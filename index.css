@@ -1,0 +1,281 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-brand-primary: #6366f1;
+  --color-brand-secondary: #a855f7;
+}
+
+@layer base {
+  html {
+    overflow-x: hidden;
+  }
+  body {
+    @apply bg-[#0a0f1e] text-slate-100 antialiased transition-colors duration-500;
+    overflow-x: hidden;
+    min-width: 0;
+  }
+
+  :where(input, select, textarea, button) {
+    font: inherit;
+  }
+
+  :where(input, select, textarea) {
+    color: rgb(226 232 240);
+  }
+
+  :where(input, select, textarea)::placeholder {
+    color: rgb(100 116 139);
+    opacity: 1;
+  }
+
+  :where(select) option {
+    background: #0f172a;
+    color: rgb(226 232 240);
+  }
+}
+
+@layer components {
+
+  /* ─── Dark mode surface ─── */
+  .glass-card {
+    background: #1e293b;
+    border-color: rgba(51, 65, 85, 0.6);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+  }
+
+  .premium-gradient {
+    @apply bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-800;
+  }
+
+  .atmospheric-bg {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
+      radial-gradient(circle at 100% 100%, rgba(168, 85, 247, 0.06) 0%, transparent 50%);
+  }
+
+  /* ─── Input fields ─── */
+  .input-base {
+    @apply w-full px-4 py-3 rounded-lg text-sm font-medium outline-none transition-all;
+    background: #0f172a;
+    border: 1px solid #334155;
+    color: rgb(226, 232, 240);
+  }
+
+  .input-base::placeholder {
+    color: rgb(100, 116, 139);
+  }
+
+  .input-base:focus {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+  }
+
+  .dashboard-mesh {
+    background-image:
+      linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .bento-card {
+    @apply rounded-2xl border border-white/[0.08] bg-[#0f172a]/45 backdrop-blur-2xl;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+      0 8px 32px rgba(0, 0, 0, 0.2);
+    transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+  }
+
+  .bento-card:hover {
+    border-color: rgba(99, 102, 241, 0.22);
+    background: rgba(15, 23, 42, 0.58);
+    box-shadow:
+      0 0 0 1px rgba(99, 102, 241, 0.1) inset,
+      0 12px 40px rgba(99, 102, 241, 0.1);
+  }
+
+  .dashboard-glass {
+    @apply bg-[#0f172a]/40 backdrop-blur-xl border border-white/[0.08];
+  }
+
+  .hero-glow {
+    background:
+      radial-gradient(ellipse 80% 60% at 20% 0%, rgba(99, 102, 241, 0.35), transparent 55%),
+      radial-gradient(ellipse 60% 50% at 90% 100%, rgba(168, 85, 247, 0.25), transparent 50%),
+      linear-gradient(135deg, #4338ca 0%, #4f46e5 35%, #6d28d9 100%);
+  }
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes zoom-in {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes slide-in-from-top {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.animate-in {
+  animation-duration: 300ms;
+  animation-fill-mode: both;
+}
+
+.fade-in {
+  animation-name: fade-in;
+}
+
+.zoom-in {
+  animation-name: zoom-in;
+}
+
+.slide-in-from-top-2 {
+  animation-name: slide-in-from-top;
+}
+
+.duration-700 {
+  animation-duration: 700ms;
+}
+
+.duration-300 {
+  animation-duration: 300ms;
+}
+
+/* Mobil: tablolar ve geniş içerik yatay kaydırılabilir */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-scroll table {
+  min-width: 600px;
+}
+
+/* ResponsiveTable — mobilde kart, masaüstünde tablo */
+.responsive-table-shell {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  min-width: 0;
+}
+
+@media (min-width: 768px) {
+  .responsive-table-inner > table {
+    min-width: var(--rt-min-width, 600px);
+  }
+}
+
+@media (max-width: 767px) {
+  .responsive-table-shell {
+    overflow-x: visible;
+  }
+
+  .responsive-table-inner > table {
+    min-width: 0 !important;
+    width: 100%;
+    display: block;
+  }
+
+  .responsive-table-inner > table > thead {
+    display: none;
+  }
+
+  .responsive-table-inner > table > tbody {
+    display: block;
+  }
+
+  .responsive-table-inner > table > tbody > tr {
+    display: block;
+    margin-bottom: 0.75rem;
+    padding: 0.65rem 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.75rem;
+    background: rgba(15, 23, 42, 0.45);
+  }
+
+  .responsive-table-inner > table > tbody > tr:hover {
+    background: rgba(15, 23, 42, 0.55);
+  }
+
+  .responsive-table-inner > table > tbody > td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.45rem 0 !important;
+    border: none;
+    text-align: right;
+    min-width: 0;
+  }
+
+  .responsive-table-inner > table > tbody > td::before {
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgb(100 116 139);
+    text-align: left;
+    flex-shrink: 0;
+    max-width: 46%;
+    line-height: 1.35;
+    padding-top: 0.1rem;
+  }
+
+  .responsive-table-inner > table > tbody > td:not([data-label])::before,
+  .responsive-table-inner > table > tbody > td[data-label=""]::before {
+    content: none;
+  }
+
+  .responsive-table-inner > table > tbody > td[colspan] {
+    display: block;
+    text-align: center;
+    padding: 1rem 0 !important;
+  }
+
+  .responsive-table-inner > table > tbody > td[colspan]::before {
+    content: none;
+  }
+
+  .responsive-table-inner > table > tbody > td[data-label=""] {
+    justify-content: flex-start;
+    padding-bottom: 0.35rem !important;
+  }
+}

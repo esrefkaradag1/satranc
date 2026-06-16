@@ -1,0 +1,8 @@
+{
+  "name": "NetChess Academy",
+  "description": "A comprehensive chess education management platform featuring student tracking, interactive board analysis, puzzle assignments, and financial management, inspired by Lichess and professional sports management systems.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

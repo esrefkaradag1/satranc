@@ -1,0 +1,40 @@
+# Node modules
+node_modules/
+
+# Build output
+build/
+dist/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Editor / system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+__snapshots__/
+
+# Caches
+.cache/
+.nyc_output/
+.eslintcache
+*.tsbuildinfo
+
+# Package managers
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Don't ignore source assets
+# KEEP these:
+# ✅ *.css in src/
+# ✅ *.d.ts used by TypeScript
+# ✅ *.png, *.svg for UI/images

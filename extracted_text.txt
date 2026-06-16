@@ -1,0 +1,28 @@
+1. Canlı ders sisteminde , videoyu kapattıktan sonra tekrar açamıyoruz.
+2. Canlı ders kısmında tahta analiz tahtası gibi serbest hareket ettirilebilir olmalı , farklı
+hamleler yapabilmeli ve eski hamleye ok tuşlarıyla geri ileri oynatabilmeliyiz.
+3. Canlı ders kısmında tahtaya PGN ile aktarım çalışmıyor.
+4. Hamleleri oynatınca bazen algılamıyor geri alıp ileri alıyor bunu 4-5 kere en az
+tekrarlıyor.
+5. Ödev yönetimi sadece günün bulmacasını algılıyor , onunda analizini yanlış alıyor
+doğru çözülse bile yanlış kabul ediyor. Ödev yönetimi her gün değil haftalık olarak
+girilebilsin örneğin pazartesi ile Salı farklı değerler olabilir.
+6. Ok tuşlarındaki renklere tıkladığımızda o rengin okunu çizmiyor ve mümkünse
+aşağıdaki gibi bir çalışma yapabiliriz.
+
+-- 1 of 2 --
+
+En sağdaki silgiler sadece o satırdaki işaretlenenleri siliyor. Örneğin kareleri siliyor oklar
+kalıyor.
+a) Kare ve yuvarlak yapıyor içi boş
+b) Çarpı koyuyor.
+c) Kareyi boyuyor.
+d) Düz ok ve at için ok işaretleri yapıyor.
+e) Silgi işaretlenen herşeyi siliyor.
+f) Taşları hareket ettirmek için tıklanıyor.
+g) Copy alanının altında tahtadaki feni kopyalama veya yeni feni ordan yapıştırma için var
+ama gerekli değil. Olursa iyi olur tahtayı anlık ordan değiştirebiliriz. Analiz yaparken iyi
+olabilir.
+
+-- 2 of 2 --
+

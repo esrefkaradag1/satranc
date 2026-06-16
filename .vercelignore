@@ -1,0 +1,14 @@
+lila-master
+Chess.com
+Stockfish-master
+stockfish18
+node_modules
+.git
+dist
+*.md
+agent-transcripts
+.vercel
+.cursor
+tmp_frames
+.DS_Store
+yazilimhatalari.pdf

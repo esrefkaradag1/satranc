@@ -1,0 +1,180 @@
+import type { Square } from 'chess.js';
+import type { StudyChapter } from '../studyTypes';
+import type { StudyTree } from './types';
+import { DEFAULT_FEN, applyMove, makeBuilderGame } from '../studyUtils';
+
+const UCI_RE = /^([a-h][1-8])([a-h][1-8])([qrbn])?$/i;
+
+/**
+ * Hamle dizgesini (SAN veya düz UCI) verilen FEN üzerinde SAN olarak gösterir.
+ */
+export function displaySanForStoredMove(label: string, beforeFen: string): string {
+  const trimmed = (label || '').trim();
+  if (!trimmed) return '';
+
+  const uciMatch = trimmed.match(UCI_RE);
+  if (uciMatch) {
+    try {
+      const g = makeBuilderGame(beforeFen);
+      const from = uciMatch[1]!.toLowerCase() as Square;
+      const to = uciMatch[2]!.toLowerCase() as Square;
+      const promo = uciMatch[3]?.toLowerCase() as 'q' | 'r' | 'b' | 'n' | undefined;
+      const mv = promo
+        ? g.move({ from, to, promotion: promo })
+        : g.move({ from, to });
+      if (mv?.san) return mv.san;
+    } catch {
+      /* keep raw */
+    }
+    return trimmed;
+  }
+
+  try {
+    const g = makeBuilderGame(beforeFen);
+    const stripped = trimmed.replace(/^\d+\.{1,3}\s*/, '').replace(/[?!+#]+$/, '');
+    const mv = g.move(stripped);
+    if (mv?.san) return mv.san;
+  } catch {
+    /* keep */
+  }
+  return trimmed;
+}
+
+function fenAfterMainlinePlies(startFen: string, mainMoves: string[], ply: number): string {
+  const g = makeBuilderGame(startFen);
+  const n = Math.max(0, Math.min(ply, mainMoves.length));
+  for (let i = 0; i < n; i++) {
+    if (!applyMove(g, mainMoves[i]!)) break;
+  }
+  return g.fen();
+}
+
+/** Varyasyon satırındaki hamleleri (UCI kalıntısı varsa) SAN listesine çevirir. */
+export function variationLineSans(startFen: string, mainMoves: string[], branchAfterPly: number, varMoves: string[]): string[] {
+  let fen = fenAfterMainlinePlies(startFen, mainMoves, branchAfterPly);
+  const out: string[] = [];
+  for (const raw of varMoves) {
+    const label = (raw || '').trim();
+    if (!label) continue;
+    out.push(displaySanForStoredMove(label, fen));
+    const adv = makeBuilderGame(fen);
+    if (applyMove(adv, label)) fen = adv.fen();
+  }
+  return out;
+}
+
+export function sanitizeChapterVariations(chapter: StudyChapter, mainMovesForReplay: string[]): Record<number, string[][]> {
+  const raw = chapter.variations ?? {};
+  const root = chapter.fen || DEFAULT_FEN;
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, groups]) => {
+      const ply = parseInt(key, 10);
+      if (!Number.isFinite(ply) || !Array.isArray(groups)) {
+        return [key, groups];
+      }
+      return [
+        key,
+        groups.map((line) => (Array.isArray(line) ? variationLineSans(root, mainMovesForReplay, ply, line) : line)),
+      ];
+    }),
+  ) as Record<number, string[][]>;
+}
+
+/** Ana hattaki verilen FEN'e sahip düğüm; yoksa ana hattın son düğümü. */
+export function mainlineNodeIdForFen(tree: StudyTree, fen: string): string {
+  const ml = tree.mainline;
+  for (let i = ml.length - 1; i >= 0; i--) {
+    const id = ml[i]!;
+    const n = tree.nodes[id];
+    if (n?.fen === fen) return id;
+  }
+  return ml[ml.length - 1] ?? tree.rootId;
+}
+
+/**
+ * Ana hattaki hamleleri SAN listesine çevirir (tahta ile liste senkronu).
+ * Her hamle, düğümün ebeveyninin FEN'i üzerinde yorumlanır (ara düğümde fen eksikliği hatasını önler).
+ */
+/** Sync ağacından eski `variations` kaydı formatına dönüştürür */
+export function buildLegacyVariationsFromTree(tree: StudyTree): Record<number, string[][]> {
+  const variations: Record<number, string[][]> = {};
+  const mainline = tree.mainline ?? [];
+  const mainSet = new Set(mainline);
+
+  const followFirstLine = (startId: string, maxLen: number = 32): string[] => {
+    const line: string[] = [];
+    let cur = tree.nodes[startId];
+    let guard = 0;
+    while (cur && guard < maxLen) {
+      guard++;
+      if (cur.san) line.push(cur.san);
+      const nextId = (cur.children ?? [])[0];
+      if (!nextId) break;
+      if (mainSet.has(nextId)) break;
+      cur = tree.nodes[nextId];
+    }
+    return line;
+  };
+
+  for (let i = 0; i < mainline.length; i++) {
+    const nodeId = mainline[i];
+    const node = tree.nodes[nodeId];
+    if (!node) continue;
+    const mainChild = mainline[i + 1] ?? null;
+    const altChildren = (node.children ?? []).filter((cid) => cid && cid !== mainChild);
+    if (altChildren.length === 0) continue;
+    const moveIndex = Math.max(0, i - 1);
+    const groups: string[][] = [];
+    const seen = new Set<string>();
+    for (const childId of altChildren) {
+      const line = followFirstLine(childId);
+      if (!line.length) continue;
+      const key = line.join('\0');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      groups.push(line);
+    }
+    if (groups.length) variations[moveIndex] = groups;
+  }
+
+  return variations;
+}
+
+/** Varyasyon grubunun ilk düğüm kimliğini bulur */
+export function findVariationBranchNodeId(
+  tree: StudyTree,
+  mainLinePos: number,
+  varGroupIdx: number,
+): string | null {
+  const variations = buildLegacyVariationsFromTree(tree);
+  const line = variations[mainLinePos]?.[varGroupIdx];
+  if (!line?.length) return null;
+
+  const parentMlIndex = Math.max(0, Math.min(tree.mainline.length - 1, mainLinePos + 1));
+  const parentId = tree.mainline[parentMlIndex];
+  const parent = tree.nodes[parentId];
+  if (!parent) return null;
+
+  const mainChild = tree.mainline[parentMlIndex + 1] ?? null;
+  const firstSan = line[0];
+  const altChildren = (parent.children ?? []).filter((cid) => {
+    if (!cid || cid === mainChild) return false;
+    const n = tree.nodes[cid];
+    return !!n && String(n.san ?? '') === String(firstSan);
+  });
+  return altChildren[varGroupIdx] ?? altChildren[0] ?? null;
+}
+
+export function mainlineSansFromTree(tree: StudyTree, rootFen: string): string[] {
+  const out: string[] = [];
+  for (let i = 1; i < tree.mainline.length; i++) {
+    const id = tree.mainline[i]!;
+    const n = tree.nodes[id];
+    const label = (n?.san || '').trim();
+    if (!label) continue;
+    const pid = n.parentId;
+    const beforeFen = pid && tree.nodes[pid]?.fen ? tree.nodes[pid]!.fen : rootFen;
+    out.push(displaySanForStoredMove(label, beforeFen));
+  }
+  return out;
+}

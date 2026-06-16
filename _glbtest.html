@@ -1,0 +1,20 @@
+<!DOCTYPE html><html><body><div id="c" style="width:400px;height:400px"></div>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+const loader = new GLTFLoader();
+const draco = new DRACOLoader();
+draco.setDecoderPath('/public/chess3d/draco/');
+loader.setDRACOLoader(draco);
+loader.load('/public/chess3d/assets/ChessGLB.glb', (gltf) => {
+  const names = [];
+  gltf.scene.traverse((c) => {
+    if (c.isMesh) names.push(c.name);
+  });
+  window.__names = names;
+  window.__pieceNames = names.filter(n => n.includes('Piece') || n.match(/Pawn|King|Queen/));
+  window.__squareNames = names.filter(n => n.includes('Square'));
+});
+</script></body></html>
