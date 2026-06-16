@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.env
+.env.*
+!.env.example
+*.md
+.DS_Store
+terminals
+.cursor
+Chess.com
+Stockfish-master
+stockfish18
