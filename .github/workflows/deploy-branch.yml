@@ -1,0 +1,65 @@
+name: Prepare Deploy Branch
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish-deploy-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install and build
+        run: |
+          npm ci --ignore-scripts
+          npm run sync:stockfish
+          npm run build
+
+      - name: Create deploy bundle
+        run: |
+          mkdir -p deploy-bundle
+          cp -r dist deploy-bundle/dist
+          cp nginx.conf docker-entrypoint.sh deploy-bundle/
+          cat > deploy-bundle/Dockerfile <<'EOF'
+          FROM nginx:alpine
+
+          RUN apk add --no-cache wget
+
+          COPY nginx.conf /etc/nginx/conf.d/default.conf
+          COPY docker-entrypoint.sh /docker-entrypoint.sh
+          RUN chmod +x /docker-entrypoint.sh
+          COPY dist /usr/share/nginx/html
+
+          EXPOSE 3000
+
+          HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+            CMD wget -qO- http://127.0.0.1:3000/health || exit 1
+
+          ENTRYPOINT ["/docker-entrypoint.sh"]
+          EOF
+          cat > deploy-bundle/.dockerignore <<'EOF'
+          .git
+          EOF
+
+      - name: Push deploy branch
+        run: |
+          cd deploy-bundle
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Deploy bundle for Dokploy"
+          git branch -M deploy
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" deploy
