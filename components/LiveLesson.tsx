@@ -14,6 +14,7 @@ import { useStockfish } from '../hooks/useStockfish';
 import type { PvLine } from '../hooks/useStockfish';
 import { useApp } from '../AppContext';
 import { getServiceSupabase, isSupabaseBackend } from '../services/supabase';
+import { getRuntimeEnv } from '../runtimeEnv';
 import AgoraRTC, { type IAgoraRTCClient, type ICameraVideoTrack, type IMicrophoneAudioTrack, type IAgoraRTCRemoteUser } from 'agora-rtc-sdk-ng';
 import type { IVirtualBackgroundProcessor } from 'agora-extension-virtual-background';
 import {
@@ -142,8 +143,9 @@ function parseStoredStudentBoardScalePct(): number {
     return BOARD_SCALE_DEFAULT;
   }
 }
-const AGORA_APP_ID = (import.meta.env.VITE_AGORA_APP_ID as string | undefined)?.trim() ?? '';
-const AGORA_CHANNEL_PREFIX = (import.meta.env.VITE_AGORA_CHANNEL_PREFIX as string | undefined)?.trim() || 'satranc';
+
+const AGORA_APP_ID = getRuntimeEnv('VITE_AGORA_APP_ID');
+const AGORA_CHANNEL_PREFIX = getRuntimeEnv('VITE_AGORA_CHANNEL_PREFIX') || 'satranc';
 
 export type LiveLessonRoom = { id: string; room_name: string | null; updated_at?: string };
 

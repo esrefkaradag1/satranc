@@ -1,8 +1,9 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { getRuntimeEnv } from '../runtimeEnv';
 
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string)?.trim() ?? '';
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string)?.trim() ?? '';
-const supabaseServiceRoleKey = (import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY as string)?.trim() ?? '';
+const supabaseUrl = getRuntimeEnv('VITE_SUPABASE_URL');
+const supabaseAnonKey = getRuntimeEnv('VITE_SUPABASE_ANON_KEY');
+const supabaseServiceRoleKey = getRuntimeEnv('VITE_SUPABASE_SERVICE_ROLE_KEY');
 
 /** Veri kaynağı olarak Supabase kullanılsın mı (anon ile okuma). true ise veri kaynağı Supabase olur. */
 export const isSupabaseBackend = (): boolean => !!(supabaseUrl && supabaseAnonKey);

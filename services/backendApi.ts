@@ -2,9 +2,10 @@
  * Sunucu API çağrıları. VITE_API_URL tanımlıysa öğrenci/veli paneli verisi buradan gelir.
  */
 import type { HomeworkAssignment, ScheduleEntry, Student, StudentDailyTarget } from '../types';
+import { getRuntimeEnv } from '../runtimeEnv';
 
 const getBase = () => {
-  const base = (import.meta.env?.VITE_API_URL as string)?.trim() ?? '';
+  const base = getRuntimeEnv('VITE_API_URL');
   return base.replace(/\/$/, '');
 };
 

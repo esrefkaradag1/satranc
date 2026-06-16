@@ -2,13 +2,10 @@
  * Sunucu API adresi. Tanımlıysa uygulama öğrenci/veli verisini API'den çeker
  * (farklı cihaz/şehirdeki kullanıcılar güncel ödev ve ders programını görür).
  */
+import { getRuntimeEnv } from './runtimeEnv';
+
 function getEnv(name: string): string {
-  try {
-    const v = (import.meta.env && (import.meta.env as Record<string, string>)[name]) ?? '';
-    return typeof v === 'string' ? v.trim() : '';
-  } catch {
-    return '';
-  }
+  return getRuntimeEnv(name);
 }
 
 export const API_BASE_URL = getEnv('VITE_API_URL');

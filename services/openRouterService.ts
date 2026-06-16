@@ -1,14 +1,10 @@
+import { getRuntimeEnv } from '../runtimeEnv';
+
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-const getApiKey = () =>
-  import.meta.env?.VITE_OPENROUTER_API_KEY?.trim() ||
-  (typeof process !== "undefined" && process.env?.VITE_OPENROUTER_API_KEY?.trim()) ||
-  "";
+const getApiKey = () => getRuntimeEnv('VITE_OPENROUTER_API_KEY');
 
-const ENV_MODEL =
-  import.meta.env?.VITE_OPENROUTER_MODEL?.trim() ||
-  process.env?.VITE_OPENROUTER_MODEL?.trim() ||
-  "";
+const ENV_MODEL = getRuntimeEnv('VITE_OPENROUTER_MODEL');
 
 /** Vision için model sırası — 404 olursa sıradaki denenir */
 const VISION_MODEL_CANDIDATES = [
