@@ -3,7 +3,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 COPY . .
 
@@ -23,6 +23,7 @@ ENV VITE_AGORA_CHANNEL_PREFIX=$VITE_AGORA_CHANNEL_PREFIX
 ENV VITE_OPENROUTER_API_KEY=$VITE_OPENROUTER_API_KEY
 ENV VITE_OPENROUTER_MODEL=$VITE_OPENROUTER_MODEL
 
+RUN npm run sync:stockfish
 RUN npm run build
 
 FROM nginx:alpine
