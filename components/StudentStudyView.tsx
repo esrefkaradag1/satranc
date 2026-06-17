@@ -33,7 +33,7 @@ import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
 import { loadStudyPresence, subscribeStudyPresence } from '../services/studyActions';
-import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations } from '../lib/studySync/moveList';
+import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath } from '../lib/studySync/moveList';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
 import { BoardViewToggle } from './chess/BoardViewToggle';
 import { useBoardViewMode } from '../hooks/useBoardViewMode';
@@ -460,10 +460,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
     return Math.max(0, path.length - 1);
   }, [syncState]);
 
+  const syncPathFen = useMemo(() => fenAtSyncPath(syncState), [syncState]);
+
   const currentFen = useMemo(() => {
+    if (syncPathFen) return syncPathFen;
     if (!moveListChapter) return DEFAULT_FEN;
     return fenToCurrentFen(moveListChapter, currentMoveIndex);
-  }, [moveListChapter, currentMoveIndex]);
+  }, [syncPathFen, moveListChapter, currentMoveIndex]);
 
   const totalMoves = chapterMovesForUi.length;
   const isComplete = isLiveAnalysis ? false : totalMoves > 0 && currentMoveIndex >= totalMoves;
@@ -930,7 +933,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
         setCurrentMoveIndex(i => i + 1);
         logStudyEvent({
           studyId: selectedStudy?.id,
-          chapterId: effectiveChapter?.id,
+          chapterId: effectiveChapter?.id ?? selectedChapter?.id,
           studentId,
           moveIndex: currentMoveIndex,
           expectedMove: null,
@@ -1015,7 +1018,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
 
           logStudyEvent({
             studyId: selectedStudy?.id,
-            chapterId: effectiveChapter?.id,
+            chapterId: effectiveChapter?.id ?? selectedChapter?.id,
             studentId,
             moveIndex: currentMoveIndex,
             expectedMove: expectedSan || 'variation',
@@ -1044,7 +1047,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
           showFeedback('wrong');
           logStudyEvent({
             studyId: selectedStudy?.id,
-            chapterId: effectiveChapter?.id,
+            chapterId: effectiveChapter?.id ?? selectedChapter?.id,
             studentId,
             moveIndex: currentMoveIndex,
             expectedMove: expectedSan,

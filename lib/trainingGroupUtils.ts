@@ -14,10 +14,23 @@ export function monthKey(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, '0')}`;
 }
 
-export function findTrainingGroupByName(groups: TrainingGroup[], name: string): TrainingGroup | undefined {
+export function findTrainingGroupByName(
+  groups: TrainingGroup[],
+  name: string,
+  scope?: { branchOffice?: string; discipline?: string },
+): TrainingGroup | undefined {
   const trimmed = name.trim();
   if (!trimmed) return undefined;
-  return groups.find((g) => g.name === trimmed);
+  const matches = groups.filter((g) => g.name === trimmed);
+  if (!matches.length) return undefined;
+  if (scope?.branchOffice && scope.discipline) {
+    return (
+      matches.find(
+        (g) => g.branchOffice === scope.branchOffice!.trim() && g.discipline === scope.discipline!.trim(),
+      ) ?? matches[0]
+    );
+  }
+  return matches[0];
 }
 
 export function findTrainingGroupById(groups: TrainingGroup[], id: string): TrainingGroup | undefined {
@@ -190,6 +203,36 @@ export function formatLessonSlot(slot: GroupLessonSlot): string {
 export function formatLessonSchedule(slots: GroupLessonSlot[] | undefined): string {
   if (!slots?.length) return '—';
   return slots.map(formatLessonSlot).join(', ');
+}
+
+export function studentsInTrainingGroup(students: Student[], group: TrainingGroup): Student[] {
+  const name = group.name.trim();
+  return students.filter(
+    (s) => s.trainingGroupId === group.id || (s.group || '').trim() === name,
+  );
+}
+
+/** Branş–grup tanımlarından şube listesi (eski şube listesiyle birleşik) */
+export function mergeBranchOffices(
+  legacyOffices: string[],
+  disciplineBranches: DisciplineBranch[],
+): string[] {
+  const fromDefs = disciplineBranches.map((b) => b.branchOffice.trim()).filter(Boolean);
+  return [...new Set([...legacyOffices, ...fromDefs])].sort((a, b) => a.localeCompare(b, 'tr'));
+}
+
+/** Seçili şubedeki branş adları (brans-grup tanımlarından) */
+export function disciplineNamesForOffice(
+  disciplineBranches: DisciplineBranch[],
+  branchOffice?: string,
+): string[] {
+  const office = branchOffice?.trim();
+  const filtered = office
+    ? disciplineBranches.filter((b) => b.branchOffice === office)
+    : disciplineBranches;
+  return [...new Set(filtered.map((b) => b.name.trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, 'tr'),
+  );
 }
 
 export function emptyLessonSlot(): GroupLessonSlot {

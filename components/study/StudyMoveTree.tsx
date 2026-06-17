@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { Search, Trash2, ArrowUpRight, GitBranch, MousePointer2 } from 'lucide-react';
+import { Trash2, ArrowUpRight, MousePointer2 } from 'lucide-react';
 import type { StudyChapter } from '../../lib/studyTypes';
 import { formatMoveGlyphs, parseMoveGlyphs } from '../../lib/studyAnnotations';
 
@@ -12,6 +12,11 @@ interface StudyMoveTreeProps {
   onDeleteFromHere?: (idx: number) => void | Promise<void>;
   onPromoteVariation?: (mainLinePos: number, varGroupIdx: number) => void;
   compact?: boolean;
+}
+
+/** Varyasyon satırındaki hamle numarası ve nokta (1. / 1...) */
+function moveNumberLabel(moveNumber: number, isWhiteTurn: boolean): string {
+  return `${moveNumber}${isWhiteTurn ? '.' : '...'}`;
 }
 
 export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
@@ -65,6 +70,11 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   const isInVariation = !!currentVariation;
   const variations = chapter.variations ?? {};
 
+  const textSize = compact ? 'text-[11px]' : 'text-[13px]';
+  const rowGrid = 'grid grid-cols-[2rem_1fr_1fr] gap-x-1.5 items-stretch w-full';
+  const indexCell = `text-[11px] font-bold text-slate-500 text-right pr-1.5 tabular-nums bg-slate-800/50 flex items-center justify-end ${compact ? 'py-1' : 'py-1.5'}`;
+  const moveCell = `min-w-0 flex items-center ${compact ? 'py-0.5' : 'py-1'}`;
+
   const renderMoveButton = (
     san: string,
     plyIndex: number,
@@ -87,55 +97,53 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
           else onHoverMove?.(plyIndex + 1);
         }}
         onContextMenu={(e) => handleContextMenu(e, plyIndex, varInfo)}
-        className={`inline px-1 rounded transition-all font-bold ${
+        className={`inline-flex items-center px-1.5 rounded font-bold transition-colors ${
           isActive
-            ? 'bg-indigo-600 text-white shadow-sm'
+            ? 'bg-[#3692e7] text-white shadow-sm'
             : isVar
-            ? 'hover:bg-white/10 text-slate-400'
-            : 'hover:bg-white/10 text-slate-200'
+            ? 'text-slate-400 hover:bg-white/10'
+            : 'text-slate-200 hover:bg-white/10'
         }`}
       >
         {san}
         {annotation != null && parseMoveGlyphs(annotation).length > 0 && (
-          <span className="text-[#bf811d] font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
+          <span className="text-amber-500 font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
         )}
       </button>
     );
   };
 
-  const renderVariationBlock = (mainLineIdx: number) => {
+  const renderVariationLines = (mainLineIdx: number) => {
     const varGroups = variations[mainLineIdx];
-    if (!varGroups || varGroups.length === 0) return null;
+    if (!varGroups?.length) return null;
+
+    const varStartFenTurn = isBlackToMove
+      ? ((mainLineIdx + 1) % 2 === 0 ? 'w' : 'b')
+      : (mainLineIdx % 2 === 0 ? 'b' : 'w');
+
+    let varMoveNumber: number;
+    if (isBlackToMove) {
+      varMoveNumber = startMoveNumber + Math.floor((mainLineIdx + 1) / 2);
+    } else {
+      varMoveNumber = startMoveNumber + Math.floor(mainLineIdx / 2);
+    }
 
     return varGroups.map((line, gi) => {
-      if (!line || line.length === 0) return null;
-
-      const varStartFenTurn = isBlackToMove
-        ? ((mainLineIdx + 1) % 2 === 0 ? 'w' : 'b')
-        : (mainLineIdx % 2 === 0 ? 'b' : 'w');
-      
-      let varMoveNumber: number;
-      if (isBlackToMove) {
-        varMoveNumber = startMoveNumber + Math.floor((mainLineIdx + 1) / 2);
-      } else {
-        varMoveNumber = startMoveNumber + Math.floor(mainLineIdx / 2);
-      }
+      if (!line?.length) return null;
 
       return (
-        <span key={`var-${mainLineIdx}-${gi}`} className="inline ml-1 bg-white/5 px-1 py-0.5 rounded">
-          <span className="text-slate-500 font-bold opacity-50">(</span>
+        <div
+          key={`var-${mainLineIdx}-${gi}`}
+          className={`w-full flex flex-wrap items-center gap-x-0.5 gap-y-0.5 pl-3 ml-1 border-l-2 border-slate-600/40 ${compact ? 'py-1 my-0.5' : 'py-1.5 my-1'} text-slate-400 ${textSize}`}
+        >
           {line.map((vSan, vi) => {
-            const isWhiteTurn = varStartFenTurn === 'w'
-              ? vi % 2 === 0
-              : vi % 2 !== 0;
-
+            const isWhiteTurn = varStartFenTurn === 'w' ? vi % 2 === 0 : vi % 2 !== 0;
             let mn: number;
             if (varStartFenTurn === 'w') {
               mn = varMoveNumber + Math.floor(vi / 2);
             } else {
               mn = varMoveNumber + Math.floor((vi + 1) / 2);
             }
-
             const showNumber = vi === 0 || isWhiteTurn;
             const varTuple: [number, number, number] = [mainLineIdx, gi, vi];
             const isActive =
@@ -145,18 +153,17 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
               currentVariation[2] === vi;
 
             return (
-              <span key={vi}>
+              <span key={vi} className="inline-flex items-center">
                 {showNumber && (
-                  <span className="text-[#787472] font-bold mr-0.5 ml-0.5">
-                    {mn}{isWhiteTurn ? '.' : '...'}
+                  <span className="text-slate-500 font-bold mr-0.5 tabular-nums">
+                    {moveNumberLabel(mn, isWhiteTurn)}
                   </span>
                 )}
                 {renderMoveButton(vSan, mainLineIdx, isActive, undefined, varTuple)}
               </span>
             );
           })}
-          <span className="text-slate-500 font-bold opacity-50">)</span>
-        </span>
+        </div>
       );
     });
   };
@@ -169,13 +176,17 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
     const bm = moves[0];
     const isActive = currentMoveIndex === 1 && !isInVariation;
     rows.push(
-      <span key="row-0" className="inline mr-2">
-        <span className="text-slate-500 font-bold mr-1 opacity-60">{currentMoveNumber}...</span>
-        <span className="inline-block">
-          {renderMoveButton(bm, 0, isActive, chapter.moveAnnotations?.[0])}
-        </span>
-        {renderVariationBlock(0)}
-      </span>
+      <div key="row-black-first" className="w-full">
+        <div className={rowGrid}>
+          <span className={indexCell}>{currentMoveNumber}</span>
+          <div className={moveCell} />
+          <div className={moveCell}>
+            <span className="text-slate-500 font-bold mr-1 tabular-nums">{currentMoveNumber}...</span>
+            {renderMoveButton(bm, 0, isActive, chapter.moveAnnotations?.[0])}
+          </div>
+        </div>
+        {renderVariationLines(0)}
+      </div>,
     );
     currentPly = 1;
     currentMoveNumber++;
@@ -188,21 +199,19 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
     const bmActive = bm !== undefined && currentMoveIndex === i + 2 && !isInVariation;
 
     rows.push(
-      <span key={i} className="inline mr-2">
-        <span className="text-slate-500 font-bold mr-1 opacity-60">{currentMoveNumber}.</span>
-        {wm !== undefined && (
-          <span className="inline-block">
-            {renderMoveButton(wm, i, wmActive, chapter.moveAnnotations?.[i])}
-          </span>
-        )}
-        {renderVariationBlock(i)}
-        {bm !== undefined && (
-          <span className="inline-block ml-1">
-            {renderMoveButton(bm, i + 1, bmActive, chapter.moveAnnotations?.[i + 1])}
-          </span>
-        )}
-        {bm !== undefined && renderVariationBlock(i + 1)}
-      </span>
+      <div key={`row-${i}`} className="w-full">
+        <div className={rowGrid}>
+          <span className={indexCell}>{currentMoveNumber}</span>
+          <div className={moveCell}>
+            {wm !== undefined && renderMoveButton(wm, i, wmActive, chapter.moveAnnotations?.[i])}
+          </div>
+          <div className={moveCell}>
+            {bm !== undefined && renderMoveButton(bm, i + 1, bmActive, chapter.moveAnnotations?.[i + 1])}
+          </div>
+        </div>
+        {renderVariationLines(i)}
+        {bm !== undefined && renderVariationLines(i + 1)}
+      </div>,
     );
     currentMoveNumber++;
   }
@@ -210,7 +219,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative ${compact ? 'p-2' : 'p-4'}`}
+      className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
       onMouseLeave={() => onHoverMove?.(null)}
     >
       {moves.length === 0 ? (
@@ -222,7 +231,12 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
           <p className="text-[9px] text-slate-600 mt-1">Tahta üzerinde hamle yaparak başlayın</p>
         </div>
       ) : (
-        <div className={`${compact ? 'text-[11px] leading-relaxed' : 'text-[13px] leading-loose'} font-sans text-slate-300 select-none`}>
+        <div className={`${textSize} font-sans text-slate-300 select-none space-y-0.5`}>
+          <div className={`${rowGrid} px-0 pb-1 mb-1 border-b border-white/5 text-[10px] font-bold uppercase tracking-wider text-slate-500`}>
+            <span />
+            <span>Beyaz</span>
+            <span>Siyah</span>
+          </div>
           {rows}
         </div>
       )}

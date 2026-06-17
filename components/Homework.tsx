@@ -2,18 +2,20 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
+import { MainlineMoveGrid } from './chess/MainlineMoveGrid';
 import {
   CheckSquare, Clock, Target, ChevronRight, MoreHorizontal, RotateCcw,
   Plus, Award, BookOpen, Calendar, Users, Grid, Filter, ChevronDown,
   AlertCircle, Eye, Play, Trash2, X, User, Sparkles, Loader2, RefreshCw, LayoutGrid,
-  Search, TrendingUp, CheckCircle2, CircleDashed,
+  Search, CheckCircle2, CircleDashed,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { analyzeStudentHomework } from '../services/geminiService';
 import type { HomeworkAssignment, Student, Puzzle, StudentDailyTarget } from '../types';
 import { HomeworkTargetSelector } from './homework/HomeworkTargetSelector';
-import { StudentProgressCard } from './homework/StudentProgressCard';
-import { HomeworkGroupResultsTable } from './homework/HomeworkGroupResultsTable';
+import { HomeworkAssignmentsList } from './homework/HomeworkAssignmentsList';
+import { HomeworkAssignmentDetail } from './homework/HomeworkAssignmentDetail';
+import { StudentPuzzleDetailModal } from './homework/StudentPuzzleDetailModal';
 import { WeeklyScheduleGrid } from './homework/WeeklyScheduleGrid';
 import { StudyControlSection } from './homework/StudyControlSection';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
@@ -31,17 +33,13 @@ import {
   fetchLichessGamesForDay,
 } from '../services/chessPlatformService';
 import { isToday, todayDayKey, weekdayKeyFromIso, mondayOfWeek, isoDateForWeekday, type DayCompletionStatus } from '../lib/homeworkDayUtils';
+import {
+  countPerPuzzleResults,
+  studentTotalThinkSeconds,
+  type StudentHwStat,
+} from '../lib/homeworkAnalysisUtils';
 
-interface StudentHwStat {
-  studentId: string;
-  name: string;
-  initials: string;
-  correct: number;
-  wrong: number;
-  points: number;
-  timeSeconds: number;
-  progress: number;
-  status: 'Tamamlandı' | 'Devam Ediyor' | 'Başlamadı';
+interface StudentHwStatWithDaily extends StudentHwStat {
   dailyGoalDone?: boolean;
   todayGames?: number;
   todayPuzzleSolved?: number;
@@ -214,6 +212,7 @@ const Homework: React.FC = () => {
   const [targetFilter, setTargetFilter] = useState<TargetFilter>(EMPTY_TARGET);
   const [programStudentId, setProgramStudentId] = useState<string | null>(null);
   const [viewDate, setViewDate] = useState(() => todayDayKey());
+  const [analysisView, setAnalysisView] = useState<'list' | 'detail'>('list');
 
   useEffect(() => {
     const tick = () => {
@@ -235,6 +234,19 @@ const Homework: React.FC = () => {
   );
 
   const targetStudentIds = useMemo(() => new Set(targetStudents.map((s) => s.id)), [targetStudents]);
+
+  const openHomeworkDetail = useCallback((homeworkId: string) => {
+    setSelectedHwId(homeworkId);
+    setAnalysisView('detail');
+    setDetailStat(null);
+    setStudentSearch('');
+    setStatusFilter('all');
+  }, []);
+
+  const backToHomeworkList = useCallback(() => {
+    setAnalysisView('list');
+    setDetailStat(null);
+  }, []);
 
   /** Ödev Takibi sayfası açıldığında localStorage'dan güncel denemeleri ve teslimleri çek (öğrenci aynı/başka sekmede hamle yaptıysa admin görsün) */
   useEffect(() => {
@@ -278,6 +290,11 @@ const Homework: React.FC = () => {
     const all = [...fromGroups, ...fromIds];
     return Array.from(new Map(all.map(s => [s.id, s])).values());
   }, [students]);
+
+  const filteredHomeworks = useMemo(() => {
+    if (targetStudents.length === 0) return homeworks;
+    return homeworks.filter((hw) => getAssignees(hw).some((s) => targetStudentIds.has(s.id)));
+  }, [homeworks, targetStudents.length, targetStudentIds, getAssignees]);
 
   const hwPuzzles = useMemo(() => {
     if (!selectedHw) return [];
@@ -361,18 +378,16 @@ const Homework: React.FC = () => {
       const attempts = homeworkAttempts.filter(
         a => a.homeworkId === hw.id && a.studentId === student.id
       );
-      const correct = attempts.filter(a => a.correct).length;
-      const wrong = attempts.filter(a => !a.correct).length;
-      const points = attempts
-        .filter(a => a.correct)
-        .reduce((sum, a) => sum + (puzzles.find(p => p.id === a.puzzleId)?.points ?? 0), 0);
+      const { correct, wrong, skipped } = countPerPuzzleResults(hw.puzzles, attempts);
+      const answered = correct + wrong;
+      const points = hw.puzzles.reduce((sum, puzzleId) => {
+        if (!attempts.some((a) => a.puzzleId === puzzleId && a.correct)) return sum;
+        return sum + (puzzles.find((p) => p.id === puzzleId)?.points ?? 0);
+      }, 0);
       const totalPuzzles = hw.puzzles.length;
-      const progress = totalPuzzles > 0 ? Math.round((correct + wrong) / totalPuzzles * 100) : 0;
-      const status = homeworkStatusFromPuzzles(submitted, totalPuzzles, attempts.length, correct + wrong);
-      const sortedByTime = [...attempts].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      const timeSeconds = sortedByTime.length >= 2
-        ? Math.round((new Date(sortedByTime[sortedByTime.length - 1].timestamp).getTime() - new Date(sortedByTime[0].timestamp).getTime()) / 1000)
-        : 0;
+      const progress = totalPuzzles > 0 ? Math.round((answered / totalPuzzles) * 100) : 0;
+      const status = homeworkStatusFromPuzzles(submitted, totalPuzzles, attempts.length, answered);
+      const timeSeconds = studentTotalThinkSeconds(attempts);
       const names = student.name.split(' ');
       const initials = names.length >= 2 ? (names[0][0] + names[names.length - 1][0]).toUpperCase() : student.name.substring(0, 2).toUpperCase();
       const todayKey = viewDate;
@@ -404,6 +419,7 @@ const Homework: React.FC = () => {
         initials,
         correct,
         wrong,
+        skipped,
         points,
         timeSeconds,
         progress: submitted ? Math.max(progress, 100) : (status === 'Başlamadı' ? 0 : progress),
@@ -430,18 +446,16 @@ const Homework: React.FC = () => {
       const attempts = homeworkAttempts.filter(
         a => a.homeworkId === selectedHw.id && a.studentId === student.id
       );
-      const correct = attempts.filter(a => a.correct).length;
-      const wrong = attempts.filter(a => !a.correct).length;
-      const points = attempts
-        .filter(a => a.correct)
-        .reduce((sum, a) => sum + (puzzles.find(p => p.id === a.puzzleId)?.points ?? 0), 0);
+      const { correct, wrong, skipped } = countPerPuzzleResults(selectedHw.puzzles, attempts);
+      const answered = correct + wrong;
+      const points = selectedHw.puzzles.reduce((sum, puzzleId) => {
+        if (!attempts.some((a) => a.puzzleId === puzzleId && a.correct)) return sum;
+        return sum + (puzzles.find((p) => p.id === puzzleId)?.points ?? 0);
+      }, 0);
       const totalPuzzles = selectedHw.puzzles.length;
-      const progress = totalPuzzles > 0 ? Math.round((correct + wrong) / totalPuzzles * 100) : 0;
-      const status = homeworkStatusFromPuzzles(submitted, totalPuzzles, attempts.length, correct + wrong);
-      const sortedByTime = [...attempts].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      const timeSeconds = sortedByTime.length >= 2
-        ? Math.round((new Date(sortedByTime[sortedByTime.length - 1].timestamp).getTime() - new Date(sortedByTime[0].timestamp).getTime()) / 1000)
-        : 0;
+      const progress = totalPuzzles > 0 ? Math.round((answered / totalPuzzles) * 100) : 0;
+      const status = homeworkStatusFromPuzzles(submitted, totalPuzzles, attempts.length, answered);
+      const timeSeconds = studentTotalThinkSeconds(attempts);
       const names = student.name.split(' ');
       const initials = names.length >= 2 ? (names[0][0] + names[names.length - 1][0]).toUpperCase() : student.name.substring(0, 2).toUpperCase();
       const todayKey = viewDate;
@@ -472,6 +486,7 @@ const Homework: React.FC = () => {
         initials,
         correct,
         wrong,
+        skipped,
         points,
         timeSeconds,
         progress: submitted ? Math.max(progress, 100) : (status === 'Başlamadı' ? 0 : progress),
@@ -516,6 +531,7 @@ const Homework: React.FC = () => {
           : 'Başlamadı';
       const correct = hwStats.reduce((s, h) => s + h.correct, 0);
       const wrong = hwStats.reduce((s, h) => s + h.wrong, 0);
+      const skipped = hwStats.reduce((s, h) => s + (h.skipped ?? 0), 0);
       const points = hwStats.reduce((s, h) => s + h.points, 0);
       const timeSeconds = hwStats.reduce((s, h) => s + h.timeSeconds, 0);
       const progress = total > 0 ? Math.round(hwStats.reduce((s, h) => s + (h.progress ?? 0), 0) / total) : 0;
@@ -532,6 +548,7 @@ const Homework: React.FC = () => {
         initials,
         correct,
         wrong,
+        skipped,
         points,
         timeSeconds,
         progress,
@@ -818,7 +835,17 @@ const Homework: React.FC = () => {
             <h2 className="text-2xl font-bold tracking-tight text-white">
               Ödev Yönetimi
             </h2>
-            {selectedHw ? (
+            {analysisView === 'detail' && selectedHw ? (
+              <p className="text-slate-400 text-sm mt-0.5 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={backToHomeworkList} className="text-indigo-400 hover:text-indigo-300 font-semibold">
+                  ← Atama listesi
+                </button>
+                <span className="text-slate-600">·</span>
+                <span>{selectedHw.title}</span>
+                <span className="text-slate-600">·</span>
+                <span className="text-indigo-300/80">{selectedHw.puzzles.length} bulmaca</span>
+              </p>
+            ) : selectedHw ? (
               <p className="text-slate-400 text-sm mt-0.5 flex flex-wrap items-center gap-2">
                 <span>{selectedHw.title}</span>
                 <span className="text-slate-600">·</span>
@@ -835,7 +862,7 @@ const Homework: React.FC = () => {
                   <>
                     <span className="text-slate-300">{homeworks.length} atama</span>
                     <span className="text-slate-600 mx-1.5">·</span>
-                    <span>genel durum özeti</span>
+                    <span>aktif atama listesi</span>
                     <span className="text-slate-600 mx-1.5">·</span>
                     <span className="text-slate-500">{loadedAttemptCount} deneme kaydı</span>
                   </>
@@ -875,8 +902,8 @@ const Homework: React.FC = () => {
               <div className="absolute right-0 top-full mt-2 w-80 bg-[#0f172a] border border-white/10 rounded-lg shadow-2xl z-[200] overflow-hidden">
                 <div className="max-h-[min(70vh,480px)] overflow-y-auto custom-scrollbar">
                   <button
-                    onClick={() => { setSelectedHwId(ALL_HOMEWORKS_ID); setShowHwPicker(false); }}
-                    className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-colors ${selectedHwId === ALL_HOMEWORKS_ID ? 'bg-indigo-600/10' : ''}`}
+                    onClick={() => { setSelectedHwId(ALL_HOMEWORKS_ID); setAnalysisView('list'); setShowHwPicker(false); }}
+                    className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-colors ${selectedHwId === ALL_HOMEWORKS_ID && analysisView === 'list' ? 'bg-indigo-600/10' : ''}`}
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-2 h-2 rounded-full flex-shrink-0 bg-indigo-500" />
@@ -892,7 +919,7 @@ const Homework: React.FC = () => {
                     const hwAssignees = getAssignees(hw);
                     const overdue = !!hw.dueDate && new Date(hw.dueDate) < new Date();
                     return (
-                      <button key={hw.id} onClick={() => { setSelectedHwId(hw.id); setShowHwPicker(false); }} className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-colors ${active ? 'bg-indigo-600/10' : ''}`}>
+                      <button key={hw.id} onClick={() => { openHomeworkDetail(hw.id); setShowHwPicker(false); }} className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-colors ${active && analysisView === 'detail' ? 'bg-indigo-600/10' : ''}`}>
                         <div className="flex items-center gap-3">
                           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${overdue ? 'bg-rose-500' : 'bg-emerald-500'}`} />
                           <div className="flex-1 min-w-0">
@@ -1255,105 +1282,32 @@ const Homework: React.FC = () => {
           <div className="p-4 sm:p-5 space-y-4">
           {panelTab === 'odev' && (
             <>
-              {filteredStats.length > 0 && (
-                <>
-                  {selectedHw ? (
-                    <HomeworkGroupResultsTable
-                      stats={filteredStats}
-                      totalPuzzles={selectedHw.puzzles.length}
-                      homeworkTitle={selectedHw.title}
-                      onSelect={(stat) => setDetailStat(stat)}
-                    />
-                  ) : null}
-
-                  <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-                    {([
-                      { key: 'all' as const, label: 'Tümü', value: summaryCounts.total, icon: Users, color: 'text-white' },
-                      { key: 'Tamamlandı' as const, label: 'Tamamlayan', value: summaryCounts.completed, icon: CheckCircle2, color: 'text-emerald-400' },
-                      { key: 'Devam Ediyor' as const, label: 'Devam Eden', value: summaryCounts.inProgress, icon: Play, color: 'text-amber-400' },
-                      { key: 'Başlamadı' as const, label: 'Başlamayan', value: summaryCounts.notStarted, icon: CircleDashed, color: 'text-slate-400' },
-                    ]).map((item) => {
-                      const Icon = item.icon;
-                      const active = statusFilter === item.key;
-                      return (
-                        <button
-                          key={item.key}
-                          type="button"
-                          onClick={() => setStatusFilter(item.key)}
-                          className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border shrink-0 transition-all ${
-                            active
-                              ? 'bg-indigo-500/15 border-indigo-500/30 shadow-sm shadow-indigo-500/10'
-                              : 'bg-white/[0.02] border-white/[0.05] hover:border-white/10'
-                          }`}
-                        >
-                          <Icon className={`w-4 h-4 ${active ? item.color : 'text-slate-500'}`} />
-                          <div className="text-left">
-                            <p className={`text-base font-black tabular-nums leading-none ${active ? item.color : 'text-slate-300'}`}>
-                              {item.value}
-                            </p>
-                            <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wide mt-0.5">{item.label}</p>
-                          </div>
-                        </button>
-                      );
-                    })}
-                    <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border border-white/[0.05] bg-white/[0.02] shrink-0 ml-auto">
-                      <TrendingUp className="w-4 h-4 text-indigo-400" />
-                      <div className="text-left">
-                        <p className="text-base font-black text-indigo-300 tabular-nums leading-none">%{summaryCounts.avgProgress}</p>
-                        <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wide mt-0.5">Ort. İlerleme</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="relative">
-                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
-                    <input
-                      type="search"
-                      value={studentSearch}
-                      onChange={(e) => setStudentSearch(e.target.value)}
-                      placeholder="Öğrenci ara..."
-                      className="input-base w-full pl-10 py-2.5 text-sm"
-                    />
-                  </div>
-                </>
-              )}
-
-              {displayStats.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
-                  {displayStats.map((stat) => (
-                    <StudentProgressCard
-                      key={stat.studentId}
-                      stat={stat}
-                      showDailyTracking={showDailyTracking}
-                      onClick={() => setDetailStat(stat)}
-                      onReset={() => handleResetStudent(stat.studentId)}
-                    />
-                  ))}
-                </div>
-              ) : filteredStats.length > 0 ? (
-                <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-10 text-center">
-                  <Search className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                  <p className="text-sm text-slate-400">Arama veya filtreye uygun öğrenci yok</p>
-                  <button
-                    type="button"
-                    onClick={() => { setStudentSearch(''); setStatusFilter('all'); }}
-                    className="mt-3 text-xs font-bold text-indigo-400 hover:text-indigo-300"
-                  >
-                    Filtreleri temizle
-                  </button>
-                </div>
+              {analysisView === 'list' ? (
+                <HomeworkAssignmentsList
+                  homeworks={filteredHomeworks}
+                  students={students}
+                  attempts={homeworkAttempts}
+                  submissions={homeworkSubmissions}
+                  onOpenDetail={openHomeworkDetail}
+                />
+              ) : selectedHw ? (
+                <HomeworkAssignmentDetail
+                  homework={selectedHw}
+                  students={students}
+                  puzzles={puzzles}
+                  stats={stats}
+                  onBack={backToHomeworkList}
+                  onSelectStudent={setDetailStat}
+                  onResetStudent={handleResetStudent}
+                />
               ) : (
-                <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-12 text-center">
-                  <Users className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                  <p className="text-sm text-slate-400">Bu hedef için öğrenci veya ödev verisi yok</p>
-                  <button
-                    type="button"
-                    onClick={() => setShowAssignForm(true)}
-                    className="mt-4 px-4 py-2 rounded-xl premium-gradient text-white text-xs font-bold"
-                  >
-                    Yeni Ödev Ata
-                  </button>
-                </div>
+                <HomeworkAssignmentsList
+                  homeworks={filteredHomeworks}
+                  students={students}
+                  attempts={homeworkAttempts}
+                  submissions={homeworkSubmissions}
+                  onOpenDetail={openHomeworkDetail}
+                />
               )}
             </>
           )}
@@ -1424,125 +1378,19 @@ const Homework: React.FC = () => {
         </div>
       ) : null}
 
-      {/* Detailed Report Table */}
-      {selectedHw && stats.length > 0 && (
-        <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-white/5 overflow-hidden">
-          <div className="p-7 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-            <h3 className="text-lg font-bold text-white flex items-center gap-3 tracking-tight">
-              <Award className="w-5 h-5 text-indigo-400" /> Detaylı Rapor
-            </h3>
-            <div className="flex items-center gap-4">
-              <span className="text-[10px] text-slate-500 font-bold">{stats.length} öğrenci</span>
-            </div>
-          </div>
-          <ResponsiveTable minWidth={800}>
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="text-slate-400 text-[10px] uppercase tracking-widest font-black border-b border-white/5">
-                  <th className="px-7 py-4">#</th>
-                  <th className="px-7 py-4">Öğrenci</th>
-                  <th className="px-7 py-4 text-center">Doğru</th>
-                  <th className="px-7 py-4 text-center">Yanlış</th>
-                  {showDailyTracking ? <th className="px-7 py-4 text-center">Maç</th> : null}
-                  <th className="px-7 py-4 text-center">Puan</th>
-                  <th className="px-7 py-4 text-center">Süre</th>
-                  <th className="px-7 py-4">İlerleme</th>
-                  <th className="px-7 py-4 text-center">Durum</th>
-                  <th className="px-7 py-4 text-right">İşlem</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {sortedStats.map((stat, idx) => {
-                  const statusColor = stat.status === 'Tamamlandı' ? 'bg-emerald-500/15 text-emerald-400' : stat.status === 'Devam Ediyor' ? 'bg-amber-500/15 text-amber-400' : 'bg-slate-700/50 text-slate-500';
-                  const showDaily = showDailyTracking;
-                  return (
-                    <tr
-                      key={stat.studentId}
-                      className="hover:bg-white/[0.02] transition-colors group cursor-pointer"
-                      onClick={() => setDetailStat(stat)}
-                    >
-                      <td data-label="#" className="px-7 py-4">
-                        <span className="text-xs font-black text-slate-600">{idx + 1}</span>
-                      </td>
-                      <td data-label="Öğrenci" className="px-7 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-lg bg-white/5 border border-white/5 text-indigo-400 flex items-center justify-center text-[10px] font-black">{stat.initials}</div>
-                          <span className="text-sm font-bold text-slate-200 tracking-tight">{stat.name}</span>
-                        </div>
-                      </td>
-                      <td data-label="Doğru" className="px-7 py-4 text-center"><span className="text-sm font-black text-emerald-400">{stat.correct}</span></td>
-                      <td data-label="Yanlış" className="px-7 py-4 text-center"><span className="text-sm font-black text-rose-400">{stat.wrong}</span></td>
-                      {showDaily ? (
-                        <td data-label="Maç" className="px-7 py-4 text-center">
-                          <span className="text-sm font-black text-sky-400">
-                            {stat.todayGames ?? 0}/{stat.dailyGameTarget ?? 0}
-                          </span>
-                        </td>
-                      ) : null}
-                      <td data-label="Puan" className="px-7 py-4 text-center"><span className="text-sm font-black text-indigo-400">{stat.points}</span></td>
-                      <td data-label="Süre" className="px-7 py-4 text-center"><span className="text-xs font-bold text-slate-400">{formatTime(stat.timeSeconds)}</span></td>
-                      <td data-label="İlerleme" className="px-7 py-4">
-                        <div className="flex items-center gap-3 min-w-[140px]">
-                          <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                            <div className={`h-full rounded-full ${stat.status === 'Tamamlandı' ? 'bg-emerald-500' : stat.status === 'Devam Ediyor' ? 'bg-amber-500' : 'bg-slate-700'}`} style={{ width: `${stat.progress}%` }} />
-                          </div>
-                          <span className="text-[10px] font-black text-slate-400 w-8 text-right">%{stat.progress}</span>
-                        </div>
-                      </td>
-                      <td data-label="Durum" className="px-7 py-4 text-center">
-                        <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${statusColor}`}>{stat.status}</span>
-                        {showDaily && (
-                          <div className={`mt-1 text-[10px] font-bold ${stat.dailyGoalDone ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {stat.dailyGoalDone ? 'Günlük hedef tamam' : 'Günlük hedef eksik'}
-                          </div>
-                        )}
-                      </td>
-                      <td data-label="İşlem" className="px-7 py-4 text-right">
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); setDetailStat(stat); }}
-                          className="p-2.5 text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-all"
-                          title="Öğrenci detay raporu"
-                        >
-                          <ChevronRight className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </ResponsiveTable>
-        </div>
+      {/* Öğrenci bulmaca detayı — 3. seviye modal */}
+      {detailStat && selectedHw && (
+        <StudentPuzzleDetailModal
+          stat={detailStat}
+          homework={selectedHw}
+          puzzles={puzzles}
+          attempts={homeworkAttempts}
+          onClose={() => setDetailStat(null)}
+        />
       )}
 
-      {/* Homework Puzzles */}
-      {selectedHw && hwPuzzles.length > 0 && (
-        <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-white/5 overflow-hidden">
-          <div className="p-7 border-b border-white/5 bg-white/[0.02]">
-            <h3 className="text-lg font-bold text-white flex items-center gap-3 tracking-tight">
-              <Grid className="w-5 h-5 text-indigo-400" /> Ödev Bulmacaları ({hwPuzzles.length})
-            </h3>
-          </div>
-          <div className="p-7 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {hwPuzzles.map((p, i) => (
-              <div key={p.id} className="bg-black/30 rounded-lg p-3 border border-white/5">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-[10px] font-black">{i + 1}</span>
-                  <span className="text-[10px] font-bold text-white truncate flex-1">{p.title}</span>
-                </div>
-                <div className="flex gap-1">
-                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-black ${p.difficulty === 'Kolay' ? 'bg-emerald-500/20 text-emerald-400' : p.difficulty === 'Orta' ? 'bg-amber-500/20 text-amber-400' : 'bg-rose-500/20 text-rose-400'}`}>{p.difficulty}</span>
-                  <span className="px-1.5 py-0.5 bg-indigo-500/20 text-indigo-300 rounded text-[8px] font-black">{p.points}p</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Öğrenci bazlı detay rapor modalı — geniş ve kullanışlı */}
-      {detailStat && (
+      {/* Genel öğrenci özeti (ödev seçilmeden — eski akış yedek) */}
+      {detailStat && !selectedHw && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setDetailStat(null)}>
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden />
           <div
@@ -1665,27 +1513,11 @@ const Homework: React.FC = () => {
                                 <div className="space-y-4 min-w-0">
                                   <div>
                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Öğrencinin oynadığı hamleler</p>
-                                    <p className="text-sm text-slate-200 font-mono leading-relaxed break-words">
-                                      {a.movesPlayed.length
-                                        ? a.movesPlayed.map((m, j) => (
-                                            <span key={j}>
-                                              {j % 2 === 0 ? <span className="text-slate-500">{Math.floor(j / 2) + 1}. </span> : null}{m}{j < a.movesPlayed.length - 1 ? ' ' : ''}
-                                            </span>
-                                          ))
-                                        : '—'}
-                                    </p>
+                                    <MainlineMoveGrid moves={a.movesPlayed} compact showHeader />
                                   </div>
                                   <div>
                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Doğru çözüm</p>
-                                    <p className="text-sm text-slate-400 font-mono leading-relaxed">
-                                      {a.solutionMoves.length
-                                        ? a.solutionMoves.map((m, j) => (
-                                            <span key={j}>
-                                              <span className="text-slate-500">{j + 1}.</span> {m}{j < a.solutionMoves.length - 1 ? ' ' : ''}
-                                            </span>
-                                          ))
-                                        : '—'}
-                                    </p>
+                                    <MainlineMoveGrid moves={a.solutionMoves} compact showHeader />
                                   </div>
                                 </div>
                                 {a.finalFen && (

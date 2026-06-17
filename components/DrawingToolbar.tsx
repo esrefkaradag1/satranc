@@ -10,6 +10,7 @@ interface DrawingToolbarProps {
   onCopy: () => void;
   currentTool: DrawingTool;
   currentColor: SquareMarkColor;
+  orientation?: 'horizontal' | 'vertical';
 }
 
 const COLORS: SquareMarkColor[] = ['red', 'blue', 'green', 'yellow', 'orange', 'purple', 'cyan', 'lime'];
@@ -20,6 +21,7 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   onCopy,
   currentTool,
   currentColor,
+  orientation = 'horizontal',
 }) => {
   const [openSubMenu, setOpenSubMenu] = useState<DrawingTool | null>(null);
 
@@ -48,9 +50,11 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   };
 
   const btnSize = 'w-9 h-9 sm:w-10 sm:h-10';
+  const isVertical = orientation === 'vertical';
+  const dividerClass = isVertical ? 'h-px w-6 bg-white/10 my-1' : 'w-px h-6 bg-white/10 mx-1';
 
   return (
-    <div className="flex items-center gap-0.5 shrink-0">
+    <div className={`flex shrink-0 ${isVertical ? 'flex-col items-center gap-0.5' : 'items-center gap-0.5'}`}>
       {/* Drawing tools */}
       {tools.map((tool) => (
         <div key={tool.id} className="relative shrink-0">
@@ -68,13 +72,23 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
               {tool.icon}
             </div>
             {tool.hasColor && (
-              <ChevronRight className="w-2 h-2 absolute bottom-1 right-1 opacity-40 rotate-90" />
+              <ChevronRight
+                className={`w-2 h-2 absolute opacity-40 ${
+                  isVertical ? 'bottom-1 right-1 rotate-90' : 'bottom-1 right-1 rotate-90'
+                }`}
+              />
             )}
           </button>
 
-          {/* Color Sub-Menu (pops UP) */}
+          {/* Color Sub-Menu */}
           {openSubMenu === tool.id && tool.hasColor && (
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 flex items-center bg-[#1b1e23] backdrop-blur-xl p-1.5 rounded-xl shadow-2xl border border-white/10 z-[110] gap-1 animate-in fade-in zoom-in-95 slide-in-from-bottom-2 duration-200">
+            <div
+              className={`absolute z-[110] flex bg-[#1b1e23] backdrop-blur-xl p-1.5 rounded-xl shadow-2xl border border-white/10 gap-1 animate-in fade-in zoom-in-95 duration-200 ${
+                isVertical
+                  ? 'left-full top-1/2 -translate-y-1/2 ml-2 flex-row flex-wrap max-w-[9.5rem]'
+                  : 'bottom-full left-1/2 -translate-x-1/2 mb-2 items-center slide-in-from-bottom-2'
+              }`}
+            >
               {COLORS.map((c) => (
                 <button
                   key={c}
@@ -95,7 +109,7 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
       ))}
 
       {/* Divider */}
-      <div className="w-px h-6 bg-white/10 mx-1" />
+      <div className={dividerClass} />
 
       {/* Eraser */}
       <button
@@ -112,7 +126,7 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
       </button>
 
       {/* Divider */}
-      <div className="w-px h-6 bg-white/10 mx-1" />
+      <div className={dividerClass} />
 
       {/* Clear */}
       <button

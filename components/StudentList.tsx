@@ -6,6 +6,8 @@ import {
  Edit2,
  Trash2,
  X,
+ ChevronDown,
+ ChevronUp,
  Users,
  UserCheck,
  UserX,
@@ -17,11 +19,21 @@ import {
  PenLine,
 } from'lucide-react';
 import { Student } from'../types';
-import { applySiblingDiscount } from '../lib/trainingGroupUtils';
+import {
+ applyGroupDefaultsToStudent,
+ applySiblingDiscount,
+ disciplineNamesForOffice,
+ findTrainingGroupByName,
+ mergeBranchOffices,
+} from '../lib/trainingGroupUtils';
 import type { StudentApplication } from'../lib/applicationTypes';
 import { APPLICATIONS_UPDATED_EVENT, loadApplicationsAsync } from'../services/applicationStorage';
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
 import { ResponsiveTable } from './ui/ResponsiveTable';
+
+const PLACEHOLDER_OFFICE = 'Şube Seçiniz';
+const PLACEHOLDER_DISCIPLINE = 'Branş Seçiniz';
+const PLACEHOLDER_GROUP = 'Grup Seçiniz';
 
 const BRANCH_OFFICES = ['Tüm Şubeler', 'Merkez', 'Çayyolu', 'Ümitköy'];
 const BRANCHES = ['Tüm Branşlar', 'Satranç', 'Robotik', 'Kodlama'];
@@ -33,13 +45,14 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup } = useApp();
+ const { students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, branchOffices, disciplines, groups, trainingGroups, disciplineBranches } = useApp();
  const [searchTerm, setSearchTerm] = useState('');
  const [filterBranchOffice, setFilterBranchOffice] = useState(BRANCH_OFFICES[0]);
  const [filterBranch, setFilterBranch] = useState(BRANCHES[0]);
  const [filterGroup, setFilterGroup] = useState(GROUPS[0]);
  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
  const [filterScholarship, setFilterScholarship] = useState<'all' | 'yes' | 'no'>('all');
+ const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(true);
 
  const [isModalOpen, setIsModalOpen] = useState(false);
  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
@@ -82,12 +95,43 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
 
  const [formData, setFormData] = useState({
  name: '',
- group: '',
+ branchOffice: PLACEHOLDER_OFFICE,
+ branch: PLACEHOLDER_DISCIPLINE,
+ group: PLACEHOLDER_GROUP,
  level: 'Başlangıç'as'Başlangıç' | 'Orta' | 'İleri',
  elo: 0,
  ukd: 0,
  paymentStatus: 'Unpaid'as'Paid' | 'Unpaid' | 'Partial',
  });
+
+ const mergedOffices = useMemo(
+  () => mergeBranchOffices(branchOffices, disciplineBranches),
+  [branchOffices, disciplineBranches],
+ );
+
+ const editOfficeOptions = useMemo(
+  () => [PLACEHOLDER_OFFICE, ...mergedOffices],
+  [mergedOffices],
+ );
+
+ const editDisciplineOptions = useMemo(() => {
+  const office = formData.branchOffice !== PLACEHOLDER_OFFICE ? formData.branchOffice : '';
+  const fromDefs = disciplineNamesForOffice(disciplineBranches, office || undefined);
+  const names = fromDefs.length > 0 ? fromDefs : disciplines;
+  return [PLACEHOLDER_DISCIPLINE, ...names];
+ }, [disciplineBranches, disciplines, formData.branchOffice]);
+
+ const editGroupOptions = useMemo(() => {
+  const office = formData.branchOffice !== PLACEHOLDER_OFFICE ? formData.branchOffice : '';
+  const discipline = formData.branch !== PLACEHOLDER_DISCIPLINE ? formData.branch : '';
+  if (trainingGroups.length) {
+   const filtered = trainingGroups
+    .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
+    .map((g) => g.name);
+   if (filtered.length) return [PLACEHOLDER_GROUP, ...filtered];
+  }
+  return [PLACEHOLDER_GROUP, ...groups.filter((g) => g !== 'Tüm Gruplar')];
+ }, [formData.branchOffice, formData.branch, trainingGroups, groups]);
 
  const filteredStudents = useMemo(() => {
  return students.filter((s) => {
@@ -175,7 +219,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setEditingStudent(student);
  setFormData({
  name: student.name,
- group: student.group,
+ branchOffice: student.branchOffice || PLACEHOLDER_OFFICE,
+ branch: student.branch || PLACEHOLDER_DISCIPLINE,
+ group: student.group || PLACEHOLDER_GROUP,
  level: student.level,
  elo: student.elo,
  ukd: student.ukd,
@@ -185,7 +231,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setEditingStudent(null);
  setFormData({
  name: '',
- group: '',
+ branchOffice: PLACEHOLDER_OFFICE,
+ branch: PLACEHOLDER_DISCIPLINE,
+ group: PLACEHOLDER_GROUP,
  level: 'Başlangıç',
  elo: 0,
  ukd: 0,
@@ -195,10 +243,50 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setIsModalOpen(true);
  };
 
+ const handleEditGroupChange = (groupName: string) => {
+  setFormData((prev) => {
+   const next = { ...prev, group: groupName };
+   if (groupName === PLACEHOLDER_GROUP) return next;
+   const office = prev.branchOffice !== PLACEHOLDER_OFFICE ? prev.branchOffice : undefined;
+   const discipline = prev.branch !== PLACEHOLDER_DISCIPLINE ? prev.branch : undefined;
+   const tg = findTrainingGroupByName(trainingGroups, groupName, { branchOffice: office, discipline });
+   if (!tg) return next;
+   const defaults = applyGroupDefaultsToStudent(tg, disciplineBranches);
+   return {
+    ...next,
+    branch: defaults.branch || prev.branch,
+    branchOffice: defaults.branchOffice || prev.branchOffice,
+   };
+  });
+ };
+
  const handleSubmit = (e: React.FormEvent) => {
  e.preventDefault();
  if (editingStudent) {
- updateStudent(editingStudent.id, formData);
+  const office = formData.branchOffice !== PLACEHOLDER_OFFICE ? formData.branchOffice : undefined;
+  const discipline = formData.branch !== PLACEHOLDER_DISCIPLINE ? formData.branch : undefined;
+  const groupName = formData.group !== PLACEHOLDER_GROUP ? formData.group : undefined;
+  const tg = groupName
+   ? findTrainingGroupByName(trainingGroups, groupName, { branchOffice: office, discipline })
+   : undefined;
+  const groupDefaults = tg ? applyGroupDefaultsToStudent(tg, disciplineBranches) : null;
+  updateStudent(editingStudent.id, {
+   name: formData.name,
+   level: formData.level,
+   elo: formData.elo,
+   ukd: formData.ukd,
+   paymentStatus: formData.paymentStatus,
+   branchOffice: office,
+   branch: discipline,
+   group: groupName ?? '',
+   trainingGroupId: tg?.id,
+   ...(groupDefaults
+    ? {
+       monthlyFee: groupDefaults.monthlyFee,
+       lessonSchedule: groupDefaults.lessonSchedule,
+      }
+    : {}),
+  });
  } else {
  setIsModalOpen(false);
  onAddNew?.();
@@ -296,25 +384,43 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
 
  {/* Filters + Actions */}
  <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-slate-700/60 overflow-hidden">
- <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-700/60 bg-slate-900/50">
- <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Filtrele ve Ara</h3>
+ <div className="px-4 sm:px-6 py-2.5 sm:py-3 border-b border-slate-700/60 bg-slate-900/50 flex items-center justify-between gap-3">
+ <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-widest">Filtrele ve Ara</h3>
+ <button
+   type="button"
+   onClick={() => setIsFiltersCollapsed((v) => !v)}
+   className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-300/90 hover:text-slate-200 transition-colors"
+   aria-expanded={!isFiltersCollapsed}
+ >
+   {isFiltersCollapsed ? (
+     <>
+       <ChevronDown className="w-4 h-4" /> Detaylı Aramayı Aç
+     </>
+   ) : (
+     <>
+       <ChevronUp className="w-4 h-4" /> Kapat
+     </>
+   )}
+ </button>
  </div>
- <div className="p-4 sm:p-6 space-y-3 sm:space-y-4">
- <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end gap-2 sm:gap-3 lg:gap-4">
+ <div className="p-3 sm:p-4 space-y-2.5 sm:space-y-3">
+ <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end gap-2 sm:gap-2.5 lg:gap-3">
  <div className="relative sm:col-span-2 lg:flex-1 lg:min-w-[200px] lg:max-w-md">
- <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+ <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
  <input
  type="text"
  placeholder="Ad, TC, Tel..."
- className="w-full pl-10 pr-4 py-2.5 sm:py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-sm focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
+ className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  value={searchTerm}
  onChange={(e) => setSearchTerm(e.target.value)}
  />
  </div>
+ {!isFiltersCollapsed && (
+   <>
  <select
  value={filterBranchOffice}
  onChange={(e) => setFilterBranchOffice(e.target.value)}
- className="w-full px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none"
+ className="w-full lg:w-auto lg:flex-1 lg:min-w-[120px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
  >
  {BRANCH_OFFICES.map((o) => (
  <option key={o} value={o}>{o}</option>
@@ -323,7 +429,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <select
  value={filterBranch}
  onChange={(e) => setFilterBranch(e.target.value)}
- className="w-full px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none"
+ className="w-full lg:w-auto lg:flex-1 lg:min-w-[110px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
  >
  {BRANCHES.map((b) => (
  <option key={b} value={b}>{b}</option>
@@ -332,7 +438,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <select
  value={filterGroup}
  onChange={(e) => setFilterGroup(e.target.value)}
- className="w-full px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none"
+ className="w-full lg:w-auto lg:flex-1 lg:min-w-[110px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
  >
  {GROUPS.map((g) => (
  <option key={g} value={g}>{g}</option>
@@ -341,7 +447,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <select
  value={filterStatus}
  onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}
- className="w-full px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none"
+ className="w-full lg:w-auto lg:flex-1 lg:min-w-[90px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
  >
  <option value="all">Tümü</option>
  <option value="active">Aktif</option>
@@ -350,19 +456,21 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <select
  value={filterScholarship}
  onChange={(e) => setFilterScholarship(e.target.value as typeof filterScholarship)}
- className="w-full px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none"
+ className="w-full lg:w-auto lg:flex-1 lg:min-w-[100px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
  >
  <option value="all">Tümü</option>
  <option value="yes">Burslu</option>
  <option value="no">Burslu Değil</option>
  </select>
+   </>
+ )}
  <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-1">
  <button
  type="button"
  onClick={clearFilters}
- className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 sm:py-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-bold transition-all"
+ className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-bold transition-all"
  >
- <RotateCcw className="w-4 h-4" /> Temizle
+ <RotateCcw className="w-3.5 h-3.5" /> Temizle
  </button>
  </div>
  </div>
@@ -693,15 +801,58 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
  <div className="grid grid-cols-2 gap-4">
  <div>
- <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Grup</label>
- <input
+ <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Şube</label>
+ <select
  required
- type="text"
  className="w-full px-4 py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-white focus:ring-2 focus:ring-indigo-500/40 outline-none"
- placeholder="Grup"
+ value={formData.branchOffice}
+ onChange={(e) =>
+  setFormData({
+   ...formData,
+   branchOffice: e.target.value,
+   branch: PLACEHOLDER_DISCIPLINE,
+   group: PLACEHOLDER_GROUP,
+  })
+ }
+ >
+ {editOfficeOptions.map((x) => (
+  <option key={x} value={x}>{x}</option>
+ ))}
+ </select>
+ </div>
+ <div>
+ <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Branş</label>
+ <select
+ required
+ className="w-full px-4 py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-white focus:ring-2 focus:ring-indigo-500/40 outline-none"
+ value={formData.branch}
+ onChange={(e) =>
+  setFormData({
+   ...formData,
+   branch: e.target.value,
+   group: PLACEHOLDER_GROUP,
+  })
+ }
+ >
+ {editDisciplineOptions.map((x) => (
+  <option key={x} value={x}>{x}</option>
+ ))}
+ </select>
+ </div>
+ </div>
+ <div className="grid grid-cols-2 gap-4">
+ <div>
+ <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Grup</label>
+ <select
+ required
+ className="w-full px-4 py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-white focus:ring-2 focus:ring-indigo-500/40 outline-none"
  value={formData.group}
- onChange={(e) => setFormData({ ...formData, group: e.target.value })}
- />
+ onChange={(e) => handleEditGroupChange(e.target.value)}
+ >
+ {editGroupOptions.map((x) => (
+  <option key={x} value={x}>{x}</option>
+ ))}
+ </select>
  </div>
  <div>
  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Seviye</label>

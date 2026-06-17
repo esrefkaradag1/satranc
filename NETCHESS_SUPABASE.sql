@@ -163,6 +163,8 @@ ALTER TABLE public.homework_attempts ADD COLUMN IF NOT EXISTS puzzletitle text;
 ALTER TABLE public.homework_attempts ADD COLUMN IF NOT EXISTS movesplayed jsonb;
 ALTER TABLE public.homework_attempts ADD COLUMN IF NOT EXISTS solutionmoves jsonb;
 ALTER TABLE public.homework_attempts ADD COLUMN IF NOT EXISTS finalfen text;
+ALTER TABLE public.homework_attempts ADD COLUMN IF NOT EXISTS thinkseconds integer;
+ALTER TABLE public.homework_attempts ADD COLUMN IF NOT EXISTS hintused boolean DEFAULT false;
 
 -- Uygulama submissionToDb → student_id, homework_id, submitted_at
 CREATE TABLE IF NOT EXISTS public.homework_submissions (

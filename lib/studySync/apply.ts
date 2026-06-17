@@ -175,3 +175,55 @@ export function promoteBranchToMainline(tree: StudyTree, branchNodeId: NodeId): 
   return { ...nextTree, mainline: rebuildMainlineFromTree(nextTree) };
 }
 
+/** Ana hat SAN listesine göre ağacı hizalar (legacy varyasyon yükseltme sonrası). */
+export function alignTreeMainlineToSans(tree: StudyTree, targetSans: string[]): StudyTree {
+  let nextTree = tree;
+  let parentId = tree.rootId;
+
+  for (const raw of targetSans) {
+    const san = (raw || '').trim();
+    if (!san) break;
+
+    const parent = nextTree.nodes[parentId];
+    if (!parent) break;
+
+    const children = parent.children ?? [];
+    const parentFen = parent.fen || '';
+    let matchId: NodeId | null = null;
+    for (const cid of children) {
+      const n = nextTree.nodes[cid];
+      if (!n) continue;
+      const nodeSan = String(n.san ?? '').trim();
+      if (nodeSan === san) {
+        matchId = cid;
+        break;
+      }
+      try {
+        const g = makeBuilderGame(parentFen);
+        const mv = g.move(san);
+        if (mv?.san === nodeSan) {
+          matchId = cid;
+          break;
+        }
+      } catch {
+        /* try next child */
+      }
+    }
+
+    if (matchId) {
+      if (children[0] !== matchId) {
+        nextTree = promoteBranchToMainline(nextTree, matchId);
+      }
+      parentId = matchId;
+      continue;
+    }
+
+    const { nextTree: withChild, childId } = addChildNode(nextTree, parentId, san);
+    if (!childId) break;
+    nextTree = promoteBranchToMainline(withChild, childId);
+    parentId = childId;
+  }
+
+  return { ...nextTree, mainline: rebuildMainlineFromTree(nextTree) };
+}
+

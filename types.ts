@@ -306,6 +306,10 @@ export interface HomeworkPuzzleAttempt {
   solutionMoves: string[];
   /** Tahtanın son görüntüsü (FEN); admin detayda gösterilir */
   finalFen?: string;
+  /** Bulmaca açıldıktan çözüme kadar geçen süre (sn) */
+  thinkSeconds?: number;
+  /** İpucu kullanıldı mı */
+  hintUsed?: boolean;
   timestamp: string; // ISO
 }
 

@@ -7,6 +7,7 @@ export interface StudentProgressCardStat {
   initials: string;
   correct: number;
   wrong: number;
+  skipped?: number;
   points: number;
   timeSeconds: number;
   progress: number;
@@ -131,7 +132,9 @@ export const StudentProgressCard: React.FC<Props> = ({
           {[
             { label: 'Doğru', value: stat.correct, color: 'text-emerald-400' },
             { label: 'Yanlış', value: stat.wrong, color: 'text-rose-400' },
-            { label: 'Puan', value: stat.points, color: 'text-indigo-300' },
+            ...(stat.skipped != null && stat.skipped > 0
+              ? [{ label: 'Atlandı', value: stat.skipped, color: 'text-slate-400' }]
+              : [{ label: 'Puan', value: stat.points, color: 'text-indigo-300' }]),
           ].map((item) => (
             <div key={item.label} className="rounded-xl bg-white/[0.03] border border-white/[0.04] px-2 py-2 text-center">
               <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wide">{item.label}</p>

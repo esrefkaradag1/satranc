@@ -62,6 +62,8 @@ type InteractiveMovesProps = {
   onClickPly?: (lineIndex: number, plyIndex: number) => void;
   maxMoves?: number;
   theme?: PvMoveListTheme;
+  /** Canlı ders: kaydırma/hover yok, yalnızca metin */
+  readOnly?: boolean;
 };
 
 export function EnginePvInteractiveMoves({
@@ -73,6 +75,7 @@ export function EnginePvInteractiveMoves({
   onClickPly,
   maxMoves = 12,
   theme = 'study',
+  readOnly = false,
 }: InteractiveMovesProps): React.ReactNode[] {
   const sanMoves = uciPvToSanList(fen, pvMoves);
   const parts = fen.split(' ');
@@ -91,19 +94,29 @@ export function EnginePvInteractiveMoves({
 
     if (i === 0 && isBlack && !isWhiteTurn) {
       nodes.push(
-        <span key={`n-${i}`} className={isClassroom ? 'text-slate-500 mr-0.5' : 'text-[#999] mr-0.5'}>
+        <span
+          key={`n-${i}`}
+          className={`mr-0.5 ${isClassroom ? 'text-[11px] text-slate-500' : 'text-[#999]'}`}
+        >
           {startNum}...
         </span>,
       );
     } else if (isWhiteTurn) {
       nodes.push(
-        <span key={`n-${i}`} className={isClassroom ? 'text-slate-500 mr-0.5' : 'text-[#999] mr-0.5'}>
+        <span
+          key={`n-${i}`}
+          className={`mr-0.5 ${isClassroom ? 'text-[11px] text-slate-500' : 'text-[#999]'}`}
+        >
           {moveNum}.
         </span>,
       );
     }
 
-    const hoverClass = isHovered
+    const hoverClass = readOnly
+      ? isClassroom
+        ? i === 0 ? 'font-bold text-slate-200' : 'text-slate-500'
+        : i === 0 ? 'font-bold text-[#e8e8e8]' : 'text-[#bababa]'
+      : isHovered
       ? isClassroom
         ? 'bg-indigo-500/40 text-white font-bold'
         : 'bg-sky-500/35 text-white font-bold'
@@ -115,24 +128,37 @@ export function EnginePvInteractiveMoves({
           ? 'text-slate-400 hover:bg-indigo-500/15 hover:text-white'
           : 'text-[#bababa] hover:bg-white/10 hover:text-white';
 
-    nodes.push(
-      <button
-        type="button"
-        key={`m-${i}`}
-        className={`mr-0.5 px-1 py-0.5 rounded cursor-pointer transition-colors font-mono leading-tight ${hoverClass} ${
-          isClassroom ? 'text-[11px]' : 'text-[12px]'
-        }`}
-        onMouseEnter={(e) => onHoverPly(lineIndex, i, e.clientX, e.clientY)}
-        onMouseMove={(e) => onHoverPly(lineIndex, i, e.clientX, e.clientY)}
-        onMouseLeave={() => onHoverPly(lineIndex, null, 0, 0)}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClickPly?.(lineIndex, i);
-        }}
-      >
-        {sanMoves[i]}
-      </button>,
-    );
+    if (readOnly) {
+      nodes.push(
+        <span
+          key={`m-${i}`}
+          className={`mr-0.5 font-mono leading-tight ${hoverClass} ${
+            isClassroom ? 'text-[9px]' : 'text-[12px]'
+          }`}
+        >
+          {sanMoves[i]}
+        </span>,
+      );
+    } else {
+      nodes.push(
+        <button
+          type="button"
+          key={`m-${i}`}
+          className={`mr-0.5 px-1 py-0.5 rounded cursor-pointer transition-colors font-mono leading-tight ${hoverClass} ${
+            isClassroom ? 'text-[12px]' : 'text-[12px]'
+          }`}
+          onMouseEnter={(e) => onHoverPly(lineIndex, i, e.clientX, e.clientY)}
+          onMouseMove={(e) => onHoverPly(lineIndex, i, e.clientX, e.clientY)}
+          onMouseLeave={() => onHoverPly(lineIndex, null, 0, 0)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClickPly?.(lineIndex, i);
+          }}
+        >
+          {sanMoves[i]}
+        </button>,
+      );
+    }
   }
 
   if (sanMoves.length > maxMoves) {

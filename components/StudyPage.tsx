@@ -12,7 +12,7 @@ import {
   ArrowLeft, Clock, Users, ListChecks, Globe, Lock, Star,
   MousePointer2, ChevronUp, ChevronDown, FileText, Video, Highlighter,
   Send, Undo2, RotateCcw, Eye, Folder, FolderPlus,
-  FileImage, Loader2, Sparkles, Import,
+  FileImage, Loader2, Sparkles, Import, Upload,
 } from 'lucide-react';
 import StudyCallPanel from './StudyCallPanel';
 import { createStudyCall } from '../services/studyCall';
@@ -41,7 +41,7 @@ import { useStudyChapterSync } from '../hooks/useStudyChapterSync';
 import { appendStudyAction } from '../services/studyActions';
 import { loadStudyPresence, subscribeStudyPresence, upsertPresence } from '../services/studyActions';
 import { serializePath } from '../lib/studySync/types';
-import { mainlineSansFromTree, sanitizeChapterVariations } from '../lib/studySync/moveList';
+import { mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, promoteVariationLines, mainlineSansDiffer, mergeVariationRecords } from '../lib/studySync/moveList';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
 import { BoardViewToggle } from './chess/BoardViewToggle';
 import { useBoardViewMode } from '../hooks/useBoardViewMode';
@@ -237,7 +237,7 @@ const StudyPage: React.FC = () => {
   /** Tahta üzerinde kare boyama (Lichess benzeri) */
   const [drawingTool, setDrawingTool] = useState<DrawingTool>('mouse');
   const [drawingColor, setDrawingColor] = useState<SquareMarkColor>('red');
-  /** Ok aracı seçili değilken: Ctrl + sağ sürükle ile ok çizmek için */
+  /** Ok aracı seçili değilken: Ctrl + sağ tık kare işareti; sağ sürükle ok (mouse modunda) */
   const [arrowCtrlShortcutHeld, setArrowCtrlShortcutHeld] = useState(false);
   /** Yazma yokken (izleyici): F ile yalnızca yerel görünüm çevirisi */
   const [studyBoardViewFlipLocal, setStudyBoardViewFlipLocal] = useState(false);
@@ -270,6 +270,7 @@ const StudyPage: React.FC = () => {
   const [showBulkPgnImport, setShowBulkPgnImport] = useState(false);
   const [bulkPgnImportText, setBulkPgnImportText] = useState('');
   const bulkPgnFileRef = useRef<HTMLInputElement>(null);
+  const ncFenFileRef = useRef<HTMLInputElement>(null);
 
   // Board settings panel
   const [showBoardSettings, setShowBoardSettings] = useState(false);
@@ -464,6 +465,7 @@ const StudyPage: React.FC = () => {
     jumpToVariation,
     jumpToMoveIndex,
     promoteVariation,
+    alignMainlineToMoves,
     navigationState,
     makeMove,
     setNodeGlyphs,
@@ -482,28 +484,36 @@ const StudyPage: React.FC = () => {
   });
 
   const selectedChapter = useMemo(() => {
-    const base = legacyChapter ?? selectedChapterRaw;
-    if (!base) return null;
-    if (!selectedChapterRaw || base === selectedChapterRaw) return base;
+    const treeCh = legacyChapter ?? null;
+    const raw = selectedChapterRaw;
+    if (!raw) return treeCh;
+    if (!treeCh || treeCh.id !== raw.id) return raw;
+    const rawMoves = raw.moves ?? [];
+    const treeMoves = treeCh.moves ?? [];
+    const mergedVars = mergeVariationRecords(raw.variations ?? {}, treeCh.variations ?? {});
     return {
-      ...base,
+      ...raw,
+      moves: mainlineSansDiffer(rawMoves, treeMoves) ? rawMoves : treeCh.moves,
+      variations: mergedVars,
       moveAnnotations: {
-        ...(base.moveAnnotations ?? {}),
-        ...(selectedChapterRaw.moveAnnotations ?? {}),
+        ...(treeCh.moveAnnotations ?? {}),
+        ...(raw.moveAnnotations ?? {}),
       },
     };
   }, [legacyChapter, selectedChapterRaw]);
 
   const chapterMovesForUi = useMemo(() => {
     if (practiceMode && !recording) return selectedChapter?.moves ?? [];
+    const legacy = selectedChapter?.moves ?? [];
     if (!syncState?.tree?.mainline || syncState.tree.mainline.length <= 1) {
-      return selectedChapter?.moves ?? [];
+      return legacy;
     }
+    if (syncState.chapterId !== selectedChapterRaw?.id) return legacy;
     const rootFen = syncState.tree.nodes[syncState.tree.rootId]?.fen ?? DEFAULT_FEN;
     const fromTree = mainlineSansFromTree(syncState.tree, rootFen);
-    const legacy = selectedChapter?.moves ?? [];
+    if (mainlineSansDiffer(fromTree, legacy)) return legacy;
     return fromTree.length >= legacy.length ? fromTree : legacy;
-  }, [practiceMode, recording, syncState, selectedChapter?.moves, selectedChapter?.id]);
+  }, [practiceMode, recording, syncState, selectedChapter?.moves, selectedChapter?.id, selectedChapterRaw?.id]);
 
   const moveListChapter = useMemo(() => {
     if (!selectedChapter) return null;
@@ -652,7 +662,17 @@ const StudyPage: React.FC = () => {
     refreshStudyEvents();
   }, [refreshStudyEvents]);
 
+  useEffect(() => {
+    if (bottomTab === 'analysis') refreshStudyEvents();
+  }, [bottomTab, selectedChapter?.id, refreshStudyEvents]);
+
+  const syncPathFen = useMemo(() => {
+    if (syncState?.chapterId !== selectedChapterRaw?.id) return null;
+    return fenAtSyncPath(syncState);
+  }, [syncState, selectedChapterRaw?.id]);
+
   const currentFen = useMemo(() => {
+    if (syncPathFen) return syncPathFen;
     const ch = moveListChapter ?? selectedChapter;
     if (!ch) return DEFAULT_FEN;
     try {
@@ -664,7 +684,7 @@ const StudyPage: React.FC = () => {
       }
       return game.fen();
     } catch { return ch.fen || DEFAULT_FEN; }
-  }, [moveListChapter, selectedChapter, currentMoveIndex]);
+  }, [syncPathFen, moveListChapter, selectedChapter, currentMoveIndex]);
 
   // Practice (vs computer) oynanıyorsa chapter.moves yerine local fen kullan
   const practiceActiveFen = useMemo(() => {
@@ -1051,6 +1071,30 @@ const StudyPage: React.FC = () => {
 
   const addChapter = useCallback(() => openNewChapterModal('empty'), [openNewChapterModal]);
 
+  const handleNcFenFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    void (async () => {
+      try {
+        const text = (await file.text()).trim();
+        if (!text) {
+          showToast('Dosya boş', 'error');
+          return;
+        }
+        setNcFenInput(text);
+        const baseName = file.name.replace(/\.(pgn|fen|txt)$/i, '').trim();
+        if (baseName) {
+          setNcName((prev) => (/^Bölüm \d+$/i.test(prev.trim()) ? baseName : prev));
+        }
+        showToast(`${file.name} yüklendi`, 'success');
+      } catch {
+        showToast('Dosya okunamadı', 'error');
+      } finally {
+        if (ncFenFileRef.current) ncFenFileRef.current.value = '';
+      }
+    })();
+  }, [showToast]);
+
   const ncUpdateFenMeta = useCallback((turn: 'w' | 'b', castling: typeof ncCastling) => {
     try {
       const parts = ncFen.split(' ');
@@ -1331,7 +1375,7 @@ const StudyPage: React.FC = () => {
       const g = makeBuilderGame(currentFen);
       const result = g.move({ from: from as any, to: to as any, promotion: 'q' });
       if (!result) return false;
-      const mainLinePos = currentMoveIndex;
+      const mainLinePos = Math.max(0, currentMoveIndex - 1);
       const existingVars = selectedChapter.variations?.[mainLinePos] ?? [];
       const newVars = [...existingVars, [result.san]];
       updateChapterAtIndex(selectedChapterIndex, {
@@ -1438,9 +1482,10 @@ const StudyPage: React.FC = () => {
 
   const effectiveFen = (viewingStudentId && studentEffectiveFen)
     ? studentEffectiveFen
-    : (isInVariation && variationFen
-      ? variationFen
-      : (practiceActiveFen ?? currentFen));
+    : (practiceActiveFen
+      ?? (isInVariation && variationFen ? variationFen : null)
+      ?? syncPathFen
+      ?? currentFen);
 
   const boardDisplayFen = useMemo(() => {
     if (!hoverState || !selectedChapter) return effectiveFen;
@@ -2479,11 +2524,15 @@ const StudyPage: React.FC = () => {
       const currentLine = [...(group[varGroupIdx] ?? [])];
       const newLine = [...currentLine.slice(0, varMoveIdx + 1), ...sanMoves];
       const nextGroup = group.map((line, idx) => (idx === varGroupIdx ? newLine : line));
+      const newVarIdx = varMoveIdx + sanMoves.length;
       updateChapterAtIndex(selectedChapterIndex, {
         variations: { ...existingVars, [mainLinePos]: nextGroup },
       });
-      setCurrentVariation([mainLinePos, varGroupIdx, varMoveIdx + sanMoves.length]);
-      setSelectedAnnotationPly(mainLinePos + varMoveIdx + sanMoves.length);
+      setCurrentVariation([mainLinePos, varGroupIdx, newVarIdx]);
+      setSelectedAnnotationPly(mainLinePos + newVarIdx);
+      if (syncState?.tree?.mainline && syncState.tree.mainline.length > 1) {
+        void jumpToVariation(mainLinePos, varGroupIdx, newVarIdx);
+      }
       return;
     }
 
@@ -2500,12 +2549,14 @@ const StudyPage: React.FC = () => {
         delete newVars[k];
       }
       const tree = syncState?.tree?.mainline;
-      if (tree && tree.length > currentIdx + 1) {
+      if (tree && tree.length > currentIdx + 1 && write) {
         await truncateMainlineFromMoveIndex(currentIdx);
       }
     }
 
     const newMoves = [...baseMoves.slice(0, currentIdx), ...sanMoves];
+    const newMoveIndex = currentIdx + sanMoves.length;
+
     updateChapterAtIndex(selectedChapterIndex, {
       moves: newMoves,
       moveComments: newComments,
@@ -2513,11 +2564,15 @@ const StudyPage: React.FC = () => {
       variations: newVars,
     });
 
-    const newMoveIndex = currentIdx + sanMoves.length;
     setCurrentVariation(null);
     setCurrentMoveIndex(newMoveIndex);
     setSelectedAnnotationPly(Math.max(0, newMoveIndex - 1));
-    void jumpToMoveIndex(newMoveIndex, newMoves);
+
+    if (syncState?.tree) {
+      alignMainlineToMoves(newMoves, newMoveIndex);
+    } else {
+      void jumpToMoveIndex(newMoveIndex, newMoves);
+    }
   }, [
     selectedChapter,
     viewingStudentId,
@@ -2531,8 +2586,11 @@ const StudyPage: React.FC = () => {
     selectedChapterIndex,
     updateChapterAtIndex,
     syncState?.tree?.mainline,
+    write,
     truncateMainlineFromMoveIndex,
+    alignMainlineToMoves,
     jumpToMoveIndex,
+    jumpToVariation,
   ]);
 
   const chapterOrientationBase = selectedChapter?.orientation ?? 'white';
@@ -3036,195 +3094,240 @@ const StudyPage: React.FC = () => {
   return (
     <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0a0f1e] text-slate-300 overflow-hidden font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
 
+      <header className="shrink-0 flex items-center gap-3 px-3 sm:px-4 py-2.5 border-b border-white/5 bg-[#0f172a]/95 backdrop-blur-xl z-50">
+        <button
+          type="button"
+          onClick={() => setView('list')}
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-bold uppercase tracking-wider transition-all shrink-0"
+          aria-label="Çalışmalara dön"
+        >
+          <ArrowLeft className="w-4 h-4 shrink-0" />
+          <span className="hidden sm:inline">Çalışmalara Dön</span>
+          <span className="sm:hidden">Geri</span>
+        </button>
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <span className="text-lg leading-none shrink-0">{selectedStudy.emoji}</span>
+          <h1 className="text-sm font-bold text-white truncate">{selectedStudy.title}</h1>
+        </div>
+      </header>
+
       {/* ═══════════════  THREE COLUMN LAYOUT (Lichess style)  ════════════════ */}
       <div className="flex flex-col xl:flex-row gap-0 flex-1 min-h-0 min-w-0 pb-14 xl:pb-0">
 
-        {/* ── LEFT SIDEBAR: Chapters + Members + Chat (Premium style) ─────── */}
-        <div className={`${mobilePanel === 'left' ? 'flex' : 'hidden'} xl:flex w-full xl:w-64 shrink-0 flex-col min-h-0 rounded-sm bg-[#0f172a] border border-white/5 overflow-hidden ${mobilePanel === 'left' ? 'fixed inset-x-0 top-0 bottom-14 z-40 xl:relative xl:z-auto xl:inset-auto' : ''}`}>
+        {/* ── LEFT SIDEBAR: Chapters + Members + Chat ─────── */}
+        <div className={`${mobilePanel === 'left' ? 'flex' : 'hidden'} xl:flex w-full xl:w-72 shrink-0 flex-col min-h-0 bg-[#0f172a] border-r border-white/5 overflow-hidden ${mobilePanel === 'left' ? 'fixed inset-x-0 top-12 bottom-14 z-40 xl:relative xl:top-auto xl:z-auto xl:inset-auto' : ''}`}>
           {/* Tab header */}
-          <div className="flex items-center bg-[#1e293b] border-b border-white/5 shrink-0">
+          <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-white/5 shrink-0">
             {(['chapters', 'members'] as const).map(tab => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setLeftTab(tab)}
-                className={`relative flex-1 px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider transition-all text-center ${
+                className={`relative flex-1 min-w-0 rounded-lg px-2 py-2 text-[11px] font-bold uppercase tracking-wide transition-all text-center ${
                   leftTab === tab
-                    ? 'text-white bg-[#0f172a]'
-                    : 'text-slate-500 hover:text-slate-300'
+                    ? 'bg-indigo-500/20 text-indigo-200 ring-1 ring-indigo-500/30'
+                    : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04]'
                 }`}
               >
                 {tab === 'chapters' ? `${selectedStudy.chapters.length} Bölüm` : `${members.length} Üye`}
                 {tab === 'members' && anyStudentLive && (
-                  <span className="absolute top-2 right-2 w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(249,115,22,0.8)]" />
+                  <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse" />
                 )}
               </button>
             ))}
-            <div className="flex items-center px-1 bg-[#1e293b]">
+            <div className="flex items-center shrink-0">
               {leftTab === 'chapters' && (
                 <button
                   type="button"
                   onClick={() => { setShowChapterSearch(v => !v); setChapterSearch(''); }}
-                  className={`p-1.5 transition-colors ${showChapterSearch ? 'text-indigo-400' : 'text-slate-500 hover:text-slate-300'}`}
+                  className={`p-2 rounded-lg transition-colors ${showChapterSearch ? 'text-indigo-400 bg-indigo-500/10' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+                  title="Bölüm ara"
                 >
                   <Search className="w-3.5 h-3.5" />
                 </button>
               )}
-              <button type="button" onClick={openStudySettings} className="p-1.5 text-[#787472] hover:text-[#bababa]">
+              <button
+                type="button"
+                onClick={openStudySettings}
+                className="p-2 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"
+                title="Çalışma ayarları"
+              >
                 <Settings2 className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar min-h-0">
+          <div className="flex-1 flex flex-col min-h-0">
             {leftTab === 'chapters' ? (
-              <div>
-                {showChapterSearch && (
-                  <div className="px-2 py-2 border-b border-white/5">
-                    <input
-                      type="text"
-                      autoFocus
-                      value={chapterSearch}
-                      onChange={e => setChapterSearch(e.target.value)}
-                      placeholder="Bölüm ara..."
-                      className="w-full bg-[#0a0f1e] border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500/50 transition-all"
-                    />
-                  </div>
-                )}
-                {/* Chapter list */}
-                <div className="divide-y divide-[rgba(255,255,255,0.05)]/30">
-                  {filteredChapters.map((ch, i) => {
-                    const realIdx = selectedStudy.chapters.findIndex(c => c.id === ch.id);
-                    const active = selectedChapterIndex === realIdx;
-                    return (
-                      <div
-                        key={ch.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => { setSelectedChapterIndex(realIdx); setCurrentMoveIndex(0); setCurrentVariation(null); }}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setSelectedChapterIndex(realIdx); setCurrentMoveIndex(0); setCurrentVariation(null); } }}
-                        className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-all group cursor-pointer border-l-2 ${
-                          active ? 'bg-indigo-600/10 border-indigo-500 text-white' : 'text-slate-400 border-transparent hover:bg-white/5 hover:text-slate-200'
-                        }`}
-                      >
-                        <span className={`text-[11px] font-bold w-5 shrink-0 text-right ${active ? 'text-indigo-400' : 'text-slate-600'}`}>
-                          {realIdx + 1}
-                        </span>
-                        <span className={`text-[13px] truncate flex-1 ${active ? 'font-bold' : ''}`}>
-                          {String((active ? selectedChapter?.title : ch.title) || '')}
-                        </span>
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              <>
+                <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar min-h-0 px-2 py-2">
+                  {showChapterSearch && (
+                    <div className="mb-2">
+                      <input
+                        type="text"
+                        autoFocus
+                        value={chapterSearch}
+                        onChange={e => setChapterSearch(e.target.value)}
+                        placeholder="Bölüm ara..."
+                        className="w-full bg-slate-900/80 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500/50 transition-all"
+                      />
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    {filteredChapters.map((ch) => {
+                      const realIdx = selectedStudy.chapters.findIndex(c => c.id === ch.id);
+                      const active = selectedChapterIndex === realIdx;
+                      return (
+                        <div
+                          key={ch.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => { setSelectedChapterIndex(realIdx); setCurrentMoveIndex(0); setCurrentVariation(null); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setSelectedChapterIndex(realIdx); setCurrentMoveIndex(0); setCurrentVariation(null); } }}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-left transition-all group cursor-pointer ${
+                            active
+                              ? 'bg-indigo-500/15 text-white ring-1 ring-indigo-500/25'
+                              : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+                          }`}
+                        >
+                          <span className={`text-[11px] font-bold w-5 shrink-0 text-right tabular-nums ${active ? 'text-indigo-400' : 'text-slate-600'}`}>
+                            {realIdx + 1}
+                          </span>
+                          <span className={`text-[13px] truncate flex-1 ${active ? 'font-semibold' : ''}`}>
+                            {String(ch.title || '')}
+                          </span>
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); openChapterEdit(ch); }}
-                            className="p-0.5 text-[#787472] hover:text-white"
+                            className="p-1 rounded-md text-slate-600 hover:text-white hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                            title="Bölümü düzenle"
                           >
-                            <Settings2 className="w-3 h-3" />
+                            <Settings2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        {active && <div className="w-0.5 h-5 bg-[#6366f1] rounded-full shrink-0" />}
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
+                  {filteredChapters.length === 0 && (
+                    <p className="text-center py-10 text-xs text-slate-500">Henüz bölüm yok</p>
+                  )}
                 </div>
 
-                {/* Add chapter */}
-                <div className="flex border-t border-white/5">
+                <div className="shrink-0 border-t border-white/10 bg-[#0b1220] p-3 space-y-2">
                   <button
                     type="button"
                     onClick={addChapter}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-3 text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/5 transition-all text-xs font-bold border-r border-white/5"
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-colors"
                   >
-                    <Plus className="w-3.5 h-3.5" /> Yeni bölüm
+                    <Plus className="w-4 h-4" /> Yeni bölüm
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => openNewChapterModal('vision')}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-3 text-slate-500 hover:text-teal-400 hover:bg-teal-500/5 transition-all text-xs font-bold border-r border-white/5"
-                    title="Görsel veya PDF ile FEN çıkar"
-                  >
-                    <FileImage className="w-3.5 h-3.5" /> Görsel / PDF
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowBulkPgnImport((v) => !v)}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-3 text-slate-500 hover:text-amber-400 hover:bg-amber-500/5 transition-all text-xs font-bold"
-                    title="Birden fazla PGN dosyasını toplu ekle"
-                  >
-                    <Import className="w-3.5 h-3.5" /> Toplu PGN
-                  </button>
-                </div>
-                {showBulkPgnImport ? (
-                  <div className="relative z-20 p-3 border-t border-white/5 space-y-2 bg-black/30">
-                    <input
-                      ref={bulkPgnFileRef}
-                      type="file"
-                      accept=".pgn,.txt,text/plain"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => {
-                        const files = e.target.files;
-                        if (!files?.length) return;
-                        void (async () => {
-                          let total = 0;
-                          for (const file of Array.from(files)) {
-                            const text = await file.text();
-                            total += bulkImportPgn(text);
-                          }
-                          if (total > 0) {
-                            showToast(`${total} bölüm eklendi`, 'success');
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openNewChapterModal('vision')}
+                      className="flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-slate-400 hover:text-teal-300 hover:border-teal-500/30 hover:bg-teal-500/5 transition-all text-[11px] font-bold"
+                      title="Görsel veya PDF ile FEN çıkar"
+                    >
+                      <FileImage className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">Görsel / PDF</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkPgnImport((v) => !v)}
+                      className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg border text-[11px] font-bold transition-all ${
+                        showBulkPgnImport
+                          ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                          : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/5'
+                      }`}
+                      title="Birden fazla PGN dosyasını toplu ekle"
+                    >
+                      <Import className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">Toplu PGN</span>
+                    </button>
+                  </div>
+
+                  {showBulkPgnImport ? (
+                    <div className="rounded-xl border border-amber-500/20 bg-slate-900/70 p-3 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Import className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span className="text-[11px] font-bold text-slate-200">Toplu PGN içe aktar</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowBulkPgnImport(false)}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-white/5 transition-colors shrink-0"
+                          aria-label="Kapat"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <input
+                        ref={bulkPgnFileRef}
+                        type="file"
+                        accept=".pgn,.txt,text/plain"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          if (!files?.length) return;
+                          void (async () => {
+                            let total = 0;
+                            for (const file of Array.from(files)) {
+                              const text = await file.text();
+                              total += bulkImportPgn(text);
+                            }
+                            if (total > 0) {
+                              showToast(`${total} bölüm eklendi`, 'success');
+                              setBulkPgnImportText('');
+                            } else {
+                              showToast('Geçerli PGN bulunamadı', 'error');
+                            }
+                            if (bulkPgnFileRef.current) bulkPgnFileRef.current.value = '';
+                          })();
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => bulkPgnFileRef.current?.click()}
+                        className="w-full py-2.5 rounded-lg border border-dashed border-white/15 bg-white/[0.03] text-slate-300 text-xs font-bold hover:border-amber-500/35 hover:bg-amber-500/5 hover:text-amber-200 transition-all"
+                      >
+                        PGN dosyası seç
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-px bg-white/10" />
+                        <span className="text-[10px] text-slate-500 font-medium shrink-0">veya yapıştır</span>
+                        <div className="flex-1 h-px bg-white/10" />
+                      </div>
+                      <textarea
+                        rows={4}
+                        value={bulkPgnImportText}
+                        onChange={(e) => setBulkPgnImportText(e.target.value)}
+                        placeholder="Birden fazla PGN yapıştırın — her oyun ayrı bölüm olur"
+                        className="w-full bg-slate-950/80 border border-white/10 rounded-lg px-3 py-2.5 text-[11px] text-slate-300 font-mono resize-none focus:outline-none focus:border-amber-500/35 transition-colors"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const n = bulkImportPgn(bulkPgnImportText);
+                          if (n > 0) {
+                            showToast(`${n} bölüm eklendi`, 'success');
                             setBulkPgnImportText('');
                           } else {
                             showToast('Geçerli PGN bulunamadı', 'error');
                           }
-                          if (bulkPgnFileRef.current) bulkPgnFileRef.current.value = '';
-                        })();
-                      }}
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => bulkPgnFileRef.current?.click()}
-                        className="flex-1 py-2 rounded-lg bg-slate-800 border border-white/10 text-slate-200 text-[10px] font-bold hover:bg-slate-700 transition-all"
+                        }}
+                        className="w-full py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors"
                       >
-                        PGN dosyası seç
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowBulkPgnImport(false)}
-                        className="px-3 py-2 rounded-lg text-slate-500 hover:text-slate-300 text-[10px] font-bold"
-                      >
-                        Kapat
+                        İçe aktar
                       </button>
                     </div>
-                    <textarea
-                      rows={5}
-                      value={bulkPgnImportText}
-                      onChange={(e) => setBulkPgnImportText(e.target.value)}
-                      placeholder="Veya birden fazla PGN yapıştırın (her oyun ayrı bölüm olur)..."
-                      className="w-full bg-slate-900 border border-white/5 rounded-lg px-3 py-2 text-[10px] text-slate-300 font-mono resize-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const n = bulkImportPgn(bulkPgnImportText);
-                        if (n > 0) {
-                          showToast(`${n} bölüm eklendi`, 'success');
-                          setBulkPgnImportText('');
-                        } else {
-                          showToast('Geçerli PGN bulunamadı', 'error');
-                        }
-                      }}
-                      className="w-full py-2 rounded-lg bg-amber-500/15 text-amber-300 text-[10px] font-black border border-amber-500/25"
-                    >
-                      Yapıştırılan metni içe aktar
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+                  ) : null}
+                </div>
+              </>
             ) : (
-              <div className="p-3 space-y-3">
+              <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar min-h-0 p-3 space-y-3">
                 <button
                   type="button"
                   onClick={() => setShowAddMember(true)}
@@ -3285,30 +3388,31 @@ const StudyPage: React.FC = () => {
             )}
           </div>
 
-          {/* Chat Section (always visible, Lichess style) */}
-          <div className="border-t border-white/5 bg-[#0f172a] flex flex-col shrink-0" style={{ minHeight: '180px', maxHeight: '220px' }}>
-            <div className="flex items-center justify-between px-3 py-2 bg-[#1e293b]/50 border-b border-white/5">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">SOHBET ODASI</span>
+          {/* Chat */}
+          <div className="border-t border-white/10 bg-[#0b1220] flex flex-col shrink-0" style={{ minHeight: '160px', maxHeight: '200px' }}>
+            <div className="flex items-center justify-between px-3 py-2.5">
+              <div className="flex items-center gap-2.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sohbet</span>
                 <button
                   type="button"
                   onClick={() => setChatEnabled(v => !v)}
-                  className={`w-9 h-5 rounded-full transition-all relative shadow-inner ${chatEnabled ? 'bg-indigo-600' : 'bg-slate-800'}`}
+                  className={`w-9 h-5 rounded-full transition-all relative ${chatEnabled ? 'bg-indigo-600' : 'bg-slate-700'}`}
+                  aria-label={chatEnabled ? 'Sohbeti kapat' : 'Sohbeti aç'}
                 >
-                  <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-md transition-all ${chatEnabled ? 'left-4.5' : 'left-0.5'}`} />
+                  <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${chatEnabled ? 'left-4.5' : 'left-0.5'}`} />
                 </button>
               </div>
               <button
                 type="button"
                 onClick={() => setShowCallPanel(v => !v)}
-                className="p-1 text-[#787472] hover:text-[#bababa] transition-colors"
-                title="Sesli Arama"
+                className="p-2 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"
+                title="Sesli arama"
               >
                 <Video className="w-3.5 h-3.5" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1.5 custom-scrollbar min-h-0">
+            <div className="flex-1 overflow-y-auto px-3 py-1.5 space-y-1 custom-scrollbar min-h-0">
               {chatMessages.length === 0 && (
                 <p className="text-center py-4 text-[10px] text-[#787472] italic">Mesaj yok</p>
               )}
@@ -3327,25 +3431,20 @@ const StudyPage: React.FC = () => {
               <div ref={chatEndRef} />
             </div>
 
-            <div className="px-2 py-1.5 text-[9px] text-[#787472] text-center border-t border-[rgba(255,255,255,0.05)]/50">
-              Lütfen sohbette nazik ol!
-            </div>
-
-            <form onSubmit={e => { e.preventDefault(); sendChat(); }} className="flex border-t border-white/5 bg-[#0f172a]">
+            <form onSubmit={e => { e.preventDefault(); sendChat(); }} className="flex border-t border-white/10 bg-slate-900/50">
               <input
                 type="text"
                 value={chatInput}
                 onChange={e => setChatInput(e.target.value)}
                 placeholder="Mesaj yaz..."
-                className="flex-1 bg-transparent px-4 py-3 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none border-none"
+                className="flex-1 bg-transparent px-3 py-2.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none"
               />
-              <button type="submit" className="px-4 text-indigo-400 hover:text-indigo-300 transition-all hover:scale-110">
+              <button type="submit" className="px-3 text-indigo-400 hover:text-indigo-300 transition-colors">
                 <Send className="w-4 h-4" />
               </button>
             </form>
 
-            {/* Connected users */}
-            <div className="px-3 py-2 bg-[#1e293b]/30 border-t border-white/5 flex items-center gap-2">
+            <div className="px-3 py-1.5 border-t border-white/5 flex items-center gap-2 text-[10px] text-slate-500">
               <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20">
                 <Users className="w-3 h-3 text-indigo-400" />
                 <span className="text-[10px] text-indigo-400 font-extrabold">{members.length + 1}</span>
@@ -3453,7 +3552,7 @@ const StudyPage: React.FC = () => {
                         onPieceClick: (arg: unknown) => handleBoardPieceClick(arg),
                         allowDrawingArrows:
                           isCoachOrAdmin &&
-                          (drawingTool === 'arrow' || arrowCtrlShortcutHeld),
+                          (drawingTool === 'mouse' || drawingTool === 'arrow' || arrowCtrlShortcutHeld),
                         arePiecesDraggable: drawingTool === 'mouse',
                         arrows: (() => {
                           const base = boardArrows || [];
@@ -3551,8 +3650,8 @@ const StudyPage: React.FC = () => {
 
               {/* Drawing Toolbar Row (Coach Only) - Outside Board */}
               {(auth?.role === 'admin' || auth?.role === 'coach') && (
-                <div className="w-full overflow-x-auto scrollbar-none -mx-0.5 px-0.5 mb-1 sm:mb-3">
-                  <div className="inline-flex bg-[#1b1e23]/95 backdrop-blur-xl p-1 sm:p-2 rounded-xl border border-white/10 shadow-2xl mx-auto sm:mx-0">
+                <div className="w-full flex justify-center overflow-x-auto scrollbar-none mb-1 sm:mb-3">
+                  <div className="inline-flex bg-[#1b1e23]/95 backdrop-blur-xl p-1 sm:p-2 rounded-xl border border-white/10 shadow-2xl">
                     <DrawingToolbar
                       currentTool={drawingTool}
                       currentColor={drawingColor}
@@ -3630,14 +3729,6 @@ const StudyPage: React.FC = () => {
               {/* Study info — mobilde kompakt */}
               <div className="w-full sm:max-w-[min(66vh,60vw)] bg-[#0f172a] rounded-xl border border-white/5 px-3 py-3 sm:px-6 sm:py-5 shadow-2xl">
                 <div className="flex items-center gap-2 sm:gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setView('list')}
-                    className="shrink-0 p-2 rounded-lg bg-white/5 text-slate-400 hover:text-white transition-all"
-                    aria-label="Çalışmalara dön"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                  </button>
                   <span className="text-xl sm:text-2xl shrink-0 leading-none">{selectedStudy.emoji}</span>
                   <div className="flex-1 min-w-0">
                     <h2 className="text-xs sm:text-sm font-bold text-white truncate">{selectedStudy.title}</h2>
@@ -3722,8 +3813,9 @@ const StudyPage: React.FC = () => {
         </div>
 
         {/* ── RIGHT COLUMN: Engine Analysis + Move Tree + Mini Board ──────────── */}
-        <div className={`${mobilePanel === 'right' ? 'flex' : 'hidden'} xl:flex w-full xl:w-72 shrink-0 flex-col min-h-0 rounded-sm bg-[#0f172a] border border-white/5 overflow-visible shadow-2xl ${mobilePanel === 'right' ? 'fixed inset-x-0 top-0 bottom-14 z-40 xl:relative xl:z-auto xl:inset-auto' : ''}`}>
-          {/* Engine Analysis Panel */}
+        <div className={`${mobilePanel === 'right' ? 'flex' : 'hidden'} xl:flex w-full xl:w-72 shrink-0 flex-col min-h-0 rounded-sm bg-[#0f172a] border border-white/5 overflow-hidden shadow-2xl ${mobilePanel === 'right' ? 'fixed inset-x-0 top-12 bottom-14 z-40 xl:relative xl:top-auto xl:z-auto xl:inset-auto' : ''}`}>
+          {/* Engine Analysis Panel — sabit üst bölüm */}
+          <div className="shrink-0">
           <EngineAnalysis
             fen={effectiveFen}
             boardOrientation={boardOrientation}
@@ -3762,6 +3854,7 @@ const StudyPage: React.FC = () => {
             onPvMoveClick={applyEnginePvLine}
             onTopMoveUpdate={setEngineTopMove}
           />
+          </div>
           
           {viewingStudentId && (
             <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-orange-500 text-white px-3 py-1.5 rounded-full font-black text-[10px] uppercase tracking-widest shadow-xl shadow-orange-500/40 animate-pulse border border-white/20">
@@ -3990,35 +4083,27 @@ const StudyPage: React.FC = () => {
                   }}
                   onPromoteVariation={async (mlp, vgi) => {
                     if (!selectedStudy || !selectedChapter) return;
-                    const varLine = moveListChapter?.variations?.[mlp]?.[vgi];
-                    if (!varLine || varLine.length === 0) return;
-                    const nextMoveIndex = mlp + 1 + varLine.length;
+                    const baseMoves = chapterMovesForUi;
+                    const baseVars = mergeVariationRecords(
+                      selectedChapterRaw?.variations ?? {},
+                      moveListChapter?.variations ?? selectedChapter.variations ?? {},
+                    );
+                    const promoted = promoteVariationLines(baseMoves, baseVars, mlp, vgi);
+                    if (!promoted) return;
+
+                    alignMainlineToMoves(promoted.moves, promoted.nextMoveIndex);
 
                     if (syncState?.tree?.mainline && syncState.tree.mainline.length > 1) {
-                      const ok = await promoteVariation(mlp, vgi);
-                      if (!ok) return;
-                      setCurrentVariation(null);
-                      void jumpToMoveIndex(nextMoveIndex);
-                      return;
+                      void promoteVariation(mlp, vgi);
                     }
 
-                    const baseMoves = chapterMovesForUi;
-                    const prefix = baseMoves.slice(0, mlp + 1);
-                    const oldContinuation = baseMoves.slice(mlp + 1);
-                    const newMainMoves = [...prefix, ...varLine];
-                    const vars = { ...(selectedChapter.variations ?? {}) };
-                    const group = [...(vars[mlp] ?? [])];
-                    group.splice(vgi, 1);
-                    if (oldContinuation.length > 0) group.push(oldContinuation);
-                    if (group.length === 0) delete vars[mlp];
-                    else vars[mlp] = group;
                     updateChapterAtIndex(selectedChapterIndex, {
-                      moves: newMainMoves,
-                      variations: vars,
+                      moves: promoted.moves,
+                      variations: promoted.variations,
                     });
                     setCurrentVariation(null);
-                    setCurrentMoveIndex(nextMoveIndex);
-                    void jumpToMoveIndex(nextMoveIndex, newMainMoves);
+                    setCurrentMoveIndex(promoted.nextMoveIndex);
+                    void jumpToMoveIndex(promoted.nextMoveIndex, promoted.moves);
                   }}
                 />
               )}
@@ -4139,9 +4224,14 @@ const StudyPage: React.FC = () => {
                     </button>
                   </div>
 
-                  <div className="flex gap-4">
+                  <div className="flex flex-col sm:flex-row gap-4">
                     {/* Board */}
-                    <ChessBoardFrame boardOrientation={ncOrientation} className="w-56 shrink-0 rounded-xl overflow-hidden border border-white/5 shadow-xl cursor-crosshair">
+                    <ChessBoardFrame
+                      boardOrientation={ncOrientation}
+                      className="w-full max-w-[min(100%,280px)] mx-auto sm:mx-0 shrink-0 rounded-xl overflow-hidden border border-white/5 shadow-xl cursor-crosshair"
+                      boardClassName="overflow-hidden"
+                    >
+                      <div className="absolute inset-0">
                       <Chessboard
                         options={{
                           position: ncFen,
@@ -4198,6 +4288,7 @@ const StudyPage: React.FC = () => {
                           },
                         }}
                       />
+                      </div>
                     </ChessBoardFrame>
 
                     {/* Side controls */}
@@ -4283,6 +4374,26 @@ const StudyPage: React.FC = () => {
 
               {ncTab === 'fen' && (
                 <div className="space-y-3">
+                  <input
+                    ref={ncFenFileRef}
+                    type="file"
+                    accept=".pgn,.fen,.txt,text/plain"
+                    className="hidden"
+                    onChange={handleNcFenFile}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => ncFenFileRef.current?.click()}
+                    className="w-full py-3 rounded-xl border border-dashed border-white/15 bg-white/[0.03] text-slate-300 text-xs font-bold hover:border-amber-500/35 hover:bg-amber-500/5 hover:text-amber-200 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Upload className="w-4 h-4 shrink-0" />
+                    PGN / FEN dosyası seç
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-px bg-white/10" />
+                    <span className="text-[10px] text-slate-500 font-medium shrink-0">veya yapıştır</span>
+                    <div className="flex-1 h-px bg-white/10" />
+                  </div>
                   <textarea
                     value={ncFenInput}
                     onChange={e => setNcFenInput(e.target.value)}
@@ -4454,7 +4565,8 @@ const StudyPage: React.FC = () => {
                   {ncFen !== DEFAULT_FEN && (
                     <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-3">
                       <p className="text-[10px] font-bold text-teal-400 uppercase tracking-widest mb-2">Yüklenen pozisyon</p>
-                      <ChessBoardFrame boardOrientation={ncOrientation} className="w-40 rounded-lg overflow-hidden border border-white/10">
+                      <ChessBoardFrame boardOrientation={ncOrientation} className="w-full max-w-[10rem] rounded-lg overflow-hidden border border-white/10" boardClassName="overflow-hidden">
+                        <div className="absolute inset-0">
                         <Chessboard
                           options={{
                             position: ncFen,
@@ -4466,6 +4578,7 @@ const StudyPage: React.FC = () => {
                             ...CHESSBOARD_NO_NOTATION,
                           }}
                         />
+                        </div>
                       </ChessBoardFrame>
                     </div>
                   )}
@@ -4717,7 +4830,8 @@ const StudyPage: React.FC = () => {
                             </button>
                           </div>
 
-                          <ChessBoardFrame boardOrientation={boardOrientation} className="rounded-[2rem] overflow-hidden shadow-[0_40px_80px_rgba(0,0,0,0.6)] border-4 border-white/5 cursor-crosshair relative ring-1 ring-white/10">
+                          <ChessBoardFrame boardOrientation={boardOrientation} className="rounded-[2rem] overflow-hidden shadow-[0_40px_80px_rgba(0,0,0,0.6)] border-4 border-white/5 cursor-crosshair relative ring-1 ring-white/10" boardClassName="overflow-hidden">
+                          <div className="absolute inset-0">
                           <Chessboard
                             options={{
                               position: builderFen,
@@ -4774,6 +4888,7 @@ const StudyPage: React.FC = () => {
                               },
                             }}
                           />
+                          </div>
                           </ChessBoardFrame>
 
                           <div className="grid grid-cols-8 gap-2 bg-black/40 border border-white/10 rounded-2xl p-2">
@@ -4898,7 +5013,9 @@ const StudyPage: React.FC = () => {
                   <ChessBoardFrame
                     boardOrientation={(p?.orientation || 'white') as 'white' | 'black'}
                     className="w-full max-w-[500px] shadow-2xl shadow-black/50 border-4 border-white/5 rounded-xl overflow-hidden"
+                    boardClassName="overflow-hidden"
                   >
+                    <div className="absolute inset-0">
                     <Chessboard
                       options={{
                         position: p?.vcFen || DEFAULT_FEN,
@@ -4910,6 +5027,7 @@ const StudyPage: React.FC = () => {
                         allowDragging: false,
                       }}
                     />
+                    </div>
                   </ChessBoardFrame>
                 </div>
                 {/* Right: History & Analysis */}

@@ -10,8 +10,7 @@ import {
   Sparkles, TrendingUp, PieChart, Target, RefreshCw, ClipboardList, Layers, FolderOpen
 } from 'lucide-react';
 import { useApp } from '../AppContext';
-import { getBestMoveAsync, getEvaluationPawns, getEvaluationPawnsAsync, type EngineLevel } from '../services/chessEngine';
-import { stopAnalysis as stopStockfishAnalysis } from '../services/stockfishService';
+import { getBestMoveAsync, type EngineLevel } from '../services/chessEngine';
 import { imageToFen, imageToFenMultiple, formatOpenRouterError, type ImageBoardResult } from '../services/geminiService';
 import {
   parseCSVLine,
@@ -194,8 +193,6 @@ const ChessBoard: React.FC = () => {
   const [puzzlePlayMode, setPuzzlePlayMode] = useState<'computer' | 'solution'>('solution');
   const [solutionFeedback, setSolutionFeedback] = useState<{ ok: boolean; message: string } | null>(null);
   
-  const { stockfishReady, stockfishLoading } = useApp();
-  const [evalScore, setEvalScore] = useState(0);
   const [tool, setTool] = useState<string>('cursor');
   /** Taş ekleme modunda imlecin yanında gösterilecek taş için mouse pozisyonu */
   const [pieceCursorPos, setPieceCursorPos] = useState<{ x: number; y: number } | null>(null);
@@ -217,8 +214,8 @@ const ChessBoard: React.FC = () => {
   const [saveAsStudyTargetId, setSaveAsStudyTargetId] = useState<string>('__new__');
   /** Çalışmaya gidecek yeni bölümün görünen adı; boşsa bulmaca başlığı kullanılır */
   const [exportChapterTitleDraft, setExportChapterTitleDraft] = useState('');
-  /** Editör sağ panel: sekme (tahta kontrolleri / bulmaca formu / çalışma aktarımı) */
-  const [editorSidebarTab, setEditorSidebarTab] = useState<'board' | 'puzzle' | 'study'>('board');
+  /** Editör sağ panel: sekme (tahta kontrolleri / bulmaca formu) */
+  const [editorSidebarTab, setEditorSidebarTab] = useState<'board' | 'puzzle'>('board');
   /** Hamle listesinden görüntülenen pozisyon: null = güncel, 0 = başlangıç, k = k yarım hamle sonrası */
   const [browseIndex, setBrowseIndex] = useState<number | null>(null);
   /** FEN'den yüklendiğinde ilk kaydedilen hamle beyaz mı? (false = bulmaca siyah ile başlıyor, sütunları doğru eşleştir) */
@@ -270,28 +267,6 @@ const ChessBoard: React.FC = () => {
     if (saveAsStudyTargetId === '__new__') return null;
     return studiesPickerList.find((s) => s.id === saveAsStudyTargetId) ?? null;
   }, [saveAsStudyTargetId, studiesPickerList]);
-
-  useEffect(() => {
-    if (activeTab !== 'editor') {
-      stopStockfishAnalysis();
-      return;
-    }
-    let cancelled = false;
-    const updateEval = async () => {
-      try {
-        const dFen = browseIndex === null ? game.fen() : getFenAtHalfMove(gameInitialFen, game.history(), browseIndex, game.fen());
-        const score = await getEvaluationPawnsAsync(new Chess(dFen));
-        if (!cancelled) setEvalScore(score);
-      } catch {
-        if (!cancelled) setEvalScore(0);
-      }
-    };
-    updateEval();
-    return () => {
-      cancelled = true;
-      stopStockfishAnalysis();
-    };
-  }, [game, browseIndex, gameInitialFen, activeTab]);
 
   // Seçili hamle satırını, sadece hamle listesi içinde kaydır (sayfanın tamamını aşağı itme)
   useEffect(() => {
@@ -1235,13 +1210,6 @@ const ChessBoard: React.FC = () => {
 
   const editorBoardWheelRef = useChessWheelNavigation(browseGoPrev, browseGoNext, history.length > 0);
 
-  /** Bulmaca editörü durum çubuğu: mevcut pozisyona göre beyaz/siyah üstünlük (piyon birimi). */
-  const evaluationForBar = evalScore;
-  const evalClamped = Math.max(-10, Math.min(10, evaluationForBar));
-  const whiteBarShare = 0.5 + evalClamped / 20;
-  const whiteBarPct = Math.round(whiteBarShare * 100);
-  const evalDisplay = Math.abs(evaluationForBar) > 20 ? 'Mat' : evaluationForBar.toFixed(1);
-
   const boardOptions: any = {
     position: displayFen,
     boardOrientation,
@@ -1313,15 +1281,6 @@ const ChessBoard: React.FC = () => {
               <ChessBoardFrame
                 boardOrientation={boardOrientation}
                 shellClassName="bg-slate-800 border-r border-white/5"
-                evalBar={
-                  <div className="flex flex-col-reverse h-full min-h-0 w-full relative">
-                    <div className="bg-white w-full transition-all duration-300 shadow-[0_0_8px_rgba(255,255,255,0.4)] shrink-0" style={{ height: `${whiteBarPct}%` }} title="Beyaz üstünlük" />
-                    <div className="bg-slate-700 w-full transition-all duration-300 flex-1 min-h-[4px]" title="Siyah üstünlük" />
-                    <span className="absolute top-1.5 left-0 right-0 z-10 text-center text-[9px] font-black text-slate-300 bg-slate-800/90 rounded px-0.5 py-0.5 border border-white/10 shadow-sm pointer-events-none">
-                      {evalDisplay}
-                    </span>
-                  </div>
-                }
               >
                 <div ref={editorBoardWheelRef} className={`absolute inset-0 ${history.length > 0 ? 'touch-none' : ''}`}>
                   <Chessboard options={boardOptions} />
@@ -1330,14 +1289,6 @@ const ChessBoard: React.FC = () => {
                       <div className="bg-indigo-600/90 px-6 py-3 rounded-lg text-white font-bold flex items-center gap-2 shadow-xl border border-white/20">
                         <Loader2 className="w-5 h-5 animate-spin" />
                         Görselden pozisyon çıkarılıyor…
-                      </div>
-                    </div>
-                  )}
-                  {!isBrowsing && (game.isGameOver() || isThinking) && !game.fen().startsWith('8/8/8/8/8/8/8/8') && (game.history().length > 0 || game.fen() === DEFAULT_START_FEN) && (
-                    <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
-                      <div className="bg-indigo-600/90 backdrop-blur-md px-8 py-4 rounded-full text-white font-bold flex items-center gap-3 shadow-2xl border border-white/20">
-                        {isThinking ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
-                        {isThinking ? 'Bilgisayar Düşünüyor...' : (game.isCheckmate() ? 'MAT!' : 'BERABERE')}
                       </div>
                     </div>
                   )}
@@ -1526,19 +1477,6 @@ const ChessBoard: React.FC = () => {
                 >
                   <Edit3 className="w-4 h-4 shrink-0 opacity-90" aria-hidden /> Bulmaca
                 </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={editorSidebarTab === 'study'}
-                  onClick={() => setEditorSidebarTab('study')}
-                  className={`flex-1 min-w-0 flex items-center justify-center gap-2 rounded-xl py-3 px-1.5 text-[10px] sm:text-[11px] font-black uppercase tracking-wider transition-all ${
-                    editorSidebarTab === 'study'
-                      ? 'bg-indigo-600 text-white shadow-md ring-1 ring-indigo-400/35'
-                      : 'text-slate-400 hover:text-white hover:bg-white/[0.06]'
-                  }`}
-                >
-                  <Zap className="w-4 h-4 shrink-0 opacity-90 text-violet-300" aria-hidden /> Çalışma
-                </button>
               </div>
 
               <div className="p-6 sm:p-7 space-y-5 max-h-[min(72vh,46rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
@@ -1676,204 +1614,6 @@ const ChessBoard: React.FC = () => {
                 <Save className="w-5 h-5" /> KAYDET VE YAYINLA
               </button>
 
-                  </>
-                )}
-
-                {editorSidebarTab === 'study' && (
-                  <>
-                    <div className="flex items-center gap-3 border-b border-white/10 pb-4 mb-1">
-                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/20 text-violet-300 ring-1 ring-violet-500/25">
-                        <Zap className="w-5 h-5" />
-                      </span>
-                      <div>
-                        <p className="font-black text-white text-base tracking-tight">Çalışmaya aktar</p>
-                        <p className="text-[10px] text-slate-500">Hedef çalışma, etkileşim ve yeni bölüm adı</p>
-                      </div>
-                    </div>
-
-                <div>
-                  <label className="text-[10px] font-black text-violet-300/90 uppercase tracking-widest flex items-center gap-2 mb-2">
-                    <span className="h-1 w-4 rounded-full bg-violet-500/60" />
-                    Etkileşimli mod
-                  </label>
-                  <select
-                    value={interactiveMode}
-                    onChange={(e) => setInteractiveMode(e.target.value as 'none' | 'puzzle' | 'liveAnalysis' | 'vsComputer')}
-                    className="w-full bg-black/50 border border-violet-500/15 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/35 focus:border-violet-500/40 text-white font-medium appearance-none shadow-inner"
-                  >
-                    <option value="none">Direkt (Okuma)</option>
-                    <option value="puzzle">Bulmaca (Doğru / Yanlış)</option>
-                    <option value="liveAnalysis">Canlı analiz (serbest)</option>
-                    <option value="vsComputer">Bilgisayara karşı antrenman</option>
-                  </select>
-                  {interactiveMode !== 'none' && (
-                    <div className="grid grid-cols-3 gap-2 mt-3 text-[10px]">
-                      <div className={`rounded-xl border px-2 py-2 text-center ${interactiveMode === 'puzzle' ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-white/5 bg-black/25 opacity-75'}`}>
-                        <span className="text-emerald-400 font-bold">Bulmaca</span>
-                      </div>
-                      <div className={`rounded-xl border px-2 py-2 text-center ${interactiveMode === 'liveAnalysis' ? 'border-violet-500/40 bg-violet-500/10' : 'border-white/5 bg-black/25 opacity-75'}`}>
-                        <span className="text-violet-300 font-bold">Analiz</span>
-                      </div>
-                      <div className={`rounded-xl border px-2 py-2 text-center ${interactiveMode === 'vsComputer' ? 'border-orange-500/35 bg-orange-500/10' : 'border-white/5 bg-black/25 opacity-75'}`}>
-                        <span className="text-orange-300 font-bold">Motor</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-violet-950/35 via-slate-900/95 to-[#0c0a14] p-5 space-y-5 shadow-xl shadow-black/40 ring-1 ring-violet-500/10">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Hedef</p>
-                    <span className="text-[10px] text-slate-500 font-medium">
-                      Çalışma + bölüm
-                    </span>
-                  </div>
-
-                  {/* Çalışma */}
-                  <div className="space-y-3">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 ring-1 ring-emerald-500/25">
-                        <FolderOpen className="w-5 h-5 text-emerald-400" />
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <label htmlFor="export-study-select" className="text-[11px] font-bold text-slate-300 block">
-                          Hangi çalışma?
-                        </label>
-                        <div className="flex gap-2">
-                          <select
-                            id="export-study-select"
-                            value={saveAsStudyTargetId}
-                            onChange={(e) => setSaveAsStudyTargetId(e.target.value)}
-                            className="flex-1 min-w-0 rounded-xl border border-white/10 bg-black/45 px-3.5 py-3 text-sm text-white placeholder:text-slate-600 shadow-inner focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500/35"
-                          >
-                            <option value="__new__">Yeni çalışma oluştur</option>
-                            {studiesSortedForPicker.map((s) => {
-                              const catLabel = s.categoryId
-                                ? studyPickerCategories.find((c) => c.id === s.categoryId)?.name
-                                : null;
-                              const prefix = catLabel ? `[${catLabel}] ` : '';
-                              return (
-                                <option key={s.id} value={s.id}>
-                                  {prefix}
-                                  {s.emoji ? `${s.emoji} ` : ''}
-                                  {s.title || 'İsimsiz'} · {s.chapters.length} bölüm · sona yeni ekle
-                                </option>
-                              );
-                            })}
-                          </select>
-                          <button
-                            type="button"
-                            title="Çalışma listesini yenile"
-                            onClick={() => refreshStudiesForPicker()}
-                            className="shrink-0 flex h-[46px] w-11 items-center justify-center rounded-xl border border-white/10 bg-black/35 text-slate-400 hover:text-white hover:bg-white/10 hover:border-white/15 transition-colors"
-                          >
-                            <RefreshCw className={`h-4 w-4 ${studyPickerLoading ? 'animate-spin text-violet-400' : ''}`} />
-                          </button>
-                        </div>
-
-                        {!exportTargetStudy ? (
-                          <div className="rounded-xl bg-black/30 border border-white/5 px-3 py-2.5 text-[11px] text-slate-400 leading-snug">
-                            <span className="text-slate-300 font-semibold">Yeni çalışma</span>{' '}
-                            — liste adını yukarıdaki{' '}
-                            <span className="text-white font-semibold">«Başlık»</span> alanı belirler. İlk bölüm olarak bu tahta
-                            kaydedilir ({interactiveMode === 'none' ? 'okuma modu' : 'etkileşim seçili'}).
-                          </div>
-                        ) : (
-                          <div className="rounded-xl bg-black/35 border border-white/[0.07] px-3 py-2.5 space-y-2">
-                            <div className="flex flex-wrap gap-2 items-center">
-                              <span className="text-lg leading-none">{exportTargetStudy.emoji ?? '♟️'}</span>
-                              <span className="text-sm font-bold text-white truncate">{exportTargetStudy.title || 'İsimsiz çalışma'}</span>
-                              {(() => {
-                                const cn =
-                                  exportTargetStudy.categoryId != null &&
-                                  studyPickerCategories.find((c) => c.id === exportTargetStudy.categoryId)?.name;
-                                return cn ? (
-                                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300 border border-teal-500/25">
-                                    {cn}
-                                  </span>
-                                ) : null;
-                              })()}
-                            </div>
-                            <div className="flex flex-wrap gap-2 text-[10px] text-slate-500">
-                              <span className="rounded-md bg-white/[0.04] px-2 py-1 border border-white/5">
-                                {exportTargetStudy.chapters.length}{' '}
-                                {exportTargetStudy.chapters.length === 1 ? 'bölüm mevcut' : 'bölüm mevcut'}
-                              </span>
-                              <span className="rounded-md bg-violet-500/10 px-2 py-1 border border-violet-500/20 text-violet-200 font-semibold">
-                                +1 · {exportTargetStudy.chapters.length + 1}. sırada yeni bölüm
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
-
-                  {/* Bölüm */}
-                  <div className="space-y-3">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-500/15 ring-1 ring-violet-400/25">
-                        <Layers className="w-5 h-5 text-violet-300" />
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <label htmlFor="export-chapter-title" className="text-[11px] font-bold text-slate-300 block">
-                          Bu kayıt hangi bölüm adıyla yazılsın?
-                        </label>
-                        <input
-                          id="export-chapter-title"
-                          value={exportChapterTitleDraft}
-                          onChange={(e) => setExportChapterTitleDraft(e.target.value)}
-                          placeholder={puzzleTitle.trim() || 'Bulmaca başlığı kullanılacak'}
-                          className="w-full rounded-xl border border-white/10 bg-black/45 px-3.5 py-3 text-sm text-white placeholder:text-slate-600 shadow-inner focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500/35"
-                        />
-                        <p className="text-[10px] text-slate-500 leading-snug">
-                          Kaydedilen bölüm:{' '}
-                          <strong className="text-slate-300">
-                            «{exportChapterTitleDraft.trim() || puzzleTitle.trim() || '—'}»
-                          </strong>
-                          {!exportChapterTitleDraft.trim() && puzzleTitle.trim() ? (
-                            <span className="text-slate-600"> · boş ise bulmacanın başlığı kullanılıyor</span>
-                          ) : null}
-                        </p>
-                        {!exportTargetStudy ? (
-                          <div className="flex items-start gap-2 rounded-lg bg-violet-500/5 border border-violet-500/15 px-3 py-2 text-[11px] text-violet-200/90">
-                            <BookOpen className="w-4 h-4 shrink-0 mt-0.5 text-violet-400" />
-                            <span>Yeni çalışmada yalnızca bu tek bölüm oluşur (liste adı = bulmaca başlığı).</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-start gap-2 rounded-lg bg-emerald-500/5 border border-emerald-500/15 px-3 py-2 text-[11px] text-emerald-100/90">
-                            <Layers className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
-                            <span>
-                              Bu tahta çalışma listesinin <strong>{exportTargetStudy.chapters.length + 1}</strong>.
-                              sırasına, <strong>«{exportTargetStudy.title || 'Çalışma'}»</strong> içinin{' '}
-                              <strong>{exportTargetStudy.chapters.length + 1}</strong>. bölümü olarak eklenecek.
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleSaveAsStudy}
-                  className="group w-full relative overflow-hidden rounded-2xl bg-gradient-to-r from-violet-600 via-violet-500 to-indigo-600 py-4 font-black uppercase tracking-[0.15em] text-xs text-white shadow-[0_12px_40px_rgba(124,58,237,0.35)] transition-all hover:brightness-110 active:scale-[0.98]"
-                >
-                  <span className="relative flex items-center justify-center gap-3">
-                    <BookOpen className="w-5 h-5 opacity-95" /> ÇALIŞMAYI KAYDET
-                  </span>
-                </button>
-                <p className="text-[9px] text-center text-slate-600 uppercase tracking-widest px-2">
-                  Önce başlığı doldurun · tahta geçerli pozisyon olmalıdır
-                </p>
-                {studySaveSuccess && (
-                  <div className="flex items-center gap-2 bg-emerald-500/20 border border-emerald-500/40 rounded-lg px-4 py-3 text-emerald-300 text-xs font-bold animate-in fade-in">
-                    <Check className="w-4 h-4 shrink-0" /> İşlem tamam. Çalışma / Bulmaca-Yeni sekmesinden devam edebilirsiniz.
-                  </div>
-                )}
                   </>
                 )}
               </div>
@@ -2071,34 +1811,41 @@ const ChessBoard: React.FC = () => {
 
           {/* Lichess Import Modal */}
           {showImportModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => !importProgress.loading && setShowImportModal(false)}>
-              <div className="bg-[#0f172a] border border-white/10 rounded-3xl shadow-2xl w-full max-w-xl mx-4 p-8 space-y-6" onClick={e => e.stopPropagation()}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-amber-500/20 rounded-lg flex items-center justify-center">
-                      <Zap className="w-6 h-6 text-amber-400" />
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+              onClick={() => !importProgress.loading && setShowImportModal(false)}
+            >
+              <div
+                className="bg-[#0f172a] border border-white/10 rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-xl max-h-[min(92vh,calc(100dvh-1.5rem))] flex flex-col overflow-hidden my-auto"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between gap-3 px-5 py-4 sm:px-6 border-b border-white/5 shrink-0">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-amber-500/20 rounded-lg flex items-center justify-center shrink-0">
+                      <Zap className="w-5 h-5 sm:w-6 sm:h-6 text-amber-400" />
                     </div>
-                    <div>
-                      <h2 className="text-xl font-black text-white">Lichess Bulmaca Import</h2>
+                    <div className="min-w-0">
+                      <h2 className="text-lg sm:text-xl font-black text-white truncate">Lichess Bulmaca Import</h2>
                       <p className="text-xs text-slate-500">4M+ bulmaca veritabanından çekin</p>
                     </div>
                   </div>
-                  <button onClick={() => !importProgress.loading && setShowImportModal(false)} className="p-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors">
+                  <button onClick={() => !importProgress.loading && setShowImportModal(false)} className="p-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors shrink-0">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
+                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 sm:px-6 sm:py-5 space-y-4 custom-scrollbar">
                 {/* Method 1: API Auto Fetch */}
-                <div className="bg-slate-800/50 rounded-lg p-6 border border-white/5 space-y-4">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Zap className="w-5 h-5 text-indigo-400" />
+                <div className="bg-slate-800/50 rounded-lg p-4 sm:p-5 border border-white/5 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Zap className="w-5 h-5 text-indigo-400 shrink-0" />
                     <h3 className="font-bold text-white text-sm">Otomatik Çek (Lichess API)</h3>
                   </div>
                   <p className="text-xs text-slate-400 leading-relaxed">
                     Seviye, tema ve puan aralığına göre bulmacalar Lichess API üzerinden otomatik indirilir. CSV dosyası gerekmez.
                   </p>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-1">Min Rating</label>
                       <input type="number" value={importFilter.minRating} onChange={e => setImportFilter(p => ({...p, minRating: +e.target.value}))} className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500" />
@@ -2134,43 +1881,43 @@ const ChessBoard: React.FC = () => {
                   </div>
                   <p className="text-[10px] text-slate-500">Örnek temalar: mix, fork, pin, mate, endgame, sacrifice. Boş bırakılırsa karışık (mix) kullanılır.</p>
 
-                  <button onClick={handleFetchFromApi} disabled={importProgress.loading} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black py-4 rounded-lg flex items-center justify-center gap-3 text-xs uppercase tracking-widest transition-all shadow-lg">
+                  <button onClick={handleFetchFromApi} disabled={importProgress.loading} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black py-3 rounded-lg flex items-center justify-center gap-3 text-xs uppercase tracking-widest transition-all shadow-lg">
                     <Download className="w-4 h-4" /> Bulmacaları Otomatik Çek
                   </button>
                 </div>
 
                 {/* Method 2: CSV Upload (optional) */}
                 <details className="bg-slate-800/30 rounded-lg border border-white/5 group">
-                  <summary className="cursor-pointer p-4 text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2 list-none">
-                    <FileText className="w-4 h-4 text-slate-500" />
+                  <summary className="cursor-pointer p-3 sm:p-4 text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2 list-none">
+                    <FileText className="w-4 h-4 text-slate-500 shrink-0" />
                     Gelişmiş: CSV dosyasından içe aktar
                   </summary>
-                  <div className="px-4 pb-4 space-y-3">
+                  <div className="px-3 sm:px-4 pb-3 sm:pb-4 space-y-3">
                     <p className="text-[10px] text-slate-500">
                       <a href="https://database.lichess.org/#puzzles" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline">database.lichess.org</a> üzerinden indirilen CSV ile toplu import (büyük dosyalar için).
                     </p>
                     <input ref={fileInputRef} type="file" accept=".csv,.txt,.zst" onChange={handleCSVUpload} className="hidden" />
-                    <button onClick={() => fileInputRef.current?.click()} disabled={importProgress.loading} className="w-full bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 text-xs uppercase tracking-widest">
+                    <button onClick={() => fileInputRef.current?.click()} disabled={importProgress.loading} className="w-full bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 text-xs uppercase tracking-widest">
                       <Upload className="w-4 h-4" /> CSV Dosyası Yükle
                     </button>
                   </div>
                 </details>
 
                 {/* Daily Puzzle */}
-                <div className="bg-slate-800/50 rounded-lg p-6 border border-white/5 space-y-4">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Zap className="w-5 h-5 text-amber-400" />
+                <div className="bg-slate-800/50 rounded-lg p-4 sm:p-5 border border-white/5 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Zap className="w-5 h-5 text-amber-400 shrink-0" />
                     <h3 className="font-bold text-white text-sm">Günün Bulmacası</h3>
                   </div>
                   <p className="text-xs text-slate-400">Lichess API üzerinden günün bulmacasını otomatik çekin.</p>
-                  <button onClick={handleFetchDaily} disabled={importProgress.loading} className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black py-4 rounded-lg flex items-center justify-center gap-3 text-xs uppercase tracking-widest transition-all shadow-lg">
+                  <button onClick={handleFetchDaily} disabled={importProgress.loading} className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black py-3 rounded-lg flex items-center justify-center gap-3 text-xs uppercase tracking-widest transition-all shadow-lg">
                     <Download className="w-4 h-4" /> Günün Bulmacasını Çek
                   </button>
                 </div>
 
                 {/* Progress */}
                 {importProgress.message && (
-                  <div className={`p-4 rounded-lg border ${importProgress.loading ? 'bg-indigo-500/10 border-indigo-500/20' : importProgress.count > 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20'}`}>
+                  <div className={`p-3 sm:p-4 rounded-lg border ${importProgress.loading ? 'bg-indigo-500/10 border-indigo-500/20' : importProgress.count > 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20'}`}>
                     <div className="flex items-center gap-3">
                       {importProgress.loading && <Loader2 className="w-4 h-4 text-indigo-400 animate-spin flex-shrink-0" />}
                       <span className={`text-sm font-bold ${importProgress.loading ? 'text-indigo-300' : importProgress.count > 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{importProgress.message}</span>
@@ -2184,7 +1931,7 @@ const ChessBoard: React.FC = () => {
                 )}
 
                 {/* Info */}
-                <div className="bg-slate-800/30 rounded-lg p-4 border border-white/5">
+                <div className="bg-slate-800/30 rounded-lg p-3 sm:p-4 border border-white/5">
                   <p className="text-[10px] text-slate-500 leading-relaxed">
                     <strong className="text-slate-400">Not:</strong> API ile istek başına en fazla 50 bulmaca gelir; hedef sayıya ulaşmak için birden fazla istek yapılır.
                     Çok yüksek sayılar (500+) birkaç dakika sürebilir. Tüm Lichess bulmacaları CC0 lisansı altındadır.
@@ -2193,13 +1940,14 @@ const ChessBoard: React.FC = () => {
 
                 {/* Danger Zone */}
                 {puzzles.length > 0 && (
-                  <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                  <div className="flex items-center justify-between pt-1 border-t border-white/5">
                     <span className="text-xs text-slate-500">{puzzles.length} bulmaca mevcut</span>
                     <button onClick={() => { if (confirm(`${puzzles.length} bulmaca silinecek. Emin misiniz?`)) { clearPuzzles(); setImportProgress({ loading: false, message: 'Tüm bulmacalar silindi.', count: 0, total: 0 }); }}} className="text-xs text-rose-400 hover:text-rose-300 font-bold transition-colors">
                       Tümünü Sil
                     </button>
                   </div>
                 )}
+                </div>
               </div>
             </div>
           )}

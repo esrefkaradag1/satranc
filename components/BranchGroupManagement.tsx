@@ -1,17 +1,21 @@
 import React, { useMemo, useState } from 'react';
 import {
   Building2, BookOpen, Users, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Clock, UserCircle,
+  UserPlus, Search, Check, X,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import type { DisciplineBranch, GroupLessonSlot, TrainingGroup } from '../types';
 import {
-  WEEKDAY_OPTIONS, emptyLessonSlot, formatLessonSchedule, getGroupMonthlyFee,
+  WEEKDAY_OPTIONS, applyGroupDefaultsToStudent, emptyLessonSlot, formatLessonSchedule, getGroupMonthlyFee,
+  mergeBranchOffices, studentsInTrainingGroup,
 } from '../lib/trainingGroupUtils';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
 const BranchGroupManagement: React.FC = () => {
   const {
     branchOffices,
+    addBranchOffice,
+    removeBranchOffice,
     disciplineBranches,
     addDisciplineBranch,
     updateDisciplineBranch,
@@ -21,10 +25,12 @@ const BranchGroupManagement: React.FC = () => {
     updateTrainingGroup,
     removeTrainingGroup,
     students,
+    updateStudent,
     coaches,
   } = useApp();
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [newOfficeName, setNewOfficeName] = useState('');
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [editingBranch, setEditingBranch] = useState<DisciplineBranch | null>(null);
   const [showGroupModal, setShowGroupModal] = useState(false);
@@ -38,19 +44,70 @@ const BranchGroupManagement: React.FC = () => {
     capacity: '14',
     lessonSlots: [emptyLessonSlot()] as GroupLessonSlot[],
   });
+  const [showStudentModal, setShowStudentModal] = useState(false);
+  const [studentModalGroup, setStudentModalGroup] = useState<TrainingGroup | null>(null);
+  const [studentSearch, setStudentSearch] = useState('');
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
 
   const sortedBranches = useMemo(
     () => [...disciplineBranches].sort((a, b) => a.branchOffice.localeCompare(b.branchOffice) || a.name.localeCompare(b.name)),
     [disciplineBranches]
   );
 
-  const countStudentsInGroup = (name: string) => students.filter((s) => s.group === name).length;
+  const officeOptions = useMemo(
+    () => mergeBranchOffices(branchOffices, disciplineBranches),
+    [branchOffices, disciplineBranches],
+  );
+
+  const countStudentsInGroup = (group: TrainingGroup) => studentsInTrainingGroup(students, group).length;
+
+  const enrolledInModalGroup = useMemo(() => {
+    if (!studentModalGroup) return new Set<string>();
+    return new Set(studentsInTrainingGroup(students, studentModalGroup).map((s) => s.id));
+  }, [students, studentModalGroup]);
+
+  const modalStudentOptions = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    return [...students]
+      .filter((s) => s.status !== 'inactive')
+      .filter((s) => !q || s.name.toLowerCase().includes(q) || (s.group || '').toLowerCase().includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+  }, [students, studentSearch]);
+
+  const openAddStudents = (group: TrainingGroup) => {
+    setStudentModalGroup(group);
+    setStudentSearch('');
+    setSelectedStudentIds([]);
+    setShowStudentModal(true);
+  };
+
+  const toggleStudentSelection = (id: string) => {
+    if (enrolledInModalGroup.has(id)) return;
+    setSelectedStudentIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
+
+  const assignStudentsToGroup = () => {
+    if (!studentModalGroup || selectedStudentIds.length === 0) return;
+    const enrolled = countStudentsInGroup(studentModalGroup);
+    const capacity = studentModalGroup.capacity || 0;
+    if (capacity > 0 && enrolled + selectedStudentIds.length > capacity) {
+      alert(`Kontenjan aşılıyor. Boş yer: ${Math.max(0, capacity - enrolled)}`);
+      return;
+    }
+    const defaults = applyGroupDefaultsToStudent(studentModalGroup, disciplineBranches);
+    selectedStudentIds.forEach((id) => updateStudent(id, defaults));
+    setShowStudentModal(false);
+    setStudentModalGroup(null);
+    setSelectedStudentIds([]);
+  };
 
   const openAddBranch = () => {
     setEditingBranch(null);
     setBranchForm({
       name: '',
-      branchOffice: branchOffices[0] || '',
+      branchOffice: officeOptions[0] || '',
       monthlyFee: '',
     });
     setShowBranchModal(true);
@@ -165,6 +222,73 @@ const BranchGroupManagement: React.FC = () => {
         </button>
       </div>
 
+      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-violet-400" /> Şubeler
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Öğrenci kaydı ve branş tanımında kullanılan şube listesi. Varsayılan: Merkez, Çayyolu, Ümitköy.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {officeOptions.map((office) => {
+            const inUse = disciplineBranches.some((b) => b.branchOffice === office);
+            return (
+              <span
+                key={office}
+                className="inline-flex items-center gap-1.5 pl-2.5 pr-1 py-1 rounded-lg bg-violet-500/10 border border-violet-500/25 text-violet-200 text-xs font-semibold"
+              >
+                {office}
+                <button
+                  type="button"
+                  title={inUse ? 'Bu şubede branş tanımı var — önce branşları silin' : 'Şubeyi sil'}
+                  disabled={inUse}
+                  onClick={() => {
+                    if (inUse) return;
+                    if (confirm(`"${office}" şubesini silmek istiyor musunuz?`)) removeBranchOffice(office);
+                  }}
+                  className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="text"
+            value={newOfficeName}
+            onChange={(e) => setNewOfficeName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const v = newOfficeName.trim();
+                if (v) {
+                  addBranchOffice(v);
+                  setNewOfficeName('');
+                }
+              }
+            }}
+            placeholder="Yeni şube adı (ör. Bahçelievler)"
+            className="flex-1 min-w-[12rem] px-3 py-2 rounded-lg bg-slate-800 border border-white/10 text-sm text-white placeholder:text-slate-500 outline-none focus:border-indigo-500/50"
+          />
+          <button
+            type="button"
+            disabled={!newOfficeName.trim()}
+            onClick={() => {
+              addBranchOffice(newOfficeName.trim());
+              setNewOfficeName('');
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold"
+          >
+            <Plus className="w-3.5 h-3.5" /> Şube ekle
+          </button>
+        </div>
+      </div>
+
       {sortedBranches.length === 0 ? (
         <div className="rounded-xl border border-dashed border-white/10 bg-slate-900/40 p-10 text-center">
           <BookOpen className="w-10 h-10 mx-auto text-slate-500 mb-3" />
@@ -257,7 +381,7 @@ const BranchGroupManagement: React.FC = () => {
                           </thead>
                           <tbody>
                             {branchGroups.map((group, gIdx) => {
-                              const enrolled = countStudentsInGroup(group.name);
+                              const enrolled = countStudentsInGroup(group);
                               const fee = getGroupMonthlyFee(group, disciplineBranches);
                               return (
                                 <tr key={group.id} className="border-b border-white/5 hover:bg-white/[0.02]">
@@ -280,9 +404,14 @@ const BranchGroupManagement: React.FC = () => {
                                     </span>
                                   </td>
                                   <td data-label="Öğrenci" className="py-3 pr-3">
-                                    <span className="px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300 text-xs font-bold">
+                                    <button
+                                      type="button"
+                                      onClick={() => openAddStudents(group)}
+                                      title="Gruba öğrenci ekle"
+                                      className="px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300 text-xs font-bold hover:bg-teal-500/25 transition-colors"
+                                    >
                                       {enrolled}/{group.capacity}
-                                    </span>
+                                    </button>
                                   </td>
                                   <td data-label="Antrenör" className="py-3 pr-3 text-slate-400 text-xs">
                                     {group.coachIds?.length
@@ -295,13 +424,21 @@ const BranchGroupManagement: React.FC = () => {
                                   </td>
                                   <td data-label="İşlemler" className="py-3 text-right">
                                     <div className="inline-flex gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => openAddStudents(group)}
+                                        className="p-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
+                                        title="Öğrenci ekle"
+                                      >
+                                        <UserPlus className="w-4 h-4" />
+                                      </button>
                                       <button type="button" onClick={() => openEditGroup(group, branch)} className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25">
                                         <Pencil className="w-4 h-4" />
                                       </button>
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const count = countStudentsInGroup(group.name);
+                                          const count = countStudentsInGroup(group);
                                           if (count > 0) {
                                             alert(`${group.name} grubunda ${count} öğrenci var. Önce öğrencileri taşıyın.`);
                                             return;
@@ -341,7 +478,7 @@ const BranchGroupManagement: React.FC = () => {
               onChange={(e) => setBranchForm((f) => ({ ...f, branchOffice: e.target.value }))}
               className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
             >
-              {branchOffices.map((o) => <option key={o} value={o}>{o}</option>)}
+              {officeOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
             <label className="block text-xs font-bold text-slate-400 uppercase">Branş Adı</label>
             <input
@@ -356,6 +493,119 @@ const BranchGroupManagement: React.FC = () => {
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setShowBranchModal(false)} className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm">İptal</button>
               <button type="button" onClick={saveBranch} className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white font-bold text-sm">Kaydet</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStudentModal && studentModalGroup && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => setShowStudentModal(false)}
+        >
+          <div
+            className="bg-slate-900 border border-white/10 rounded-xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-white/5 space-y-1">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-black text-white">Gruba Öğrenci Ekle</h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {studentModalGroup.branchOffice} / {studentModalGroup.discipline} / {studentModalGroup.name}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowStudentModal(false)}
+                  className="p-2 rounded-lg text-slate-400 hover:bg-white/5"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Seçilen öğrencilerin şube, branş, grup, ücret ve ders programı profilde güncellenir.
+              </p>
+            </div>
+            <div className="px-6 py-3 border-b border-white/5">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  value={studentSearch}
+                  onChange={(e) => setStudentSearch(e.target.value)}
+                  placeholder="Öğrenci veya mevcut grup ara..."
+                  className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm placeholder:text-slate-500 outline-none focus:border-indigo-500/50"
+                />
+              </div>
+              <div className="flex items-center justify-between mt-2 text-[11px] text-slate-500">
+                <span>
+                  {countStudentsInGroup(studentModalGroup)}/{studentModalGroup.capacity || '∞'} kayıtlı
+                </span>
+                <span>{selectedStudentIds.length} seçili</span>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-3 space-y-1 min-h-[200px] max-h-[340px]">
+              {modalStudentOptions.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-8">Öğrenci bulunamadı.</p>
+              ) : (
+                modalStudentOptions.map((student) => {
+                  const alreadyIn = enrolledInModalGroup.has(student.id);
+                  const selected = selectedStudentIds.includes(student.id);
+                  return (
+                    <button
+                      key={student.id}
+                      type="button"
+                      disabled={alreadyIn}
+                      onClick={() => toggleStudentSelection(student.id)}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                        alreadyIn
+                          ? 'bg-teal-500/10 border border-teal-500/20 opacity-70 cursor-default'
+                          : selected
+                            ? 'bg-indigo-500/15 border border-indigo-500/30'
+                            : 'bg-slate-800/40 border border-transparent hover:bg-slate-800 hover:border-white/5'
+                      }`}
+                    >
+                      <span
+                        className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
+                          alreadyIn
+                            ? 'bg-teal-500/20 border-teal-500/40 text-teal-300'
+                            : selected
+                              ? 'bg-indigo-600 border-indigo-500 text-white'
+                              : 'border-slate-600'
+                        }`}
+                      >
+                        {(alreadyIn || selected) && <Check className="w-3 h-3" />}
+                      </span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm font-semibold text-white truncate">{student.name}</span>
+                        <span className="block text-[11px] text-slate-500 truncate">
+                          {alreadyIn
+                            ? 'Bu grupta'
+                            : [student.branchOffice, student.branch, student.group].filter(Boolean).join(' · ') || 'Grup atanmamış'}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+            <div className="p-6 border-t border-white/5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowStudentModal(false)}
+                className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                disabled={selectedStudentIds.length === 0}
+                onClick={assignStudentsToGroup}
+                className="flex-1 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm"
+              >
+                {selectedStudentIds.length > 0 ? `${selectedStudentIds.length} öğrenciyi ekle` : 'Öğrenci seçin'}
+              </button>
             </div>
           </div>
         </div>

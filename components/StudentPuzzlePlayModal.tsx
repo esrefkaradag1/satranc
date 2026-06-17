@@ -17,6 +17,8 @@ export interface HomeworkAttemptRecord {
   solutionMoves: string[];
   /** Tahtanın son pozisyonu (FEN); admin detayda gösterilir */
   finalFen?: string;
+  thinkSeconds?: number;
+  hintUsed?: boolean;
 }
 
 interface StudentPuzzlePlayModalProps {
@@ -72,6 +74,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
   const solution = Array.isArray(puzzle.solution) ? puzzle.solution : [];
   const movesPlayedRef = useRef<string[]>([]);
   const reportedRef = useRef(false);
+  const puzzleStartRef = useRef<number>(Date.now());
+  const hintUsedRef = useRef(false);
   const [movesPlayed, setMovesPlayed] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
@@ -115,6 +119,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
     studentColorRef.current = getTurnFromFen(startFen);
     movesPlayedRef.current = [];
     reportedRef.current = false;
+    puzzleStartRef.current = Date.now();
+    hintUsedRef.current = false;
     setMovesPlayed([]);
     setSubmitted(false);
     setShowSuccessToast(false);
@@ -143,6 +149,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
         movesPlayed: [...movesPlayedRef.current],
         solutionMoves: [...solution],
         finalFen: finalFen || undefined,
+        thinkSeconds: Math.max(1, Math.round((Date.now() - puzzleStartRef.current) / 1000)),
+        hintUsed: hintUsedRef.current,
       });
       setSubmitted(true);
     },
@@ -311,7 +319,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
               <div className="flex flex-wrap gap-2 mt-4">
                 <button
                   type="button"
-                  onClick={() => setHintRevealed(true)}
+                  onClick={() => { hintUsedRef.current = true; setHintRevealed(true); }}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-sm hover:bg-amber-500/30 transition-colors"
                 >
                   <Lightbulb className="w-4 h-4" /> İpucu

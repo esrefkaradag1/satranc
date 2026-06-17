@@ -29,7 +29,7 @@ import { DrawingToolbar, type DrawingTool } from '../components/DrawingToolbar';
 import { saveStudyAsync } from '../studyStorage';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES } from '../lib/chessBoardUi';
 import { Study, StudyChapter } from '../lib/studyTypes';
-import type { Puzzle as PuzzleType } from '../types';
+import type { Puzzle as PuzzleType, Student } from '../types';
 import { makeBuilderGame, applyMove } from '../lib/studyUtils';
 import {
   liveLessonFenAt,
@@ -38,19 +38,22 @@ import {
 } from '../lib/liveLessonVariations';
 import { loadStudiesAsync } from '../studyStorage';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
+import { StudyMoveTree } from './study/StudyMoveTree';
 import { BoardViewToggle } from './chess/BoardViewToggle';
 import { useBoardViewMode } from '../hooks/useBoardViewMode';
 
 const Chessboard3D = lazy(() => import('./chess/Chessboard3D'));
 import {
-  fenAfterUciPlies,
-  EngineLinePreviewInline,
   EnginePvInteractiveMoves,
-  type LinePreviewState,
+  EngineLinePreviewPortal,
+  buildPvHoverHandler,
   type PvHoverState,
+  type LinePreviewState,
 } from '../lib/enginePvPreview';
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
-import { StudyMoveTree } from './study/StudyMoveTree';
+import { promoteVariationLines } from '../lib/studySync/moveList';
+import { studentsInTrainingGroup } from '../lib/trainingGroupUtils';
+import type { TrainingGroup } from '../types';
 import Analysis from './Analysis';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -59,9 +62,12 @@ const SYNC_POLL_MS = 1000;
 const COACH_SIDE_STORAGE_KEY = 'live_lesson_coach_side';
 const COACH_BOARD_SCALE_STORAGE_KEY = 'live_lesson_coach_board_scale_pct';
 const STUDENT_BOARD_SCALE_STORAGE_KEY = 'live_lesson_student_board_scale_pct';
-const BOARD_SCALE_MIN = 65;
+const BOARD_SCALE_MIGRATED_KEY = 'live_lesson_board_scale_v2_migrated';
+const BOARD_SCALE_MIN = 50;
 const BOARD_SCALE_MAX = 125;
 const BOARD_SCALE_DEFAULT = 100;
+/** UI %100 = önceki %80 boyut (canlı ders sınıf düzeni) */
+const BOARD_BASE_SCALE = 0.8;
 
 const liveLessonStudyTargetKey = (roomId: string) => `live_lesson_study_target_${roomId}`;
 
@@ -124,24 +130,46 @@ function clampBoardScalePct(v: number): number {
   return Math.min(BOARD_SCALE_MAX, Math.max(BOARD_SCALE_MIN, Math.round(v)));
 }
 
-function parseStoredCoachBoardScalePct(): number {
+/** Eski kayıtlı % değerini yeni referansa çevir (eski %80 ≈ yeni %100) */
+function migrateBoardScalePct(stored: number): number {
+  return clampBoardScalePct(Math.round(stored * (100 / 80)));
+}
+
+function ensureBoardScaleMigrated(): void {
+  if (typeof window === 'undefined') return;
+  if (localStorage.getItem(BOARD_SCALE_MIGRATED_KEY)) return;
+  try {
+    for (const storageKey of [COACH_BOARD_SCALE_STORAGE_KEY, STUDENT_BOARD_SCALE_STORAGE_KEY]) {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) continue;
+      const n = Number.parseInt(raw, 10);
+      if (Number.isFinite(n)) {
+        localStorage.setItem(storageKey, String(migrateBoardScalePct(n)));
+      }
+    }
+    localStorage.setItem(BOARD_SCALE_MIGRATED_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
+function readStoredBoardScale(storageKey: string): number {
   if (typeof window === 'undefined') return BOARD_SCALE_DEFAULT;
   try {
-    const n = Number.parseInt(localStorage.getItem(COACH_BOARD_SCALE_STORAGE_KEY) || '', 10);
+    ensureBoardScaleMigrated();
+    const n = Number.parseInt(localStorage.getItem(storageKey) || '', 10);
     return clampBoardScalePct(Number.isFinite(n) ? n : BOARD_SCALE_DEFAULT);
   } catch {
     return BOARD_SCALE_DEFAULT;
   }
 }
 
+function parseStoredCoachBoardScalePct(): number {
+  return readStoredBoardScale(COACH_BOARD_SCALE_STORAGE_KEY);
+}
+
 function parseStoredStudentBoardScalePct(): number {
-  if (typeof window === 'undefined') return BOARD_SCALE_DEFAULT;
-  try {
-    const n = Number.parseInt(localStorage.getItem(STUDENT_BOARD_SCALE_STORAGE_KEY) || '', 10);
-    return clampBoardScalePct(Number.isFinite(n) ? n : BOARD_SCALE_DEFAULT);
-  } catch {
-    return BOARD_SCALE_DEFAULT;
-  }
+  return readStoredBoardScale(STUDENT_BOARD_SCALE_STORAGE_KEY);
 }
 
 const AGORA_APP_ID = getRuntimeEnv('VITE_AGORA_APP_ID');
@@ -186,6 +214,8 @@ export type LiveChatMessage = {
   role: 'coach' | 'student';
   text: string;
   at: string;
+  /** Özel sohbet: hedef öğrenci kimliği (koç↔öğrenci) */
+  privateWithStudentId?: string;
 };
 
 export type SessionMediaState = {
@@ -217,6 +247,10 @@ export type SessionMediaState = {
   independentBoardStudentIds?: string[];
   /** Öğrenci başına bağımsız tahta anlık görüntüsü */
   studentBoards?: Record<string, LiveStudentBoardSnapshot>;
+  /** Bu derse davet edilen / yoklama listesindeki öğrenciler */
+  rosterStudentIds?: string[];
+  /** Antrenörün işaretlediği yoklama durumları */
+  attendanceMarks?: Record<string, 'present' | 'absent' | 'late' | 'excused'>;
 };
 
 export type LiveStudentBoardSnapshot = {
@@ -302,6 +336,510 @@ function LiveLessonVideoPlayer({
   );
 }
 
+type LiveVideoTile = {
+  id: string;
+  name: string;
+  role: 'coach' | 'student';
+  isSelf: boolean;
+  stream: MediaStream | null;
+  micMuted: boolean;
+  camOff: boolean;
+};
+
+function ClassroomVideoTile({
+  tile,
+  muted,
+  className = '',
+  labelClassName = 'text-[9px]',
+  showLabel = true,
+  isSpeaking = false,
+}: {
+  tile: LiveVideoTile;
+  muted: boolean;
+  className?: string;
+  labelClassName?: string;
+  showLabel?: boolean;
+  isSpeaking?: boolean;
+}) {
+  return (
+    <div
+      className={`relative overflow-hidden bg-black border ${
+        isSpeaking ? 'border-emerald-400 ring-2 ring-emerald-400/80' : 'border-white/10'
+      } ${className}`}
+    >
+      {tile.stream ? (
+        <>
+          <LiveLessonVideoPlayer
+            stream={tile.stream}
+            muted={muted}
+            camOff={tile.camOff}
+            className="w-full h-full object-cover"
+          />
+          {tile.camOff ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/55 pointer-events-none">
+              <VideoOff className="w-6 h-6 text-slate-500" />
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900 gap-0.5">
+          <span className="text-base font-bold text-slate-400">{tile.name.charAt(0).toUpperCase()}</span>
+          <VideoOff className="w-3.5 h-3.5 text-slate-600" />
+        </div>
+      )}
+      {showLabel ? (
+        <div className={`absolute bottom-0 left-0 right-0 flex items-center justify-between gap-1 bg-black/65 px-1.5 py-0.5 text-white ${labelClassName}`}>
+          <span className="truncate">{tile.name}</span>
+          {tile.micMuted ? <MicOff className="w-3 h-3 shrink-0 text-rose-400" /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ClassroomAttendancePanel({
+  rosterStudents,
+  tiles,
+  attendanceMarks,
+  admittedIds,
+  pendingIds,
+  focusedId,
+  onFocus,
+  onSetMark,
+  onMarkAll,
+  onSave,
+  onAdmit,
+  onAdmitAll,
+  saving,
+  saveMessage,
+  vbSupported,
+  cameraBackgroundBlur,
+  onToggleBlur,
+  vbApplying,
+  localCamOff,
+  mediaLoading,
+  variant = 'dock',
+  floorStudentId = null,
+  studentMicBlocked = {},
+  studentCamForcedOff = {},
+  speakingStudentIds,
+  onToggleStudentMic,
+  onToggleStudentCam,
+  onOpenPrivateChat,
+}: {
+  rosterStudents: Student[];
+  tiles: LiveVideoTile[];
+  attendanceMarks?: Record<string, 'present' | 'absent' | 'late' | 'excused'>;
+  admittedIds: string[];
+  pendingIds: string[];
+  focusedId: string | null;
+  onFocus: (id: string) => void;
+  onSetMark: (studentId: string, status: 'present' | 'absent' | 'late' | 'excused') => void;
+  onMarkAll: (status: 'present' | 'absent' | 'late' | 'excused') => void;
+  onSave: () => void;
+  onAdmit: (studentId: string) => void;
+  onAdmitAll?: () => void;
+  saving: boolean;
+  saveMessage: string | null;
+  vbSupported: boolean;
+  cameraBackgroundBlur: boolean;
+  onToggleBlur: () => void;
+  vbApplying: boolean;
+  localCamOff: boolean;
+  mediaLoading: boolean;
+  variant?: 'dock' | 'mobile';
+  floorStudentId?: string | null;
+  studentMicBlocked?: Record<string, boolean>;
+  studentCamForcedOff?: Record<string, boolean>;
+  speakingStudentIds?: Set<string>;
+  onToggleStudentMic?: (studentId: string) => void;
+  onToggleStudentCam?: (studentId: string) => void;
+  onOpenPrivateChat?: (studentId: string) => void;
+}) {
+  const coachTile = tiles.find((t) => t.role === 'coach') ?? null;
+  const tileByStudentId = useMemo(() => {
+    const map = new Map<string, LiveVideoTile>();
+    for (const t of tiles) {
+      if (t.role === 'student') map.set(t.id.replace(/^student-/, ''), t);
+    }
+    return map;
+  }, [tiles]);
+
+  const summary = useMemo(() => {
+    let present = 0;
+    let absent = 0;
+    let waiting = 0;
+    let unset = 0;
+    for (const s of rosterStudents) {
+      const sid = normalizeStudentId(s.id);
+      const tile = tileByStudentId.get(sid);
+      const status = resolveLiveAttendanceStatus(
+        sid,
+        attendanceMarks,
+        admittedIds,
+        pendingIds,
+        !!tile?.stream,
+      );
+      if (status === 'present' || status === 'late' || status === 'excused') present += 1;
+      else if (status === 'absent') absent += 1;
+      else if (status === 'waiting') waiting += 1;
+      else unset += 1;
+    }
+    return { present, absent, waiting, unset, total: rosterStudents.length };
+  }, [rosterStudents, attendanceMarks, admittedIds, pendingIds, tileByStudentId]);
+
+  const studentRow = (student: Student, compact: boolean) => {
+    const sid = normalizeStudentId(student.id);
+    const tile = tileByStudentId.get(sid);
+    const tileId = tile?.id ?? `student-${sid}`;
+    const status = resolveLiveAttendanceStatus(sid, attendanceMarks, admittedIds, pendingIds, !!tile?.stream);
+    const isPending = pendingIds.some((k) => idsEqual(k, sid));
+    const hasFloor = idsEqual(floorStudentId, sid);
+    const micBlocked = studentMicBlocked[sid] ?? false;
+    const audioOpen = hasFloor && !micBlocked;
+    const camForcedOff = !!(studentCamForcedOff[sid]);
+    const isSpeaking = speakingStudentIds?.has(sid) ?? false;
+
+    return (
+      <div
+        key={student.id}
+        className={`rounded-lg border bg-slate-900/50 overflow-hidden ${
+          isPending
+            ? 'border-amber-500/50 ring-2 ring-amber-500/30'
+            : isSpeaking
+              ? 'border-emerald-400 ring-2 ring-emerald-400/70'
+              : focusedId === tileId
+                ? 'border-indigo-500/60 ring-1 ring-indigo-500/30'
+                : 'border-white/10'
+        }`}
+      >
+        <div className="relative w-full text-left">
+          <div className={`relative ${compact ? 'aspect-[4/3]' : 'aspect-video'} bg-black`}>
+            {tile ? (
+              <ClassroomVideoTile
+                tile={tile}
+                muted={tile.isSelf}
+                className="w-full h-full"
+                showLabel={false}
+                isSpeaking={isSpeaking}
+              />
+            ) : student.photoUrl ? (
+              <img src={student.photoUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
+                <span className="text-lg font-bold text-slate-400">{student.name.charAt(0).toUpperCase()}</span>
+              </div>
+            )}
+            <span className={`absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold border ${liveAttendanceStatusClass(status)}`}>
+              {LIVE_ATTENDANCE_STATUS_LABEL[status]}
+            </span>
+            {isPending ? (
+              <button
+                type="button"
+                onClick={() => onAdmit(student.id)}
+                className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-emerald-950/75 hover:bg-emerald-900/85 transition-colors border-0 cursor-pointer"
+                title={`${student.name} derse alınsın`}
+              >
+                <Check className="w-6 h-6 text-emerald-300" />
+                <span className="text-[10px] font-bold text-emerald-100 uppercase tracking-wide">Derse al</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onFocus(tileId)}
+                className="absolute inset-0 opacity-0"
+                aria-label={`${student.name} görüntüsü`}
+              />
+            )}
+          </div>
+        </div>
+        <div className={`px-1.5 ${compact ? 'py-1' : 'py-1.5'} space-y-1`}>
+          <button
+            type="button"
+            onClick={() => onOpenPrivateChat?.(student.id)}
+            className="text-[10px] font-semibold text-white truncate text-left w-full hover:text-indigo-300"
+            title={onOpenPrivateChat ? 'Özel sohbet' : undefined}
+          >
+            {student.name}
+          </button>
+          {!isPending ? (
+          <>
+          <div className="flex items-center justify-center gap-1">
+            {onToggleStudentMic ? (
+              <button
+                type="button"
+                onClick={() => onToggleStudentMic(student.id)}
+                className={`p-1 rounded ${audioOpen ? 'bg-slate-700/80 text-slate-200' : 'bg-rose-800/60 text-white'}`}
+                title={audioOpen ? 'Sesi kapat' : 'Sesi aç (söz hakkı)'}
+              >
+                {audioOpen ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+              </button>
+            ) : null}
+            {onToggleStudentCam ? (
+              <button
+                type="button"
+                onClick={() => onToggleStudentCam(student.id)}
+                className={`p-1 rounded ${camForcedOff ? 'bg-rose-800/60 text-white' : 'bg-slate-700/80 text-slate-200'}`}
+                title={camForcedOff ? 'Kamerayı açtır' : 'Kamerayı kapat'}
+              >
+                {camForcedOff ? <VideoOff className="w-3 h-3" /> : <Video className="w-3 h-3" />}
+              </button>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-4 gap-0.5">
+            {(['present', 'absent', 'late', 'excused'] as const).map((mark) => (
+              <button
+                key={mark}
+                type="button"
+                title={LIVE_ATTENDANCE_STATUS_LABEL[mark]}
+                onClick={() => onSetMark(student.id, mark)}
+                className={`p-1 rounded text-[9px] font-bold transition-colors ${
+                  attendanceMarks?.[sid] === mark || (status === mark && !attendanceMarks?.[sid])
+                    ? mark === 'present'
+                      ? 'bg-emerald-600 text-white'
+                      : mark === 'absent'
+                        ? 'bg-rose-600 text-white'
+                        : mark === 'late'
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-sky-600 text-white'
+                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'
+                }`}
+              >
+                {mark === 'present' ? '✓' : mark === 'absent' ? '✗' : mark === 'late' ? '⏱' : 'İ'}
+              </button>
+            ))}
+          </div>
+          </>
+          ) : (
+            <p className="text-[9px] text-amber-200/90 leading-snug">Bekleme odasında — kabul etmek için üstteki yeşil alana tıklayın.</p>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const header = (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-1">
+        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+          Yoklama · {summary.present}/{summary.total}
+        </span>
+        {vbSupported ? (
+          <button
+            type="button"
+            onClick={onToggleBlur}
+            disabled={localCamOff || vbApplying}
+            title={cameraBackgroundBlur ? 'Bulanıklığı kapat' : 'Arka planı bulanıklaştır'}
+            className={`p-1 rounded-md border transition-colors ${
+              cameraBackgroundBlur
+                ? 'bg-indigo-600/80 border-indigo-400/40 text-white'
+                : 'border-white/10 text-slate-400 hover:text-white'
+            } ${localCamOff || vbApplying ? 'opacity-50' : ''}`}
+          >
+            {vbApplying ? <Loader2 className="w-3 h-3 animate-spin" /> : <Focus className="w-3 h-3" />}
+          </button>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap gap-1 text-[8px] font-bold">
+        <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">{summary.present} geldi</span>
+        <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/25">{summary.absent} yok</span>
+        {summary.waiting > 0 ? (
+          <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-200 border border-amber-500/25">{summary.waiting} bekliyor</span>
+        ) : null}
+      </div>
+      {summary.waiting > 0 && onAdmitAll ? (
+        <button
+          type="button"
+          onClick={onAdmitAll}
+          className="w-full py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold shadow-lg shadow-emerald-900/30"
+        >
+          Bekleyen {summary.waiting} öğrenciyi derse al
+        </button>
+      ) : null}
+      <div className="flex flex-wrap gap-1">
+        <button type="button" onClick={() => onMarkAll('present')} className="px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-300 text-[8px] font-bold border border-emerald-500/30 hover:bg-emerald-600/30">Tümü geldi</button>
+        <button type="button" onClick={() => onMarkAll('absent')} className="px-1.5 py-0.5 rounded bg-rose-600/20 text-rose-300 text-[8px] font-bold border border-rose-500/30 hover:bg-rose-600/30">Tümü yok</button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving || rosterStudents.length === 0}
+          className="ml-auto px-2 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[8px] font-bold"
+        >
+          {saving ? 'Kaydediliyor…' : 'Kaydet'}
+        </button>
+      </div>
+      {saveMessage ? <p className="text-[9px] text-indigo-300">{saveMessage}</p> : null}
+    </div>
+  );
+
+  if (variant === 'mobile') {
+    return (
+      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-2 space-y-2">
+        {header}
+        {coachTile ? (
+          <div className="aspect-video max-h-24 rounded-lg overflow-hidden ring-1 ring-white/10">
+            <ClassroomVideoTile tile={coachTile} muted={coachTile.isSelf} className="w-full h-full" />
+          </div>
+        ) : null}
+        <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-0.5">
+          {rosterStudents.map((s) => (
+            <div key={s.id} className="shrink-0 w-32">{studentRow(s, true)}</div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <aside className="hidden lg:flex w-[min(13rem,24vw)] xl:w-[min(14.5rem,22vw)] shrink-0 flex-col gap-1.5 sticky top-2 self-start max-h-[min(72vh,560px)]">
+      {header}
+      {coachTile ? (
+        <div className="relative aspect-video w-full rounded-lg overflow-hidden ring-1 ring-white/10 shrink-0">
+          <ClassroomVideoTile tile={coachTile} muted={coachTile.isSelf} className="w-full h-full rounded-lg" labelClassName="text-[8px]" />
+          {coachTile.isSelf && mediaLoading ? (
+            <div className="absolute top-1 right-1"><Loader2 className="w-3.5 h-3.5 animate-spin text-white" /></div>
+          ) : null}
+        </div>
+      ) : null}
+      {rosterStudents.length > 0 ? (
+        <div className="grid grid-cols-2 gap-1.5 overflow-y-auto custom-scrollbar min-h-0 flex-1">
+          {rosterStudents.map((s) => studentRow(s, true))}
+        </div>
+      ) : (
+        <p className="text-[10px] text-slate-600 text-center py-4 px-1">
+          Yoklama listesi boş. Oda oluştururken öğrenci davet edin veya oda adını grup adıyla eşleştirin.
+        </p>
+      )}
+    </aside>
+  );
+}
+
+/** Öğrenci: tahta yanında sürekli görüntü (antrenör + kendi + sınıf arkadaşları) */
+function ClassroomStudentVideoPanel({
+  tiles,
+  focusedId,
+  onFocus,
+  vbSupported,
+  cameraBackgroundBlur,
+  onToggleBlur,
+  vbApplying,
+  localCamOff,
+  mediaLoading,
+  variant = 'dock',
+  speakingStudentIds,
+  coachIsSpeaking = false,
+}: {
+  tiles: LiveVideoTile[];
+  focusedId: string | null;
+  onFocus: (id: string) => void;
+  vbSupported: boolean;
+  cameraBackgroundBlur: boolean;
+  onToggleBlur: () => void;
+  vbApplying: boolean;
+  localCamOff: boolean;
+  mediaLoading: boolean;
+  variant?: 'dock' | 'mobile';
+  speakingStudentIds?: Set<string>;
+  coachIsSpeaking?: boolean;
+}) {
+  const coachTile = tiles.find((t) => t.role === 'coach') ?? null;
+  const selfTile = tiles.find((t) => t.isSelf) ?? null;
+  const activeTile = tiles.find((t) => t.id === focusedId) ?? coachTile ?? selfTile ?? tiles[0] ?? null;
+  const sideTiles = tiles.filter((t) => activeTile && t.id !== activeTile.id);
+
+  const blurBtn = vbSupported ? (
+    <button
+      type="button"
+      onClick={onToggleBlur}
+      disabled={localCamOff || vbApplying}
+      title={cameraBackgroundBlur ? 'Bulanıklığı kapat' : 'Arka planı bulanıklaştır'}
+      className={`p-1 rounded-md border transition-colors ${
+        cameraBackgroundBlur
+          ? 'bg-indigo-600/80 border-indigo-400/40 text-white'
+          : 'border-white/10 text-slate-400 hover:text-white'
+      } ${localCamOff || vbApplying ? 'opacity-50' : ''}`}
+    >
+      {vbApplying ? <Loader2 className="w-3 h-3 animate-spin" /> : <Focus className="w-3 h-3" />}
+    </button>
+  ) : null;
+
+  const tileIsSpeaking = (tile: LiveVideoTile) => {
+    if (tile.role === 'coach') return coachIsSpeaking;
+    const sid = normalizeStudentId(tile.id.replace(/^(student-|self-)/, ''));
+    return sid ? (speakingStudentIds?.has(sid) ?? false) : false;
+  };
+
+  const tileButton = (tile: LiveVideoTile, className: string, labelClass = 'text-[8px]') => {
+    const speaking = tileIsSpeaking(tile);
+    return (
+    <button
+      key={tile.id}
+      type="button"
+      onClick={() => onFocus(tile.id)}
+      className={`relative overflow-hidden text-left transition-all ${
+        speaking
+          ? 'ring-2 ring-emerald-400'
+          : focusedId === tile.id
+            ? 'ring-2 ring-indigo-500'
+            : 'ring-1 ring-white/10 hover:ring-indigo-500/40'
+      } ${className}`}
+    >
+      <ClassroomVideoTile
+        tile={tile}
+        muted={tile.isSelf}
+        className="w-full h-full"
+        labelClassName={labelClass}
+        isSpeaking={speaking}
+      />
+      {tile.isSelf && mediaLoading ? (
+        <div className="absolute top-1 right-1">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+        </div>
+      ) : null}
+    </button>
+  );
+  };
+
+  if (variant === 'mobile') {
+    return (
+      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-2">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Canlı görüntü</span>
+          {blurBtn}
+        </div>
+        <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-0.5">
+          {tiles.map((tile) => (
+            <div key={tile.id} className="shrink-0 w-28 aspect-video rounded-lg overflow-hidden">
+              {tileButton(tile, 'w-full h-full rounded-lg')}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <aside className="hidden lg:flex w-[min(12rem,22vw)] xl:w-[min(13.5rem,20vw)] shrink-0 flex-col gap-1.5 sticky top-2 self-start max-h-[min(72vh,520px)]">
+      <div className="flex items-center justify-between gap-1">
+        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Canlı görüntü</span>
+        {blurBtn}
+      </div>
+
+      {activeTile ? tileButton(activeTile, 'aspect-video w-full rounded-xl', 'text-[9px]') : (
+        <div className="aspect-video rounded-xl border border-dashed border-white/10 flex items-center justify-center text-[10px] text-slate-500">
+          Görüntü bekleniyor…
+        </div>
+      )}
+
+      {sideTiles.length > 0 ? (
+        <div className="grid grid-cols-2 gap-1.5 overflow-y-auto custom-scrollbar min-h-0 flex-1">
+          {sideTiles.map((tile) => tileButton(tile, 'aspect-[4/3] rounded-lg'))}
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
 /** Öğrenci id eşlemesi (UUID / Supabase bazen farklı tipte dönebilir) */
 function normalizeStudentId(id: string | null | undefined): string {
   if (id == null) return '';
@@ -312,6 +850,12 @@ function idsEqual(a: string | null | undefined, b: string | null | undefined): b
   const x = normalizeStudentId(a);
   const y = normalizeStudentId(b);
   return x !== '' && x === y;
+}
+
+/** Agora kanal uid — öğrenci join'de studentId'nin ilk 32 karakteri */
+function agoraUidForStudent(studentId: string): string {
+  const sid = normalizeStudentId(studentId);
+  return sid ? sid.slice(0, 32) : '';
 }
 
 function pickSquare(arg: unknown): string | null {
@@ -431,7 +975,63 @@ function parseSessionMedia(raw: unknown): SessionMediaState {
       o.studentEvalBarVisible !== undefined
         ? !!o.studentEvalBarVisible
         : !!o.studentAnalysisVisible,
+    rosterStudentIds: parseIdList('rosterStudentIds'),
+    attendanceMarks: parseAttendanceMarks(o.attendanceMarks),
   };
+}
+
+function parseAttendanceMarks(raw: unknown): Record<string, 'present' | 'absent' | 'late' | 'excused'> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const allowed = new Set(['present', 'absent', 'late', 'excused']);
+  const out: Record<string, 'present' | 'absent' | 'late' | 'excused'> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const sid = normalizeStudentId(k);
+    if (!sid || typeof v !== 'string' || !allowed.has(v)) continue;
+    out[sid] = v as 'present' | 'absent' | 'late' | 'excused';
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+type LiveAttendanceUiStatus = 'present' | 'absent' | 'late' | 'excused' | 'waiting' | 'unset';
+
+function resolveLiveAttendanceStatus(
+  studentId: string,
+  marks: Record<string, 'present' | 'absent' | 'late' | 'excused'> | undefined,
+  admittedIds: string[],
+  pendingIds: string[],
+  hasVideoStream: boolean,
+): LiveAttendanceUiStatus {
+  const sid = normalizeStudentId(studentId);
+  if (marks?.[sid]) return marks[sid];
+  if (pendingIds.some((k) => idsEqual(k, sid))) return 'waiting';
+  if (admittedIds.some((k) => idsEqual(k, sid)) || hasVideoStream) return 'present';
+  return 'unset';
+}
+
+const LIVE_ATTENDANCE_STATUS_LABEL: Record<LiveAttendanceUiStatus, string> = {
+  present: 'Geldi',
+  absent: 'Yok',
+  late: 'Geç',
+  excused: 'İzinli',
+  waiting: 'Bekliyor',
+  unset: '—',
+};
+
+function liveAttendanceStatusClass(status: LiveAttendanceUiStatus): string {
+  switch (status) {
+    case 'present':
+      return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
+    case 'absent':
+      return 'bg-rose-500/20 text-rose-300 border-rose-500/30';
+    case 'late':
+      return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+    case 'excused':
+      return 'bg-sky-500/20 text-sky-300 border-sky-500/30';
+    case 'waiting':
+      return 'bg-amber-500/15 text-amber-200 border-amber-500/25 animate-pulse';
+    default:
+      return 'bg-slate-700/50 text-slate-400 border-white/10';
+  }
 }
 
 /** Antrenörün tahtadaki rolü; öğrenci tarafı ters renk veya both (işbirlik) */
@@ -521,7 +1121,17 @@ function classroomEvalBarPawns(line: PvLine | null | undefined, turn: 'w' | 'b')
 }
 
 /** Motor / katılım anahtarı: thumb pist içinde kalır */
-function ClassroomToggle({ on, onToggle, id }: { on: boolean; onToggle: () => void; id?: string }) {
+function ClassroomToggle({
+  on,
+  onToggle,
+  id,
+  compact = false,
+}: {
+  on: boolean;
+  onToggle: () => void;
+  id?: string;
+  compact?: boolean;
+}) {
   return (
     <button
       id={id}
@@ -529,20 +1139,28 @@ function ClassroomToggle({ on, onToggle, id }: { on: boolean; onToggle: () => vo
       role="switch"
       aria-checked={on}
       onClick={onToggle}
-      className={`relative h-[26px] w-[46px] shrink-0 overflow-hidden rounded-full border border-white/10 transition-colors duration-200 hover:brightness-[1.06] active:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 ${on ? 'bg-indigo-500' : 'bg-slate-700'}`}
+      className={`relative shrink-0 overflow-hidden rounded-full border border-white/10 transition-colors duration-200 hover:brightness-[1.06] active:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 ${
+        compact ? 'h-5 w-9' : 'h-[26px] w-[46px]'
+      } ${on ? 'bg-indigo-500' : 'bg-slate-700'}`}
     >
       <span className="sr-only">{on ? 'Açık' : 'Kapalı'}</span>
       <span
         aria-hidden
-        className="pointer-events-none absolute left-[3px] top-1/2 size-[18px] rounded-full bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_1px_2px_rgba(0,0,0,0.28)] ring-1 ring-black/12 transition-[transform] duration-200 ease-[cubic-bezier(0.2,0.85,0.25,1)] motion-reduce:transition-none"
-        style={{ transform: on ? 'translate3d(22px, -50%, 0)' : 'translate3d(0, -50%, 0)' }}
+        className={`pointer-events-none absolute left-[2px] top-1/2 rounded-full bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_1px_2px_rgba(0,0,0,0.28)] ring-1 ring-black/12 transition-[transform] duration-200 ease-[cubic-bezier(0.2,0.85,0.25,1)] motion-reduce:transition-none ${
+          compact ? 'size-3.5' : 'size-[18px]'
+        }`}
+        style={{
+          transform: on
+            ? `translate3d(${compact ? '16px' : '22px'}, -50%, 0)`
+            : 'translate3d(0, -50%, 0)',
+        }}
       />
     </button>
   );
 }
 
 const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: roomIdProp, studentId: studentIdProp }) => {
-  const { students, puzzles, refreshStudentsFromSupabase, addAttendanceRecord } = useApp();
+  const { students, puzzles, refreshStudentsFromSupabase, addAttendanceRecord, trainingGroups } = useApp();
   /** Admin: seçilen oda (null = sınıf listesi göster) */
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<LiveLessonRoom[]>([]);
@@ -578,6 +1196,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const [fen, setFen] = useState(game.fen());
   const [baseFen, setBaseFen] = useState(START_FEN);
   const [hoverFen, setHoverFen] = useState<string | null>(null);
+  const [enginePvHovered, setEnginePvHovered] = useState<PvHoverState>(null);
+  const [enginePvLinePreview, setEnginePvLinePreview] = useState<LinePreviewState>(null);
+  const boardWheelNavTsRef = useRef(0);
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
   const [variations, setVariations] = useState<Record<number, string[][]>>({});
   const [currentVariation, setCurrentVariation] = useState<LiveVariationRef | null>(null);
@@ -619,6 +1240,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const [chatMessages, setChatMessages] = useState<LiveChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatSending, setChatSending] = useState(false);
+  /** Koç: özel sohbet hedefi; null = genel sohbet */
+  const [chatPrivateStudentId, setChatPrivateStudentId] = useState<string | null>(null);
+  /** Öğrenci: antrenörle özel sohbet modu */
+  const [studentChatPrivate, setStudentChatPrivate] = useState(false);
+  const [speakingUids, setSpeakingUids] = useState<Set<string>>(() => new Set());
   const [sidebarTab, setSidebarTab] = useState<ClassroomSidebarTab>('analiz');
   /** Mobilde tahta / yan panel — masaüstünde ikisi yan yana */
   const [mobileClassroomPanel, setMobileClassroomPanel] = useState<'board' | 'sidebar'>('board');
@@ -630,9 +1256,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   /** Motor göstergesi (sidebar) */
   const [engineEvalVisible, setEngineEvalVisible] = useState(true);
   const [engineLinesVisible, setEngineLinesVisible] = useState(true);
-  const [enginePvHover, setEnginePvHover] = useState<PvHoverState>(null);
-  const [engineLinePreview, setEngineLinePreview] = useState<LinePreviewState>(null);
-  const [enginePreviewFen, setEnginePreviewFen] = useState<string | null>(null);
   /** Davet kutusu kullanıcı adı (arka uç uyarı/link odaklı) */
   const [inviteUsernameInput, setInviteUsernameInput] = useState('');
   const [inviteToast, setInviteToast] = useState<string | null>(null);
@@ -691,6 +1314,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const [drawingColor, setDrawingColor] = useState<SquareMarkColor>('red');
   const [marks, setMarks] = useState<Record<string, { color: SquareMarkColor, type: 'square' | 'circle' | 'x' }>>({});
+  /** Öğrenci: yalnızca kendi ekranında görünen bulmaca tarzı işaretler */
+  const [studentLocalMarks, setStudentLocalMarks] = useState<
+    Record<string, { color: SquareMarkColor; type: 'circle' }>
+  >({});
+  const [studentLocalArrows, setStudentLocalArrows] = useState<ArrowItem[]>([]);
   /** DB'de coach_side kolonu yoksa false (400 sonrası) */
   const schemaHasExtendedRef = useRef<boolean | null>(null);
   /** arrows kolonu — marks gibi ayrı tespit (coach_side olmasa da ok senkronu çalışsın) */
@@ -722,7 +1350,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const [boardReady, setBoardReady] = useState(false);
   /** Yerel kamera/mikrofon akışı (önizleme + track.enabled ile aç/kapa) */
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteStreamsByUid, setRemoteStreamsByUid] = useState<Record<string, MediaStream>>({});
   const [callStatus, setCallStatus] = useState<'idle' | 'connecting' | 'connected' | 'ended' | 'error'>('idle');
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [mediaLoading, setMediaLoading] = useState(false);
@@ -730,6 +1358,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const agoraClientRef = useRef<IAgoraRTCClient | null>(null);
   const agoraLocalAudioTrackRef = useRef<IMicrophoneAudioTrack | null>(null);
   const agoraLocalVideoTrackRef = useRef<ICameraVideoTrack | null>(null);
+  const syncCoachRemoteAudioRef = useRef<() => void>(() => {});
   const vbProcessorRef = useRef<IVirtualBackgroundProcessor | null>(null);
   const vbPipedTrackRef = useRef<ICameraVideoTrack | null>(null);
   const [cameraBackgroundBlur, setCameraBackgroundBlur] = useState(readCameraBlurPreference);
@@ -760,6 +1389,24 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     () => (isStudentView ? students.filter((s) => !idsEqual(s.id, studentIdProp)) : students),
     [students, isStudentView, studentIdProp]
   );
+  const [attendanceSaving, setAttendanceSaving] = useState(false);
+  const [attendanceSaveToast, setAttendanceSaveToast] = useState<string | null>(null);
+
+  const classroomRosterStudents = useMemo(() => {
+    const roster = sessionMedia.rosterStudentIds ?? [];
+    if (roster.length > 0) {
+      return roster
+        .map((id) => students.find((s) => idsEqual(s.id, id)))
+        .filter((s): s is Student => !!s);
+    }
+    const roomName = effectiveRoomName.trim();
+    if (roomName) {
+      const exactGroup = students.filter((s) => s.group?.trim() === roomName);
+      if (exactGroup.length > 0) return exactGroup;
+    }
+    return students;
+  }, [sessionMedia.rosterStudentIds, students, effectiveRoomName]);
+
   const liveVideoTiles = useMemo(() => {
     const tiles: Array<{
       id: string;
@@ -771,16 +1418,17 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       camOff: boolean;
     }> = [];
 
+    const coachRemote = remoteStreamsByUid.coach ?? null;
+
     // Koç kutusu: koç görünümünde yerel akış, öğrenci görünümünde uzak akış.
     tiles.push({
       id: 'coach',
       name: 'Baş Antrenör',
       role: 'coach',
       isSelf: !isStudentView,
-      stream: isStudentView ? remoteStream : localStream,
+      stream: isStudentView ? coachRemote : localStream,
       micMuted: sessionMedia.coachMicMuted,
-      /** Koç önizlemesi: yalnızca sessionMedia (toggle burayı anında güncelliyor); isCameraOff koçta güncellenmeyebiliyordu ve OR ile preview kapanık kalıyordu */
-      camOff: isStudentView ? (sessionMedia.coachCamOff && !remoteStream) : sessionMedia.coachCamOff,
+      camOff: isStudentView ? sessionMedia.coachCamOff && !coachRemote : sessionMedia.coachCamOff,
     });
 
     if (isStudentView && currentStudent) {
@@ -798,33 +1446,28 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
 
     const otherStudents = isStudentView ? visibleStudents : students;
-    for (const [index, s] of otherStudents.entries()) {
+    for (const s of otherStudents) {
       const sid = normalizeStudentId(s.id);
       if (isStudentView && currentStudent && idsEqual(s.id, currentStudent.id)) continue;
-      const streamForTile = !isStudentView && index === 0 ? remoteStream : null;
+      const agoraUid = agoraUidForStudent(s.id);
+      const remoteForStudent = agoraUid ? remoteStreamsByUid[agoraUid] ?? null : null;
       const coachForcedStudentCam = !!(sid && (sessionMedia.studentCamForcedOff[sid] ?? false));
+      const hasFloor = idsEqual(sessionMedia.floorStudentId, sid);
+      const micBlocked = sessionMedia.studentMicBlocked[sid] ?? false;
       tiles.push({
         id: `student-${sid || s.id}`,
         name: s.name,
         role: 'student',
         isSelf: false,
-        stream: streamForTile,
-        micMuted: sessionMedia.studentMicBlocked[sid] ?? false,
-        camOff: !streamForTile || coachForcedStudentCam,
+        stream: remoteForStudent,
+        micMuted: micBlocked || !hasFloor,
+        camOff: coachForcedStudentCam,
       });
     }
 
     return tiles;
-  }, [isStudentView, localStream, remoteStream, sessionMedia, isCameraOff, currentStudent, isMuted, visibleStudents, students]);
+  }, [isStudentView, localStream, remoteStreamsByUid, sessionMedia, isCameraOff, currentStudent, isMuted, visibleStudents, students]);
   const [focusedVideoTileId, setFocusedVideoTileId] = useState<string | null>(null);
-  const activeVideoTile = useMemo(
-    () => liveVideoTiles.find((t) => t.id === focusedVideoTileId) ?? liveVideoTiles[0] ?? null,
-    [liveVideoTiles, focusedVideoTileId]
-  );
-  const sideVideoTiles = useMemo(
-    () => liveVideoTiles.filter((t) => !activeVideoTile || t.id !== activeVideoTile.id),
-    [liveVideoTiles, activeVideoTile]
-  );
 
   useEffect(() => {
     if (!liveVideoTiles.length) {
@@ -835,6 +1478,46 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setFocusedVideoTileId(liveVideoTiles[0].id);
     }
   }, [liveVideoTiles, focusedVideoTileId]);
+
+  const speakingStudentIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of students) {
+      const sid = normalizeStudentId(s.id);
+      const uid = agoraUidForStudent(s.id);
+      if (sid && speakingUids.has(uid)) set.add(sid);
+    }
+    return set;
+  }, [speakingUids, students]);
+
+  const syncCoachRemoteAudioPlayback = useCallback(() => {
+    if (isStudentView) return;
+    const client = agoraClientRef.current;
+    if (!client) return;
+    const sm = sessionMediaRef.current;
+    for (const user of client.remoteUsers) {
+      if (!user.audioTrack) continue;
+      const uid = String(user.uid);
+      if (uid === 'coach') continue;
+      const matched =
+        classroomRosterStudents.find((s) => agoraUidForStudent(s.id) === uid) ??
+        students.find((s) => agoraUidForStudent(s.id) === uid);
+      const sid = matched ? normalizeStudentId(matched.id) : '';
+      const blocked = sid ? (sm.studentMicBlocked[sid] ?? false) : true;
+      const hasFloor = sid ? idsEqual(sm.floorStudentId, sid) : false;
+      try {
+        if (hasFloor && !blocked) void user.audioTrack.play();
+        else user.audioTrack.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [isStudentView, classroomRosterStudents, students]);
+
+  syncCoachRemoteAudioRef.current = syncCoachRemoteAudioPlayback;
+
+  useEffect(() => {
+    syncCoachRemoteAudioPlayback();
+  }, [sessionMedia, syncCoachRemoteAudioPlayback]);
 
   useEffect(() => {
     localStreamRef.current = localStream;
@@ -862,7 +1545,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       agoraLocalAudioTrackRef.current = null;
       agoraLocalVideoTrackRef.current = null;
       activeCallRoomRef.current = null;
-      setRemoteStream(null);
+      setRemoteStreamsByUid({});
       setCallStatus('ended');
     };
   }, []);
@@ -901,25 +1584,41 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           agoraLocalAudioTrackRef.current = null;
           agoraLocalVideoTrackRef.current = null;
           setLocalStream(null);
-          setRemoteStream(null);
+          setRemoteStreamsByUid({});
         }
 
         const client = agoraClientRef.current ?? AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
         agoraClientRef.current = client;
         activeCallRoomRef.current = callRoomKey;
 
+        const upsertRemoteVideo = (uid: string | number, stream: MediaStream) => {
+          const key = String(uid);
+          if (cancelled) return;
+          setRemoteStreamsByUid((prev) => ({ ...prev, [key]: stream }));
+          setCallStatus('connected');
+        };
+        const removeRemoteVideo = (uid: string | number) => {
+          const key = String(uid);
+          if (cancelled) return;
+          setRemoteStreamsByUid((prev) => {
+            if (!prev[key]) return prev;
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        };
+
         client.removeAllListeners();
         client.on('user-published', async (user: IAgoraRTCRemoteUser, mediaType: 'audio' | 'video') => {
           try {
             await client.subscribe(user, mediaType);
-            if (mediaType === 'audio' && user.audioTrack) user.audioTrack.play();
+            if (mediaType === 'audio' && user.audioTrack) {
+              user.audioTrack.play();
+              syncCoachRemoteAudioRef.current();
+            }
             if (mediaType === 'video' && user.videoTrack) {
               const track = user.videoTrack.getMediaStreamTrack();
-              const stream = new MediaStream([track]);
-              if (!cancelled) {
-                setRemoteStream(stream);
-                setCallStatus('connected');
-              }
+              upsertRemoteVideo(user.uid, new MediaStream([track]));
             }
           } catch (e) {
             if (!cancelled) {
@@ -929,17 +1628,50 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             }
           }
         });
-        client.on('user-unpublished', (_user: IAgoraRTCRemoteUser, mediaType: 'audio' | 'video') => {
-          if (mediaType === 'video' && !cancelled) setRemoteStream(null);
+        client.on('user-unpublished', (user: IAgoraRTCRemoteUser, mediaType: 'audio' | 'video') => {
+          if (mediaType === 'video') removeRemoteVideo(user.uid);
         });
-        client.on('user-left', () => {
-          if (!cancelled) setRemoteStream(null);
+        client.on('user-left', (user: IAgoraRTCRemoteUser) => {
+          removeRemoteVideo(user.uid);
         });
 
         if (client.connectionState !== 'CONNECTED') {
           const uidBase = isStudentView ? normalizeStudentId(studentIdProp) || roleDisplayName : 'coach';
           await client.join(AGORA_APP_ID, callRoomKey, null, uidBase.slice(0, 32));
         }
+
+        try {
+          client.enableAudioVolumeIndicator();
+        } catch {
+          /* ignore */
+        }
+        client.on('volume-indicator', (volumes) => {
+          if (cancelled) return;
+          const next = new Set<string>();
+          for (const vol of volumes) {
+            if (vol.level > 8) next.add(String(vol.uid));
+          }
+          setSpeakingUids(next);
+        });
+
+        for (const user of client.remoteUsers) {
+          try {
+            if (user.hasVideo) {
+              await client.subscribe(user, 'video');
+              if (user.videoTrack) {
+                const track = user.videoTrack.getMediaStreamTrack();
+                upsertRemoteVideo(user.uid, new MediaStream([track]));
+              }
+            }
+            if (user.hasAudio) {
+              await client.subscribe(user, 'audio');
+              if (user.audioTrack) user.audioTrack.play();
+            }
+          } catch {
+            /* tek kullanıcı hatası diğerlerini engellemesin */
+          }
+        }
+        syncCoachRemoteAudioRef.current();
 
         if (!agoraLocalAudioTrackRef.current || !agoraLocalVideoTrackRef.current) {
           const [micTrack, camTrack] = await AgoraRTC.createMicrophoneAndCameraTracks(
@@ -954,7 +1686,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         }
 
         if (!cancelled) {
-          setCallStatus(remoteStream ? 'connected' : 'idle');
+          setCallStatus(client.remoteUsers.length > 0 ? 'connected' : 'idle');
         }
       } catch (e) {
         if (!cancelled) {
@@ -1216,6 +1948,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             role: x.role === 'coach' ? 'coach' : 'student',
             text: String(x.text ?? ''),
             at: String(x.at ?? ''),
+            privateWithStudentId: x.privateWithStudentId ? String(x.privateWithStudentId) : undefined,
           }))
           .filter((m) => m.id && m.text);
         /** Toplu derste öğrenci belleğinde ve ekranda yalnızca antrenör + kendi mesajları (diğer öğrenciler gizli) */
@@ -1226,8 +1959,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             setChatMessages(
               parsed.filter(
                 (m) =>
-                  m.role === 'coach' ||
-                  (m.role === 'student' && idsEqual(m.studentId, sid))
+                  (m.privateWithStudentId && idsEqual(m.privateWithStudentId, sid)) ||
+                  (!m.privateWithStudentId &&
+                    (m.role === 'coach' || (m.role === 'student' && idsEqual(m.studentId, sid))))
               )
             );
           }
@@ -1274,19 +2008,28 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     );
   }, []);
 
-  const inviteGroupNames = useMemo(
-    () => [...new Set(students.map((s) => s.group).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr')),
-    [students],
+  const inviteTrainingGroups = useMemo(
+    () =>
+      [...trainingGroups].sort(
+        (a, b) =>
+          a.branchOffice.localeCompare(b.branchOffice, 'tr') ||
+          a.discipline.localeCompare(b.discipline, 'tr') ||
+          a.name.localeCompare(b.name, 'tr'),
+      ),
+    [trainingGroups],
   );
 
-  const toggleInviteGroup = useCallback((groupName: string) => {
-    const ids = students.filter((s) => s.group === groupName).map((s) => s.id);
-    setInviteStudentIds((prev) => {
-      const allIn = ids.length > 0 && ids.every((id) => prev.includes(id));
-      if (allIn) return prev.filter((id) => !ids.includes(id));
-      return [...new Set([...prev, ...ids])];
-    });
-  }, [students]);
+  const toggleInviteTrainingGroup = useCallback(
+    (group: TrainingGroup) => {
+      const ids = studentsInTrainingGroup(students, group).map((s) => s.id);
+      setInviteStudentIds((prev) => {
+        const allIn = ids.length > 0 && ids.every((id) => prev.includes(id));
+        if (allIn) return prev.filter((id) => !ids.includes(id));
+        return [...new Set([...prev, ...ids])];
+      });
+    },
+    [students],
+  );
 
   const buildStudentInviteUrl = useCallback((roomId: string) => {
     if (typeof window === 'undefined') return '';
@@ -1668,7 +2411,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       moves: [],
       coach_side: null,
       arrows: [],
-      session_media: DEFAULT_SESSION_MEDIA,
+      session_media: {
+        ...DEFAULT_SESSION_MEDIA,
+        rosterStudentIds: inviteStudentIds
+          .map((id) => normalizeStudentId(id))
+          .filter(Boolean),
+      },
       chat_messages: [] as LiveChatMessage[],
       updated_at: new Date().toISOString(),
     };
@@ -1725,12 +2473,16 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     const sid = !isStudentView ? 'coach' : normalizeStudentId(studentIdProp);
     if (!sid) return;
     const role: LiveChatMessage['role'] = !isStudentView ? 'coach' : 'student';
+    const privateWithStudentId = isStudentView
+      ? (studentChatPrivate ? normalizeStudentId(studentIdProp) : undefined)
+      : (chatPrivateStudentId ?? undefined);
     const msg: LiveChatMessage = {
       id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
       studentId: sid,
       role,
       text,
       at: new Date().toISOString(),
+      ...(privateWithStudentId ? { privateWithStudentId } : {}),
     };
     setChatInput('');
     setChatSending(true);
@@ -1751,7 +2503,16 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         .finally(() => setChatSending(false));
       return next;
     });
-  }, [chatInput, effectiveRoomId, isStudentView, studentIdProp, isPgColumnError]);
+  }, [chatInput, effectiveRoomId, isStudentView, studentIdProp, isPgColumnError, chatPrivateStudentId, studentChatPrivate]);
+
+  const openPrivateChatWithStudent = useCallback((studentId: string) => {
+    const id = normalizeStudentId(studentId);
+    if (!id || isStudentView) return;
+    setChatPrivateStudentId(id);
+    setSidebarTab('sohbet');
+    setMobileClassroomPanel('sidebar');
+    setShowChatDrawer(true);
+  }, [isStudentView]);
 
   const toggleCoachStudentLiveAudio = useCallback(
     (studentId: string) => {
@@ -1779,6 +2540,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           handRaisedStudentIds: clearHand,
         });
       }
+      window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
     },
     [sessionMedia, pushSessionMediaRemote]
   );
@@ -1922,6 +2684,79 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     [addAttendanceRecord, effectiveRoomName],
   );
 
+  const setLiveAttendanceMark = useCallback(
+    (studentId: string, status: 'present' | 'absent' | 'late' | 'excused') => {
+      const id = normalizeStudentId(studentId);
+      if (!id || isStudentView) return;
+      const marks = { ...(sessionMedia.attendanceMarks ?? {}), [id]: status };
+      void pushSessionMediaRemote({ ...sessionMedia, attendanceMarks: marks });
+      if (status === 'present') recordLiveAttendance(id);
+    },
+    [isStudentView, pushSessionMediaRemote, recordLiveAttendance, sessionMedia],
+  );
+
+  const markAllLiveAttendance = useCallback(
+    (status: 'present' | 'absent' | 'late' | 'excused') => {
+      if (isStudentView) return;
+      const marks = { ...(sessionMedia.attendanceMarks ?? {}) };
+      for (const s of classroomRosterStudents) {
+        const id = normalizeStudentId(s.id);
+        if (id) marks[id] = status;
+      }
+      void pushSessionMediaRemote({ ...sessionMedia, attendanceMarks: marks });
+      if (status === 'present') {
+        classroomRosterStudents.forEach((s) => recordLiveAttendance(s.id));
+      }
+    },
+    [classroomRosterStudents, isStudentView, pushSessionMediaRemote, recordLiveAttendance, sessionMedia],
+  );
+
+  const saveLiveAttendance = useCallback(async () => {
+    if (isStudentView || classroomRosterStudents.length === 0) return;
+    setAttendanceSaving(true);
+    setAttendanceSaveToast(null);
+    const today = new Date().toISOString().slice(0, 10);
+    const marks = sessionMedia.attendanceMarks ?? {};
+    const admitted = sessionMedia.admittedStudentIds ?? [];
+    const pending = sessionMedia.pendingStudentIds ?? [];
+    try {
+      for (const s of classroomRosterStudents) {
+        const sid = normalizeStudentId(s.id);
+        if (!sid) continue;
+        const agoraUid = agoraUidForStudent(s.id);
+        const hasVideo = !!(agoraUid && remoteStreamsByUid[agoraUid]);
+        const resolved = resolveLiveAttendanceStatus(sid, marks, admitted, pending, hasVideo);
+        let status: 'present' | 'absent' | 'late' | 'excused' =
+          marks[sid] ??
+          (resolved === 'present' || resolved === 'late' || resolved === 'excused'
+            ? resolved
+            : resolved === 'waiting' || resolved === 'unset'
+              ? 'absent'
+              : 'absent');
+        await addAttendanceRecord({
+          date: today,
+          studentId: sid,
+          status,
+          lessonSummary: `Canlı ders: ${effectiveRoomName}`,
+        });
+        attendanceRecordedRef.current.add(sid);
+      }
+      setAttendanceSaveToast('Yoklama kaydedildi');
+      window.setTimeout(() => setAttendanceSaveToast(null), 3500);
+    } finally {
+      setAttendanceSaving(false);
+    }
+  }, [
+    addAttendanceRecord,
+    classroomRosterStudents,
+    effectiveRoomName,
+    isStudentView,
+    remoteStreamsByUid,
+    sessionMedia.admittedStudentIds,
+    sessionMedia.attendanceMarks,
+    sessionMedia.pendingStudentIds,
+  ]);
+
   const kickParticipant = useCallback(
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
@@ -1986,10 +2821,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (!id || isStudentView) return;
       const pending = (sessionMedia.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
       const admitted = [...new Set([...(sessionMedia.admittedStudentIds ?? []), id])];
+      const marks = { ...(sessionMedia.attendanceMarks ?? {}), [id]: 'present' as const };
       void pushSessionMediaRemote({
         ...sessionMedia,
         pendingStudentIds: pending,
         admittedStudentIds: admitted,
+        attendanceMarks: marks,
       });
       recordLiveAttendance(id);
     },
@@ -2001,10 +2838,15 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     const pending = sessionMedia.pendingStudentIds ?? [];
     if (pending.length === 0) return;
     const admitted = [...new Set([...(sessionMedia.admittedStudentIds ?? []), ...pending])];
+    const marks = { ...(sessionMedia.attendanceMarks ?? {}) };
+    pending.forEach((id) => {
+      marks[normalizeStudentId(id)] = 'present';
+    });
     void pushSessionMediaRemote({
       ...sessionMedia,
       pendingStudentIds: [],
       admittedStudentIds: admitted,
+      attendanceMarks: marks,
     });
     pending.forEach((id) => recordLiveAttendance(id));
   }, [isStudentView, pushSessionMediaRemote, recordLiveAttendance, sessionMedia]);
@@ -2026,10 +2868,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       studentJoinRegisteredRef.current = true;
       const nextAdmitted = [...new Set([...admitted, sid])];
       const nextPending = pending.filter((kid) => !idsEqual(kid, sid));
+      const marks = { ...(sessionMedia.attendanceMarks ?? {}), [sid]: 'present' as const };
       void pushSessionMediaRemote({
         ...sessionMedia,
         admittedStudentIds: nextAdmitted,
         pendingStudentIds: nextPending,
+        attendanceMarks: marks,
       });
       recordLiveAttendance(sid);
       return;
@@ -2171,15 +3015,34 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const visibleChatMessages = useMemo(() => {
     const sorted = [...chatMessages].sort((a, b) => a.at.localeCompare(b.at));
-    if (!isStudentView) return sorted;
-    if (!studentIdProp) return [];
-    const sid = normalizeStudentId(studentIdProp);
-    if (!sid) return [];
-    /** Öğrenci: yalnızca antrenör + kendi mesajları (chatMessages zaten senkronde filtrelendi; çift kontrol) */
-    return sorted.filter(
-      (m) => m.role === 'coach' || (m.role === 'student' && idsEqual(m.studentId, sid))
-    );
-  }, [chatMessages, isStudentView, studentIdProp]);
+    const isPrivate = (m: LiveChatMessage) => !!m.privateWithStudentId;
+
+    if (isStudentView) {
+      const sid = normalizeStudentId(studentIdProp);
+      if (!sid) return [];
+      return sorted.filter((m) => {
+        if (studentChatPrivate) {
+          return isPrivate(m) && idsEqual(m.privateWithStudentId, sid);
+        }
+        if (isPrivate(m)) return false;
+        return m.role === 'coach' || (m.role === 'student' && idsEqual(m.studentId, sid));
+      });
+    }
+
+    if (chatPrivateStudentId) {
+      return sorted.filter((m) => isPrivate(m) && idsEqual(m.privateWithStudentId, chatPrivateStudentId));
+    }
+    return sorted.filter((m) => !isPrivate(m));
+  }, [chatMessages, isStudentView, studentIdProp, chatPrivateStudentId, studentChatPrivate]);
+
+  const chatSenderName = useCallback(
+    (msg: LiveChatMessage) => {
+      if (msg.role === 'coach') return 'Antrenör';
+      const s = students.find((st) => idsEqual(st.id, msg.studentId));
+      return s?.name ?? 'Öğrenci';
+    },
+    [students],
+  );
 
   const sidSelfBoard = normalizeStudentId(studentIdProp);
   const hasIndependentBoard = !!(
@@ -2259,6 +3122,15 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     return () => window.clearInterval(id);
   }, [replayIsPlaying, moveHistory]);
 
+  /** Tahtadaki avantaj çubuğu — öğrencide sekme değişince de açık kalır */
+  const studentBoardEvalOn =
+    sessionMedia.studentEvalBarVisible ?? sessionMedia.studentAnalysisVisible ?? false;
+  const showBoardEvalBar = isStudentView ? studentBoardEvalOn : engineEvalVisible;
+  const coachEngineActive = engineEvalVisible && sidebarTab === 'analiz';
+  const studentEngineActive =
+    (sessionMedia.studentAnalysisVisible ?? false) && sidebarTab === 'analiz';
+  const enginePanelActive = isStudentView ? studentEngineActive : coachEngineActive;
+
   const {
     pvLines: enginePvLines,
     depth: engineDepth,
@@ -2268,52 +3140,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     loading: engineLoading,
     error: engineError,
   } = useStockfish({
-    numPv: engineLinesVisible ? 3 : 1,
+    numPv: engineLinesVisible && enginePanelActive ? 3 : 1,
     enabled: isStudentView
-      ? (sessionMedia.studentEvalBarVisible ?? sessionMedia.studentAnalysisVisible ?? false)
-      : engineEvalVisible && sidebarTab === 'analiz',
+      ? studentBoardEvalOn || studentEngineActive
+      : engineEvalVisible || coachEngineActive,
   });
-
-  /** Tahtadaki avantaj çubuğu — öğrencide sekme değişince de açık kalır */
-  const studentBoardEvalOn =
-    sessionMedia.studentEvalBarVisible ?? sessionMedia.studentAnalysisVisible ?? false;
-  const showBoardEvalBar = isStudentView ? studentBoardEvalOn : engineEvalVisible;
-
-  /** Analiz sekmesi dışına çıkınca sonsuz aramayı durdur (yan panel satırları) */
-  const coachEngineActive = engineEvalVisible && sidebarTab === 'analiz';
-  const studentEngineActive =
-    (sessionMedia.studentAnalysisVisible ?? false) && sidebarTab === 'analiz';
-  const enginePanelActive = isStudentView ? studentEngineActive : coachEngineActive;
-
-  const handleEnginePvHover = useCallback(
-    (lineIndex: number, plyIndex: number | null, _clientX: number, _clientY: number) => {
-      if (plyIndex === null) {
-        setEnginePvHover(null);
-        setEngineLinePreview(null);
-        setEnginePreviewFen(null);
-        return;
-      }
-      const line = enginePvLines[lineIndex];
-      if (!line?.pv?.length) return;
-      setEnginePvHover({ lineIndex, plyIndex });
-      const previewFen = fenAfterUciPlies(boardDisplayFen, line.pv, plyIndex + 1);
-      if (previewFen) {
-        setEnginePreviewFen(previewFen);
-        setEngineLinePreview(null);
-      }
-      const uci = line.pv[plyIndex];
-      if (uci && uci.length >= 4) {
-        setHoverFen(null);
-      }
-    },
-    [boardDisplayFen, enginePvLines],
-  );
-
-  useEffect(() => {
-    setEnginePvHover(null);
-    setEngineLinePreview(null);
-    setEnginePreviewFen(null);
-  }, [boardDisplayFen, sidebarTab, enginePanelActive]);
 
   useEffect(() => {
     if (!showBoardEvalBar && !enginePanelActive) {
@@ -2334,6 +3165,24 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
     analyseEngineFen(fen);
   }, [showBoardEvalBar, enginePanelActive, boardDisplayFen, analyseEngineFen]);
+
+  const onEnginePvHoverPly = useMemo(
+    () =>
+      buildPvHoverHandler({
+        rootFen: boardDisplayFen,
+        pvLines: enginePvLines,
+        setHovered: setEnginePvHovered,
+        setPreview: setEnginePvLinePreview,
+      }),
+    [boardDisplayFen, enginePvLines],
+  );
+
+  useEffect(() => {
+    if (!enginePanelActive) {
+      setEnginePvHovered(null);
+      setEnginePvLinePreview(null);
+    }
+  }, [enginePanelActive]);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -2672,26 +3521,16 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const promoteLiveVariation = useCallback((mlp: number, vgi: number) => {
     if (isStudentView || usesOwnBoardDisplay) return;
-    const varLine = variations[mlp]?.[vgi];
-    if (!varLine || varLine.length === 0) return;
-    const prefix = moveHistory.slice(0, mlp + 1);
-    const oldContinuation = moveHistory.slice(mlp + 1);
-    const newMainMoves = [...prefix, ...varLine];
-    const vars = { ...variations };
-    const group = [...(vars[mlp] ?? [])];
-    group.splice(vgi, 1);
-    if (oldContinuation.length > 0) group.push(oldContinuation);
-    if (group.length === 0) delete vars[mlp];
-    else vars[mlp] = group;
-    for (let k = mlp + 1; k < moveHistory.length; k++) delete vars[k];
-    const nextFen = liveLessonFenAt(baseFen, newMainMoves, vars, newMainMoves.length, null);
-    setMoveHistory(newMainMoves);
-    setVariations(vars);
+    const promoted = promoteVariationLines(moveHistory, variations, mlp, vgi);
+    if (!promoted) return;
+    const nextFen = liveLessonFenAt(baseFen, promoted.moves, promoted.variations, promoted.nextMoveIndex, null);
+    setMoveHistory(promoted.moves);
+    setVariations(promoted.variations);
     setCurrentVariation(null);
     setReplayNavPly(null);
     setFen(nextFen);
     setGame(new Chess(nextFen));
-    pushState(nextFen, newMainMoves, undefined, undefined, coachSide ?? undefined, vars);
+    pushState(nextFen, promoted.moves, undefined, undefined, coachSide ?? undefined, promoted.variations);
   }, [isStudentView, usesOwnBoardDisplay, variations, moveHistory, baseFen, coachSide, pushState]);
 
   const lastMoveSquares: Record<string, React.CSSProperties> = {};
@@ -2717,6 +3556,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (!targetSquare || !sourceSquare) return false;
 
     if (!boardExploreMode) return false;
+
+    if (isStudentView) {
+      setStudentLocalArrows([]);
+      setStudentLocalMarks({});
+    }
 
     let turnNow: 'w' | 'b';
     try {
@@ -2933,7 +3777,37 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   // Arrow Key Navigation (replay gezinme — hamle silmez)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (!keyboardTargetAllowsBoardShortcut(e)) return;
+
+      // Ctrl/Cmd+Z: son hamleyi gerçekten geri al (koçta ana tahtadan siler; öğrencide kendi tahtasında siler)
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        setReplayIsPlaying(false);
+        setHoverFen(null);
+        setCurrentVariation(null);
+        setReplayNavPly(null);
+
+        if (isStudentView) {
+          if (!usesOwnBoardDisplay) return;
+          if (displayMoveHistory.length === 0) return;
+          const nextMoves = displayMoveHistory.slice(0, -1);
+          const nextVars = { ...displayVariations };
+          for (let k = nextMoves.length; k < displayMoveHistory.length; k++) delete nextVars[k];
+          const nextFen = liveLessonFenAt(displayBaseFen, nextMoves, nextVars, nextMoves.length, null);
+          pushStudentBoardSnapshot({
+            fen: nextFen,
+            moves: nextMoves,
+            baseFen: displayBaseFen,
+            variations: nextVars,
+          });
+          return;
+        }
+
+        if (moveHistory.length === 0) return;
+        deleteLiveMoveFromHere(moveHistory.length - 1);
+        return;
+      }
+
       if (moveHistory.length === 0) return;
 
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -2956,7 +3830,16 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [moveHistory.length]);
+  }, [
+    moveHistory.length,
+    isStudentView,
+    usesOwnBoardDisplay,
+    displayMoveHistory,
+    displayVariations,
+    displayBaseFen,
+    pushStudentBoardSnapshot,
+    deleteLiveMoveFromHere,
+  ]);
 
   const setCoachSideAndPush = useCallback((side: CollaborativeBoardSide) => {
     try { sessionStorage.setItem(COACH_SIDE_STORAGE_KEY, side); } catch { /* ignore */ }
@@ -2999,6 +3882,66 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const sanitizedArrows = useMemo(() => sanitizeArrows(arrows), [arrows]);
   const arrowsToShow = boardReady ? sanitizedArrows : [];
+
+  const liveLessonDrawArrowsEnabled =
+    !isStudentView && (drawingTool === 'mouse' || drawingTool === 'arrow');
+
+  const applyLiveLessonSquareMarkAt = useCallback(
+    (square: string, markType: 'circle' | 'square' = 'circle') => {
+      if (isStudentView) {
+        setStudentLocalMarks((prev) => {
+          const current = prev[square];
+          if (current?.type === markType) {
+            const next = { ...prev };
+            delete next[square];
+            return next;
+          }
+          return { ...prev, [square]: { color: 'red', type: 'circle' } };
+        });
+        return;
+      }
+      setMarks((prev) => {
+        const current = prev[square];
+        if (current?.type === markType && current.color === drawingColor) {
+          const next = { ...prev };
+          delete next[square];
+          pushState(fen, moveHistory, arrows, next, coachSide ?? undefined);
+          return next;
+        }
+        const next = { ...prev, [square]: { color: drawingColor, type: markType } };
+        pushState(fen, moveHistory, arrows, next, coachSide ?? undefined);
+        return next;
+      });
+    },
+    [isStudentView, drawingColor, fen, moveHistory, arrows, coachSide, pushState],
+  );
+
+  const handleBoardSquareRightClick = useCallback(
+    (arg: unknown) => {
+      const square = pickSquare(arg);
+      if (!square) return;
+      if (isStudentView) {
+        applyLiveLessonSquareMarkAt(square, 'circle');
+        return;
+      }
+      if (drawingTool !== 'mouse') return;
+      applyLiveLessonSquareMarkAt(square, 'circle');
+    },
+    [isStudentView, drawingTool, applyLiveLessonSquareMarkAt],
+  );
+
+  const boardArrowsToShow = useMemo(() => {
+    if (!isStudentView) return arrowsToShow;
+    const seen = new Set<string>();
+    const merged: ArrowItem[] = [];
+    for (const a of [...arrowsToShow, ...studentLocalArrows]) {
+      const k = `${a.startSquare}-${a.endSquare}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push(a);
+    }
+    return merged;
+  }, [isStudentView, arrowsToShow, studentLocalArrows]);
 
   const moveHintsToolOk = !isStudentView && drawingTool === 'mouse';
 
@@ -3088,6 +4031,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       ...lastMoveSquares,
       ...legalMoveHintStyles,
       ...squareMarksToStyles(marks),
+      ...squareMarksToStyles(studentLocalMarks),
     },
     /** Klasik yeşil / krem Chess.com tahtası */
     darkSquareStyle: { backgroundColor: '#769656' },
@@ -3129,6 +4073,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (!square || !liveLessonPieceEligibleForMoveHints(square, piece, !!isSparePiece)) return;
       setMoveHintSquare((prev) => (prev === square ? null : square));
     },
+    onSquareRightClick: isStudentView || drawingTool === 'mouse' ? handleBoardSquareRightClick : undefined,
     onSquareClick: (arg: unknown) => {
       const square = pickSquare(arg);
       if (!square) return;
@@ -3175,9 +4120,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       (isStudentView
         ? playSide != null
         : drawingTool === 'mouse') && boardExploreMode,
-    allowDrawingArrows: !isStudentView && drawingTool === 'arrow',
-    /** Öğrenci: sunucudan gelen oklar; antrenör kendi çizimini internalArrows ile görür (boş dizi = çift ok yok) */
-    arrows: isStudentView ? arrowsToShow : [],
+    allowDrawingArrows: liveLessonDrawArrowsEnabled || isStudentView,
+    arrows: boardArrowsToShow,
     clearArrowsOnPositionChange: false,
     arrowOptions: {
       color: COLOR_VALUES[drawingColor],
@@ -3191,18 +4135,24 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       sameTargetArrowLengthReducerDenominator: 4,
       arrowStartOffset: 0,
     },
-    onArrowsChange: !isStudentView ? (payload: unknown) => {
+    onArrowsChange: (payload: unknown) => {
       const newArrows = Array.isArray(payload)
         ? (payload as ArrowItem[])
         : ((payload as { arrows?: ArrowItem[] } | null)?.arrows ?? []);
       const next = sanitizeArrows(newArrows ?? []);
+      if (isStudentView) {
+        const engineColors = new Set(['rgba(99,102,241,0.85)', 'rgba(99,102,241,0.4)']);
+        const localOnly = next.filter((a) => !engineColors.has(a.color));
+        setStudentLocalArrows(persistedArrows(localOnly));
+        return;
+      }
       if (next.length > arrows.length) {
         next[next.length - 1].color = COLOR_VALUES[drawingColor];
       }
       const toPersist = persistedArrows(next);
       setArrows(toPersist);
       pushState(fen, moveHistory, toPersist, marks, coachSide ?? undefined);
-    } : undefined,
+    },
     canDragPiece: ({ piece }: { piece?: { pieceType?: string }; isSparePiece?: boolean; square?: string | null }) => {
       const pieceType = piece?.pieceType ?? (piece as unknown as string);
       const pt = typeof pieceType === 'string' ? pieceType : '';
@@ -3386,28 +4336,34 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Katılımcı daveti</label>
                        <button type="button" onClick={() => refreshStudentsFromSupabase()} className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 uppercase">Yenile</button>
                     </div>
-                    {inviteGroupNames.length > 0 ? (
+                    {inviteTrainingGroups.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5 mb-3">
-                        {inviteGroupNames.map((g) => {
-                          const ids = students.filter((s) => s.group === g).map((s) => s.id);
+                        {inviteTrainingGroups.map((g) => {
+                          const groupStudents = studentsInTrainingGroup(students, g);
+                          const ids = groupStudents.map((s) => s.id);
                           const allSelected = ids.length > 0 && ids.every((id) => inviteStudentIds.includes(id));
                           return (
                             <button
-                              key={g}
+                              key={g.id}
                               type="button"
-                              onClick={() => toggleInviteGroup(g)}
+                              onClick={() => toggleInviteTrainingGroup(g)}
+                              title={`${g.discipline} · ${g.branchOffice}`}
                               className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all ${
                                 allSelected
                                   ? 'bg-indigo-600/25 text-indigo-200 border-indigo-500/40'
                                   : 'bg-slate-800/60 text-slate-400 border-white/10 hover:border-indigo-500/30'
                               }`}
                             >
-                              {g} ({ids.length})
+                              {g.name} ({groupStudents.length})
                             </button>
                           );
                         })}
                       </div>
-                    ) : null}
+                    ) : (
+                      <p className="text-[10px] text-slate-500 mb-3 leading-snug">
+                        Henüz eğitim grubu yok. Branş–Grup sayfasından grup ekleyin.
+                      </p>
+                    )}
                     <div className="max-h-40 overflow-y-auto rounded-xl border border-white/[0.06] bg-[#0f172a]/60 custom-scrollbar divide-y divide-white/[0.04]">
                        {students.map(s => (
                          <label key={s.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-500/[0.06] cursor-pointer transition-colors group">
@@ -3520,20 +4476,17 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   /** Tahta sütunu: koç ve öğrenci aynı kare ölçek mantığı (Chess.com sınıf düzeni) */
   const lessonBoardSizing = 'w-full mx-auto';
   const boardScalePct = isStudentView ? studentBoardScalePct : coachBoardScalePct;
-  const boardMul = boardScalePct / 100;
+  const boardMul = (boardScalePct / 100) * BOARD_BASE_SCALE;
   const boardViewportDeduction = mobileClassroomPanel === 'board' ? '9rem' : (isStudentView ? '12.5rem' : '15rem');
   /** Eval + rakam sütunu + alt harf satırı — tahta karesi dışındaki pay */
-  const boardChromeW = showLiveEvalBar ? '3.5rem' : '1.25rem';
-  const classroomEvalWidth = '2.25rem';
+  const boardChromeW = showLiveEvalBar ? '2.875rem' : '1.25rem';
+  const classroomEvalWidth = '1.625rem';
   const boardFileRowH = '1.25rem';
   const boardColumnStyle: CSSProperties = { width: '100%', maxWidth: '100%' };
   const boardShellStyle: CSSProperties = {
-    // Not: cqw/cqh + container-type bazı tarayıcılarda tahtayı aşırı küçültebiliyor.
-    // Bu yüzden daha uyumlu bir min(vw, vh, px) kuralı kullanıyoruz.
-    // Önemli: ChessBoardFrame dışarıda eval + koordinat "chrome" eklediği için genişlik hesabına chrome'u dahil etmeliyiz,
-    // aksi halde taşma/scroll oluşup butonlar iç içe girebiliyor.
-    width: `min(96vw, calc(100dvh - ${boardViewportDeduction}), calc(${Math.max(280, Math.round(980 * boardMul))}px + ${boardChromeW}))`,
-    maxWidth: '96vw',
+    // Ölçek tüm viewport sınırlarına uygulanır; aksi halde %100 iken min() sabit kalır ve küçültme geç etkiler.
+    width: `min(calc(100% * ${boardMul}), calc(96vw * ${boardMul}), calc((100dvh - ${boardViewportDeduction}) * ${boardMul}), calc(${Math.max(280, Math.round(980 * boardMul))}px + ${boardChromeW}))`,
+    maxWidth: `calc(96vw * ${boardMul})`,
   };
   const setBoardScalePct = isStudentView ? setStudentBoardScalePct : setCoachBoardScalePct;
   const sidebarTabDefs: { id: ClassroomSidebarTab; Icon: typeof Search; label: string; coachOnly?: boolean }[] = [
@@ -3635,9 +4588,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </div>
             )}
 
+            <div className="flex flex-1 min-h-0 w-full max-w-full flex-col lg:flex-row items-stretch lg:items-start justify-center gap-2 lg:gap-3 xl:gap-4">
             <div
-              className={`${lessonBoardSizing} min-h-0 w-full flex flex-col gap-2 ${
-                isStudentView ? 'flex-1 min-h-0' : 'shrink-0'
+              className={`${lessonBoardSizing} min-h-0 min-w-0 flex flex-col gap-2 ${
+                isStudentView ? 'flex-1 min-h-0' : 'shrink-0 lg:flex-1'
               }`}
               style={boardColumnStyle}
             >
@@ -3703,10 +4657,63 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 </div>
               </div>
 
-              <div className="flex flex-1 min-h-0 w-full min-w-0 items-center justify-center overflow-visible py-1 sm:py-2">
+              <div className="flex flex-1 min-h-0 w-full min-w-0 items-center justify-center gap-2 sm:gap-3 overflow-visible py-1 sm:py-2">
+              {!isStudentView ? (
+                <div className="shrink-0 self-center">
+                  <div className="rounded-xl border border-white/10 bg-slate-900/90 p-1 shadow-lg shadow-black/30">
+                    <DrawingToolbar
+                      orientation="vertical"
+                      currentTool={drawingTool}
+                      currentColor={drawingColor}
+                      onToolSelect={(t, c) => {
+                        setDrawingTool(t);
+                        setDrawingColor(c);
+                      }}
+                      onClear={() => {
+                        setMarks({});
+                        setArrows([]);
+                        pushState(fen, moveHistory, [], {}, coachSide ?? undefined);
+                      }}
+                      onCopy={() => {
+                        void navigator.clipboard?.writeText(new Chess(boardDisplayFen).fen());
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
               <div
                 className="relative mx-auto shrink-0 rounded-2xl border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.45)] bg-slate-900/90 ring-1 ring-indigo-500/15"
                 style={boardShellStyle}
+                onWheel={(e) => {
+                  // Tahta üstünde mouse wheel ile hamle gez (ArrowLeft/Right gibi).
+                  // Ctrl/Cmd + wheel tarayıcı zoom/scroll davranışını bozmasın.
+                  if (e.ctrlKey || e.metaKey) return;
+                  const now = Date.now();
+                  if (now - boardWheelNavTsRef.current < 80) return;
+                  const dy = e.deltaY;
+                  if (Math.abs(dy) < 2) return;
+                  if (displayMoveHistory.length === 0) return;
+                  e.preventDefault();
+                  boardWheelNavTsRef.current = now;
+                  setReplayIsPlaying(false);
+                  setHoverFen(null);
+                  setCurrentVariation(null);
+                  const len = displayMoveHistory.length;
+                  if (dy < 0) {
+                    // yukarı: geri
+                    setReplayNavPly((p) => {
+                      const cur = p ?? len;
+                      return Math.max(0, cur - 1);
+                    });
+                  } else {
+                    // aşağı: ileri
+                    setReplayNavPly((p) => {
+                      const cur = p ?? len;
+                      const next = Math.min(len, cur + 1);
+                      return next >= len ? null : next;
+                    });
+                  }
+                }}
               >
                 {boardViewMode === '3d' ? (
                   <div className="w-full aspect-square min-h-[200px]">
@@ -3728,7 +4735,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   boardOrientation={boardOrientation as 'white' | 'black'}
                   evalColumnWidth={classroomEvalWidth}
                   className="w-full min-h-0"
-                  shellClassName="bg-slate-900 border-r border-white/10 min-w-[2.25rem]"
+                  shellClassName="bg-slate-900 border-r border-white/10 min-w-[1.625rem]"
                   boardClassName="min-w-0 w-full"
                   evalBar={
                     showLiveEvalBar ? (
@@ -3742,7 +4749,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         }
                         darkClassName="bg-slate-800 border-b border-white/10"
                         lightClassName="bg-slate-200"
-                        labelClassName="text-[10px] font-bold text-slate-200 bg-slate-900/90 border-b border-white/10 py-1.5"
+                        labelClassName="text-[9px] font-bold text-slate-200 bg-slate-900/95 border-b border-white/10 py-1 leading-tight tabular-nums"
                       />
                     ) : undefined
                   }
@@ -3761,32 +4768,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </div>
               </div>
 
-              {!isStudentView ? (
-                <div
-                  className={`${lessonBoardSizing} flex justify-center shrink-0 mt-1 sm:mt-2 w-full overflow-x-auto scrollbar-none`}
-                  style={boardColumnStyle}
-                >
-                  <div className="inline-flex max-w-full rounded-xl border border-white/10 bg-slate-900/90 px-1 py-1 sm:px-1.5 shadow-lg shadow-black/30">
-                    <DrawingToolbar
-                      currentTool={drawingTool}
-                      currentColor={drawingColor}
-                      onToolSelect={(t, c) => {
-                        setDrawingTool(t);
-                        setDrawingColor(c);
-                      }}
-                      onClear={() => {
-                        setMarks({});
-                        setArrows([]);
-                        pushState(fen, moveHistory, [], {}, coachSide ?? undefined);
-                      }}
-                      onCopy={() => {
-                        void navigator.clipboard?.writeText(new Chess(boardDisplayFen).fen());
-                      }}
-                    />
-                  </div>
-                </div>
-              ) : null}
-
               <div className="flex items-center justify-between gap-2 px-0.5 min-h-[20px] shrink-0">
                 <div className="flex items-center gap-1.5 text-slate-300 text-xs font-medium">
                   <span className="text-[10px] text-slate-500 leading-none" aria-hidden>▲</span>
@@ -3800,6 +4781,107 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   <span className="w-14 shrink-0" aria-hidden />
                 )}
               </div>
+            </div>
+
+            {!isStudentView ? (
+            <ClassroomAttendancePanel
+              variant="dock"
+              rosterStudents={classroomRosterStudents}
+              tiles={liveVideoTiles}
+              attendanceMarks={sessionMedia.attendanceMarks}
+              admittedIds={sessionMedia.admittedStudentIds ?? []}
+              pendingIds={sessionMedia.pendingStudentIds ?? []}
+              focusedId={focusedVideoTileId}
+              onFocus={setFocusedVideoTileId}
+              onSetMark={setLiveAttendanceMark}
+              onMarkAll={markAllLiveAttendance}
+              onSave={() => void saveLiveAttendance()}
+              onAdmit={admitStudentToClass}
+              onAdmitAll={admitAllPendingStudents}
+              saving={attendanceSaving}
+              saveMessage={attendanceSaveToast}
+              vbSupported={vbSupported}
+              cameraBackgroundBlur={cameraBackgroundBlur}
+              onToggleBlur={toggleCameraBackgroundBlur}
+              vbApplying={vbApplying}
+              localCamOff={localCamOff}
+              mediaLoading={mediaLoading}
+              floorStudentId={sessionMedia.floorStudentId}
+              studentMicBlocked={sessionMedia.studentMicBlocked}
+              studentCamForcedOff={sessionMedia.studentCamForcedOff}
+              speakingStudentIds={speakingStudentIds}
+              onToggleStudentMic={toggleCoachStudentLiveAudio}
+              onToggleStudentCam={toggleCoachStudentCam}
+              onOpenPrivateChat={openPrivateChatWithStudent}
+            />
+            ) : (
+            <ClassroomStudentVideoPanel
+              variant="dock"
+              tiles={liveVideoTiles}
+              focusedId={focusedVideoTileId}
+              onFocus={setFocusedVideoTileId}
+              vbSupported={vbSupported}
+              cameraBackgroundBlur={cameraBackgroundBlur}
+              onToggleBlur={toggleCameraBackgroundBlur}
+              vbApplying={vbApplying}
+              localCamOff={localCamOff}
+              mediaLoading={mediaLoading}
+              speakingStudentIds={speakingStudentIds}
+              coachIsSpeaking={speakingUids.has('coach')}
+            />
+            )}
+            </div>
+
+            <div className={`${isStudentView ? '' : 'lg:hidden'} w-full shrink-0 max-w-lg mx-auto`}>
+              {!isStudentView ? (
+              <ClassroomAttendancePanel
+                variant="mobile"
+                rosterStudents={classroomRosterStudents}
+                tiles={liveVideoTiles}
+                attendanceMarks={sessionMedia.attendanceMarks}
+                admittedIds={sessionMedia.admittedStudentIds ?? []}
+                pendingIds={sessionMedia.pendingStudentIds ?? []}
+                focusedId={focusedVideoTileId}
+                onFocus={setFocusedVideoTileId}
+                onSetMark={setLiveAttendanceMark}
+                onMarkAll={markAllLiveAttendance}
+                onSave={() => void saveLiveAttendance()}
+                onAdmit={admitStudentToClass}
+                onAdmitAll={admitAllPendingStudents}
+                saving={attendanceSaving}
+                saveMessage={attendanceSaveToast}
+                vbSupported={vbSupported}
+                cameraBackgroundBlur={cameraBackgroundBlur}
+                onToggleBlur={toggleCameraBackgroundBlur}
+                vbApplying={vbApplying}
+                localCamOff={localCamOff}
+                mediaLoading={mediaLoading}
+                floorStudentId={sessionMedia.floorStudentId}
+                studentMicBlocked={sessionMedia.studentMicBlocked}
+                studentCamForcedOff={sessionMedia.studentCamForcedOff}
+                speakingStudentIds={speakingStudentIds}
+                onToggleStudentMic={toggleCoachStudentLiveAudio}
+                onToggleStudentCam={toggleCoachStudentCam}
+                onOpenPrivateChat={openPrivateChatWithStudent}
+              />
+              ) : (
+              <div className="lg:hidden">
+                <ClassroomStudentVideoPanel
+                  variant="mobile"
+                  tiles={liveVideoTiles}
+                  focusedId={focusedVideoTileId}
+                  onFocus={setFocusedVideoTileId}
+                  vbSupported={vbSupported}
+                  cameraBackgroundBlur={cameraBackgroundBlur}
+                  onToggleBlur={toggleCameraBackgroundBlur}
+                  vbApplying={vbApplying}
+                  localCamOff={localCamOff}
+                  mediaLoading={mediaLoading}
+                  speakingStudentIds={speakingStudentIds}
+                  coachIsSpeaking={speakingUids.has('coach')}
+                />
+              </div>
+              )}
             </div>
 
             {/* Tahta görünmez kaldığında hata bildir */}
@@ -3856,129 +4938,121 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           <div className="row-start-3 min-h-0 overflow-hidden flex flex-col">
             {sidebarTab === 'analiz' && (
               <div className="flex flex-col h-full min-h-0">
-                <section className="shrink-0 border-b border-white/10 px-3 py-3 space-y-2.5 bg-slate-800/30 overflow-y-auto max-h-[min(32vh,260px)] lg:max-h-[min(42vh,320px)] custom-scrollbar">
-                  {!isStudentView ? (
-                    <div className="flex items-center justify-between gap-3 py-1 border-b border-white/[0.06]">
-                      <label
-                        htmlFor="live-student-analysis-toggle"
-                        className="cursor-pointer text-[13px] leading-snug text-slate-300 flex-1 min-w-0"
-                      >
-                        Öğrenci analiz paneli
-                      </label>
-                      <ClassroomToggle
-                        id="live-student-analysis-toggle"
-                        on={sessionMedia.studentAnalysisVisible ?? false}
-                        onToggle={() => toggleStudentAnalysisVisibility()}
-                      />
-                    </div>
-                  ) : null}
+                <section className="shrink-0 border-b border-white/10 px-2 py-1.5 bg-slate-800/30">
                   {isStudentView && !studentBoardEvalOn && !(sessionMedia.studentAnalysisVisible ?? false) ? (
-                    <p className="text-[12px] text-slate-500 leading-snug rounded-xl border border-white/10 bg-slate-800/40 px-3 py-2.5">
+                    <p className="text-[10px] text-slate-500 leading-snug rounded-lg border border-white/10 bg-slate-800/40 px-2 py-1.5">
                       Antrenör avantaj çubuğunu veya analiz panelini henüz açmadı.
                     </p>
                   ) : isStudentView && !studentBoardEvalOn ? (
-                    <p className="text-[12px] text-slate-500 leading-snug rounded-xl border border-white/10 bg-slate-800/40 px-3 py-2.5">
-                      Avantaj çubuğu için antrenörün «Avantaj çubuğu» ayarını açması gerekir.
+                    <p className="text-[10px] text-slate-500 leading-snug rounded-lg border border-white/10 bg-slate-800/40 px-2 py-1.5">
+                      Avantaj çubuğu için antrenörün ayarı açması gerekir.
                     </p>
                   ) : (
                   <>
-                  <div className="flex items-center justify-between gap-3 py-1 border-b border-white/[0.06]">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-0.5 border-b border-white/[0.06]">
+                    {!isStudentView ? (
+                      <label
+                        htmlFor="live-student-analysis-toggle"
+                        className="flex items-center gap-1 cursor-pointer text-[8px] text-slate-400 whitespace-nowrap"
+                        title="Öğrenci analiz paneli"
+                      >
+                        <span>Öğr. analiz</span>
+                        <ClassroomToggle
+                          id="live-student-analysis-toggle"
+                          compact
+                          on={sessionMedia.studentAnalysisVisible ?? false}
+                          onToggle={() => toggleStudentAnalysisVisibility()}
+                        />
+                      </label>
+                    ) : null}
                     <label
                       htmlFor="live-advantage-bar-toggle"
-                      className="cursor-pointer text-[13px] leading-snug text-slate-300 flex-1 min-w-0"
-                      title="Tahtanın solunda beyaz–siyah avantaj çubuğunu gösterir (Stockfish)."
+                      className="flex items-center gap-1 cursor-pointer text-[8px] text-slate-400 whitespace-nowrap"
+                      title="Tahtanın solunda avantaj çubuğu"
                     >
-                      Avantaj çubuğu
+                      <span>Avantaj</span>
+                      <ClassroomToggle
+                        id="live-advantage-bar-toggle"
+                        compact
+                        on={
+                          isStudentView
+                            ? (sessionMedia.studentEvalBarVisible ??
+                                sessionMedia.studentAnalysisVisible ??
+                                false)
+                            : engineEvalVisible
+                        }
+                        onToggle={() => {
+                          if (!isStudentView) toggleCoachEvalBarVisible();
+                        }}
+                      />
                     </label>
-                    <ClassroomToggle
-                      id="live-advantage-bar-toggle"
-                      on={
-                        isStudentView
-                          ? (sessionMedia.studentEvalBarVisible ??
-                              sessionMedia.studentAnalysisVisible ??
-                              false)
-                          : engineEvalVisible
-                      }
-                      onToggle={() => {
-                        if (!isStudentView) toggleCoachEvalBarVisible();
-                      }}
-                    />
-                  </div>
-                  {!isStudentView ? (
-                  <div className="flex items-center justify-between gap-3 py-1 border-b border-white/[0.06]">
-                    <label htmlFor="live-engine-lines-toggle" className="cursor-pointer text-[13px] leading-snug text-slate-300 flex-1 min-w-0">
-                      Devam yolları
-                    </label>
-                    <ClassroomToggle
-                      id="live-engine-lines-toggle"
-                      on={engineLinesVisible}
-                      onToggle={() => setEngineLinesVisible(!engineLinesVisible)}
-                    />
-                  </div>
-                  ) : null}
-                  <div className="flex items-center justify-between gap-2 pt-2 text-[11px] text-slate-400">
-                    <span className="shrink-0 tabular-nums font-medium text-slate-300">
-                      depth={enginePanelActive ? (engineLoading ? '…' : String(engineDepth || 0)) : '—'}
-                      {!engineReady && enginePanelActive ? (
-                        <span className="text-slate-500 font-normal"> · bekleniyor</span>
-                      ) : null}
-                    </span>
-                    <div className="flex min-w-0 items-center gap-1 text-[10px] text-slate-500">
-                      <span className="truncate">Stockfish 18 · lite-single</span>
-                      <button
-                        type="button"
-                        title="Çok hat analizi için devam satırlarını açık tutun"
-                        className="shrink-0 p-1 text-slate-500 hover:text-indigo-300 rounded-md"
+                    {!isStudentView ? (
+                      <label
+                        htmlFor="live-engine-lines-toggle"
+                        className="flex items-center gap-1 cursor-pointer text-[8px] text-slate-400 whitespace-nowrap"
+                        title="Devam yolları (2. ve 3. satır)"
                       >
-                        <Settings2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                        <span>Devam</span>
+                        <ClassroomToggle
+                          id="live-engine-lines-toggle"
+                          compact
+                          on={engineLinesVisible}
+                          onToggle={() => setEngineLinesVisible(!engineLinesVisible)}
+                        />
+                      </label>
+                    ) : null}
                   </div>
+
+                  <div className="flex items-center justify-between gap-2 py-0.5 text-[9px] text-slate-500">
+                    <span className="shrink-0 tabular-nums font-medium text-slate-400">
+                      depth={enginePanelActive ? (engineLoading ? '…' : String(engineDepth || 0)) : '—'}
+                    </span>
+                    <span className="truncate">Stockfish 18 · lite</span>
+                  </div>
+
                   {engineError ? (
-                    <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-100/95 leading-snug">
+                    <div className="rounded-md border border-amber-500/35 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-100/95 leading-snug">
                       {engineError}
                     </div>
                   ) : null}
-                  {enginePanelActive && enginePvLines[0] ? (
-                    <div className="flex flex-col gap-2">
-                      {enginePreviewFen ? (
-                        <div className="flex items-center gap-3 rounded-xl border border-indigo-500/20 bg-indigo-950/30 px-2 py-2">
-                          <EngineLinePreviewInline fen={enginePreviewFen} boardOrientation={boardOrientation} />
-                          <p className="text-[10px] text-slate-400 leading-snug">Hamle önizlemesi sabit konumda — Lichess gibi kaymaz.</p>
-                        </div>
-                      ) : null}
-                    <div className="flex flex-col gap-1 max-h-[6rem] overflow-y-auto custom-scrollbar">
-                      {(engineLinesVisible ? ([0, 1, 2] as const) : ([0] as const)).map((slotIdx) => {
+
+                  {enginePanelActive ? (
+                    <div
+                      className="divide-y divide-white/[0.05] overflow-hidden rounded-md border border-white/[0.06] bg-black/20"
+                      style={{ height: (engineLinesVisible ? 3 : 1) * 26 }}
+                    >
+                      {Array.from({ length: engineLinesVisible ? 3 : 1 }).map((_, slotIdx) => {
                         const line = enginePvLines[slotIdx];
-                        if (!line) return null;
                         return (
                           <div
-                            key={`pv-row-${slotIdx}-${line.multipv}-${line.depth}`}
-                            className="flex items-start gap-1.5 rounded-lg border border-indigo-500/20 bg-indigo-950/40 px-1.5 py-1 text-left"
+                            key={`pv-row-${slotIdx}`}
+                            className="flex items-center h-[26px] px-1.5 gap-1.5 min-h-[26px] max-h-[26px]"
                           >
-                            <span className="shrink-0 min-w-[2.75rem] rounded-md bg-indigo-500/25 border border-indigo-400/35 px-1 py-0.5 text-center text-[9px] font-bold tabular-nums text-indigo-100 leading-tight">
-                              {formatClassroomEngineScore(line, displayTurn)}
+                            <span className="shrink-0 w-10 text-[11px] font-bold tabular-nums text-indigo-300 text-right">
+                              {line ? formatClassroomEngineScore(line, displayTurn) : '···'}
                             </span>
-                            <div className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar">
-                              <span className="inline-flex items-center whitespace-nowrap text-[9px] leading-tight">
-                                <EnginePvInteractiveMoves
-                                  fen={boardDisplayFen}
-                                  pvMoves={line.pv}
-                                  lineIndex={slotIdx}
-                                  hovered={enginePvHover}
-                                  onHoverPly={handleEnginePvHover}
-                                  theme="classroom"
-                                />
-                              </span>
+                            <div className="min-w-0 flex-1 overflow-hidden">
+                              {line ? (
+                                <span className="block truncate whitespace-nowrap text-[12px] leading-[26px] font-mono text-slate-400">
+                                  <EnginePvInteractiveMoves
+                                    fen={boardDisplayFen}
+                                    pvMoves={line.pv}
+                                    lineIndex={slotIdx}
+                                    hovered={enginePvHovered}
+                                    onHoverPly={onEnginePvHoverPly}
+                                    theme="classroom"
+                                    maxMoves={10}
+                                  />
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-slate-600 italic truncate">
+                                  {!engineReady || engineLoading ? 'Motor…' : 'Bekleniyor…'}
+                                </span>
+                              )}
                             </div>
                           </div>
                         );
                       })}
-                    </div>
-                    </div>
-                  ) : enginePanelActive ? (
-                    <div className="rounded-xl border border-white/10 bg-slate-800/40 px-3 py-3 text-center text-[11px] text-slate-500 leading-snug">
-                      {!engineReady || engineLoading ? 'Motor başlatılıyor…' : 'Henüz satır gelmedi — tahtayı değiştirin veya bekleyin.'}
                     </div>
                   ) : null}
                   </>
@@ -3986,8 +5060,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 </section>
 
                 <div className="flex flex-col flex-1 min-h-0 border-t border-white/10">
-                <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 shrink-0 bg-slate-800/50">
-                  <span className="text-sm font-semibold text-white tracking-tight">Beyaz · Siyah</span>
+                <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-white/10 shrink-0 bg-slate-800/50">
+                  <span className="text-xs font-semibold text-white tracking-tight">Beyaz · Siyah</span>
                   <button
                     type="button"
                     className="p-1.5 text-slate-400 hover:text-indigo-300 rounded-md hover:bg-white/10"
@@ -4286,14 +5360,47 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   </div>
                 ) : null}
 
+                {!isStudentView ? (
+                  <div className="px-3 py-3 border-b border-white/10 shrink-0 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Canlı yoklama</p>
+                      <button
+                        type="button"
+                        onClick={() => void saveLiveAttendance()}
+                        disabled={attendanceSaving || classroomRosterStudents.length === 0}
+                        className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[10px] font-bold"
+                      >
+                        {attendanceSaving ? 'Kaydediliyor…' : 'Yoklamayı kaydet'}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Tahta yanındaki panelden ✓ geldi / ✗ yok işaretleyin. Derse bağlanan öğrenciler otomatik &quot;Geldi&quot; olur.
+                    </p>
+                    {attendanceSaveToast ? (
+                      <p className="text-[11px] text-indigo-300">{attendanceSaveToast}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="px-3 py-3 space-y-2 flex-1 min-h-0 overflow-y-auto custom-scrollbar pb-4">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">Katılımcılar</p>
                   <div className="rounded-xl border border-white/10 bg-slate-800/40 divide-y divide-white/10">
                     <div className="flex items-center justify-between gap-2 px-3 py-2.5">
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-9 h-9 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-sm font-bold text-indigo-200 shrink-0">
-                          {isStudentView ? (currentStudent?.name?.charAt(0) ?? '?') : 'A'}
-                        </div>
+                        {(() => {
+                          const selfTile = isStudentView
+                            ? liveVideoTiles.find((t) => t.isSelf)
+                            : liveVideoTiles.find((t) => t.id === 'coach');
+                          return selfTile ? (
+                            <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 ring-1 ring-white/10">
+                              <ClassroomVideoTile tile={selfTile} muted={selfTile.isSelf} className="w-full h-full" showLabel={false} />
+                            </div>
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-sm font-bold text-indigo-200 shrink-0">
+                              {isStudentView ? (currentStudent?.name?.charAt(0) ?? '?') : 'A'}
+                            </div>
+                          );
+                        })()}
                         <div className="min-w-0">
                           <p className="text-[13px] font-semibold text-white truncate">
                             {isStudentView ? `${currentStudent?.name ?? 'Öğrenci'} (Siz)` : 'Antrenör'}
@@ -4314,27 +5421,74 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         {localCamOff ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
                       </div>
                     </div>
-                    {visibleStudents.map((s) => {
+                    {(isStudentView ? visibleStudents : classroomRosterStudents).map((s) => {
                       const sid = normalizeStudentId(s.id);
                       const blocked = sessionMedia.studentMicBlocked[sid] ?? false;
                       const hasFloor = idsEqual(sessionMedia.floorStudentId, sid);
                       const handRaised = (sessionMedia.handRaisedStudentIds ?? []).some((kid) => idsEqual(kid, sid));
                       const audioCoachOpen = !blocked && hasFloor;
                       const camForcedOffByCoach = !!(sessionMedia.studentCamForcedOff[sid]);
+                      const isSpeaking = speakingStudentIds.has(sid);
                       return (
-                        <div key={s.id} className="relative flex items-center justify-between gap-2 px-3 py-2">
+                        <div
+                          key={s.id}
+                          className={`relative flex items-center justify-between gap-2 px-3 py-2 ${
+                            isSpeaking ? 'bg-emerald-500/10' : ''
+                          }`}
+                        >
                           <div className="flex items-center gap-2 min-w-0">
-                            <div className="w-9 h-9 rounded-full bg-slate-700/80 border border-white/10 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">
-                              {s.name.charAt(0)}
-                            </div>
+                            {(() => {
+                              const studentTile = liveVideoTiles.find((t) => t.id === `student-${sid}`);
+                              return studentTile ? (
+                                <div
+                                  className={`w-10 h-10 rounded-lg overflow-hidden shrink-0 ${
+                                    isSpeaking ? 'ring-2 ring-emerald-400' : 'ring-1 ring-white/10'
+                                  }`}
+                                >
+                                  <ClassroomVideoTile
+                                    tile={studentTile}
+                                    muted
+                                    className="w-full h-full"
+                                    showLabel={false}
+                                    isSpeaking={isSpeaking}
+                                  />
+                                </div>
+                              ) : (
+                                <div
+                                  className={`w-10 h-10 rounded-lg bg-slate-700/80 border flex items-center justify-center text-xs font-bold text-slate-300 shrink-0 ${
+                                    isSpeaking ? 'border-emerald-400 ring-2 ring-emerald-400/70' : 'border-white/10'
+                                  }`}
+                                >
+                                  {s.name.charAt(0)}
+                                </div>
+                              );
+                            })()}
                             <div className="min-w-0">
                               <button
                                 type="button"
-                                onClick={() => !isStudentView && setSelectedAnalysisStudentId(s.id)}
+                                onClick={() => {
+                                  if (!isStudentView) openPrivateChatWithStudent(s.id);
+                                }}
                                 className="text-[13px] font-semibold text-white truncate text-left hover:text-indigo-300"
+                                title={!isStudentView ? 'Özel sohbet' : undefined}
                               >
                                 {s.name}
                               </button>
+                              {(() => {
+                                const agoraUid = agoraUidForStudent(s.id);
+                                const attStatus = resolveLiveAttendanceStatus(
+                                  sid,
+                                  sessionMedia.attendanceMarks,
+                                  sessionMedia.admittedStudentIds ?? [],
+                                  sessionMedia.pendingStudentIds ?? [],
+                                  !!(agoraUid && remoteStreamsByUid[agoraUid]),
+                                );
+                                return (
+                                  <span className={`inline-flex mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold border ${liveAttendanceStatusClass(attStatus)}`}>
+                                    {LIVE_ATTENDANCE_STATUS_LABEL[attStatus]}
+                                  </span>
+                                );
+                              })()}
                               <p className="text-[11px] text-slate-400 leading-snug">
                                 {handRaised && !hasFloor ? <span className="text-amber-300">Söz istedi · </span> : null}
                                 {hasFloor ? <span className="text-indigo-300">Söz hakkı · </span> : null}
@@ -4389,6 +5543,28 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                                     role="menu"
                                     className="absolute right-0 top-full mt-1 z-40 min-w-[12.5rem] rounded-xl border border-white/10 bg-slate-800 py-1 shadow-xl text-[13px]"
                                   >
+                                    <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="w-full text-left px-3 py-2 text-slate-200 hover:bg-indigo-500/15"
+                                      onClick={() => {
+                                        setParticipantMenuStudentId(null);
+                                        openPrivateChatWithStudent(s.id);
+                                      }}
+                                    >
+                                      Özel sohbet
+                                    </button>
+                                    <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="w-full text-left px-3 py-2 text-slate-200 hover:bg-indigo-500/15 border-b border-white/10"
+                                      onClick={() => {
+                                        setParticipantMenuStudentId(null);
+                                        setSelectedAnalysisStudentId(s.id);
+                                      }}
+                                    >
+                                      Analiz paneli
+                                    </button>
                                     <button
                                       type="button"
                                       role="menuitem"
@@ -4522,9 +5698,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             )}
 
             {sidebarTab === 'goruntu' && (
-              <div className="flex flex-col flex-1 min-h-0 p-3 space-y-2 overflow-y-auto custom-scrollbar">
+              <div className="flex flex-col flex-1 min-h-0 p-3 space-y-3 overflow-y-auto custom-scrollbar">
+                <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/10 px-3 py-2">
+                  <p className="text-[11px] text-indigo-200/90 leading-snug">
+                    Ana görüntü tahtanın yanında sürekli açık. Buradan tüm katılımcıları büyütülmüş şekilde yönetebilirsiniz.
+                  </p>
+                </div>
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Görüntü</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Tüm katılımcılar</p>
                   {vbSupported ? (
                     <button
                       type="button"
@@ -4552,59 +5733,43 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                     </button>
                   ) : null}
                 </div>
-                {activeVideoTile ? (
-                  <>
-                    <div className="relative aspect-video rounded-xl overflow-hidden bg-black border border-white/10">
-                      {activeVideoTile.stream ? (
-                        <>
-                          <LiveLessonVideoPlayer
-                            stream={activeVideoTile.stream}
-                            muted={activeVideoTile.isSelf}
-                            camOff={activeVideoTile.camOff}
-                            className="w-full h-full object-cover"
-                          />
-                          {activeVideoTile.camOff && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/55 pointer-events-none">
-                              <VideoOff className="w-10 h-10 text-slate-500" />
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-slate-900">
-                          <VideoOff className="w-10 h-10 text-slate-600" />
-                        </div>
-                      )}
-                      <div className="absolute bottom-1 left-1 right-1 flex justify-between text-[10px] text-white bg-black/60 rounded px-2 py-1">
-                        <span className="truncate">{activeVideoTile.name}</span>
-                        {activeVideoTile.isSelf && mediaLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                      </div>
-                    </div>
-                    {sideVideoTiles.length > 0 ? (
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {sideVideoTiles.map((tile) => (
-                          <button
-                            key={tile.id}
-                            type="button"
-                            onClick={() => setFocusedVideoTileId(tile.id)}
-                            className="relative aspect-video rounded-lg overflow-hidden bg-black border border-white/10"
-                          >
-                            {tile.stream ? (
-                              <LiveLessonVideoPlayer
-                                stream={tile.stream}
-                                muted={tile.isSelf}
-                                camOff={tile.camOff}
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center bg-slate-900">
-                                <VideoOff className="w-6 h-6 text-slate-600" />
-                              </div>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </>
+                {liveVideoTiles.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {liveVideoTiles.map((tile) => {
+                      const tileSpeaking =
+                        tile.role === 'coach'
+                          ? speakingUids.has('coach')
+                          : speakingStudentIds.has(
+                              normalizeStudentId(tile.id.replace(/^(student-|self-)/, '')),
+                            );
+                      return (
+                      <button
+                        key={tile.id}
+                        type="button"
+                        onClick={() => setFocusedVideoTileId(tile.id)}
+                        className={`relative aspect-video rounded-xl overflow-hidden text-left transition-all ${
+                          tileSpeaking
+                            ? 'ring-2 ring-emerald-400 shadow-lg shadow-emerald-500/20'
+                            : focusedVideoTileId === tile.id
+                              ? 'ring-2 ring-indigo-500 shadow-lg shadow-indigo-500/20'
+                              : 'ring-1 ring-white/10 hover:ring-indigo-500/40'
+                        }`}
+                      >
+                        <ClassroomVideoTile
+                          tile={tile}
+                          muted={tile.isSelf}
+                          className="w-full h-full rounded-xl"
+                          isSpeaking={tileSpeaking}
+                        />
+                        {tile.isSelf && mediaLoading ? (
+                          <div className="absolute top-1.5 right-1.5">
+                            <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          </div>
+                        ) : null}
+                      </button>
+                      );
+                    })}
+                  </div>
                 ) : (
                   <p className="text-xs text-slate-600 text-center py-10">Henüz görüntü yok.</p>
                 )}
@@ -4613,22 +5778,72 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
             {sidebarTab === 'sohbet' && (
               <div className="flex flex-col h-full min-h-0 bg-slate-800/35">
+                    {(chatPrivateStudentId || studentChatPrivate) ? (
+                      <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-indigo-500/30 bg-indigo-500/10">
+                        <p className="text-[11px] font-semibold text-indigo-200 truncate">
+                          {isStudentView
+                            ? 'Özel sohbet · Antrenör'
+                            : `Özel sohbet · ${students.find((s) => idsEqual(s.id, chatPrivateStudentId))?.name ?? 'Öğrenci'}`}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setChatPrivateStudentId(null);
+                            setStudentChatPrivate(false);
+                          }}
+                          className="text-[10px] font-bold text-indigo-300 hover:text-white shrink-0"
+                        >
+                          Genel sohbet
+                        </button>
+                      </div>
+                    ) : !isStudentView ? (
+                      <p className="shrink-0 px-3 py-1.5 text-[10px] text-slate-500 border-b border-white/5">
+                        Öğrenci adına tıklayarak özel sohbet başlatabilirsiniz.
+                      </p>
+                    ) : (
+                      <div className="shrink-0 px-3 py-1.5 border-b border-white/5">
+                        <button
+                          type="button"
+                          onClick={() => setStudentChatPrivate(true)}
+                          className="text-[10px] font-bold text-indigo-300 hover:text-indigo-200"
+                        >
+                          Antrenöre özel mesaj
+                        </button>
+                      </div>
+                    )}
                     <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 custom-scrollbar">
                       {visibleChatMessages.length === 0 ? (
                         <p className="text-xs text-slate-600 text-center py-6">Henüz mesaj yok.</p>
                       ) : (
-                        visibleChatMessages.map((msg) => (
+                        visibleChatMessages.map((msg) => {
+                          const sender = chatSenderName(msg);
+                          const isCoachMsg = msg.role === 'coach';
+                          const canOpenPrivate =
+                            !isStudentView && msg.role === 'student' && !msg.privateWithStudentId;
+                          return (
                           <div
                             key={msg.id}
                             className={`text-[13px] rounded-xl px-3 py-2 border ${
-                              msg.role === 'coach'
+                              isCoachMsg
                                 ? 'bg-indigo-500/10 border-indigo-500/25 text-slate-200'
                                 : 'bg-violet-500/10 border-violet-500/25 text-slate-200 ml-4'
-                            }`}
+                            } ${msg.privateWithStudentId ? 'ring-1 ring-indigo-400/30' : ''}`}
                           >
+                            {canOpenPrivate ? (
+                              <button
+                                type="button"
+                                onClick={() => openPrivateChatWithStudent(msg.studentId)}
+                                className="text-[10px] font-bold text-indigo-300 hover:text-indigo-200 mb-0.5 block"
+                              >
+                                {sender}
+                              </button>
+                            ) : (
+                              <p className="text-[10px] font-bold text-slate-400 mb-0.5">{sender}</p>
+                            )}
                             {msg.text}
                           </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                     <div className="p-2 border-t border-white/10 flex gap-2">
@@ -4636,7 +5851,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()}
-                        placeholder="Mesaj…"
+                        placeholder={
+                          chatPrivateStudentId || studentChatPrivate
+                            ? 'Özel mesaj…'
+                            : 'Mesaj…'
+                        }
                         className="flex-1 min-w-0 rounded-xl bg-slate-900/80 border border-white/10 text-[13px] text-white px-3 py-2 outline-none placeholder:text-slate-500 focus:border-indigo-500/50"
                       />
                       <button
@@ -5247,6 +6466,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       )}
 
       {/* ── STUDENT ANALYSIS MODAL ────────────────────────────────────────── */}
+      <EngineLinePreviewPortal preview={enginePvLinePreview} boardOrientation={boardOrientation} />
+
       {selectedAnalysisStudentId && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-8 lg:p-12 animate-in fade-in duration-300">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-3xl" onClick={() => setSelectedAnalysisStudentId(null)} />

@@ -402,7 +402,6 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   // doğal olarak yeni analiz başlar ve eskisi durur.
   useEffect(() => {
     if (!enabled) return;
-    console.log('[EngineAnalysis] effect fen=', fen, 'enabled=', enabled, 'ready=', ready);
     prevFenRef.current = fen;
     analyseFen(fen);
   }, [fen, enabled, ready, analyseFen]);
@@ -517,11 +516,11 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   }, [enabled, ready, fen, mainLine, turn, hasFreshLines, onEvalScoreChange]);
 
   return (
-    <div className="border-b border-white/5 bg-[#0f172a]">
+    <div className="shrink-0 border-b border-white/5 bg-[#0f172a]">
       <div className="h-[3px] bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.5)]" />
 
-      {/* Header */}
-      <div className="flex items-center gap-2 px-2.5 py-2 bg-[#0f172a]">
+      {/* Header — sabit yükseklik; sparkline alanı her zaman rezerve */}
+      <div className="flex items-center gap-2 px-2.5 h-[52px] bg-[#0f172a]">
         {/* Toggle */}
         <button type="button" onClick={onToggle} className="shrink-0" title={enabled ? 'Motor açık' : 'Motor kapalı'}>
           <div className={`w-9 h-5 rounded-full relative transition-all duration-300 ${
@@ -543,7 +542,7 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
           </div>
         </button>
 
-        <span className="text-xl font-bold text-white tracking-tight min-w-[50px]">
+        <span className="text-xl font-bold text-white tracking-tight tabular-nums min-w-[3.25rem] text-right">
           {enabled ? mainScore : '—'}
         </span>
 
@@ -564,12 +563,14 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
           </div>
         </div>
 
-        {enabled && evalHistory.length >= 2 ? (
-          <div className="flex items-center gap-1 shrink-0" title="Pozisyon değişiminde eval eğrisi">
-            <BarChart2 className="w-3 h-3 text-indigo-400/70 shrink-0" />
-            <EvalSparkline scores={evalHistory} />
-          </div>
-        ) : null}
+        <div className="w-[108px] h-[22px] shrink-0 flex items-center justify-end gap-1">
+          {enabled && evalHistory.length >= 2 ? (
+            <>
+              <BarChart2 className="w-3 h-3 text-indigo-400/70 shrink-0" />
+              <EvalSparkline scores={evalHistory} />
+            </>
+          ) : null}
+        </div>
 
         <div className="flex-1" />
 
@@ -633,33 +634,36 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
         </div>
       </div>
 
-      {/* PV Lines */}
+      {/* PV Lines — sabit yükseklik; içerik kayar, alttaki hamle listesi oynamaz */}
       {enabled && (
-        <div className="divide-y divide-[rgba(255,255,255,0.05)]/60">
+        <div
+          className="divide-y divide-[rgba(255,255,255,0.05)]/60 overflow-y-auto overscroll-contain custom-scrollbar"
+          style={{ maxHeight: Math.max(1, numPv) * 32 }}
+        >
           {Array.from({ length: numPv }).map((_, i) => {
             const line = pvLines[i];
             if (!line) {
               return (
-                <div key={i} className="flex items-center px-2.5 py-[5px] min-h-[30px]">
+                <div key={i} className="flex items-center px-2.5 h-8">
                   <div className="w-12 shrink-0">
                     <span className="text-[11px] text-[#555] font-mono">···</span>
                   </div>
-                  <span className="text-[11px] text-[#555] italic">{statusText}</span>
+                  <span className="text-[11px] text-[#555] italic truncate">{statusText}</span>
                 </div>
               );
             }
             return (
               <div
                 key={i}
-                className="flex items-center px-2.5 py-[5px] min-h-[30px] hover:bg-white/[0.03] transition-colors group"
+                className="flex items-center px-2.5 h-8 hover:bg-white/[0.03] transition-colors group"
               >
                 <div className="w-12 shrink-0">
-                  <span className={`text-[12px] font-bold font-mono ${scoreColorClass(line, turn)}`}>
+                  <span className={`text-[12px] font-bold font-mono tabular-nums ${scoreColorClass(line, turn)}`}>
                     {formatScore(line, turn)}
                   </span>
                 </div>
-                <div className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden custom-scrollbar">
-                  <span className="text-[12px] leading-tight whitespace-nowrap font-mono inline-flex items-center">
+                <div className="flex-1 min-w-0 overflow-hidden">
+                  <span className="text-[12px] leading-8 whitespace-nowrap font-mono inline-flex items-center max-w-full overflow-hidden text-ellipsis">
                     <InteractiveMoveList
                       fen={fen}
                       pvMoves={line.pv}
@@ -670,7 +674,7 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
                     />
                   </span>
                 </div>
-                <ChevronDown className="w-3.5 h-3.5 text-[#666] group-hover:text-[#999] shrink-0 ml-1 transition-colors" />
+                <ChevronDown className="w-3.5 h-3.5 text-[#666] group-hover:text-[#999] shrink-0 ml-1 transition-colors opacity-60" />
               </div>
             );
           })}

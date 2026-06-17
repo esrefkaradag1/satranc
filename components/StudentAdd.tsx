@@ -30,8 +30,10 @@ import type { GroupLessonSlot, Student } from '../types';
 import {
   applyGroupDefaultsToStudent,
   applySiblingDiscount,
+  disciplineNamesForOffice,
   findTrainingGroupByName,
   formatLessonSchedule,
+  mergeBranchOffices,
 } from '../lib/trainingGroupUtils';
 import { isValidTrPhone, normalizeTrPhoneDigits } from '../lib/phoneUtils';
 
@@ -228,8 +230,12 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
   onSaved,
 }) => {
   const { addStudent, updateStudent, branchOffices, disciplines, groups, students, trainingGroups, disciplineBranches } = useApp();
-  const branchOfficeOptions = [PLACEHOLDER_OFFICE, ...branchOffices];
-  const disciplineOptions = [PLACEHOLDER_DISCIPLINE, ...disciplines];
+  const mergedOffices = useMemo(
+    () => mergeBranchOffices(branchOffices, disciplineBranches),
+    [branchOffices, disciplineBranches],
+  );
+  const branchOfficeOptions = [PLACEHOLDER_OFFICE, ...mergedOffices];
+
   const [lessonSchedule, setLessonSchedule] = useState<GroupLessonSlot[]>([]);
 
   const handleAddDemoStudent = () => {
@@ -300,6 +306,13 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
     password: '',
   });
 
+  const disciplineOptions = useMemo(() => {
+    const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
+    const fromDefs = disciplineNamesForOffice(disciplineBranches, office || undefined);
+    const names = fromDefs.length > 0 ? fromDefs : disciplines;
+    return [PLACEHOLDER_DISCIPLINE, ...names];
+  }, [disciplineBranches, disciplines, form.branchOffice]);
+
   const groupOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
     const discipline = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : '';
@@ -319,7 +332,10 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
         setLessonSchedule([]);
         return next;
       }
-      const tg = findTrainingGroupByName(trainingGroups, groupName);
+      const tg = findTrainingGroupByName(trainingGroups, groupName, {
+        branchOffice: prev.branchOffice !== PLACEHOLDER_OFFICE ? prev.branchOffice : undefined,
+        discipline: prev.branch !== PLACEHOLDER_DISCIPLINE ? prev.branch : undefined,
+      });
       if (tg) {
         const defaults = applyGroupDefaultsToStudent(tg, disciplineBranches);
         setLessonSchedule(defaults.lessonSchedule ?? []);
@@ -473,7 +489,10 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
         username: form.username.trim() || undefined,
         password: form.password.trim() || undefined,
         photoUrl: photoUrl,
-        trainingGroupId: findTrainingGroupByName(trainingGroups, form.group)?.id,
+        trainingGroupId: findTrainingGroupByName(trainingGroups, form.group, {
+          branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
+          discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
+        })?.id,
         lessonSchedule: lessonSchedule.length ? lessonSchedule : undefined,
       });
 

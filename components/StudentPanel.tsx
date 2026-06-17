@@ -6,7 +6,6 @@ import {
   CheckSquare,
   CreditCard,
   ExternalLink,
-  FileText,
   Grid,
   Image as ImageIcon,
   LayoutDashboard,
@@ -44,8 +43,6 @@ import { useApp, getDisplayStudentNo } from '../AppContext';
 import { analyzeStudentHomework } from '../services/geminiService';
 import { Student } from '../types';
 import type { PerformanceAnalysis } from '../types';
-import { categoryBadgeClass, getAnalysisCategories } from '../lib/performanceAnalysisUtils';
-import { AiCoachInsightPanel } from './analysis/AiInsightCards';
 import type { Puzzle, GalleryItem } from '../types';
 import type { ScheduleEntryStatus } from '../types';
 import { isHomeworkAssignedToStudent } from '../homeworkUtils';
@@ -56,6 +53,8 @@ import ScheduleWeeklyView from './ScheduleWeeklyView';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
 import { LeaderboardPreview } from './leaderboard/LeaderboardPreview';
 import { StudentSummaryDashboard } from './student/StudentSummaryDashboard';
+import { StudentHomeworkPanel } from './student/StudentHomeworkPanel';
+import { StudentAnalysesPanel } from './student/StudentAnalysesPanel';
 import LichessGameViewerModal from './LichessGameViewerModal';
 import ChessComGameViewerModal from './ChessComGameViewerModal';
 import PlatformViewTabs, { type PlatformViewTab } from './PlatformViewTabs';
@@ -301,11 +300,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const [liveLessonRooms, setLiveLessonRooms] = useState<LiveLessonRoom[]>([]);
   /** Arkadaş daveti: hangi oda linki az önce kopyalandı */
   const [peerInviteCopiedFor, setPeerInviteCopiedFor] = useState<string | null>(null);
-  const [expandedAnalysisId, setExpandedAnalysisId] = useState<string | null>(null);
-  const [expandedCoachReportId, setExpandedCoachReportId] = useState<string | null>(null);
-  const [aiReportHwId, setAiReportHwId] = useState<string | null>(null);
-  const [aiReportLoading, setAiReportLoading] = useState(false);
-  const [aiReportResult, setAiReportResult] = useState<{ eksiklikler: string; hamleler: string } | null>(null);
   const [lichessProfile, setLichessProfile] = useState<LichessUserProfile | null>(null);
   const [lichessActivities, setLichessActivities] = useState<LichessActivity[]>([]);
   const [lichessGames, setLichessGames] = useState<LichessGame[]>([]);
@@ -788,6 +782,25 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     }
   }, [isServerMode(), studentId, student?.group]);
 
+  const refreshStudentHomeworks = useCallback(() => {
+    if (isServerMode() && studentId && student?.group != null) {
+      setHomeworksLoading(true);
+      apiHomeworksForStudent(studentId, student.group)
+        .then(setApiHomeworks)
+        .catch(() => setApiHomeworks([]))
+        .finally(() => setHomeworksLoading(false));
+    } else {
+      refreshFromStorage();
+    }
+  }, [studentId, student?.group, refreshFromStorage]);
+
+  useEffect(() => {
+    if (activeTab !== 'puzzles') return;
+    refreshStudentHomeworks();
+    const id = window.setInterval(refreshStudentHomeworks, 30000);
+    return () => window.clearInterval(id);
+  }, [activeTab, refreshStudentHomeworks]);
+
   const [apiSchedule, setApiSchedule] = useState<typeof scheduleEntries>([]);
   useEffect(() => {
     if (isServerMode() && studentId && student?.group != null) {
@@ -1086,224 +1099,30 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           </div>
         )}
 
-        {/* Bulmaca sekmesi — atanan ödevler, süre, eksiklikler */}
-        {activeTab === 'puzzles' && (
-          <div className="space-y-6 animate-in fade-in duration-300">
-            <div className="rounded-2xl bg-gradient-to-br from-indigo-600/15 via-violet-600/10 to-transparent border border-indigo-600/20 p-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                  <Grid className="w-5 h-5 text-indigo-400" /> Bulmaca ödevleri
-                </h2>
-                <p className="text-slate-400 text-sm mt-1">Öğretmeninizin atadığı bulmacaları buradan takip edebilirsiniz. Admin ile aynı tarayıcıda açın; veri senkron olur.</p>
-              </div>
-              <button
-                type="button"
-                disabled={homeworksLoading}
-                onClick={() => {
-                  if (isServerMode() && studentId && student?.group != null) {
-                    setHomeworksLoading(true);
-                    apiHomeworksForStudent(studentId, student.group)
-                      .then(setApiHomeworks)
-                      .catch(() => setApiHomeworks([]))
-                      .finally(() => setHomeworksLoading(false));
-                  } else {
-                    refreshFromStorage();
-                  }
-                }}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-600 text-white text-sm font-bold transition-colors disabled:opacity-70"
-              >
-                <RefreshCw className={`w-4 h-4 ${homeworksLoading ? 'animate-spin' : ''}`} /> Yenile
-              </button>
-            </div>
+        {activeTab === 'puzzles' && student && (
+          <div className="animate-in fade-in duration-300">
+            <StudentHomeworkPanel
+              student={student}
+              assignedHomeworks={assignedHomeworks}
+              puzzles={puzzles}
+              homeworkAttempts={homeworkAttempts}
+              homeworkSubmissions={homeworkSubmissions}
+              homeworksLoading={homeworksLoading}
+              homeworkDayKey={homeworkDayKey}
+              todayExternalGameCount={todayExternalGameCount}
+              todayExternalPuzzleCount={todayExternalPuzzleCount}
+              todayExternalPuzzlePassed={todayExternalPuzzlePassed}
+              loadingExternalGameCount={loadingExternalGameCount}
+              midnightCountdown={midnightCountdown}
+              onRefresh={refreshStudentHomeworks}
+              onPlayPuzzle={setPlayingPuzzle}
+            />
+          </div>
+        )}
 
-            {homeworksLoading && (
-              <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-8 text-center">
-                <RefreshCw className="w-10 h-10 text-indigo-400 animate-spin mx-auto mb-2" />
-                <p className="text-slate-400 text-sm">Ödevler yükleniyor...</p>
-              </div>
-            )}
-            {!homeworksLoading && assignedHomeworks.length > 0 ? (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="rounded-xl bg-slate-800/50 border border-slate-700/50 p-4">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Toplam ödev</p>
-                  <p className="text-lg font-black text-white mt-0.5">{assignedHomeworks.length}</p>
-                </div>
-                <div className="rounded-xl bg-slate-800/50 border border-slate-700/50 p-4">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Yapılacak bulmaca</p>
-                  <p className="text-lg font-black text-indigo-400 mt-0.5">{assignedHomeworks.reduce((s, h) => s + h.puzzles.length, 0)}</p>
-                </div>
-                <div className="rounded-xl bg-slate-800/50 border border-slate-700/50 p-4">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Süresi dolan</p>
-                  <p className="text-lg font-black text-rose-400 mt-0.5">
-                    {assignedHomeworks.filter((h) => h.dueDate && new Date(h.dueDate) < new Date()).length}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-slate-800/50 border border-slate-700/50 p-4">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Toplam puan</p>
-                  <p className="text-lg font-black text-amber-400 mt-0.5">
-                    {assignedHomeworks.reduce((s, h) => s + puzzles.filter((p) => h.puzzles.includes(p.id)).reduce((a, p) => a + p.points, 0), 0)}
-                  </p>
-                </div>
-              </div>
-            ) : null}
-
-            {!homeworksLoading && (assignedHomeworks.length === 0 ? (
-              <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-10 text-center">
-                <Grid className="w-12 h-12 text-slate-500 mx-auto mb-3" />
-                <h3 className="text-white font-bold mb-1">Henüz atanmış bulmaca yok</h3>
-                <p className="text-slate-400 text-sm mb-2">Öğretmeniniz bulmaca ödevi atadığında burada listelenecektir.</p>
-                <p className="text-slate-500 text-xs mb-3">Bu öğrenci grubu: <span className="font-medium text-slate-400">{student.group || '—'}</span>. Ödev gruba veya doğrudan öğrenciye atanmış olmalıdır.</p>
-                {!isServerMode() && homeworks.length > 0 && (
-                  <p className="text-amber-400/90 text-xs">Sistemde toplam {homeworks.length} ödev var; bu öğrenciye atanan yok. Ödev &quot;{student.group || '—'}&quot; grubuna veya öğrenci no {student.id} ile atanmış olmalı. Yenile butonunu deneyin.</p>
-                )}
-                <button type="button" onClick={() => { if (isServerMode() && studentId && student?.group != null) { setHomeworksLoading(true); apiHomeworksForStudent(studentId, student.group).then(setApiHomeworks).catch(() => setApiHomeworks([])).finally(() => setHomeworksLoading(false)); } else { refreshFromStorage(); } }} className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm font-medium">
-                  <RefreshCw className="w-4 h-4" /> Veriyi yenile
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {assignedHomeworks.map((hw) => {
-                  const dueDate = hw.dueDate ? new Date(hw.dueDate) : null;
-                  const now = new Date();
-                  const isOverdue = dueDate && dueDate < now;
-                  const daysLeft = dueDate && !isOverdue ? Math.ceil((dueDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)) : null;
-                  const hwPuzzles = puzzles.filter((p) => hw.puzzles.includes(p.id));
-                  const totalPoints = hwPuzzles.reduce((s, p) => s + p.points, 0);
-                  const timeLimit = hw.timeLimitMinutes;
-                  const todayKey = homeworkDayKey;
-                  const studentTarget = hw.studentDailyTargets?.[student.id];
-                  const currentDayKey = (() => {
-                    const d = new Date(`${todayKey}T12:00:00`);
-                    const day = d.getDay();
-                    return day === 0 ? 7 : day;
-                  })();
-                  const dayTarget = studentTarget?.weeklySchedule?.[currentDayKey];
-
-                  const dailyPuzzleTarget = Math.max(0, dayTarget?.dailyPuzzleTarget ?? studentTarget?.dailyPuzzleTarget ?? hw.dailyPuzzleTarget ?? 0);
-                  const dailyGameTarget = Math.max(0, dayTarget?.dailyGameTarget ?? studentTarget?.dailyGameTarget ?? hw.dailyGameTarget ?? 0);
-                  const minPuzzleAccuracy = Math.max(0, Math.min(100, dayTarget?.minPuzzleAccuracyPct ?? studentTarget?.minPuzzleAccuracyPct ?? hw.minPuzzleAccuracyPct ?? 60));
-                  const todayAttempts = homeworkAttempts.filter(
-                    (a) => a.studentId === student.id && a.homeworkId === hw.id && a.timestamp?.slice(0, 10) === todayKey
-                  );
-                  const internalTodayPuzzleSolved = todayAttempts.length;
-                  const todayPuzzleCorrect = todayAttempts.filter((a) => a.correct).length;
-                  const todayPuzzleSolved = internalTodayPuzzleSolved + todayExternalPuzzleCount;
-                  const totalPuzzleCorrect = todayPuzzleCorrect + todayExternalPuzzlePassed;
-                  const todayPuzzleAccuracy =
-                    todayPuzzleSolved > 0 ? (totalPuzzleCorrect / todayPuzzleSolved) * 100 : 0;
-                  const puzzleGoalMet = dailyPuzzleTarget <= 0 ? true : (todayPuzzleSolved >= dailyPuzzleTarget && todayPuzzleAccuracy >= minPuzzleAccuracy);
-                  const gameGoalMet = dailyGameTarget <= 0 ? true : todayExternalGameCount >= dailyGameTarget;
-                  const dailyGoalDone = puzzleGoalMet && gameGoalMet;
-                  return (
-                    <div
-                      key={hw.id}
-                      className="rounded-2xl bg-slate-800/60 border border-slate-700/50 overflow-hidden hover:border-indigo-600/30 transition-colors"
-                    >
-                      <div className="p-5 border-b border-slate-700/50 flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-base font-bold text-white">{hw.title}</h3>
-                          {hw.description && <p className="text-slate-400 text-sm mt-0.5 line-clamp-2">{hw.description}</p>}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="px-2.5 py-1 rounded-lg bg-indigo-600/15 text-indigo-400 text-xs font-bold">
-                            {hw.puzzles.length} bulmaca
-                          </span>
-                          <span className="px-2.5 py-1 rounded-lg bg-slate-700/50 text-slate-300 text-xs font-bold">
-                            {totalPoints} puan
-                          </span>
-                          {isOverdue ? (
-                            <span className="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-400 text-xs font-bold">Süresi geçti</span>
-                          ) : daysLeft != null && daysLeft <= 3 ? (
-                            <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-400 text-xs font-bold">{daysLeft} gün kaldı</span>
-                          ) : daysLeft != null ? (
-                            <span className="px-2.5 py-1 rounded-lg bg-slate-600/50 text-slate-300 text-xs font-bold">{daysLeft} gün kaldı</span>
-                          ) : null}
-                        </div>
-                      </div>
-                      <div className="p-5 grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-                        <div>
-                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Son tarih</p>
-                          <p className="font-medium text-white">{hw.dueDate ? formatDateTR(hw.dueDate) : '—'}</p>
-                        </div>
-                        {timeLimit != null && timeLimit > 0 && (
-                          <div>
-                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Süre</p>
-                            <p className="font-medium text-white">{timeLimit} dakika</p>
-                          </div>
-                        )}
-                        <div>
-                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Yapılacak</p>
-                          <p className="font-medium text-indigo-400">{hw.puzzles.length} bulmaca</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Durum</p>
-                          <p className={`font-medium ${dailyGoalDone ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {dailyGoalDone ? 'Tamamlandı (Yeşil)' : 'Eksik (Kırmızı)'}
-                          </p>
-                        </div>
-                      </div>
-                      {(dailyPuzzleTarget > 0 || dailyGameTarget > 0) && (
-                        <div className="px-5 pb-4 text-xs">
-                          <div className="flex flex-wrap gap-2 mb-1">
-                            {dailyGameTarget > 0 && (
-                              <span className={`px-2 py-1 rounded-lg border ${gameGoalMet ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border-rose-500/30'}`}>
-                                Günlük maç: {todayExternalGameCount}/{dailyGameTarget}
-                                {loadingExternalGameCount ? ' (yükleniyor...)' : ''}
-                              </span>
-                            )}
-                            {dailyPuzzleTarget > 0 && (
-                              <span className={`px-2 py-1 rounded-lg border ${puzzleGoalMet ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border-rose-500/30'}`}>
-                                Günlük bulmaca: {todayPuzzleSolved}/{dailyPuzzleTarget} · %{Math.round(todayPuzzleAccuracy)} (min %{minPuzzleAccuracy})
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-slate-500">
-                            Maç ve bulmaca: sistem + Lichess + Chess.com (puanlı, özel ve hücum bulmacaları dahil).
-                            <span className="block mt-1 text-indigo-400/80">
-                              Gün sonu: {midnightCountdown}
-                            </span>
-                          </p>
-                        </div>
-                      )}
-                      {/* Ödev yap — bulmacaları listele; liste boşsa (veri senkron değilse) bilgi ver */}
-                      <div className="px-5 pb-5">
-                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-2">Ödev yap</p>
-                        {hwPuzzles.length > 0 ? (
-                          <div className="flex flex-wrap gap-2">
-                            {hwPuzzles.slice(0, 12).map((p) => (
-                              <button
-                                key={p.id}
-                                type="button"
-                                onClick={() => setPlayingPuzzle({ puzzle: p, homeworkId: hw.id, openKey: `${hw.id}:${p.id}:${Date.now()}` })}
-                                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600/20 border border-indigo-600/40 hover:bg-indigo-600/40 hover:border-indigo-400/60 text-sm font-medium text-indigo-200 transition-all text-left"
-                              >
-                                <Play className="w-4 h-4 shrink-0" />
-                                <span>{p.title}</span>
-                                <span className="text-indigo-400/80">· {p.points}p</span>
-                              </button>
-                            ))}
-                            {hwPuzzles.length > 12 && (
-                              <span className="inline-flex px-3 py-2 rounded-xl bg-slate-800/80 text-slate-500 text-xs">
-                                +{hwPuzzles.length - 12} bulmaca daha
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="py-4 px-4 rounded-xl bg-slate-800/60 border border-slate-700/50 text-slate-400 text-sm">
-                            <p className="font-medium text-slate-300">Bu ödevde {hw.puzzles.length} bulmaca var.</p>
-                            <p className="mt-1 text-xs">Bulmacaları görmek için &quot;Yenile&quot; butonuna tıklayın veya antrenör paneli ile aynı tarayıcıda açın.</p>
-                          </div>
-                        )}
-                      </div>
-                      <div className="px-5 pb-5 pt-2 flex items-center gap-2 text-slate-400 text-xs border-t border-slate-700/50">
-                        <Clock className="w-4 h-4 shrink-0 text-indigo-400" />
-                        <span>Günlük hedefler otomatik takip edilir; gün sonunda tamamlanmayan ödevler sıfırlanır.</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+        {activeTab === 'puzzles' && !student && (
+          <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-10 text-center text-slate-400 text-sm">
+            Öğrenci bilgisi yükleniyor...
           </div>
         )}
 
@@ -1569,195 +1388,35 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           </div>
         )}
 
-        {/* Analizler sekmesi — Performans analizleri + Ödev AI raporu (öğrenci ve veli) */}
         {activeTab === 'analyses' && student && (
-          <div className="space-y-6 animate-in fade-in duration-300">
-            <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-700/60 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-violet-400" />
-                <span className="text-sm font-black text-white">
-                  {viewAs === 'parent' ? 'Antrenör AI Raporları (Veli)' : 'Antrenör AI Raporları'}
-                </span>
-              </div>
-              <div className="p-6">
-                {studentCoachAiReports.length === 0 ? (
-                  <div className="py-8 text-center rounded-xl bg-slate-900/30 border border-slate-700/50">
-                    <Sparkles className="w-10 h-10 text-slate-600 mx-auto mb-2" />
-                    <p className="text-slate-400 text-sm">Henüz paylaşılmış AI analiz raporu yok.</p>
-                    <p className="text-slate-500 text-xs mt-1">Antrenörünüz rapor gönderdiğinde burada görünecek.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {studentCoachAiReports.map((report) => {
-                      const isOpen = expandedCoachReportId === report.id;
-                      const dateLabel = new Date(report.createdAt).toLocaleDateString('tr-TR', {
-                        day: 'numeric',
-                        month: 'long',
-                        year: 'numeric',
-                      });
-                      return (
-                        <div
-                          key={report.id}
-                          className={`rounded-xl border transition-all ${isOpen ? 'bg-slate-800/60 border-violet-500/25' : 'bg-slate-800/30 border-white/[0.06]'}`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => setExpandedCoachReportId((id) => (id === report.id ? null : report.id))}
-                            className="w-full text-left p-4"
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <h4 className="text-sm font-bold text-white">{report.title}</h4>
-                                <p className="text-[11px] text-slate-400 mt-0.5">{dateLabel}</p>
-                              </div>
-                              <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                            </div>
-                            <p className="mt-2 text-xs text-slate-300 line-clamp-2">{report.summary}</p>
-                          </button>
-                          {isOpen ? (
-                            <div className="px-4 pb-4 border-t border-slate-700/50 pt-4">
-                              <AiCoachInsightPanel eksiklikler={report.eksiklikler} hamleler={report.hamleler} />
-                            </div>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-700/60 flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-indigo-500" />
-                <span className="text-sm font-black text-white">Performans Analizleri</span>
-              </div>
-              <div className="p-6">
-                {studentAnalyses.length === 0 ? (
-                  <div className="py-10 text-center rounded-xl bg-slate-900/30 border border-slate-700/50">
-                    <BarChart3 className="w-12 h-12 text-slate-500 mx-auto mb-3" />
-                    <p className="text-slate-400 text-sm">Henüz performans analizi eklenmemiş.</p>
-                    <p className="text-slate-500 text-xs mt-1">Antrenörünüz analiz eklediğinde burada görünecektir.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {studentAnalyses.map((a) => {
-                      const isExpanded = expandedAnalysisId === a.id;
-                      const categories = getAnalysisCategories(a);
-                      return (
-                        <div key={a.id} className={`rounded-xl border transition-all duration-200 ${isExpanded ? 'bg-slate-800/60 border-indigo-500/20' : 'bg-slate-800/30 border-white/[0.06] hover:border-slate-600/50'}`}>
-                          <button type="button" onClick={() => setExpandedAnalysisId((id) => (id === a.id ? null : a.id))} className="w-full text-left p-4">
-                            <div className="flex items-center justify-between gap-4">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                                  <BarChart3 className="w-5 h-5 text-indigo-400" />
-                                </div>
-                                <div>
-                                  <h4 className="text-sm font-bold text-white">{a.branch}</h4>
-                                  <p className="text-[11px] text-slate-400 mt-0.5">{formatDateTR(a.analysisDate)}</p>
-                                </div>
-                              </div>
-                              <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-xs font-semibold">
-                                <FileText className="w-3.5 h-3.5 text-indigo-400" />
-                                <span>Detay</span>
-                                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-                              </div>
-                            </div>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {categories.map((c, idx) => (
-                                <span key={c.id} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${categoryBadgeClass(idx)}`}>{c.label}: {c.value}</span>
-                              ))}
-                            </div>
-                            {a.generalEvaluation && <p className="mt-2 text-xs text-slate-400 line-clamp-2">{a.generalEvaluation}</p>}
-                          </button>
-                          {isExpanded && (
-                            <div className="px-4 pb-4 pt-0 border-t border-slate-700/50">
-                              <div className="mt-4 rounded-xl bg-slate-900/50 border border-slate-700/50 p-4 space-y-4">
-                                <div>
-                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Performans Değerlendirmesi</p>
-                                  <div className="grid gap-2">
-                                    {categories.map(({ id, label, value, notes }) => (
-                                      <div key={id} className="flex gap-3 items-center p-2 rounded-lg bg-slate-800/40 border border-slate-700/50">
-                                        <span className="text-xs font-bold text-slate-300 min-w-[120px]">{label}</span>
-                                        <span className="w-7 h-7 rounded-full flex items-center justify-center text-sm font-black text-white bg-slate-700 ring-2 ring-indigo-500/30 shrink-0">{value}</span>
-                                        {notes ? <p className="text-xs text-slate-400 flex-1">{notes}</p> : <span className="text-slate-600 text-xs italic">—</span>}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                                {a.generalEvaluation && <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Genel Değerlendirme</p><p className="text-xs text-slate-300 whitespace-pre-wrap">{a.generalEvaluation}</p></div>}
-                                {a.recommendations && <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Öneriler</p><p className="text-xs text-slate-300 whitespace-pre-wrap">{a.recommendations}</p></div>}
-                                {a.shortTermGoal && <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Kısa Vadeli Hedef</p><p className="text-xs text-slate-300 whitespace-pre-wrap">{a.shortTermGoal}</p></div>}
-                                {a.longTermGoal && <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Uzun Vadeli Hedef</p><p className="text-xs text-slate-300 whitespace-pre-wrap">{a.longTermGoal}</p></div>}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-700/60 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-violet-500" />
-                <span className="text-sm font-black text-white">Ödev AI Raporu</span>
-              </div>
-              <div className="p-6 space-y-4">
-                <p className="text-xs text-slate-400">Ödev denemelerinize göre AI ile eksiklik ve hamle analizi oluşturulur.</p>
-                {studentHomeworksWithAttempts.length === 0 ? (
-                  <p className="text-slate-500 text-sm">Bu öğrenciye ait ödev denemesi bulunamadı. Ödev yapıp kaydettikten sonra rapor alabilirsiniz.</p>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <select value={aiReportHwId ?? ''} onChange={(e) => { setAiReportHwId(e.target.value || null); setAiReportResult(null); }} className="px-4 py-2.5 rounded-xl border border-slate-600 bg-slate-800 text-white text-sm font-medium [color-scheme:dark] min-w-[200px]">
-                        <option value="">Ödev seçin...</option>
-                        {studentHomeworksWithAttempts.map((hw) => (
-                          <option key={hw.id} value={hw.id}>{hw.title}</option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        disabled={aiReportLoading || !aiReportHwId}
-                        onClick={async () => {
-                          if (!student || !aiReportHwId) return;
-                          const hw = homeworks.find((h) => h.id === aiReportHwId);
-                          if (!hw) return;
-                          setAiReportResult(null);
-                          setAiReportLoading(true);
-                          try {
-                            const attempts = homeworkAttempts.filter((a) => a.studentId === student.id && a.homeworkId === aiReportHwId).map((a) => ({ puzzleTitle: a.puzzleTitle, correct: a.correct, movesPlayed: a.movesPlayed, solutionMoves: a.solutionMoves }));
-                            const res = await analyzeStudentHomework(student.name, hw.title, attempts);
-                            setAiReportResult(res);
-                          } catch {
-                            setAiReportResult({ eksiklikler: 'Analiz alınamadı.', hamleler: '-' });
-                          } finally {
-                            setAiReportLoading(false);
-                          }
-                        }}
-                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold"
-                      >
-                        {aiReportLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                        {aiReportLoading ? 'Rapor oluşturuluyor...' : 'AI Rapor Oluştur'}
-                      </button>
-                    </div>
-                    {aiReportResult && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                        <div className="rounded-xl border border-slate-700/60 bg-slate-900/50 p-4">
-                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Eksiklikler & Gelişim Alanları</h4>
-                          <div className="text-sm text-slate-300 whitespace-pre-wrap max-h-52 overflow-y-auto">{aiReportResult.eksiklikler}</div>
-                        </div>
-                        <div className="rounded-xl border border-slate-700/60 bg-slate-900/50 p-4">
-                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Hamleler & Karşılaştırma</h4>
-                          <div className="text-sm text-slate-300 whitespace-pre-wrap max-h-52 overflow-y-auto">{aiReportResult.hamleler}</div>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
+          <div className="animate-in fade-in duration-300">
+            <StudentAnalysesPanel
+              student={student}
+              viewAs={viewAs}
+              studentAnalyses={studentAnalyses}
+              studentCoachAiReports={studentCoachAiReports}
+              studentHomeworksWithAttempts={studentHomeworksWithAttempts}
+              homeworks={homeworks}
+              homeworkAttempts={homeworkAttempts}
+              formatDateTR={formatDateTR}
+              onGenerateHomeworkReport={async (homeworkId) => {
+                const hw = homeworks.find((h) => h.id === homeworkId);
+                if (!hw) return null;
+                try {
+                  const attempts = homeworkAttempts
+                    .filter((a) => a.studentId === student.id && a.homeworkId === homeworkId)
+                    .map((a) => ({
+                      puzzleTitle: a.puzzleTitle,
+                      correct: a.correct,
+                      movesPlayed: a.movesPlayed,
+                      solutionMoves: a.solutionMoves,
+                    }));
+                  return await analyzeStudentHomework(student.name, hw.title, attempts);
+                } catch {
+                  return { eksiklikler: 'Analiz alınamadı.', hamleler: '-' };
+                }
+              }}
+            />
           </div>
         )}
 

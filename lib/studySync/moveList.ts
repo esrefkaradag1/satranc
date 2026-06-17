@@ -1,7 +1,16 @@
 import type { Square } from 'chess.js';
 import type { StudyChapter } from '../studyTypes';
 import type { StudyTree } from './types';
+import type { StudyChapterState } from './types';
 import { DEFAULT_FEN, applyMove, makeBuilderGame } from '../studyUtils';
+
+/** Sync ağacındaki güncel yolun FEN'i — hamle listesini yeniden oynatmaktan güvenilir. */
+export function fenAtSyncPath(state: StudyChapterState | null | undefined): string | null {
+  if (!state?.currentPath?.length) return null;
+  const nodeId = state.currentPath[state.currentPath.length - 1];
+  const fen = state.tree.nodes[nodeId]?.fen;
+  return fen && fen.trim() ? fen : null;
+}
 
 const UCI_RE = /^([a-h][1-8])([a-h][1-8])([qrbn])?$/i;
 
@@ -95,26 +104,84 @@ export function mainlineNodeIdForFen(tree: StudyTree, fen: string): string {
  * Ana hattaki hamleleri SAN listesine çevirir (tahta ile liste senkronu).
  * Her hamle, düğümün ebeveyninin FEN'i üzerinde yorumlanır (ara düğümde fen eksikliği hatasını önler).
  */
+/** Varyasyon dalının SAN listesini (ana hatta birleşene kadar) toplar */
+function followFirstLineSans(tree: StudyTree, startId: string, mainSet: Set<string>, maxLen = 32): string[] {
+  const line: string[] = [];
+  let cur = tree.nodes[startId];
+  let guard = 0;
+  while (cur && guard < maxLen) {
+    guard++;
+    if (cur.san) line.push(cur.san);
+    const nextId = (cur.children ?? [])[0];
+    if (!nextId) break;
+    if (mainSet.has(nextId)) break;
+    cur = tree.nodes[nextId];
+  }
+  return line;
+}
+
+export function mainlineSansDiffer(a: string[], b: string[]): boolean {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    if (a[i] !== b[i]) return true;
+  }
+  return false;
+}
+
+/** Ağaç + kayıtlı bölüm varyasyonlarını birleştirir (legacy-only dallar kaybolmasın). */
+export function mergeVariationRecords(
+  chapterVars: Record<number, string[][]>,
+  treeVars: Record<number, string[][]>,
+): Record<number, string[][]> {
+  const out: Record<number, string[][]> = { ...treeVars };
+  for (const [key, groups] of Object.entries(chapterVars)) {
+    const k = Number(key);
+    if (!Number.isFinite(k) || !Array.isArray(groups)) continue;
+    const existing = out[k] ?? [];
+    const merged = existing.map((line) => [...line]);
+    for (const line of groups) {
+      if (!Array.isArray(line) || !line.length) continue;
+      const sig = line.join('\0');
+      if (!merged.some((g) => g.join('\0') === sig)) merged.push([...line]);
+    }
+    if (merged.length) out[k] = merged;
+  }
+  return out;
+}
+
+/** Lichess tarzı: varyasyonu ana hatta yükseltir (eski ana hat varyasyona iner). */
+export function promoteVariationLines(
+  moves: string[],
+  variations: Record<number, string[][]>,
+  mainLinePos: number,
+  varGroupIdx: number,
+): { moves: string[]; variations: Record<number, string[][]>; nextMoveIndex: number } | null {
+  const varLine = variations[mainLinePos]?.[varGroupIdx];
+  if (!varLine?.length) return null;
+
+  const prefix = moves.slice(0, mainLinePos + 1);
+  const oldContinuation = moves.slice(mainLinePos + 1);
+  const newMoves = [...prefix, ...varLine];
+  const vars: Record<number, string[][]> = { ...variations };
+  const group = [...(vars[mainLinePos] ?? [])];
+  group.splice(varGroupIdx, 1);
+  if (oldContinuation.length > 0) group.push(oldContinuation);
+  if (group.length === 0) delete vars[mainLinePos];
+  else vars[mainLinePos] = group;
+
+  for (const key of Object.keys(vars)) {
+    const k = Number(key);
+    if (k > mainLinePos) delete vars[k];
+  }
+
+  return { moves: newMoves, variations: vars, nextMoveIndex: newMoves.length };
+}
+
 /** Sync ağacından eski `variations` kaydı formatına dönüştürür */
 export function buildLegacyVariationsFromTree(tree: StudyTree): Record<number, string[][]> {
   const variations: Record<number, string[][]> = {};
   const mainline = tree.mainline ?? [];
   const mainSet = new Set(mainline);
-
-  const followFirstLine = (startId: string, maxLen: number = 32): string[] => {
-    const line: string[] = [];
-    let cur = tree.nodes[startId];
-    let guard = 0;
-    while (cur && guard < maxLen) {
-      guard++;
-      if (cur.san) line.push(cur.san);
-      const nextId = (cur.children ?? [])[0];
-      if (!nextId) break;
-      if (mainSet.has(nextId)) break;
-      cur = tree.nodes[nextId];
-    }
-    return line;
-  };
 
   for (let i = 0; i < mainline.length; i++) {
     const nodeId = mainline[i];
@@ -127,7 +194,7 @@ export function buildLegacyVariationsFromTree(tree: StudyTree): Record<number, s
     const groups: string[][] = [];
     const seen = new Set<string>();
     for (const childId of altChildren) {
-      const line = followFirstLine(childId);
+      const line = followFirstLineSans(tree, childId, mainSet);
       if (!line.length) continue;
       const key = line.join('\0');
       if (seen.has(key)) continue;
@@ -145,10 +212,14 @@ export function findVariationBranchNodeId(
   tree: StudyTree,
   mainLinePos: number,
   varGroupIdx: number,
+  legacyVariations?: Record<number, string[][]>,
 ): string | null {
-  const variations = buildLegacyVariationsFromTree(tree);
-  const line = variations[mainLinePos]?.[varGroupIdx];
-  if (!line?.length) return null;
+  const variations = mergeVariationRecords(
+    legacyVariations ?? {},
+    buildLegacyVariationsFromTree(tree),
+  );
+  const targetLine = variations[mainLinePos]?.[varGroupIdx];
+  if (!targetLine?.length) return null;
 
   const parentMlIndex = Math.max(0, Math.min(tree.mainline.length - 1, mainLinePos + 1));
   const parentId = tree.mainline[parentMlIndex];
@@ -156,13 +227,28 @@ export function findVariationBranchNodeId(
   if (!parent) return null;
 
   const mainChild = tree.mainline[parentMlIndex + 1] ?? null;
-  const firstSan = line[0];
-  const altChildren = (parent.children ?? []).filter((cid) => {
-    if (!cid || cid === mainChild) return false;
+  const mainSet = new Set(tree.mainline);
+  const altChildren = (parent.children ?? []).filter((cid) => cid && cid !== mainChild);
+
+  let groupIdx = 0;
+  const seen = new Set<string>();
+  for (const childId of altChildren) {
+    const line = followFirstLineSans(tree, childId, mainSet);
+    if (!line.length) continue;
+    const key = line.join('\0');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (groupIdx === varGroupIdx) return childId;
+    if (key === targetLine.join('\0')) return childId;
+    groupIdx++;
+  }
+
+  const firstSan = targetLine[0];
+  const bySan = altChildren.filter((cid) => {
     const n = tree.nodes[cid];
     return !!n && String(n.san ?? '') === String(firstSan);
   });
-  return altChildren[varGroupIdx] ?? altChildren[0] ?? null;
+  return bySan[varGroupIdx] ?? bySan[0] ?? null;
 }
 
 export function mainlineSansFromTree(tree: StudyTree, rootFen: string): string[] {

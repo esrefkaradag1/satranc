@@ -816,6 +816,8 @@ function attemptToDb(r: Record<string, unknown>): Record<string, unknown> {
     movesplayed: (r as any).movesPlayed ?? [],
     solutionmoves: (r as any).solutionMoves ?? [],
     finalfen: (r as any).finalFen ?? null,
+    thinkseconds: (r as any).thinkSeconds ?? null,
+    hintused: (r as any).hintUsed ?? false,
     timestamp: (r as any).timestamp,
   };
 }
@@ -831,6 +833,8 @@ function dbToHomeworkAttempt(row: Record<string, unknown>): HomeworkPuzzleAttemp
     movesPlayed: Array.isArray(r.moves_played) ? r.moves_played : Array.isArray(r.movesPlayed) ? r.movesPlayed : Array.isArray(r.movesplayed) ? r.movesplayed : [],
     solutionMoves: Array.isArray(r.solution_moves) ? r.solution_moves : Array.isArray(r.solutionMoves) ? r.solutionMoves : Array.isArray(r.solutionmoves) ? r.solutionmoves : [],
     finalFen: r.final_fen != null ? String(r.final_fen) : r.finalFen != null ? String(r.finalFen) : r.finalfen != null ? String(r.finalfen) : undefined,
+    thinkSeconds: r.think_seconds != null ? Number(r.think_seconds) : r.thinkSeconds != null ? Number(r.thinkSeconds) : r.thinkseconds != null ? Number(r.thinkseconds) : undefined,
+    hintUsed: Boolean(r.hint_used ?? r.hintUsed ?? r.hintused ?? false),
     timestamp: String(r.timestamp ?? ''),
   };
 }
@@ -1021,7 +1025,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const DEFAULT_GROUPS = ['Alt Yapı A', 'Alt Yapı B', 'Gelişim A', 'Gelişim B', 'Turnuva', 'Yetişkin'];
 
   const [branchOffices, setBranchOffices] = useState<string[]>(() =>
-    useSupabase ? DEFAULT_BRANCH_OFFICES : loadJSON<string[]>('netchess_branch_offices', DEFAULT_BRANCH_OFFICES)
+    loadJSON<string[]>('netchess_branch_offices', DEFAULT_BRANCH_OFFICES)
   );
   const [disciplines, setDisciplines] = useState<string[]>(() =>
     useSupabase ? DEFAULT_DISCIPLINES : loadJSON<string[]>('netchess_disciplines', DEFAULT_DISCIPLINES)
@@ -1354,6 +1358,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadFromSupabase();
   }, [useSupabase]);
 
+  /** Yerel branş–grup tanımlarını eski disciplines/groups listeleriyle senkron tut */
+  useEffect(() => {
+    if (disciplineBranches.length > 0) {
+      const names = [...new Set(disciplineBranches.map((b) => b.name.trim()).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b, 'tr'),
+      );
+      setDisciplines(names);
+    }
+    if (trainingGroups.length > 0) {
+      const names = [...new Set(trainingGroups.map((g) => g.name.trim()).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b, 'tr'),
+      );
+      setGroups(names);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- yalnızca ilk yükleme
+  }, []);
+
   const refreshStudentsFromSupabase = useCallback(async () => {
     if (!useSupabase) return;
     const sb = getServiceSupabase();
@@ -1416,8 +1437,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (hydrated.current && !useSupabase) localStorage.setItem('netchess_gallery', JSON.stringify(gallery));
   }, [gallery, useSupabase]);
   useEffect(() => {
-    if (hydrated.current && !useSupabase) localStorage.setItem('netchess_branch_offices', JSON.stringify(branchOffices));
-  }, [branchOffices, useSupabase]);
+    if (hydrated.current) localStorage.setItem('netchess_branch_offices', JSON.stringify(branchOffices));
+  }, [branchOffices]);
   useEffect(() => {
     if (hydrated.current && !useSupabase) localStorage.setItem('netchess_clubs', JSON.stringify(clubs));
   }, [clubs, useSupabase]);
@@ -2453,17 +2474,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addTrainingGroup = useCallback((group: Omit<TrainingGroup, 'id'>) => {
     const name = group.name.trim();
+    const office = group.branchOffice.trim();
+    const discipline = group.discipline.trim();
     if (!name) return;
     setTrainingGroups((prev) => {
-      if (prev.some((g) => g.name === name)) return prev;
+      if (prev.some((g) => g.name === name && g.branchOffice === office && g.discipline === discipline)) {
+        return prev;
+      }
       const next = [
         ...prev,
         {
           ...group,
           id: genId(),
           name,
-          branchOffice: group.branchOffice.trim(),
-          discipline: group.discipline.trim(),
+          branchOffice: office,
+          discipline,
           capacity: Math.max(0, group.capacity || 0),
           lessonSlots: group.lessonSlots ?? [],
         },

@@ -2,6 +2,12 @@ import React from 'react';
 import { Tag, MessageSquare, BarChart2, Share2, Info, X, Plus, Copy, Download, RefreshCw, Highlighter, Send } from 'lucide-react';
 import type { Study, StudyChapter, BottomTab } from '../../lib/studyTypes';
 import type { StudyEvent } from '../../studyEvents';
+import {
+  buildOrphanChapterMap,
+  eventMatchesChapter,
+  mergeStudyAnalysisEvents,
+  resolveEventChapterId,
+} from '../../lib/studyAnalysisEvents';
 import { formatMoveGlyphs, moveHasGlyph, parseMoveGlyphs, STUDY_ANNOTATION_SYMBOLS } from '../../lib/studyAnnotations';
 import { Chessboard } from 'react-chessboard';
 
@@ -128,26 +134,38 @@ export const StudyBottomTools: React.FC<StudyBottomToolsProps> = ({
     if (readOnly && (activeTab === 'share' || activeTab === 'multiboard')) onTabChange('comments');
   }, [readOnly, activeTab, onTabChange]);
 
+  React.useEffect(() => {
+    if (viewingStudentId) setEventStudentFilter(String(viewingStudentId));
+  }, [viewingStudentId]);
+
   /* ── Admin events helpers ── */
+  const allAnalysisEvents = React.useMemo(
+    () => mergeStudyAnalysisEvents(studyEvents, study),
+    [studyEvents, study],
+  );
+
+  const orphanChapterMap = React.useMemo(
+    () => buildOrphanChapterMap(allAnalysisEvents, study),
+    [allAnalysisEvents, study],
+  );
+
   const filteredEvents = React.useMemo(() => {
-    if (!studyEvents) return [];
-    let events = studyEvents;
-    // Filter by chapter if chapter is selected
-    if (chapter) {
-      events = events.filter(e => e.chapterId === chapter.id);
+    let events = allAnalysisEvents;
+    if (chapter?.id) {
+      events = events.filter((e) =>
+        eventMatchesChapter(e, chapter.id, study, orphanChapterMap),
+      );
     }
-    // Filter by student if selected
     if (eventStudentFilter) {
-      events = events.filter(e => String(e.studentId) === eventStudentFilter);
+      events = events.filter((e) => String(e.studentId) === eventStudentFilter);
     }
     return events;
-  }, [studyEvents, chapter, eventStudentFilter]);
+  }, [allAnalysisEvents, chapter?.id, eventStudentFilter, study, orphanChapterMap]);
 
   const uniqueStudents = React.useMemo(() => {
-    if (!studyEvents) return [];
     const ids = new Set<string>();
     const result: Array<{ id: string; name: string }> = [];
-    for (const e of studyEvents) {
+    for (const e of allAnalysisEvents) {
       const sid = String(e.studentId);
       if (ids.has(sid)) continue;
       ids.add(sid);
@@ -155,7 +173,7 @@ export const StudyBottomTools: React.FC<StudyBottomToolsProps> = ({
       result.push({ id: sid, name: student?.name ?? `Öğrenci #${sid.slice(0, 6)}` });
     }
     return result;
-  }, [studyEvents, studentsData]);
+  }, [allAnalysisEvents, studentsData]);
 
   const filteredLiveNotes = React.useMemo(() => {
     const msgs = chatMessages ?? study.chatMessages ?? [];
@@ -211,9 +229,10 @@ export const StudyBottomTools: React.FC<StudyBottomToolsProps> = ({
   }, [studentsData]);
 
   const getChapterNumber = React.useCallback((chapterId: string) => {
-    const idx = study.chapters.findIndex(ch => ch.id === chapterId);
+    const resolved = resolveEventChapterId(chapterId, study, orphanChapterMap);
+    const idx = study.chapters.findIndex(ch => ch.id === resolved);
     return idx >= 0 ? idx + 1 : 0;
-  }, [study.chapters]);
+  }, [study.chapters, study, orphanChapterMap]);
 
   const formatEventTime = React.useCallback((iso: string) => {
     try {
@@ -422,7 +441,7 @@ export const StudyBottomTools: React.FC<StudyBottomToolsProps> = ({
                 <div className="space-y-0 max-h-64 overflow-y-auto custom-scrollbar -mx-4">
                   {filteredEvents.length === 0 ? (
                     <p className="text-xs text-slate-500 px-4 py-6 text-center">
-                      {studyEvents && studyEvents.length > 0
+                      {allAnalysisEvents.length > 0
                         ? 'Bu bölüm için kayıt bulunamadı.'
                         : 'Henüz öğrenci hamle kaydı yok. Öğrenciler çalışmada hamle yaptıkça burada listelenecek.'}
                     </p>

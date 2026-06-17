@@ -7,6 +7,7 @@ import type { ChessComGame } from '../services/chessPlatformService';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
+import { MainlineMoveGrid } from './chess/MainlineMoveGrid';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -255,22 +256,19 @@ const ChessComGameViewerModal: React.FC<{
                 <p className="text-[11px] text-slate-500">← → hamle; tahta üzerinde tekerlek; hamle üzerine gelince önizleme; Esc kapatır.</p>
                 <div
                   className="rounded-xl bg-slate-950/50 border border-slate-700/60 p-3 max-h-48 overflow-y-auto"
-                  onMouseLeave={() => setHoverMoveIndex(null)}
                 >
                   <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Hamle listesi</div>
-                  <div className="text-sm text-slate-300 font-mono leading-relaxed flex flex-wrap gap-x-2 gap-y-1">
-                    {moveList.map((m, i) => (
-                      <span key={`${i}-${m}`}>
-                        {i % 2 === 0 && <span className="text-slate-500 mr-1">{Math.floor(i / 2) + 1}.</span>}
-                        <span
-                          className={`cursor-default ${i < effectiveMoveIndex ? 'text-emerald-400' : 'text-slate-500'}`}
-                          onMouseEnter={() => setHoverMoveIndex(i + 1)}
-                        >
-                          {m}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
+                  <MainlineMoveGrid
+                    moves={moveList}
+                    activeHalfMove={effectiveMoveIndex}
+                    hoverHalfMove={hoverMoveIndex}
+                    compact
+                    onSelectHalfMove={(ply) => {
+                      setHoverMoveIndex(null);
+                      setMoveIndex(ply);
+                    }}
+                    onHoverHalfMove={setHoverMoveIndex}
+                  />
                 </div>
               </div>
             </div>

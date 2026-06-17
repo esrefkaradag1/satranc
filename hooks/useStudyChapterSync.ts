@@ -4,8 +4,8 @@ import { DEFAULT_FEN } from '../lib/studyUtils';
 import type { StudyChapterState, StudyActionEnvelope } from '../lib/studySync/types';
 import { parsePath, serializePath } from '../lib/studySync/types';
 import { initialChapterState, applyAction, applyActions } from '../lib/studySync/reducer';
-import { genNodeId, deleteSubtree } from '../lib/studySync/apply';
-import { buildLegacyVariationsFromTree, findVariationBranchNodeId } from '../lib/studySync/moveList';
+import { genNodeId, deleteSubtree, alignTreeMainlineToSans } from '../lib/studySync/apply';
+import { buildLegacyVariationsFromTree, findVariationBranchNodeId, mergeVariationRecords } from '../lib/studySync/moveList';
 import { loadStudyActions, loadStudySnapshot, subscribeStudyActions, appendStudyAction, upsertPresence, upsertStudySnapshot } from '../services/studyActions';
 
 function pathsEqual(a: string[], b: string[]) {
@@ -23,7 +23,10 @@ function treeToLegacyChapter(state: StudyChapterState, fallback: StudyChapter | 
   const moves: string[] = [];
   const moveComments: Record<number, string> = {};
   const moveAnnotations: Record<number, string | string[]> = {};
-  const variations = buildLegacyVariationsFromTree(tree);
+  const variations = mergeVariationRecords(
+    fallback?.variations ?? {},
+    buildLegacyVariationsFromTree(tree),
+  );
 
   for (let i = 1; i < mainline.length; i++) {
     const id = mainline[i];
@@ -203,6 +206,8 @@ export function useStudyChapterSync(args: {
   }, [studyId, chapterId, syncState?.lastSeq]);
 
   useEffect(() => {
+    setSyncState(null);
+    lastSeqRef.current = 0;
     void ensureState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studyId, chapterId]);
@@ -223,9 +228,9 @@ export function useStudyChapterSync(args: {
   }, [studyId, chapterId, syncState?.studyId]); // re-subscribe on chapter switch
 
   const legacyChapter = useMemo(() => {
-    if (!syncState) return args.chapter;
+    if (!syncState || syncState.chapterId !== chapterId) return args.chapter;
     return treeToLegacyChapter(syncState, args.chapter);
-  }, [syncState, args.chapter]);
+  }, [syncState, args.chapter, chapterId]);
 
   const setSticky = useCallback(async (sticky: boolean) => {
     if (!studyId || !chapterId || !syncState) return;
@@ -521,10 +526,18 @@ export function useStudyChapterSync(args: {
   const promoteVariation = useCallback(async (mainLinePos: number, varGroupIdx: number) => {
     if (!studyId || !chapterId || !syncState) return false;
 
-    const branchId = findVariationBranchNodeId(syncState.tree, mainLinePos, varGroupIdx);
+    const branchId = findVariationBranchNodeId(
+      syncState.tree,
+      mainLinePos,
+      varGroupIdx,
+      args.chapter?.variations ?? {},
+    );
     if (!branchId) return false;
 
-    const variations = buildLegacyVariationsFromTree(syncState.tree);
+    const variations = mergeVariationRecords(
+      args.chapter?.variations ?? {},
+      buildLegacyVariationsFromTree(syncState.tree),
+    );
     const varLine = variations[mainLinePos]?.[varGroupIdx] ?? [];
     const targetMoveIndex = mainLinePos + 1 + varLine.length;
 
@@ -541,7 +554,9 @@ export function useStudyChapterSync(args: {
     let nextPathSerialized = '';
     setSyncState((prev) => {
       if (!prev) return prev;
-      const next = applyAction(prev, tempAction);
+      const action: StudyActionEnvelope = { ...tempAction, seq: prev.lastSeq + 1 };
+      const next = applyAction(prev, action);
+      lastSeqRef.current = next.lastSeq;
       const pathLen = Math.min(targetMoveIndex + 1, next.tree.mainline.length);
       const nextPath = next.tree.mainline.slice(0, Math.max(1, pathLen));
       nextPathSerialized = serializePath(nextPath);
@@ -565,6 +580,17 @@ export function useStudyChapterSync(args: {
 
     return true;
   }, [studyId, chapterId, syncState, canWrite, args.actorId, args.actorRole, broadcastPathIfSticky]);
+
+  const alignMainlineToMoves = useCallback((moves: string[], moveIndex: number) => {
+    if (!syncState) return;
+    setSyncState((prev) => {
+      if (!prev) return prev;
+      const alignedTree = alignTreeMainlineToSans(prev.tree, moves);
+      const pathLen = Math.min(moveIndex + 1, alignedTree.mainline.length);
+      const nextPath = alignedTree.mainline.slice(0, Math.max(1, pathLen));
+      return { ...prev, tree: alignedTree, currentPath: nextPath };
+    });
+  }, [syncState]);
 
   const undoMove = useCallback(async () => {
     if (!syncState || !canWrite) return;
@@ -668,6 +694,7 @@ export function useStudyChapterSync(args: {
     jumpToVariation,
     jumpToMoveIndex,
     promoteVariation,
+    alignMainlineToMoves,
     makeMove,
     setNodeGlyphs,
     undoMove,
