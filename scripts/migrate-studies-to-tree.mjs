@@ -139,7 +139,7 @@ function buildTreeSnapshotFromChapter(chapter, study) {
   for (const [k, groups] of Object.entries(vars)) {
     const idx = Number(k);
     if (!Number.isFinite(idx)) continue;
-    const parentNodeId = mainlineIds[idx + 1] || rootId;
+    const parentNodeId = mainlineIds[idx] ?? rootId;
     if (!nodes[parentNodeId]) continue;
     if (!Array.isArray(groups)) continue;
     for (const line of groups) {

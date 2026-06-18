@@ -4088,7 +4088,13 @@ const StudyPage: React.FC = () => {
                       selectedChapterRaw?.variations ?? {},
                       moveListChapter?.variations ?? selectedChapter.variations ?? {},
                     );
-                    const promoted = promoteVariationLines(baseMoves, baseVars, mlp, vgi);
+                    const promoted = promoteVariationLines(
+                      baseMoves,
+                      baseVars,
+                      mlp,
+                      vgi,
+                      selectedChapter.fen || selectedChapterRaw?.fen,
+                    );
                     if (!promoted) return;
 
                     alignMainlineToMoves(promoted.moves, promoted.nextMoveIndex);

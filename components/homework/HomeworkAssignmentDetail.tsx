@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  ArrowLeft, Grid, Users, Percent, Trophy, Clock, RotateCcw, LayoutGrid, Table2,
+  ArrowLeft, Grid, Users, Percent, Trophy, Clock, RotateCcw, LayoutGrid, Table2, Trash2,
 } from 'lucide-react';
 import type { HomeworkAssignment, Puzzle, Student } from '../../types';
 import type { StudentHwStat } from '../../lib/homeworkAnalysisUtils';
@@ -23,6 +23,7 @@ type Props = {
   onBack: () => void;
   onSelectStudent: (stat: StudentHwStat) => void;
   onResetStudent: (studentId: string) => void;
+  onDelete?: () => void;
 };
 
 function formatDateTime(iso?: string): string {
@@ -48,6 +49,7 @@ export const HomeworkAssignmentDetail: React.FC<Props> = ({
   onBack,
   onSelectStudent,
   onResetStudent,
+  onDelete,
 }) => {
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const hwPuzzles = useMemo(
@@ -69,14 +71,26 @@ export const HomeworkAssignmentDetail: React.FC<Props> = ({
 
   return (
     <div className="space-y-5">
-      <button
-        type="button"
-        onClick={onBack}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold transition-colors"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        Atama Listesine Dön
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Atama Listesine Dön
+        </button>
+        {onDelete ? (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-sm font-bold transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            Ödevi Sil
+          </button>
+        ) : null}
+      </div>
 
       <div className="rounded-2xl border border-violet-500/25 bg-gradient-to-br from-violet-600/20 via-indigo-600/10 to-transparent p-5 sm:p-6">
         <div>

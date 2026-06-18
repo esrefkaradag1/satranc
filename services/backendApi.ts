@@ -80,10 +80,28 @@ function normalizeHomework(h: Record<string, unknown>): HomeworkAssignment {
       const dailyGameTarget = parseTargetNumber(t.dailyGameTarget ?? t.daily_game_target);
       const dailyPuzzleTarget = parseTargetNumber(t.dailyPuzzleTarget ?? t.daily_puzzle_target);
       const minPuzzleAccuracyPct = parseTargetNumber(t.minPuzzleAccuracyPct ?? t.min_puzzle_accuracy_pct);
+      const weeklyRaw = t.weeklySchedule ?? t.weekly_schedule;
+      let weeklySchedule: StudentDailyTarget['weeklySchedule'];
+      if (weeklyRaw && typeof weeklyRaw === 'object' && !Array.isArray(weeklyRaw)) {
+        weeklySchedule = {};
+        Object.entries(weeklyRaw as Record<string, unknown>).forEach(([dayKey, dayRaw]) => {
+          const day = Number(dayKey);
+          if (!Number.isFinite(day) || day < 1 || day > 7) return;
+          if (!dayRaw || typeof dayRaw !== 'object' || Array.isArray(dayRaw)) return;
+          const d = dayRaw as Record<string, unknown>;
+          weeklySchedule![day] = {
+            dailyGameTarget: parseTargetNumber(d.dailyGameTarget ?? d.daily_game_target),
+            dailyPuzzleTarget: parseTargetNumber(d.dailyPuzzleTarget ?? d.daily_puzzle_target),
+            minPuzzleAccuracyPct: parseTargetNumber(d.minPuzzleAccuracyPct ?? d.min_puzzle_accuracy_pct),
+          };
+        });
+        if (Object.keys(weeklySchedule).length === 0) weeklySchedule = undefined;
+      }
       out[String(studentId)] = {
         dailyGameTarget,
         dailyPuzzleTarget,
         minPuzzleAccuracyPct,
+        ...(weeklySchedule ? { weeklySchedule } : {}),
       };
     });
     return Object.keys(out).length > 0 ? out : undefined;

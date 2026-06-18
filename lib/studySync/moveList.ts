@@ -3,6 +3,7 @@ import type { StudyChapter } from '../studyTypes';
 import type { StudyTree } from './types';
 import type { StudyChapterState } from './types';
 import { DEFAULT_FEN, applyMove, makeBuilderGame } from '../studyUtils';
+import { promoteVariationLegacy } from './treeModel';
 
 /** Sync ağacındaki güncel yolun FEN'i — hamle listesini yeniden oynatmaktan güvenilir. */
 export function fenAtSyncPath(state: StudyChapterState | null | undefined): string | null {
@@ -149,32 +150,15 @@ export function mergeVariationRecords(
   return out;
 }
 
-/** Lichess tarzı: varyasyonu ana hatta yükseltir (eski ana hat varyasyona iner). */
+/** Lichess tarzı: varyasyonu ana hatta yükseltir — ağaç modeli (children[0] = ana hat). */
 export function promoteVariationLines(
   moves: string[],
   variations: Record<number, string[][]>,
   mainLinePos: number,
   varGroupIdx: number,
+  startFen: string = DEFAULT_FEN,
 ): { moves: string[]; variations: Record<number, string[][]>; nextMoveIndex: number } | null {
-  const varLine = variations[mainLinePos]?.[varGroupIdx];
-  if (!varLine?.length) return null;
-
-  const prefix = moves.slice(0, mainLinePos + 1);
-  const oldContinuation = moves.slice(mainLinePos + 1);
-  const newMoves = [...prefix, ...varLine];
-  const vars: Record<number, string[][]> = { ...variations };
-  const group = [...(vars[mainLinePos] ?? [])];
-  group.splice(varGroupIdx, 1);
-  if (oldContinuation.length > 0) group.push(oldContinuation);
-  if (group.length === 0) delete vars[mainLinePos];
-  else vars[mainLinePos] = group;
-
-  for (const key of Object.keys(vars)) {
-    const k = Number(key);
-    if (k > mainLinePos) delete vars[k];
-  }
-
-  return { moves: newMoves, variations: vars, nextMoveIndex: newMoves.length };
+  return promoteVariationLegacy(moves, variations, mainLinePos, varGroupIdx, startFen);
 }
 
 /** Sync ağacından eski `variations` kaydı formatına dönüştürür */
@@ -190,7 +174,8 @@ export function buildLegacyVariationsFromTree(tree: StudyTree): Record<number, s
     const mainChild = mainline[i + 1] ?? null;
     const altChildren = (node.children ?? []).filter((cid) => cid && cid !== mainChild);
     if (altChildren.length === 0) continue;
-    const moveIndex = Math.max(0, i - 1);
+    // mainline[i] düğümünden ayrılan varyasyonlar → legacy anahtar = i (k öncesi hamle sayısı)
+    const moveIndex = i;
     const groups: string[][] = [];
     const seen = new Set<string>();
     for (const childId of altChildren) {
@@ -221,7 +206,7 @@ export function findVariationBranchNodeId(
   const targetLine = variations[mainLinePos]?.[varGroupIdx];
   if (!targetLine?.length) return null;
 
-  const parentMlIndex = Math.max(0, Math.min(tree.mainline.length - 1, mainLinePos + 1));
+  const parentMlIndex = Math.max(0, Math.min(tree.mainline.length - 1, mainLinePos));
   const parentId = tree.mainline[parentMlIndex];
   const parent = tree.nodes[parentId];
   if (!parent) return null;

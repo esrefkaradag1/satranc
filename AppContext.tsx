@@ -1594,9 +1594,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         if (puzRes.data) {
           setPuzzles((puzRes.data as Record<string, unknown>[]).map(dbToPuzzle));
-          console.log('[Supabase] refreshFromStorage puzzles yüklendi:', (puzRes.data as unknown[]).length);
-        } else if (!puzRes.error) {
-          console.log('[Supabase] refreshFromStorage puzzles boş.');
         }
         if (stuRes.data) {
           const stuRows = stuRes.data as Record<string, unknown>[];
@@ -2202,8 +2199,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (found) addActivityLog({ user: CURRENT_USER, action: 'Ödev Ataması Silindi', target: found.title, type: 'warning' });
       return prev.filter(h => h.id !== id);
     });
+    setHomeworkAttempts(prev => prev.filter(a => a.homeworkId !== id));
+    setHomeworkSubmissions(prev => prev.filter(s => s.homeworkId !== id));
     const sb = getServiceSupabase();
     if (sb) try {
+      await sb.from('homework_attempts').delete().eq('homeworkId', id);
+      await sb.from('homework_submissions').delete().eq('homeworkId', id);
       const { error } = await sb.from('homeworks').delete().eq('id', id);
       if (error) console.error('Supabase homeworks delete error:', error);
     } catch (err) {

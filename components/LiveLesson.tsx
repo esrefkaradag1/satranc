@@ -3531,7 +3531,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const promoteLiveVariation = useCallback((mlp: number, vgi: number) => {
     if (isStudentView || usesOwnBoardDisplay) return;
-    const promoted = promoteVariationLines(moveHistory, variations, mlp, vgi);
+    const promoted = promoteVariationLines(moveHistory, variations, mlp, vgi, baseFen);
     if (!promoted) return;
     const nextFen = liveLessonFenAt(baseFen, promoted.moves, promoted.variations, promoted.nextMoveIndex, null);
     setMoveHistory(promoted.moves);

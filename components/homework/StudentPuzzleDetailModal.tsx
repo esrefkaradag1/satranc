@@ -1,22 +1,36 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { X, Lightbulb, Clock, CheckCircle2, XCircle, CircleDashed } from 'lucide-react';
 import { Chessboard } from 'react-chessboard';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
-import type { HomeworkAssignment, HomeworkPuzzleAttempt, Puzzle } from '../../types';
+import type { HomeworkAssignment, HomeworkPuzzleAttempt, Puzzle, Student } from '../../types';
 import type { StudentHwStat } from '../../lib/homeworkAnalysisUtils';
+import type { PlatformDayStats } from '../../lib/homeworkPlatformUtils';
+import { capDailyPuzzleDisplay } from '../../lib/homeworkPlatformUtils';
 import {
   attemptThinkSeconds,
   formatHomeworkDuration,
   studentTotalThinkSeconds,
 } from '../../lib/homeworkAnalysisUtils';
+import { PlatformDailyPuzzlesSection } from './PlatformDailyPuzzlesSection';
 
 type Props = {
   stat: StudentHwStat;
   homework: HomeworkAssignment;
   puzzles: Puzzle[];
   attempts: HomeworkPuzzleAttempt[];
+  student?: Student;
+  viewDate?: string;
+  platformStats?: PlatformDayStats;
   onClose: () => void;
+};
+
+type DailyStatFields = {
+  todayPuzzleCorrect?: number;
+  todayPuzzleWrong?: number;
+  todayGames?: number;
+  dailyPuzzleTarget?: number;
+  dailyGameTarget?: number;
 };
 
 const DIFFICULTY_CLASS: Record<string, string> = {
@@ -63,8 +77,19 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
   homework,
   puzzles,
   attempts,
+  student,
+  viewDate,
+  platformStats,
   onClose,
 }) => {
+  const [goalActivity, setGoalActivity] = useState<{ puzzleCorrect: number; puzzleWrong: number; games: number } | null>(null);
+  const handleGoalActivityChange = useCallback((data: { puzzleCorrect: number; puzzleWrong: number; games: number }) => {
+    setGoalActivity(data);
+  }, []);
+
+  useEffect(() => {
+    setGoalActivity(null);
+  }, [stat.studentId, viewDate]);
   const hwPuzzles = useMemo(
     () => homework.puzzles
       .map((id, index) => {
@@ -93,6 +118,41 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
   }, [studentAttempts]);
 
   const totalTime = studentTotalThinkSeconds(studentAttempts);
+  const showPlatformSection = Boolean(
+    student && (student.lichessUsername?.trim() || student.chessComUsername?.trim()),
+  );
+  const isDailyOnly = hwPuzzles.length === 0;
+  const daily = stat as StudentHwStat & DailyStatFields;
+
+  const displaySummary = useMemo(() => {
+    if (!isDailyOnly) {
+      return {
+        correct: stat.correct,
+        wrong: stat.wrong,
+        skipped: stat.skipped,
+        points: stat.points,
+        time: formatHomeworkDuration(totalTime),
+      };
+    }
+    const puzzleTarget = daily.dailyPuzzleTarget ?? 0;
+    const rawCorrect = goalActivity?.puzzleCorrect ?? platformStats?.puzzlePassed ?? daily.todayPuzzleCorrect ?? stat.correct;
+    const rawWrong = goalActivity?.puzzleWrong ?? platformStats?.puzzleFailed ?? daily.todayPuzzleWrong ?? stat.wrong;
+    const capped = capDailyPuzzleDisplay(rawCorrect, rawWrong, puzzleTarget);
+    const gameTarget = daily.dailyGameTarget ?? 0;
+    const games = goalActivity?.games ?? platformStats?.games ?? daily.todayGames ?? 0;
+    const platformTime = stat.timeSeconds > 0 ? stat.timeSeconds : totalTime;
+    return {
+      correct: capped.correct,
+      wrong: capped.wrong,
+      skipped: 0,
+      points: 0,
+      time: platformTime > 0
+        ? formatHomeworkDuration(platformTime)
+        : gameTarget > 0
+          ? `Maç ${Math.min(games, gameTarget)}/${gameTarget}`
+          : '—',
+    };
+  }, [isDailyOnly, stat, daily, platformStats, goalActivity, totalTime]);
 
   const cards = useMemo(() => hwPuzzles.map(({ puzzle, index }) => {
     const puzzleAttempts = attemptsByPuzzleId.get(puzzle.id) ?? [];
@@ -136,7 +196,7 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
             <div className="min-w-0">
               <h3 className="text-lg font-bold text-white truncate">{stat.name}</h3>
               <p className="text-xs text-slate-400 mt-0.5 truncate">
-                {homework.title} · {hwPuzzles.length} bulmaca
+                {homework.title} · {hwPuzzles.length > 0 ? `${hwPuzzles.length} bulmaca` : 'Günlük hedef'}
               </p>
             </div>
           </div>
@@ -154,11 +214,11 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
         <div className="px-4 sm:px-5 py-4 border-b border-white/[0.06] bg-black/20 shrink-0">
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3">
             {[
-              { label: 'Doğru', value: stat.correct, color: 'text-emerald-400' },
-              { label: 'Yanlış', value: stat.wrong, color: 'text-rose-400' },
-              { label: 'Atlandı', value: stat.skipped, color: stat.skipped > 0 ? 'text-amber-400' : 'text-slate-500' },
-              { label: 'Puan', value: stat.points, color: 'text-indigo-300' },
-              { label: 'Toplam Süre', value: formatHomeworkDuration(totalTime), color: 'text-slate-200', text: true },
+              { label: 'Doğru', value: displaySummary.correct, color: 'text-emerald-400' },
+              { label: 'Yanlış', value: displaySummary.wrong, color: 'text-rose-400' },
+              { label: 'Atlandı', value: displaySummary.skipped, color: displaySummary.skipped > 0 ? 'text-amber-400' : 'text-slate-500' },
+              { label: 'Puan', value: displaySummary.points, color: 'text-indigo-300' },
+              { label: isDailyOnly ? 'Maç / Süre' : 'Toplam Süre', value: displaySummary.time, color: 'text-slate-200', text: true },
             ].map((item) => (
               <div
                 key={item.label}
@@ -174,9 +234,10 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
         </div>
 
         {/* Bulmaca kartları */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 custom-scrollbar">
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-            {cards.map(({ puzzle, index, result, meta, attempt, wrongCount, thinkSec, fen }) => {
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 custom-scrollbar space-y-6">
+          {cards.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+              {cards.map(({ puzzle, index, result, meta, attempt, wrongCount, thinkSec, fen }) => {
               const StatusIcon = meta.icon;
               return (
                 <div
@@ -294,11 +355,29 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
                 </div>
               );
             })}
-          </div>
+            </div>
+          ) : null}
 
-          {hwPuzzles.length === 0 && (
+          {showPlatformSection && student && viewDate ? (
+            <PlatformDailyPuzzlesSection
+              student={student}
+              viewDate={viewDate}
+              platformStats={platformStats}
+              dailyPuzzleTarget={
+                ('dailyPuzzleTarget' in stat ? Number(stat.dailyPuzzleTarget) : 0)
+                || homework.dailyPuzzleTarget
+                || 0
+              }
+              dailyGameTarget={
+                ('dailyGameTarget' in stat ? Number(stat.dailyGameTarget) : 0)
+                || homework.dailyGameTarget
+                || 0
+              }
+              onGoalActivityChange={handleGoalActivityChange}
+            />
+          ) : hwPuzzles.length === 0 ? (
             <p className="text-center text-slate-500 py-16">Bu ödeve bağlı bulmaca yok.</p>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

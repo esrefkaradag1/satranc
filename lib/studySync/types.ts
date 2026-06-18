@@ -22,6 +22,7 @@ export type TreeComment = {
 export interface StudyNode {
   id: NodeId;
   parentId: NodeId | null;
+  /** Ana hat = children[0] (Lichess tree modeli). */
   children: NodeId[];
   // Move metadata
   san?: string; // move SAN for this node (root has none)

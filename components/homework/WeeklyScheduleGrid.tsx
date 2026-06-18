@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Save } from 'lucide-react';
+import { Calendar, RefreshCw, Save } from 'lucide-react';
 import type { Student, StudentDailyTarget } from '../../types';
 import { WEEKDAY_LABELS } from '../../lib/homeworkPanelUtils';
 
@@ -11,9 +11,14 @@ type Props = {
   onDraftChange: (studentId: string, patch: Partial<StudentDailyTarget>) => void;
   onDayChange: (studentId: string, day: number, patch: Partial<NonNullable<StudentDailyTarget['weeklySchedule']>[number]>) => void;
   onSave: () => void;
+  onRefreshPlatform?: () => void;
+  loadingPlatform?: boolean;
   selectedStudentId?: string | null;
   onSelectStudent?: (id: string | null) => void;
   dayCompletion?: Record<number, DayCompletionStatus>;
+  dayProgress?: Record<number, { games: number; gameTarget: number; puzzles: number; puzzleTarget: number; syncNote?: string | null }>;
+  homeworkTitle?: string;
+  autoSelectedHomework?: boolean;
 };
 
 function completionStyles(status: DayCompletionStatus | undefined): string {
@@ -52,9 +57,14 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
   onDraftChange,
   onDayChange,
   onSave,
+  onRefreshPlatform,
+  loadingPlatform = false,
   selectedStudentId,
   onSelectStudent,
   dayCompletion,
+  dayProgress,
+  homeworkTitle,
+  autoSelectedHomework = false,
 }) => {
   const activeId = selectedStudentId ?? students[0]?.id ?? null;
   const activeStudent = students.find((s) => s.id === activeId);
@@ -67,16 +77,41 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
           <Calendar className="w-5 h-5 text-violet-400" />
           <div>
             <h3 className="text-sm font-black text-white">Günlük Program</h3>
-            <p className="text-[10px] text-slate-500 mt-0.5">Pazartesi–Pazar · öğrenci bazlı maç ve bulmaca hedefi</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">
+              Pazartesi–Pazar · öğrenci bazlı maç ve bulmaca hedefi
+              {homeworkTitle ? (
+                <>
+                  <span className="text-slate-600"> · </span>
+                  <span className="text-indigo-300/90">{homeworkTitle}</span>
+                  {autoSelectedHomework ? <span className="text-amber-400/90"> (otomatik seçildi)</span> : null}
+                </>
+              ) : null}
+              <span className="text-slate-600"> · </span>
+              <span className="text-slate-500">Platform: butonla çekilir, 10 dk aralıkla güncellenir</span>
+            </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onSave}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl premium-gradient text-white text-xs font-bold shadow-lg shadow-indigo-500/20"
-        >
-          <Save className="w-4 h-4" /> Kaydet
-        </button>
+        <div className="flex items-center gap-2">
+          {onRefreshPlatform ? (
+            <button
+              type="button"
+              onClick={onRefreshPlatform}
+              disabled={loadingPlatform}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-800 border border-white/10 text-slate-300 text-xs font-bold hover:bg-slate-700 disabled:opacity-60"
+              title="Lichess ve Chess.com verilerini çek (sonra 10 dk'da bir güncellenir)"
+            >
+              <RefreshCw className={`w-4 h-4 ${loadingPlatform ? 'animate-spin' : ''}`} />
+              Platform
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onSave}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl premium-gradient text-white text-xs font-bold shadow-lg shadow-indigo-500/20"
+          >
+            <Save className="w-4 h-4" /> Kaydet
+          </button>
+        </div>
       </div>
 
       <div className="p-5 space-y-4">
@@ -100,6 +135,16 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
         {activeStudent ? (
           <>
             <p className="text-sm font-bold text-white">{activeStudent.name}</p>
+            <p className="text-[10px] text-slate-500">
+              İlerleme: Lichess {activeStudent.lichessUsername ? `@${activeStudent.lichessUsername}` : '—'}
+              {' · '}
+              Chess.com {activeStudent.chessComUsername ? `@${activeStudent.chessComUsername}` : '—'}
+            </p>
+            {Object.values(dayProgress ?? {}).some((p) => p.syncNote) ? (
+              <p className="text-[10px] text-amber-400/90">
+                {Object.values(dayProgress ?? {}).find((p) => p.syncNote)?.syncNote}
+              </p>
+            ) : null}
             <div className="flex flex-wrap gap-3 text-[10px] text-slate-500">
               <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Tamam</span>
               <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Bekliyor</span>
@@ -114,6 +159,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                 })();
                 const completion = dayCompletion?.[day];
                 const completionText = completionLabel(completion);
+                const progress = dayProgress?.[day];
                 return (
                   <div
                     key={day}
@@ -173,6 +219,20 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                         className="input-base w-full text-xs py-1.5"
                       />
                     </div>
+                    {progress && (progress.gameTarget > 0 || progress.puzzleTarget > 0) ? (
+                      <div className="pt-1 space-y-0.5 text-[9px] font-bold">
+                        {progress.gameTarget > 0 ? (
+                          <p className={progress.games >= progress.gameTarget ? 'text-emerald-400' : 'text-rose-400'}>
+                            Maç {progress.games}/{progress.gameTarget}
+                          </p>
+                        ) : null}
+                        {progress.puzzleTarget > 0 ? (
+                          <p className={progress.puzzles >= progress.puzzleTarget ? 'text-emerald-400' : 'text-rose-400'}>
+                            Bulmaca {progress.puzzles}/{progress.puzzleTarget}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}

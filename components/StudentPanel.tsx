@@ -67,10 +67,8 @@ import { getServiceSupabase, isSupabaseBackend } from '../services/supabase';
 import {
   fetchLichessUser,
   fetchLichessActivity,
-  fetchLichessGamesForDay,
   fetchLichessGamesPage,
   fetchChessComDailyPuzzleStats,
-  fetchLichessDailyPuzzleStats,
   fetchChessComPlayer,
   fetchChessComStats,
   fetchChessComMemberStats,
@@ -95,6 +93,9 @@ import LichessPuzzlesSection from './LichessPuzzlesSection';
 import { fetchFidePlayer, federationLabel, type FidePlayer } from '../services/fideService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
 import { formatMidnightCountdown, todayDayKey } from '../lib/homeworkDayUtils';
+import { fetchStudentPlatformDayStats, platformSyncSummary } from '../lib/homeworkPlatformUtils';
+
+const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
 
 const MONTHS_TR = [
   'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
@@ -342,6 +343,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const [todayExternalPuzzleCount, setTodayExternalPuzzleCount] = useState(0);
   const [todayExternalPuzzlePassed, setTodayExternalPuzzlePassed] = useState(0);
   const [loadingExternalGameCount, setLoadingExternalGameCount] = useState(false);
+  const [externalStatsNote, setExternalStatsNote] = useState<string | null>(null);
+  const [platformStatsFetched, setPlatformStatsFetched] = useState(false);
+  const platformPollEnabledRef = useRef(false);
   const [midnightCountdown, setMidnightCountdown] = useState(() => formatMidnightCountdown());
   const [homeworkDayKey, setHomeworkDayKey] = useState(() => todayDayKey());
 
@@ -360,46 +364,61 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     return students.find((s) => s.id === studentId) ?? null;
   }, [students, studentId, apiStudent]);
 
+  const refreshTodayExternalStats = useCallback(async () => {
+    if (!student) {
+      setTodayExternalGameCount(0);
+      setTodayExternalPuzzleCount(0);
+      setTodayExternalPuzzlePassed(0);
+      setExternalStatsNote(null);
+      return;
+    }
+    const lichessUsername = student.lichessUsername?.trim();
+    const chessComUsername = student.chessComUsername?.trim();
+    if (!lichessUsername && !chessComUsername) {
+      setTodayExternalGameCount(0);
+      setTodayExternalPuzzleCount(0);
+      setTodayExternalPuzzlePassed(0);
+      setExternalStatsNote('Lichess veya Chess.com kullanıcı adı profilde tanımlı değil.');
+      return;
+    }
+    setLoadingExternalGameCount(true);
+    platformPollEnabledRef.current = true;
+    const todayKey = todayDayKey();
+    try {
+      const stats = await fetchStudentPlatformDayStats(student, todayKey);
+      setPlatformStatsFetched(true);
+      setTodayExternalGameCount(stats.games);
+      setTodayExternalPuzzleCount(stats.puzzleSolved);
+      setTodayExternalPuzzlePassed(stats.puzzlePassed);
+      const syncNote = platformSyncSummary(stats, student);
+      if (stats.lichessError && student.lichessUsername) {
+        setExternalStatsNote('Lichess şu an erişilemiyor (ağ engeli veya zaman aşımı). Chess.com verisi kullanılıyor.');
+      } else if (stats.games === 0 && stats.puzzleSolved === 0) {
+        setExternalStatsNote(`Bugün (${todayKey}) platform aktivitesi bulunamadı.${syncNote ? ` ${syncNote}` : ''}`);
+      } else {
+        setExternalStatsNote(syncNote);
+      }
+    } catch {
+      setTodayExternalGameCount(0);
+      setTodayExternalPuzzleCount(0);
+      setTodayExternalPuzzlePassed(0);
+      setExternalStatsNote('Platform verisi alınamadı. Biraz sonra yeniden deneyin.');
+    } finally {
+      setLoadingExternalGameCount(false);
+    }
+  }, [student]);
+
   useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      if (!student) {
-        setTodayExternalGameCount(0);
-        return;
-      }
-      const lichessUsername = student.lichessUsername?.trim();
-      const chessComUsername = student.chessComUsername?.trim();
-      if (!lichessUsername && !chessComUsername) {
-        setTodayExternalGameCount(0);
-        return;
-      }
-      setLoadingExternalGameCount(true);
-      const todayKey = todayDayKey();
-      try {
-        const [lichessToday, chessComToday, lichessPuzzles, chessComPuzzles] = await Promise.all([
-          lichessUsername ? fetchLichessGamesForDay(lichessUsername, todayKey) : Promise.resolve(0),
-          chessComUsername ? fetchChessComGamesForDay(chessComUsername, todayKey) : Promise.resolve(0),
-          lichessUsername ? fetchLichessDailyPuzzleStats(lichessUsername, todayKey) : Promise.resolve({ count: 0, passed: 0, failed: 0 }),
-          chessComUsername ? fetchChessComDailyPuzzleStats(chessComUsername, todayKey) : Promise.resolve({ count: 0, passed: 0, failed: 0 }),
-        ]);
-        if (!cancelled) {
-          setTodayExternalGameCount(lichessToday + chessComToday);
-          setTodayExternalPuzzleCount((lichessPuzzles?.count ?? 0) + (chessComPuzzles?.count ?? 0));
-          setTodayExternalPuzzlePassed((lichessPuzzles?.passed ?? 0) + (chessComPuzzles?.passed ?? 0));
-        }
-      } catch {
-        if (!cancelled) {
-          setTodayExternalGameCount(0);
-          setTodayExternalPuzzleCount(0);
-          setTodayExternalPuzzlePassed(0);
-        }
-      } finally {
-        if (!cancelled) setLoadingExternalGameCount(false);
-      }
-    };
-    void run();
-    return () => { cancelled = true; };
-  }, [student?.id, student?.lichessUsername, student?.chessComUsername, homeworkDayKey]);
+    setPlatformStatsFetched(false);
+    platformPollEnabledRef.current = false;
+  }, [homeworkDayKey, student?.id]);
+
+  const handleDailyGoalsComplete = useCallback((homeworkId: string) => {
+    if (!student) return;
+    const already = homeworkSubmissions.some((s) => s.studentId === student.id && s.homeworkId === homeworkId);
+    if (already) return;
+    addHomeworkSubmission({ studentId: student.id, homeworkId });
+  }, [student, homeworkSubmissions, addHomeworkSubmission]);
 
   const studentAttendances = useMemo(() => {
     return attendanceRecords
@@ -569,8 +588,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [activeTab, joinedTournaments, selectedTournamentId]);
 
   useEffect(() => {
-    if (!isServerMode()) refreshFromStorage();
-  }, [refreshFromStorage]);
+    if (!isServerMode() && activeTab === 'puzzles') refreshFromStorage();
+  }, [refreshFromStorage, activeTab, isServerMode]);
 
   useEffect(() => {
     if (!window.location.hash.replace(/^#\/?/, '')) writePanelHash('summary');
@@ -796,12 +815,22 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     }
   }, [studentId, student?.group, refreshFromStorage]);
 
+  const refreshHomeworkTab = useCallback(() => {
+    refreshStudentHomeworks();
+  }, [refreshStudentHomeworks]);
+
   useEffect(() => {
     if (activeTab !== 'puzzles') return;
     refreshStudentHomeworks();
-    const id = window.setInterval(refreshStudentHomeworks, 30000);
-    return () => window.clearInterval(id);
   }, [activeTab, refreshStudentHomeworks]);
+
+  useEffect(() => {
+    if (activeTab !== 'puzzles' || !platformPollEnabledRef.current) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshTodayExternalStats();
+    }, PLATFORM_AUTO_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [activeTab, refreshTodayExternalStats]);
 
   const [apiSchedule, setApiSchedule] = useState<typeof scheduleEntries>([]);
   useEffect(() => {
@@ -1117,9 +1146,13 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               todayExternalPuzzleCount={todayExternalPuzzleCount}
               todayExternalPuzzlePassed={todayExternalPuzzlePassed}
               loadingExternalGameCount={loadingExternalGameCount}
+              externalStatsNote={externalStatsNote}
               midnightCountdown={midnightCountdown}
-              onRefresh={refreshStudentHomeworks}
+              onRefresh={refreshHomeworkTab}
+              onRefreshPlatform={() => void refreshTodayExternalStats()}
+              platformStatsFetched={platformStatsFetched}
               onPlayPuzzle={setPlayingPuzzle}
+              onDailyGoalsComplete={handleDailyGoalsComplete}
             />
           </div>
         )}

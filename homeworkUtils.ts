@@ -37,6 +37,15 @@ export function isHomeworkAssignedToStudent(
   return false;
 }
 
+/** Ödevin atandığı öğrenci kayıtlarını döndürür (grup + bireysel id, normalize eşleşme) */
+export function resolveHomeworkAssignees<T extends StudentForAssignment>(
+  hw: HomeworkAssignment,
+  students: T[],
+): T[] {
+  const ids = new Set(getAssignedStudentIds(hw, students));
+  return students.filter((s) => ids.has(s.id));
+}
+
 /** Ödevin atandığı öğrenci listesini döndürür (grup + bireysel id) */
 export function getAssignedStudentIds(
   hw: HomeworkAssignment,

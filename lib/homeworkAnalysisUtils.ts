@@ -1,4 +1,5 @@
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../types';
+import { resolveHomeworkAssignees } from '../homeworkUtils';
 import { studentInitials } from './homeworkPanelUtils';
 
 export type StudentHwStat = {
@@ -60,11 +61,7 @@ export function attemptThinkSeconds(
 }
 
 export function getHomeworkAssignees(hw: HomeworkAssignment, students: Student[]): Student[] {
-  const groups = hw.assignedTo.filter((a) => a.startsWith('group:')).map((a) => a.replace('group:', ''));
-  const studentIds = hw.assignedTo.filter((a) => !a.startsWith('group:'));
-  const fromGroups = groups.length > 0 ? students.filter((s) => groups.includes(s.group)) : [];
-  const fromIds = studentIds.length > 0 ? students.filter((s) => studentIds.includes(s.id)) : [];
-  return Array.from(new Map([...fromGroups, ...fromIds].map((s) => [s.id, s])).values());
+  return resolveHomeworkAssignees(hw, students);
 }
 
 export function getHomeworkGroupLabel(hw: HomeworkAssignment, students: Student[]): string {
@@ -109,12 +106,14 @@ export function homeworkParticipation(
   students: Student[],
   attempts: HomeworkPuzzleAttempt[],
   submissions: HomeworkSubmission[],
+  opts?: { isStudentActive?: (studentId: string) => boolean },
 ): { started: number; total: number } {
   const assignees = getHomeworkAssignees(hw, students);
   const started = assignees.filter(
     (s) =>
       attempts.some((a) => a.homeworkId === hw.id && a.studentId === s.id)
-      || submissions.some((sub) => sub.homeworkId === hw.id && sub.studentId === s.id),
+      || submissions.some((sub) => sub.homeworkId === hw.id && sub.studentId === s.id)
+      || opts?.isStudentActive?.(s.id),
   ).length;
   return { started, total: assignees.length };
 }

@@ -95,6 +95,40 @@ export function parseChessComTactics2Puzzles(data: unknown, type: ChessComPuzzle
   return out.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 }
 
+/** Aynı bulmaca farklı sekmelerde veya tekrar denemede gelirse tek kayda indirger (hedef sayımı için). */
+export function dedupeChessComPuzzleAttempts(attempts: ChessComPuzzleAttempt[]): ChessComPuzzleAttempt[] {
+  const byId = new Map<number, ChessComPuzzleAttempt>();
+  for (const attempt of attempts) {
+    const existing = byId.get(attempt.id);
+    if (!existing) {
+      byId.set(attempt.id, attempt);
+      continue;
+    }
+    const score = (a: ChessComPuzzleAttempt) =>
+      (a.passed ? 100 : 0) + Math.min(99, new Date(a.date).getTime() / 1e12);
+    if (score(attempt) >= score(existing)) {
+      byId.set(attempt.id, attempt);
+    }
+  }
+  return Array.from(byId.values()).sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  );
+}
+
+export function selectHomeworkGoalPuzzles(
+  attempts: ChessComPuzzleAttempt[],
+  puzzleTarget: number,
+): ChessComPuzzleAttempt[] {
+  if (puzzleTarget <= 0) return [];
+  const unique = dedupeChessComPuzzleAttempts(attempts);
+  const sorted = [...unique].sort(
+    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+  );
+  const passed = sorted.filter((a) => a.passed);
+  if (passed.length > 0) return passed.slice(0, puzzleTarget);
+  return sorted.slice(0, puzzleTarget);
+}
+
 export function formatChessComApiError(value: unknown): string {
   if (typeof value === 'string' && value.trim()) return value;
   if (value && typeof value === 'object') {

@@ -41,6 +41,31 @@ export default defineConfig(({ mode }) => {
                 : path;
             },
           },
+          '/api/chesscom-games': {
+            target: 'https://api.chess.com',
+            changeOrigin: true,
+            rewrite: (path) => {
+              const u = new URL(path, 'http://local');
+              const username = u.searchParams.get('username');
+              const year = u.searchParams.get('year');
+              const month = u.searchParams.get('month');
+              if (!username || !year || !month) return path;
+              const mm = month.padStart(2, '0');
+              return `/pub/player/${encodeURIComponent(username)}/games/${year}/${mm}`;
+            },
+          },
+          '/api/lichess-proxy': {
+            target: 'https://lichess.org',
+            changeOrigin: true,
+            rewrite: (path) => {
+              const u = new URL(path, 'http://local');
+              const apiPath = u.searchParams.get('path');
+              if (!apiPath) return path;
+              u.searchParams.delete('path');
+              const qs = u.searchParams.toString();
+              return `/api/${apiPath}${qs ? `?${qs}` : ''}`;
+            },
+          },
         },
       },
       optimizeDeps: {

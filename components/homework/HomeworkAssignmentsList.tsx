@@ -16,6 +16,7 @@ type Props = {
   attempts: HomeworkPuzzleAttempt[];
   submissions: HomeworkSubmission[];
   onOpenDetail: (homeworkId: string) => void;
+  isStudentActive?: (studentId: string) => boolean;
 };
 
 export const HomeworkAssignmentsList: React.FC<Props> = ({
@@ -24,6 +25,7 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
   attempts,
   submissions,
   onOpenDetail,
+  isStudentActive,
 }) => {
   const sorted = [...homeworks].sort((a, b) => {
     const da = a.endDate || a.dueDate || a.startDate || '';
@@ -64,7 +66,7 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
           </thead>
           <tbody>
             {sorted.map((hw) => {
-              const participation = homeworkParticipation(hw, students, attempts, submissions);
+              const participation = homeworkParticipation(hw, students, attempts, submissions, { isStudentActive });
               const status = homeworkStatusLabel(hw);
               return (
                 <tr
@@ -95,8 +97,17 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
                     </span>
                   </td>
                   <td data-label="Katılım" className="py-3 px-3 text-center">
-                    <span className="inline-flex px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 text-[11px] font-bold">
-                      {participation.started} Öğrenci
+                    <span
+                      title={`${participation.started} başladı · ${participation.total} atanan`}
+                      className={`inline-flex px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                        participation.started > 0
+                          ? 'bg-emerald-500/15 text-emerald-300'
+                          : participation.total > 0
+                            ? 'bg-amber-500/15 text-amber-300'
+                            : 'bg-slate-500/15 text-slate-400'
+                      }`}
+                    >
+                      {participation.started}/{participation.total} Katılım
                     </span>
                   </td>
                   <td data-label="Bitiş" className="py-3 px-3 text-center text-slate-400 text-xs hidden sm:table-cell">

@@ -292,8 +292,8 @@ export function useStudyChapterSync(args: {
     const line = groups?.[varGroupIdx];
     if (!line || line.length === 0) return;
 
-    // Parent node: node after mainLinePos ply on mainline (root at 0)
-    const parentMlIndex = Math.max(0, Math.min(tree.mainline.length - 1, mainLinePos + 1));
+    // Parent: mainline[mainLinePos] — varyasyonun ayrıldığı düğüm (kök veya önceki ana hat hamlesi)
+    const parentMlIndex = Math.max(0, Math.min(tree.mainline.length - 1, mainLinePos));
     const parentId = tree.mainline[parentMlIndex];
     const parent = tree.nodes[parentId];
     if (!parent) return;
@@ -539,7 +539,7 @@ export function useStudyChapterSync(args: {
       buildLegacyVariationsFromTree(syncState.tree),
     );
     const varLine = variations[mainLinePos]?.[varGroupIdx] ?? [];
-    const targetMoveIndex = mainLinePos + 1 + varLine.length;
+    const targetMoveIndex = mainLinePos + varLine.length;
 
     const tempAction: StudyActionEnvelope = {
       id: `tmp-promote-${Date.now()}`,
@@ -662,8 +662,8 @@ export function useStudyChapterSync(args: {
       else break;
     }
 
-    // junctionIdx is the index in mainline where it branches off
-    const legacyKey = Math.max(0, junctionIdx - 1);
+    // junctionIdx: ana hat ile son ortak düğüm; varyasyon anahtarı aynı indeks
+    const legacyKey = Math.max(0, junctionIdx);
     const groups = variations[legacyKey] ?? [];
     
     // Find which group matches our path
@@ -678,7 +678,7 @@ export function useStudyChapterSync(args: {
       }
     }
 
-    return { moveIndex: Math.max(0, junctionIdx - 1), currentVariation: null };
+    return { moveIndex: Math.max(0, junctionIdx), currentVariation: null };
   }, [syncState]);
 
   return {

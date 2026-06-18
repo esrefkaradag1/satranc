@@ -1,6 +1,22 @@
-/** ISO tarih: YYYY-MM-DD */
+/** Yerel takvim günü: YYYY-MM-DD */
 export function todayDayKey(ref = new Date()): string {
-  return ref.toISOString().slice(0, 10);
+  const y = ref.getFullYear();
+  const m = String(ref.getMonth() + 1).padStart(2, '0');
+  const d = String(ref.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function localDayKeyFromMs(ms: number): string {
+  return todayDayKey(new Date(ms));
+}
+
+export function utcDayKeyFromMs(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+export function timestampMatchesDay(ms: number, target: string): boolean {
+  const day = target.slice(0, 10);
+  return localDayKeyFromMs(ms) === day || utcDayKeyFromMs(ms) === day;
 }
 
 export function weekdayKeyFromIso(isoDate: string): number {
@@ -43,5 +59,5 @@ export function mondayOfWeek(ref = new Date()): Date {
 export function isoDateForWeekday(monday: Date, weekday: number): string {
   const d = new Date(monday);
   d.setDate(d.getDate() + weekday - 1);
-  return d.toISOString().slice(0, 10);
+  return todayDayKey(d);
 }

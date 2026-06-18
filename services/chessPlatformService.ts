@@ -6,15 +6,66 @@
 import {
   parseChessComTactics2Puzzles,
   formatChessComApiError,
+  dedupeChessComPuzzleAttempts,
   type ChessComPuzzleAttempt,
   type ChessComPuzzleTab,
 } from '../lib/chesscomPuzzleParse';
+import { timestampMatchesDay, localDayKeyFromMs } from '../lib/homeworkDayUtils';
 
 export type { ChessComPuzzleAttempt, ChessComPuzzleTab };
 export { parseChessComTactics2Puzzles };
 
-const LICHESS_API = 'https://lichess.org/api';
-const CHESSCOM_API = 'https://api.chess.com/pub';
+const LICHESS_DIRECT_API = 'https://lichess.org/api';
+const CHESSCOM_DIRECT_API = 'https://api.chess.com/pub';
+const FETCH_TIMEOUT_MS = 8000;
+function lichessProxyUrl(apiPath: string, params?: URLSearchParams): string {
+  const q = new URLSearchParams();
+  q.set('path', apiPath.replace(/^\/+/, ''));
+  if (params) params.forEach((value, key) => q.set(key, value));
+  return `/api/lichess-proxy?${q.toString()}`;
+}
+
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+/** Lichess API — sunucu proxy üzerinden (tarayıcıdan doğrudan erişim çoğu ağda zaman aşımı verir). */
+async function lichessApiFetch(
+  apiPath: string,
+  init?: RequestInit,
+  params?: URLSearchParams,
+): Promise<Response> {
+  const proxyUrl = lichessProxyUrl(apiPath, params);
+  return fetchWithTimeout(proxyUrl, init);
+}
+
+async function chessComGamesFetch(username: string, year: string, month: string): Promise<Response> {
+  const mm = month.padStart(2, '0');
+  const q = new URLSearchParams({ username: username.toLowerCase(), year, month: mm });
+  return fetchWithTimeout(`/api/chesscom-games?${q}`, { headers: { Accept: 'application/json' } });
+}
+const LICHESS_ACTIVITY_CACHE_TTL_MS = 5 * 60 * 1000;
+const LICHESS_ACTIVITY_RATE_LIMIT_MS = 5 * 60 * 1000;
+const CHESSCOM_API = CHESSCOM_DIRECT_API;
+
+type LichessActivityCacheEntry = {
+  fetchedAt: number;
+  data: LichessActivity[];
+  rateLimited?: boolean;
+};
+
+const lichessActivityCache = new Map<string, LichessActivityCacheEntry>();
+const lichessActivityInFlight = new Map<string, Promise<LichessActivity[]>>();
+
+function lichessActivityCacheKey(username: string): string {
+  return username.trim().toLowerCase();
+}
 
 export interface LichessPerf {
   games: number;
@@ -57,6 +108,7 @@ export interface LichessGame {
   speed?: string;
   perf?: string;
   createdAt?: number;
+  lastMoveAt?: number;
   status?: string;
   players?: { white?: LichessGamePlayer; black?: LichessGamePlayer };
   opening?: { name?: string };
@@ -263,7 +315,7 @@ export async function fetchLichessUser(username: string): Promise<LichessUserPro
   const trimmed = username.trim();
   if (!trimmed) return null;
   try {
-    const res = await fetch(`${LICHESS_API}/user/${encodeURIComponent(trimmed)}`, {
+    const res = await lichessApiFetch(`user/${encodeURIComponent(trimmed)}`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return null;
@@ -314,9 +366,11 @@ export async function fetchLichessRecentGames(username: string, max = 10): Promi
   const trimmed = username.trim();
   if (!trimmed) return [];
   try {
-    const res = await fetch(
-      `${LICHESS_API}/games/user/${encodeURIComponent(trimmed)}?max=${max}&moves=0&opening=true`,
-      { headers: { Accept: 'application/x-ndjson' } }
+    const params = new URLSearchParams({ max: String(max), moves: '0', opening: 'true' });
+    const res = await lichessApiFetch(
+      `games/user/${encodeURIComponent(trimmed)}`,
+      { headers: { Accept: 'application/x-ndjson' } },
+      params,
     );
     if (!res.ok) return [];
     return parseNdjsonGames(await res.text());
@@ -352,9 +406,10 @@ export async function fetchLichessGamesPage(
     if (typeof opts?.until === 'number' && Number.isFinite(opts.until) && opts.until > 0) {
       params.set('until', String(Math.floor(opts.until)));
     }
-    const res = await fetch(
-      `${LICHESS_API}/games/user/${encodeURIComponent(trimmed)}?${params}`,
-      { headers: { Accept: 'application/x-ndjson' } }
+    const res = await lichessApiFetch(
+      `games/user/${encodeURIComponent(trimmed)}`,
+      { headers: { Accept: 'application/x-ndjson' } },
+      params,
     );
     if (!res.ok) return { games: [], nextUntil: null, hasMore: false };
     const parsed = parseNdjsonGames(await res.text());
@@ -408,9 +463,10 @@ export async function fetchLichessAllUserGames(
       params.set('opening', 'true');
       if (until !== undefined) params.set('until', String(until));
 
-      const res = await fetch(
-        `${LICHESS_API}/games/user/${encodeURIComponent(trimmed)}?${params}`,
-        { headers: { Accept: 'application/x-ndjson' } }
+      const res = await lichessApiFetch(
+        `games/user/${encodeURIComponent(trimmed)}`,
+        { headers: { Accept: 'application/x-ndjson' } },
+        params,
       );
       if (!res.ok) break;
 
@@ -442,15 +498,51 @@ export async function fetchLichessAllUserGames(
 export async function fetchLichessGamePgn(gameId: string): Promise<string | null> {
   const id = String(gameId ?? '').trim();
   if (!id) return null;
-  try {
-    const res = await fetch(`https://lichess.org/game/export/${encodeURIComponent(id)}`, {
-      headers: { Accept: 'application/x-chess-pgn' },
-    });
+  const load = async (url: string) => {
+    const res = await fetch(url, { headers: { Accept: 'application/x-chess-pgn' } });
     if (!res.ok) return null;
     const text = await res.text();
     return text.trim() || null;
+  };
+  try {
+    return await load(`/api/lichess-proxy?path=${encodeURIComponent(`game/export/${id}`)}`)
+      ?? await load(`https://lichess.org/game/export/${encodeURIComponent(id)}`);
   } catch {
     return null;
+  }
+}
+
+/** Belirtilen güne ait Lichess oyunları (meta, PGN yok) */
+export async function fetchLichessGamesForDay(
+  username: string,
+  day: string = new Date().toISOString().slice(0, 10),
+): Promise<LichessGame[]> {
+  const trimmed = username.trim();
+  if (!trimmed) return [];
+  const target = day.slice(0, 10);
+  const [y, m, d] = target.split('-').map(Number);
+  if (!y || !m || !d) return [];
+  const since = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+  try {
+    const params = new URLSearchParams();
+    params.set('max', '20');
+    params.set('moves', '0');
+    params.set('since', String(since));
+    const res = await lichessApiFetch(
+      `games/user/${encodeURIComponent(trimmed)}`,
+      { headers: { Accept: 'application/x-ndjson' } },
+      params,
+    );
+    if (!res.ok) return [];
+    const games = parseNdjsonGames(await res.text()).filter((g) => lichessGameInvolvesUser(g, trimmed));
+    return dedupeLichessGamesById(
+      games.filter((g) => {
+        const ts = lichessGameTimestamp(g);
+        return ts > 0 && timestampMatchesDay(ts, target);
+      }),
+    );
+  } catch {
+    return [];
   }
 }
 
@@ -898,26 +990,162 @@ export function lichessPerfLabel(key: string): string {
 
 /**
  * Lichess kullanıcı aktivite akışını çeker.
+ * Aynı kullanıcı için eşzamanlı/tekrarlayan istekler önbellek ve tek uçuş birleştirmesiyle sınırlanır.
  */
 export async function fetchLichessActivity(username: string): Promise<LichessActivity[]> {
   const trimmed = username.trim();
   if (!trimmed) return [];
+  const key = lichessActivityCacheKey(trimmed);
+  const now = Date.now();
+  const cached = lichessActivityCache.get(key);
+  if (cached) {
+    const ttl = cached.rateLimited ? LICHESS_ACTIVITY_RATE_LIMIT_MS : LICHESS_ACTIVITY_CACHE_TTL_MS;
+    if (now - cached.fetchedAt < ttl) return cached.data;
+  }
+
+  const inflight = lichessActivityInFlight.get(key);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const res = await lichessApiFetch(`user/${encodeURIComponent(trimmed)}/activity`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (res.status === 429) {
+        const fallback = cached?.data ?? [];
+        lichessActivityCache.set(key, { fetchedAt: Date.now(), data: fallback, rateLimited: true });
+        return fallback;
+      }
+      if (!res.ok) {
+        lichessActivityCache.set(key, { fetchedAt: Date.now(), data: [] });
+        return [];
+      }
+      const data = await res.json();
+      const activities = Array.isArray(data) ? (data as LichessActivity[]) : [];
+      lichessActivityCache.set(key, { fetchedAt: Date.now(), data: activities });
+      return activities;
+    } catch (err) {
+      lichessActivityCache.set(key, { fetchedAt: Date.now(), data: cached?.data ?? [], rateLimited: true });
+      return cached?.data ?? [];
+    } finally {
+      lichessActivityInFlight.delete(key);
+    }
+  })();
+
+  lichessActivityInFlight.set(key, promise);
+  return promise;
+}
+
+function lichessGameTimestamp(game: LichessGame): number {
+  return game.lastMoveAt ?? game.createdAt ?? 0;
+}
+
+/** Aktivite API 429 olduğunda günlük maç sayısı için yedek: /api/games/user */
+export async function fetchLichessGamesCountForDay(
+  username: string,
+  day: string = new Date().toISOString().slice(0, 10),
+): Promise<number> {
+  const trimmed = username.trim();
+  if (!trimmed) return 0;
+  const target = day.slice(0, 10);
+  const [y, m, d] = target.split('-').map(Number);
+  if (!y || !m || !d) return 0;
+  const since = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
   try {
-    const res = await fetch(`${LICHESS_API}/user/${encodeURIComponent(trimmed)}/activity`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data) ? (data as LichessActivity[]) : [];
+    const params = new URLSearchParams();
+    params.set('max', '100');
+    params.set('moves', '0');
+    params.set('since', String(since));
+    const res = await lichessApiFetch(
+      `games/user/${encodeURIComponent(trimmed)}`,
+      { headers: { Accept: 'application/x-ndjson' } },
+      params,
+    );
+    if (!res.ok) return 0;
+    const games = parseNdjsonGames(await res.text()).filter((g) => lichessGameInvolvesUser(g, trimmed));
+    return games.filter((g) => {
+      const ts = lichessGameTimestamp(g);
+      return ts > 0 && timestampMatchesDay(ts, target);
+    }).length;
   } catch {
-    return [];
+    return 0;
+  }
+}
+
+function isLichessActivityRateLimited(username: string): boolean {
+  const cached = lichessActivityCache.get(lichessActivityCacheKey(username));
+  return !!cached?.rateLimited;
+}
+
+function lichessGamesForDayFromActivity(activities: LichessActivity[], day: string): number {
+  const target = day.slice(0, 10);
+  for (const row of activities) {
+    if (!row.interval?.start) continue;
+    if (!timestampMatchesDay(row.interval.start, target)) continue;
+    const games = row.games;
+    if (!games) continue;
+    let total = 0;
+    for (const mode of Object.values(games)) {
+      if (!mode || typeof mode !== 'object') continue;
+      total += (mode.win || 0) + (mode.loss || 0) + (mode.draw || 0);
+    }
+    return total;
+  }
+  return 0;
+}
+
+function lichessPuzzleStatsForDayFromActivity(activities: LichessActivity[], day: string): DailyPuzzleActivityStats {
+  const target = day.slice(0, 10);
+  for (const row of activities) {
+    if (!row.interval?.start) continue;
+    if (!timestampMatchesDay(row.interval.start, target)) continue;
+
+    const puzzles = row.puzzles;
+    if (!puzzles) continue;
+
+    const count = typeof puzzles.count === 'number' ? puzzles.count : 0;
+    if (count > 0) {
+      const win = puzzles.score?.win ?? 0;
+      const loss = puzzles.score?.loss ?? 0;
+      if (loss > 0 && win <= 0) {
+        return { count, passed: 0, failed: count };
+      }
+      if (win > 0 && loss > 0) {
+        const passed = Math.max(0, Math.min(count, Math.round(win / 6)));
+        return { count, passed, failed: Math.max(0, count - passed) };
+      }
+      return { count, passed: count, failed: 0 };
+    }
+  }
+  return { count: 0, passed: 0, failed: 0 };
+}
+
+/** Tek Lichess aktivite isteğiyle günlük maç + bulmaca özeti */
+export async function fetchLichessDayStats(
+  username: string,
+  day: string = new Date().toISOString().slice(0, 10),
+): Promise<{ games: number; puzzles: DailyPuzzleActivityStats; activityRateLimited: boolean }> {
+  try {
+    const activities = await fetchLichessActivity(username);
+    const activityRateLimited = isLichessActivityRateLimited(username);
+    let games = lichessGamesForDayFromActivity(activities, day);
+    const puzzles = lichessPuzzleStatsForDayFromActivity(activities, day);
+    if (games === 0 && (activities.length === 0 || activityRateLimited)) {
+      games = await fetchLichessGamesCountForDay(username, day);
+    }
+    return { games, puzzles, activityRateLimited: isLichessActivityRateLimited(username) };
+  } catch {
+    const games = await fetchLichessGamesCountForDay(username, day).catch(() => 0);
+    return { games, puzzles: { count: 0, passed: 0, failed: 0 }, activityRateLimited: true };
   }
 }
 
 function puzzleAttemptOnDay(isoDate: string | undefined, day: string): boolean {
   if (!isoDate) return false;
   try {
-    return new Date(isoDate).toISOString().slice(0, 10) === day.slice(0, 10);
+    const ms = new Date(isoDate).getTime();
+    if (!Number.isFinite(ms)) return false;
+    return timestampMatchesDay(ms, day);
   } catch {
     return false;
   }
@@ -933,35 +1161,6 @@ export interface DailyPuzzleActivityStats {
 }
 
 /**
- * Lichess aktivite akışından belirtilen güne ait oyun sayısı (tüm hız modları).
- */
-export async function fetchLichessGamesForDay(
-  username: string,
-  day: string = new Date().toISOString().slice(0, 10),
-): Promise<number> {
-  try {
-    const activities = await fetchLichessActivity(username);
-    const target = day.slice(0, 10);
-    for (const row of activities) {
-      if (!row.interval?.start) continue;
-      const d = new Date(row.interval.start).toISOString().slice(0, 10);
-      if (d !== target) continue;
-      const games = row.games;
-      if (!games) return 0;
-      let total = 0;
-      for (const mode of Object.values(games)) {
-        if (!mode || typeof mode !== 'object') continue;
-        total += (mode.win || 0) + (mode.loss || 0) + (mode.draw || 0);
-      }
-      return total;
-    }
-    return 0;
-  } catch {
-    return 0;
-  }
-}
-
-/**
  * Chess.com aylık arşivden belirtilen güne ait oyun sayısı.
  */
 export async function fetchChessComGamesForDay(
@@ -974,14 +1173,14 @@ export async function fetchChessComGamesForDay(
   const [y, m] = target.split('-');
   if (!y || !m) return 0;
   try {
-    const res = await fetch(`${CHESSCOM_API}/player/${encodeURIComponent(trimmed)}/games/${y}/${m}`);
+    const res = await chessComGamesFetch(trimmed, y, m);
     if (!res.ok) return 0;
     const data = (await res.json()) as { games?: ChessComGame[] };
     return (data.games ?? []).filter(
       (g) =>
         chessComGameInvolvesUser(g, trimmed) &&
         g.end_time &&
-        new Date(g.end_time * 1000).toISOString().slice(0, 10) === target,
+        localDayKeyFromMs(g.end_time * 1000) === target,
     ).length;
   } catch {
     return 0;
@@ -997,30 +1196,7 @@ export async function fetchLichessDailyPuzzleStats(
 ): Promise<DailyPuzzleActivityStats> {
   try {
     const activities = await fetchLichessActivity(username);
-    const target = day.slice(0, 10);
-    for (const row of activities) {
-      if (!row.interval?.start) continue;
-      const d = new Date(row.interval.start).toISOString().slice(0, 10);
-      if (d !== target) continue;
-
-      const puzzles = row.puzzles;
-      if (!puzzles) return { count: 0, passed: 0, failed: 0 };
-
-      const count = typeof puzzles.count === 'number' ? puzzles.count : 0;
-      if (count > 0) {
-        const win = puzzles.score?.win ?? 0;
-        const loss = puzzles.score?.loss ?? 0;
-        if (loss > 0 && win <= 0) {
-          return { count, passed: 0, failed: count };
-        }
-        if (win > 0 && loss > 0) {
-          const passed = Math.max(0, Math.min(count, Math.round(win / 6)));
-          return { count, passed, failed: Math.max(0, count - passed) };
-        }
-        return { count, passed: count, failed: 0 };
-      }
-    }
-    return { count: 0, passed: 0, failed: 0 };
+    return lichessPuzzleStatsForDayFromActivity(activities, day);
   } catch {
     return { count: 0, passed: 0, failed: 0 };
   }
@@ -1036,14 +1212,13 @@ export async function fetchChessComDailyPuzzleStats(
   const bundle = await fetchChessComPuzzlesBundle(username);
   if (!bundle) return { count: 0, passed: 0, failed: 0 };
   const target = day.slice(0, 10);
-  const today = [...bundle.rated, ...bundle.learning, ...bundle.rush].filter((a) =>
-    puzzleAttemptOnDay(a.date, target),
-  );
-  const passed = today.filter((a) => a.passed).length;
+  const ratedToday = bundle.rated.filter((a) => puzzleAttemptOnDay(a.date, target));
+  const unique = dedupeChessComPuzzleAttempts(ratedToday);
+  const passed = unique.filter((a) => a.passed).length;
   return {
     count: passed,
     passed,
-    failed: today.filter((a) => !a.passed).length,
+    failed: unique.filter((a) => !a.passed).length,
   };
 }
 
