@@ -826,7 +826,7 @@ const Homework: React.FC = () => {
   return (
     <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-700">
       {/* Header */}
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 rounded-2xl border border-white/[0.06] bg-[#0f172a]/50 backdrop-blur-sm px-5 py-4">
+      <div className="relative z-30 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 rounded-2xl border border-white/[0.06] bg-[#0f172a]/50 backdrop-blur-sm px-5 py-4">
         <div className="flex items-start gap-4">
           <div className="hidden sm:flex w-11 h-11 rounded-xl premium-gradient items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
             <CheckSquare className="w-5 h-5 text-white" />
@@ -892,14 +892,14 @@ const Homework: React.FC = () => {
             <span className="hidden sm:inline">Yenile</span>
           </button>
           {homeworks.length > 0 && (
-          <div className="relative flex-1 sm:flex-none">
+          <div className="relative z-40 flex-1 sm:flex-none">
             <button onClick={() => setShowHwPicker(!showHwPicker)} className="flex items-center gap-2 w-full sm:w-auto px-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-xl text-sm font-semibold text-white hover:bg-white/[0.08] transition-all">
               <Filter className="w-4 h-4 text-indigo-400 shrink-0" />
               <span className="truncate max-w-[140px]">{selectedHw?.title || 'Tüm Ödevler'}</span>
               <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform shrink-0 ${showHwPicker ? 'rotate-180' : ''}`} />
             </button>
             {showHwPicker && (
-              <div className="absolute right-0 top-full mt-2 w-80 bg-[#0f172a] border border-white/10 rounded-lg shadow-2xl z-[200] overflow-hidden">
+              <div className="absolute right-0 top-full mt-2 w-80 bg-[#0f172a] border border-white/10 rounded-lg shadow-2xl z-50 overflow-hidden">
                 <div className="max-h-[min(70vh,480px)] overflow-y-auto custom-scrollbar">
                   <button
                     onClick={() => { setSelectedHwId(ALL_HOMEWORKS_ID); setAnalysisView('list'); setShowHwPicker(false); }}
@@ -1242,7 +1242,7 @@ const Homework: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[260px_1fr] gap-5">
+      <div className="relative z-0 grid grid-cols-1 xl:grid-cols-[260px_1fr] gap-5">
         <HomeworkTargetSelector
           target={targetFilter}
           onChange={handleTargetChange}

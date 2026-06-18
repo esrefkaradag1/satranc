@@ -47,6 +47,7 @@ import {
   EnginePvInteractiveMoves,
   EngineLinePreviewPortal,
   buildPvHoverHandler,
+  fenAfterUciPlies,
   type PvHoverState,
   type LinePreviewState,
 } from '../lib/enginePvPreview';
@@ -3177,6 +3178,15 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     [boardDisplayFen, enginePvLines],
   );
 
+  const onEnginePvClickPly = useCallback((lineIndex: number, plyIndex: number) => {
+    const line = enginePvLines[lineIndex];
+    if (!line?.pv?.length || plyIndex < 0 || plyIndex >= line.pv.length) return;
+    setEnginePvHovered(null);
+    setEnginePvLinePreview(null);
+    const nextFen = fenAfterUciPlies(boardDisplayFen, line.pv, plyIndex + 1);
+    if (nextFen) setHoverFen(nextFen);
+  }, [enginePvLines, boardDisplayFen]);
+
   useEffect(() => {
     if (!enginePanelActive) {
       setEnginePvHovered(null);
@@ -5040,6 +5050,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                                     lineIndex={slotIdx}
                                     hovered={enginePvHovered}
                                     onHoverPly={onEnginePvHoverPly}
+                                    onClickPly={onEnginePvClickPly}
                                     theme="classroom"
                                     maxMoves={10}
                                   />

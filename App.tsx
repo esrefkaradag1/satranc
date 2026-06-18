@@ -138,6 +138,8 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   const [activeTab, setActiveTabRaw] = useState(initial.tab);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initial.studentId);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarDesktopExpanded, setSidebarDesktopExpanded] = useState(true);
+  const sidebarIconOnlyDefault = activeTab === 'lessons';
 
   const setActiveTab = useCallback((tab: string, studentId?: string | null) => {
     setActiveTabRaw(tab);
@@ -249,9 +251,11 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
           onLogout={onLogout}
           mobileOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
+          defaultIconOnly={sidebarIconOnlyDefault}
+          onDesktopExpandedChange={setSidebarDesktopExpanded}
         />
 
-        <main className="flex-1 min-w-0 ml-0 lg:ml-64 min-h-screen flex flex-col relative overflow-x-hidden">
+        <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
           <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
 
           <header className="h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 transition-all duration-500 bg-[#020617]/40 backdrop-blur-xl border-b border-white/5 shrink-0">
@@ -379,11 +383,22 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
 
   const sidebarTab = COACH_TAB_IDS.has(activeTab) ? activeTab : (activeTab === 'student-detail' ? 'student-list' : defaultCoachTab);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarDesktopExpanded, setSidebarDesktopExpanded] = useState(true);
+  const sidebarIconOnlyDefault = activeTab === 'lessons';
 
   return (
     <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
-      <Sidebar activeTab={sidebarTab} setActiveTab={handleSidebarTab} navCategories={COACH_NAV_CATEGORIES} onLogout={onLogout} mobileOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <main className="flex-1 min-w-0 ml-0 lg:ml-64 min-h-screen flex flex-col relative overflow-x-hidden">
+      <Sidebar
+        activeTab={sidebarTab}
+        setActiveTab={handleSidebarTab}
+        navCategories={COACH_NAV_CATEGORIES}
+        onLogout={onLogout}
+        mobileOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        defaultIconOnly={sidebarIconOnlyDefault}
+        onDesktopExpandedChange={setSidebarDesktopExpanded}
+      />
+      <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
         <header className="h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/40 backdrop-blur-xl border-b border-white/5 shrink-0">
           <div className="flex items-center gap-3 sm:gap-6 min-w-0">

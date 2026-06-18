@@ -285,6 +285,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     }
   }, []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarDesktopExpanded, setSidebarDesktopExpanded] = useState(true);
+  const sidebarIconOnlyDefault = activeTab === 'live-lesson';
   const [showLoginInfoModal, setShowLoginInfoModal] = useState(false);
   const [loginPhone, setLoginPhone] = useState('');
   const [loginPin, setLoginPin] = useState('');
@@ -875,9 +877,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         onLogout={handleLogout}
         mobileOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        defaultIconOnly={sidebarIconOnlyDefault}
+        onDesktopExpandedChange={setSidebarDesktopExpanded}
       />
 
-      <main className="flex-1 min-w-0 ml-0 lg:ml-64 min-h-screen flex flex-col relative overflow-x-hidden">
+      <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
         <header className="relative z-10 h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/60 backdrop-blur-2xl border-b border-white/[0.06] shrink-0 shadow-lg shadow-black/5">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
