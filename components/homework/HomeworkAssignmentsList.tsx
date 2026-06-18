@@ -8,6 +8,7 @@ import {
   homeworkEndDateLabel,
   homeworkStatusLabel,
 } from '../../lib/homeworkAnalysisUtils';
+import { homeworkHasPlatformGoals } from '../../lib/homeworkStatsBuilders';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
 
 type Props = {
@@ -17,6 +18,7 @@ type Props = {
   submissions: HomeworkSubmission[];
   onOpenDetail: (homeworkId: string) => void;
   isStudentActive?: (studentId: string) => boolean;
+  variant?: 'internal' | 'platform';
 };
 
 export const HomeworkAssignmentsList: React.FC<Props> = ({
@@ -26,6 +28,7 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
   submissions,
   onOpenDetail,
   isStudentActive,
+  variant = 'internal',
 }) => {
   const sorted = [...homeworks].sort((a, b) => {
     const da = a.endDate || a.dueDate || a.startDate || '';
@@ -58,7 +61,9 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
               <th className="text-left py-3 px-4 font-bold">Başlık</th>
               <th className="text-left py-3 px-3 font-bold hidden md:table-cell">Şube</th>
               <th className="text-left py-3 px-3 font-bold">Grup</th>
-              <th className="text-center py-3 px-3 font-bold">Bulmaca</th>
+              <th className="text-center py-3 px-3 font-bold">
+                {variant === 'platform' ? 'Program' : 'Bulmaca'}
+              </th>
               <th className="text-center py-3 px-3 font-bold">Katılım</th>
               <th className="text-center py-3 px-3 font-bold hidden sm:table-cell">Bitiş</th>
               <th className="text-center py-3 px-4 font-bold">İşlem</th>
@@ -91,10 +96,22 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
                   <td data-label="Grup" className="py-3 px-3 text-slate-300 text-xs max-w-[180px]">
                     <span className="line-clamp-2">{getHomeworkGroupLabel(hw, students)}</span>
                   </td>
-                  <td data-label="Bulmaca" className="py-3 px-3 text-center">
-                    <span className="inline-flex px-2.5 py-1 rounded-full bg-indigo-500/15 text-indigo-300 text-[11px] font-bold">
-                      {hw.puzzles.length} Bulmaca
-                    </span>
+                  <td data-label={variant === 'platform' ? 'Program' : 'Bulmaca'} className="py-3 px-3 text-center">
+                    {variant === 'platform' ? (
+                      <span
+                        className={`inline-flex px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                          homeworkHasPlatformGoals(hw)
+                            ? 'bg-violet-500/15 text-violet-300'
+                            : 'bg-slate-500/15 text-slate-400'
+                        }`}
+                      >
+                        {homeworkHasPlatformGoals(hw) ? 'Lichess + Chess.com' : 'Hedef ayarla'}
+                      </span>
+                    ) : (
+                      <span className="inline-flex px-2.5 py-1 rounded-full bg-indigo-500/15 text-indigo-300 text-[11px] font-bold">
+                        {hw.puzzles.length} Bulmaca
+                      </span>
+                    )}
                   </td>
                   <td data-label="Katılım" className="py-3 px-3 text-center">
                     <span

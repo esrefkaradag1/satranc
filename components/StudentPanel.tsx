@@ -825,12 +825,17 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [activeTab, refreshStudentHomeworks]);
 
   useEffect(() => {
-    if (activeTab !== 'puzzles' || !platformPollEnabledRef.current) return;
+    if (activeTab !== 'puzzles' || !student) return;
+    void refreshTodayExternalStats();
+  }, [activeTab, student?.id, homeworkDayKey, refreshTodayExternalStats]);
+
+  useEffect(() => {
+    if (activeTab !== 'puzzles' || !student) return;
     const id = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refreshTodayExternalStats();
     }, PLATFORM_AUTO_POLL_MS);
     return () => window.clearInterval(id);
-  }, [activeTab, refreshTodayExternalStats]);
+  }, [activeTab, student?.id, homeworkDayKey, refreshTodayExternalStats]);
 
   const [apiSchedule, setApiSchedule] = useState<typeof scheduleEntries>([]);
   useEffect(() => {

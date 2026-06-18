@@ -238,6 +238,8 @@ export interface Puzzle {
   source?: 'lichess' | 'custom';
   /** Lichess ham tema etiketleri (örn. mateIn3 fork) — filtreleme için */
   lichessThemes?: string;
+  /** Orijinal Lichess bulmaca kimliği (UUID dışı) — onarım için */
+  lichessId?: string;
 }
 
 export type AssignmentType = 'group' | 'package';

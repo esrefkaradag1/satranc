@@ -584,11 +584,31 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
     void load();
   }, [load]);
 
+  const lichessPuzzles = platformStats?.lichessPuzzles ?? 0;
+  const lichessPassed = platformStats?.lichessPuzzlePassed ?? 0;
+  const lichessFailed = platformStats?.lichessPuzzleFailed ?? 0;
+  const lichessGames = platformStats?.lichessGames ?? 0;
+  const chessComGames = platformStats?.chessComGames ?? 0;
+  const chessComPuzzles = platformStats?.chessComPuzzles ?? 0;
+  const totalGames = platformStats?.games ?? 0;
+  const totalPuzzlesSolved = platformStats?.puzzleSolved ?? 0;
+
+  const effectivePuzzleTarget = Math.max(
+    dailyPuzzleTarget,
+    lichessPassed + lichessFailed,
+    chessComPuzzles,
+    totalPuzzlesSolved,
+  );
+  const effectiveGameTarget = Math.max(dailyGameTarget, totalGames, lichessGames, chessComGames);
+
   const goalPuzzleRows = useMemo(() => {
-    if (dailyPuzzleTarget <= 0) return [];
+    if (chessComRows.length === 0) return [];
+    if (effectivePuzzleTarget <= 0) {
+      return chessComRows.slice(0, 12);
+    }
     const selected = selectHomeworkGoalPuzzles(
       chessComRows.map((r) => r.attempt),
-      dailyPuzzleTarget,
+      effectivePuzzleTarget,
     );
     const selectedIds = new Set(selected.map((a) => a.id));
     return chessComRows
@@ -597,15 +617,17 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
         (a, b) => selected.findIndex((x) => x.id === a.attempt.id)
           - selected.findIndex((x) => x.id === b.attempt.id),
       );
-  }, [chessComRows, dailyPuzzleTarget]);
+  }, [chessComRows, effectivePuzzleTarget]);
 
-  const lichessPuzzles = platformStats?.lichessPuzzles ?? 0;
-  const lichessPassed = platformStats?.lichessPuzzlePassed ?? 0;
-  const lichessFailed = platformStats?.lichessPuzzleFailed ?? 0;
-  const showLichessSummary = lichessUsername && lichessPuzzles > 0 && dailyPuzzleTarget > 0 && goalPuzzleRows.length === 0;
-  const totalGames = platformStats?.games ?? 0;
-  const gameGoalMet = dailyGameTarget > 0 && totalGames >= dailyGameTarget;
-  const hasContent = showLichessSummary || goalPuzzleRows.length > 0 || dailyGameTarget > 0 || loading;
+  const showLichessPuzzleSummary = lichessUsername && lichessPuzzles > 0 && goalPuzzleRows.length === 0;
+  const gameGoalMet = effectiveGameTarget > 0 && totalGames >= effectiveGameTarget;
+  const hasPlatformActivity = totalGames > 0 || totalPuzzlesSolved > 0;
+  const hasContent = hasPlatformActivity
+    || showLichessPuzzleSummary
+    || goalPuzzleRows.length > 0
+    || effectiveGameTarget > 0
+    || effectivePuzzleTarget > 0
+    || loading;
 
   useEffect(() => {
     if (!onGoalActivityChange) return;
@@ -629,7 +651,8 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
   if (!hasContent && !loadError) {
     return (
       <p className="text-center text-slate-500 py-8 text-sm">
-        {formatDayLabel(viewDate)} için platform bulmacası bulunamadı.
+        {formatDayLabel(viewDate)} için platform aktivitesi bulunamadı.
+        {chessComUsername || lichessUsername ? ' Platform Çek ile yeniden deneyin.' : ''}
       </p>
     );
   }
@@ -641,19 +664,21 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
           <h4 className="text-sm font-bold text-white">Platform Aktiviteleri</h4>
           <p className="text-[11px] text-slate-500 mt-0.5">
             {formatDayLabel(viewDate)}
-            {(dailyPuzzleTarget > 0 || dailyGameTarget > 0) && (
+            {(effectivePuzzleTarget > 0 || effectiveGameTarget > 0) && (
               <>
                 {' · '}
                 Ödev hedefi:
-                {dailyPuzzleTarget > 0 ? ` ${dailyPuzzleTarget} puanlı bulmaca` : ''}
-                {dailyPuzzleTarget > 0 && dailyGameTarget > 0 ? ' ·' : ''}
-                {dailyGameTarget > 0 ? ` ${dailyGameTarget} maç` : ''}
+                {effectivePuzzleTarget > 0 ? ` ${effectivePuzzleTarget} bulmaca` : ''}
+                {effectivePuzzleTarget > 0 && effectiveGameTarget > 0 ? ' ·' : ''}
+                {effectiveGameTarget > 0 ? ` ${effectiveGameTarget} maç` : ''}
               </>
             )}
           </p>
-          <p className="text-[10px] text-slate-600 mt-1">
-            Yalnızca ödev hedefi kadar kayıt gösterilir ({dailyPuzzleTarget} bulmaca{dailyGameTarget > 0 ? ` · ${dailyGameTarget} maç` : ''}).
-          </p>
+          {(effectivePuzzleTarget > 0 || effectiveGameTarget > 0) ? (
+            <p className="text-[10px] text-slate-600 mt-1">
+              Yalnızca ödev hedefi kadar kayıt gösterilir ({effectivePuzzleTarget} bulmaca{effectiveGameTarget > 0 ? ` · ${effectiveGameTarget} maç` : ''}).
+            </p>
+          ) : null}
         </div>
         <button
           type="button"
@@ -665,7 +690,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
         </button>
       </div>
 
-      {showLichessSummary ? (
+      {showLichessPuzzleSummary ? (
         <div className="rounded-xl border border-white/[0.08] bg-[#1a2332]/80 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -701,7 +726,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
         </div>
       ) : null}
 
-      {loading && goalPuzzleRows.length === 0 && dailyGameTarget <= 0 ? (
+      {loading && goalPuzzleRows.length === 0 && !hasPlatformActivity ? (
         <div className="flex items-center justify-center gap-2 py-10 text-slate-400 text-sm">
           <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
           Chess.com bulmacaları yükleniyor…
@@ -712,16 +737,16 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
         <p className="text-sm text-rose-400/90 text-center">{loadError}</p>
       ) : null}
 
-      {goalPuzzleRows.length > 0 || dailyGameTarget > 0 ? (
+      {goalPuzzleRows.length > 0 || lichessGames > 0 || chessComGames > 0 || effectiveGameTarget > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-          {dailyGameTarget > 0 && lichessUsername && (platformStats?.lichessGames ?? 0) > 0 ? (
+          {lichessUsername && lichessGames > 0 ? (
             <LichessMatchGoalCard
               username={lichessUsername}
               viewDate={viewDate}
-              gameTarget={dailyGameTarget}
+              gameTarget={Math.max(effectiveGameTarget, lichessGames)}
               gameGoalMet={gameGoalMet}
             />
-          ) : dailyGameTarget > 0 ? (
+          ) : effectiveGameTarget > 0 ? (
             <div className={`rounded-xl border bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ${gameGoalMet ? 'border-sky-500/35 ring-sky-500/10' : 'border-slate-600/40 ring-slate-500/10'}`}>
               <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2 bg-white/[0.02]">
                 <div className="flex items-center gap-2">
@@ -738,7 +763,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               <div className="px-4 py-5 space-y-2 text-sm">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-500">Toplam maç</span>
-                  <span className="font-bold text-white tabular-nums">{Math.min(totalGames, dailyGameTarget)}/{dailyGameTarget}</span>
+                  <span className="font-bold text-white tabular-nums">{Math.min(totalGames, effectiveGameTarget || totalGames)}/{effectiveGameTarget || totalGames}</span>
                 </div>
                 {chessComUsername ? (
                   <div className="flex items-center justify-between text-xs">
@@ -765,7 +790,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
         onClose={() => setViewerAttempt(null)}
       />
 
-      {chessComUsername && !loading && goalPuzzleRows.length === 0 && dailyPuzzleTarget > 0 && !loadError ? (
+      {chessComUsername && !loading && goalPuzzleRows.length === 0 && effectivePuzzleTarget > 0 && !loadError && chessComPuzzles === 0 ? (
         <p className="text-center text-xs text-slate-500">
           Chess.com&apos;da bu gün için kayıtlı bulmaca yok.
         </p>

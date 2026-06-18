@@ -43,6 +43,13 @@ export function isToday(isoDate: string): boolean {
   return isoDate === todayDayKey();
 }
 
+/** ISO gün anahtarında ±N gün kaydırır */
+export function shiftDayKey(isoDate: string, deltaDays: number): string {
+  const d = new Date(`${isoDate.slice(0, 10)}T12:00:00`);
+  d.setDate(d.getDate() + deltaDays);
+  return todayDayKey(d);
+}
+
 export type DayCompletionStatus = 'done' | 'missed' | 'pending' | 'none';
 
 /** Haftanın pazartesi günü (öğlen, yerel) */

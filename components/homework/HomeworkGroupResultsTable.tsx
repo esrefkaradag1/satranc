@@ -42,7 +42,7 @@ export const HomeworkGroupResultsTable: React.FC<Props> = ({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-bold tabular-nums">
           <span className="text-emerald-400">{totalCorrect} doğru</span>
           <span className="text-rose-400">{totalWrong} yanlış</span>
-          {totalSkipped > 0 && <span className="text-slate-400">{totalSkipped} atlandı</span>}
+          {totalSkipped > 0 && <span className="text-slate-400">{totalSkipped} çözülmedi</span>}
           <span className="text-slate-500">{stats.length} öğrenci</span>
           <span className="text-indigo-300">{completed}/{stats.length} tamamladı</span>
         </div>
@@ -54,7 +54,7 @@ export const HomeworkGroupResultsTable: React.FC<Props> = ({
               <th className="text-left py-2.5 px-4 font-bold">Öğrenci</th>
               <th className="text-center py-2.5 px-2 font-bold">Doğru</th>
               <th className="text-center py-2.5 px-2 font-bold">Yanlış</th>
-              <th className="text-center py-2.5 px-2 font-bold">Atlandı</th>
+              <th className="text-center py-2.5 px-2 font-bold">Çözülmedi</th>
               <th className="text-center py-2.5 px-2 font-bold hidden sm:table-cell">Toplam süre</th>
               <th className="text-center py-2.5 px-2 font-bold">Durum</th>
               {totalPuzzles > 0 ? (

@@ -4,6 +4,7 @@ import {
   ChevronDown, ChevronUp, Target, ExternalLink, AlertCircle,
 } from 'lucide-react';
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../../types';
+import { evaluatePlatformDailyGoals } from '../../lib/homeworkPlatformUtils';
 
 type FilterKey = 'all' | 'todo' | 'progress' | 'done';
 
@@ -58,6 +59,7 @@ type HwProgress = {
   todayPuzzleAccuracy: number;
   puzzleGoalMet: boolean;
   gameGoalMet: boolean;
+  dailyGoalsMet: boolean;
 };
 
 export function buildHomeworkProgress(
@@ -99,30 +101,44 @@ export function buildHomeworkProgress(
   const dailyPuzzleTarget = Math.max(0, dayTarget?.dailyPuzzleTarget ?? studentTarget?.dailyPuzzleTarget ?? hw.dailyPuzzleTarget ?? 0);
   const dailyGameTarget = Math.max(0, dayTarget?.dailyGameTarget ?? studentTarget?.dailyGameTarget ?? hw.dailyGameTarget ?? 0);
   const minPuzzleAccuracy = Math.max(0, Math.min(100, dayTarget?.minPuzzleAccuracyPct ?? studentTarget?.minPuzzleAccuracyPct ?? hw.minPuzzleAccuracyPct ?? 60));
-  const todayAttempts = studentAttempts.filter((a) => a.timestamp?.slice(0, 10) === todayKey);
-  const todayPuzzleCorrect = todayAttempts.filter((a) => a.correct).length;
-  const todayPuzzleSolved = todayAttempts.length + todayExternalPuzzleCount;
-  const totalPuzzleCorrect = todayPuzzleCorrect + todayExternalPuzzlePassed;
-  const todayPuzzleAccuracy = todayPuzzleSolved > 0 ? (totalPuzzleCorrect / todayPuzzleSolved) * 100 : 0;
-  const puzzleGoalMet = dailyPuzzleTarget <= 0 || (todayPuzzleSolved >= dailyPuzzleTarget && todayPuzzleAccuracy >= minPuzzleAccuracy);
-  const gameGoalMet = dailyGameTarget <= 0 || todayExternalGameCount >= dailyGameTarget;
+  const todayPlatformPuzzleSolved = todayExternalPuzzleCount;
+  const todayPlatformPuzzlePassed = todayExternalPuzzlePassed;
+  const platformGoals = evaluatePlatformDailyGoals(
+    dailyGameTarget,
+    dailyPuzzleTarget,
+    minPuzzleAccuracy,
+    todayExternalGameCount,
+    todayPlatformPuzzleSolved,
+    todayPlatformPuzzlePassed,
+  );
+  const puzzleGoalMet = platformGoals.puzzlesMet;
+  const gameGoalMet = platformGoals.gamesMet;
+  const todayPuzzleAccuracy = platformGoals.puzzleAccuracy;
 
   const nextPuzzle = puzzleStates.find((x) => x.state !== 'done')?.puzzle ?? null;
   const total = hwPuzzles.length;
   const hasDailyTargets = dailyPuzzleTarget > 0 || dailyGameTarget > 0;
-  const dailyGoalsMet = hasDailyTargets && puzzleGoalMet && gameGoalMet;
-  const dailyStarted = hasDailyTargets && (todayPuzzleSolved > 0 || todayExternalGameCount > 0);
+  const dailyGoalsMet = platformGoals.done;
+  const dailyStarted = hasDailyTargets && (todayPlatformPuzzleSolved > 0 || todayExternalGameCount > 0);
   const dailyGoalCount = (dailyGameTarget > 0 ? 1 : 0) + (dailyPuzzleTarget > 0 ? 1 : 0);
   const dailyGoalDoneCount = (dailyGameTarget > 0 && gameGoalMet ? 1 : 0) + (dailyPuzzleTarget > 0 && puzzleGoalMet ? 1 : 0);
-  const progressPct = total > 0
+  const puzzlesDone = total === 0 || solvedCount >= total;
+  let progressPct = total > 0
     ? Math.round((solvedCount / total) * 100)
     : hasDailyTargets
       ? (dailyGoalCount > 0 ? Math.round((dailyGoalDoneCount / dailyGoalCount) * 100) : 0)
       : (submitted ? 100 : 0);
+  if (hasDailyTargets && dailyGoalsMet) {
+    const dailyPct = dailyGoalCount > 0 ? Math.round((dailyGoalDoneCount / dailyGoalCount) * 100) : 100;
+    progressPct = total > 0 ? Math.max(progressPct, dailyPct) : dailyPct;
+  }
 
   let status: HwProgress['status'] = 'Başlamadı';
-  if (submitted || (total > 0 && solvedCount >= total) || (total === 0 && dailyGoalsMet)) status = 'Tamamlandı';
-  else if (studentAttempts.length > 0 || dailyStarted) status = 'Devam Ediyor';
+  if (submitted || (hasDailyTargets && dailyGoalsMet) || (puzzlesDone && !hasDailyTargets)) {
+    status = 'Tamamlandı';
+  } else if (studentAttempts.length > 0 || dailyStarted) {
+    status = 'Devam Ediyor';
+  }
 
   const dueDate = hw.dueDate ? new Date(hw.dueDate) : null;
   const now = new Date();
@@ -147,10 +163,11 @@ export function buildHomeworkProgress(
     puzzleStates,
     dailyPuzzleTarget,
     dailyGameTarget,
-    todayPuzzleSolved,
+    todayPuzzleSolved: todayPlatformPuzzleSolved,
     todayPuzzleAccuracy,
     puzzleGoalMet,
     gameGoalMet,
+    dailyGoalsMet,
   };
 }
 
@@ -294,10 +311,12 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               )}
             </div>
             <div className="text-right shrink-0">
-              {isDailyOnly ? (
+              {isDailyOnly || (hasDaily && item.dailyGoalsMet) ? (
                 <>
                   <p className="text-2xl font-black text-white tabular-nums">{item.progressPct}%</p>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase">günlük hedef</p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase">
+                    {isDailyOnly ? 'günlük hedef' : 'günlük hedef tamam'}
+                  </p>
                 </>
               ) : (
                 <>
@@ -325,7 +344,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
             )}
           </div>
 
-          {hasDaily && item.status !== 'Tamamlandı' && (
+          {hasDaily && (
             <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
               {item.dailyGameTarget > 0 && (
                 <span className={`px-2 py-1 rounded-lg border ${item.gameGoalMet ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
@@ -336,7 +355,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               {item.dailyPuzzleTarget > 0 && (
                 <span className={`px-2 py-1 rounded-lg border ${item.puzzleGoalMet ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
                   Günlük bulmaca {Math.min(item.todayPuzzleSolved, item.dailyPuzzleTarget)}/{item.dailyPuzzleTarget}
-                  {item.todayPuzzleSolved > 0 && item.dailyPuzzleTarget > 0 ? ` · %${Math.round(item.todayPuzzleAccuracy)} doğru` : ''}
+                  {item.todayPuzzleSolved > 0 ? ` · %${Math.round(item.todayPuzzleAccuracy)} doğru` : ''}
                 </span>
               )}
             </div>
@@ -591,7 +610,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
           {!platformStatsFetched && !loadingExternalGameCount && (
             <div className="flex items-start gap-2 rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-3 py-2 text-xs text-indigo-200/90">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>Lichess ve Chess.com verisi otomatik çekilmez. Önce <strong>Platform verisini çek</strong> butonuna tıklayın; sonrasında 10 dakikada bir güncellenir.</span>
+              <span>Lichess ve Chess.com verisi yükleniyor; tamamlanma durumu birkaç saniye içinde güncellenir.</span>
             </div>
           )}
         </>

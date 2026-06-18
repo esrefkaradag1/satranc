@@ -125,6 +125,27 @@ export function evaluateDayGoals(
   };
 }
 
+/** Yalnızca Lichess/Chess.com — öğretmen Günlük Program ve öğrenci paneli aynı mantık. */
+export function evaluatePlatformDailyGoals(
+  gameTarget: number,
+  puzzleTarget: number,
+  minAccuracy: number,
+  games: number,
+  puzzleSolved: number,
+  puzzlePassed: number,
+): { gamesMet: boolean; puzzlesMet: boolean; done: boolean; puzzleAccuracy: number } {
+  const puzzleAccuracy = puzzleSolved > 0 ? (puzzlePassed / puzzleSolved) * 100 : 0;
+  const gamesMet = gameTarget <= 0 || games >= gameTarget;
+  const puzzlesMet = puzzleTarget <= 0 || (puzzleSolved >= puzzleTarget && puzzleAccuracy >= minAccuracy);
+  const hasTargets = gameTarget > 0 || puzzleTarget > 0;
+  return {
+    gamesMet,
+    puzzlesMet,
+    done: hasTargets && gamesMet && puzzlesMet,
+    puzzleAccuracy,
+  };
+}
+
 export function weekdayFromIso(iso: string): number {
   return weekdayKeyFromIso(iso);
 }

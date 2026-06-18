@@ -34,6 +34,11 @@ export const testConnection = async () => {
 /** Service role client — tek instance (Multiple GoTrueClient uyarısını önler) */
 let serviceSupabase: SupabaseClient | null = null;
 
+/** Canlı ders okuma: service role varsa onu, yoksa anon (öğrenci paneli sohbet senkronu). */
+export const getLiveLessonReadClient = (): SupabaseClient => {
+  return getServiceSupabase() ?? supabase;
+};
+
 /** Service role client; anahtar yoksa null (localStorage modunda yazma yapılmaz). */
 export const getServiceSupabase = (): SupabaseClient | null => {
   if (serviceSupabase) return serviceSupabase;

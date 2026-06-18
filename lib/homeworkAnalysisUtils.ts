@@ -15,7 +15,7 @@ export type StudentHwStat = {
   status: 'Tamamlandı' | 'Devam Ediyor' | 'Başlamadı';
 };
 
-/** Ödevdeki her bulmaca için doğru / yanlış / atlandı sayar */
+/** Ödevdeki her bulmaca için doğru / yanlış / çözülmedi sayar */
 export function countPerPuzzleResults(
   puzzleIds: string[],
   attempts: HomeworkPuzzleAttempt[],
@@ -150,9 +150,8 @@ export function buildStudentStatsForHomework(
       if (!solved) return sum;
       return sum + (puzzles.find((p) => p.id === puzzleId)?.points ?? 0);
     }, 0);
-    const answered = correct + wrong;
-    const progress = totalPuzzles > 0 ? Math.round((answered / totalPuzzles) * 100) : 0;
-    const status = homeworkStatusFromAttempts(submitted, totalPuzzles, studentAttempts.length, answered);
+    const progress = totalPuzzles > 0 ? Math.round((correct / totalPuzzles) * 100) : 0;
+    const status = homeworkStatusFromAttempts(submitted, totalPuzzles, studentAttempts.length, correct);
     const timeSeconds = studentTotalThinkSeconds(studentAttempts);
 
     return {

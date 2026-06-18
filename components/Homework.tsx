@@ -16,14 +16,16 @@ import type { HomeworkAssignment, Student, Puzzle, StudentDailyTarget } from '..
 import { HomeworkTargetSelector } from './homework/HomeworkTargetSelector';
 import { HomeworkAssignmentsList } from './homework/HomeworkAssignmentsList';
 import { HomeworkAssignmentDetail } from './homework/HomeworkAssignmentDetail';
+import { DailyProgramAssignmentDetail } from './homework/DailyProgramAssignmentDetail';
 import { StudentPuzzleDetailModal } from './homework/StudentPuzzleDetailModal';
-import { WeeklyScheduleGrid } from './homework/WeeklyScheduleGrid';
+import { StudentPlatformDetailModal } from './homework/StudentPlatformDetailModal';
 import { StudyControlSection } from './homework/StudyControlSection';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import {
   EMPTY_TARGET,
   filterStudentsByTarget,
+  PROGRAM_BULK_EDIT_ID,
   type HomeworkPanelTab,
   type TargetFilter,
 } from '../lib/homeworkPanelUtils';
@@ -33,7 +35,6 @@ import {
   fetchLichessDayStats,
 } from '../services/chessPlatformService';
 import {
-  capDailyPuzzleDisplay,
   evaluateDayGoals,
   fetchStudentPlatformActivityTimeSeconds,
   fetchStudentPlatformDayStats,
@@ -41,6 +42,12 @@ import {
   resolveDayTargets,
   type PlatformDayStats,
 } from '../lib/homeworkPlatformUtils';
+import {
+  buildInternalHomeworkStats,
+  buildPlatformHomeworkStats,
+  resolveProgramDailyTarget,
+  type PlatformStudentStat,
+} from '../lib/homeworkStatsBuilders';
 import { isToday, todayDayKey, weekdayKeyFromIso, mondayOfWeek, isoDateForWeekday, type DayCompletionStatus } from '../lib/homeworkDayUtils';
 
 /** Platform API otomatik kontrol aralığı (manuel yenileme sonrası / sekme açıkken) */
@@ -50,18 +57,6 @@ import {
   studentTotalThinkSeconds,
   type StudentHwStat,
 } from '../lib/homeworkAnalysisUtils';
-
-interface StudentHwStatWithDaily extends StudentHwStat {
-  dailyGoalDone?: boolean;
-  todayGames?: number;
-  todayPuzzleSolved?: number;
-  todayPuzzleAccuracy?: number;
-  dailyGameTarget?: number;
-  dailyPuzzleTarget?: number;
-  minPuzzleAccuracyPct?: number;
-  todayPuzzleCorrect?: number;
-  todayPuzzleWrong?: number;
-}
 
 function numericTargetDisplay(v: number | undefined): number | '' {
   if (v === undefined) return '';
@@ -76,89 +71,6 @@ function parseNumericTargetInput(raw: string): number | undefined {
 
 function clearZeroOnFocus(v: number | undefined): number | undefined {
   return (v ?? 0) === 0 ? undefined : v;
-}
-
-function homeworkStatusFromPuzzles(
-  submitted: boolean,
-  totalPuzzles: number,
-  attemptCount: number,
-  solvedCount: number,
-): StudentHwStat['status'] {
-  if (submitted) return 'Tamamlandı';
-  if (totalPuzzles === 0) return attemptCount === 0 ? 'Başlamadı' : 'Devam Ediyor';
-  if (attemptCount === 0) return 'Başlamadı';
-  if (solvedCount >= totalPuzzles) return 'Tamamlandı';
-  return 'Devam Ediyor';
-}
-
-/** Günlük hedef varsa kart üstündeki doğru/yanlış/ilerleme/durum günlük veriden türetilir.
- *  Bulmaca ödevinde kayıtlı deneme varsa puzzle istatistikleri korunur (BAŞLAMADI hatası önlenir). */
-function applyDailyDisplayToStat(
-  stat: StudentHwStat,
-  opts?: { hasPuzzleHomework?: boolean; attemptCount?: number },
-): StudentHwStat {
-  const hasPuzzleHomework = opts?.hasPuzzleHomework ?? false;
-  const attemptCount = opts?.attemptCount ?? (stat.correct + stat.wrong);
-  const dailyGameTarget = stat.dailyGameTarget ?? 0;
-  const dailyPuzzleTarget = stat.dailyPuzzleTarget ?? 0;
-  const hasDailyTargets = dailyGameTarget > 0 || dailyPuzzleTarget > 0;
-  if (!hasDailyTargets) return stat;
-
-  const todayGames = stat.todayGames ?? 0;
-  const todayPuzzleSolved = stat.todayPuzzleSolved ?? 0;
-  const todayPuzzleCorrect = stat.todayPuzzleCorrect ?? 0;
-  const todayPuzzleWrong = stat.todayPuzzleWrong ?? 0;
-  const hasDailyActivity = todayGames > 0 || todayPuzzleSolved > 0;
-  const hasHwActivity = attemptCount > 0;
-
-  const progressParts: number[] = [];
-  if (dailyGameTarget > 0) progressParts.push(Math.min(100, (todayGames / dailyGameTarget) * 100));
-  if (dailyPuzzleTarget > 0) progressParts.push(Math.min(100, (todayPuzzleSolved / dailyPuzzleTarget) * 100));
-  const dailyProgress = progressParts.length
-    ? Math.round(progressParts.reduce((a, b) => a + b, 0) / progressParts.length)
-    : stat.progress;
-
-  if (hasPuzzleHomework && hasHwActivity) {
-    return stat;
-  }
-
-  if (hasPuzzleHomework && hasDailyActivity) {
-    return {
-      ...stat,
-      status: stat.dailyGoalDone ? 'Tamamlandı' : 'Devam Ediyor',
-      progress: stat.dailyGoalDone ? 100 : Math.max(stat.progress, dailyProgress),
-    };
-  }
-
-  let status = stat.status;
-  if (stat.dailyGoalDone) {
-    status = 'Tamamlandı';
-  } else if (hasDailyActivity || hasHwActivity) {
-    status = 'Devam Ediyor';
-  } else {
-    status = 'Başlamadı';
-  }
-
-  const capped = capDailyPuzzleDisplay(todayPuzzleCorrect, todayPuzzleWrong, dailyPuzzleTarget);
-
-  return {
-    ...stat,
-    correct: capped.correct,
-    wrong: capped.wrong,
-    progress: stat.dailyGoalDone ? 100 : dailyProgress,
-    status,
-  };
-}
-
-function mergeHomeworkTimeSeconds(
-  hwTimeSeconds: number,
-  studentId: string,
-  dailyGameTarget: number,
-  dailyPuzzleTarget: number,
-  platformTimeByStudent: Record<string, number>,
-): number {
-  if (dailyGameTarget <= 0 && dailyPuzzleTarget <= 0) return hwTimeSeconds;
-  return hwTimeSeconds + (platformTimeByStudent[studentId] ?? 0);
 }
 
 function formatTime(seconds: number): string {
@@ -181,21 +93,6 @@ function thinkSecondsBetweenAttempts(
   );
   if (sec <= 0 || sec > 7200) return null;
   return sec;
-}
-
-function computeDailyPuzzleProgress(
-  internalSolved: number,
-  internalCorrect: number,
-  externalSolved: number,
-  externalPassed: number,
-  externalFailed: number,
-) {
-  const todayPuzzleSolved = internalSolved + externalSolved;
-  const totalCorrect = internalCorrect + externalPassed;
-  const todayPuzzleWrong = Math.max(0, internalSolved - internalCorrect) + externalFailed;
-  const todayPuzzleAccuracy =
-    todayPuzzleSolved > 0 ? (totalCorrect / todayPuzzleSolved) * 100 : 0;
-  return { todayPuzzleSolved, todayPuzzleAccuracy, todayPuzzleCorrect: totalCorrect, todayPuzzleWrong };
 }
 
 const Homework: React.FC = () => {
@@ -242,6 +139,9 @@ const Homework: React.FC = () => {
   const [panelTab, setPanelTab] = useState<HomeworkPanelTab>('odev');
   const [targetFilter, setTargetFilter] = useState<TargetFilter>(EMPTY_TARGET);
   const [programStudentId, setProgramStudentId] = useState<string | null>(null);
+  const [programAnalysisView, setProgramAnalysisView] = useState<'list' | 'detail'>('list');
+  const [programSelectedHwId, setProgramSelectedHwId] = useState<string | null>(null);
+  const [programDetailStat, setProgramDetailStat] = useState<PlatformStudentStat | null>(null);
   const [viewDate, setViewDate] = useState(() => todayDayKey());
   const [analysisView, setAnalysisView] = useState<'list' | 'detail'>('list');
 
@@ -277,6 +177,17 @@ const Homework: React.FC = () => {
   const backToHomeworkList = useCallback(() => {
     setAnalysisView('list');
     setDetailStat(null);
+  }, []);
+
+  const openProgramDetail = useCallback((homeworkId: string) => {
+    setProgramSelectedHwId(homeworkId);
+    setProgramAnalysisView('detail');
+    setProgramDetailStat(null);
+  }, []);
+
+  const backToProgramList = useCallback(() => {
+    setProgramAnalysisView('list');
+    setProgramDetailStat(null);
   }, []);
 
   const handleDeleteHomework = useCallback((homeworkId: string) => {
@@ -346,11 +257,18 @@ const Homework: React.FC = () => {
 
   const assignees = useMemo(() => selectedHw ? getAssignees(selectedHw) : [], [selectedHw, getAssignees]);
 
+  const programHomeworks = filteredHomeworks;
+
+  const programSelectedHw = useMemo(() => {
+    if (!programSelectedHwId) return null;
+    return homeworks.find((h) => h.id === programSelectedHwId) ?? null;
+  }, [programSelectedHwId, homeworks]);
+
   const programHomework = useMemo(() => {
-    if (selectedHw) return selectedHw;
+    if (programSelectedHw) return programSelectedHw;
     if (panelTab !== 'program') return null;
-    return filteredHomeworks[0] ?? null;
-  }, [selectedHw, panelTab, filteredHomeworks]);
+    return programHomeworks[0] ?? null;
+  }, [programSelectedHw, panelTab, programHomeworks]);
 
   const programAssignees = useMemo(
     () => (programHomework ? getAssignees(programHomework) : []),
@@ -362,15 +280,6 @@ const Homework: React.FC = () => {
     [programAssignees],
   );
 
-  const allAssignees = useMemo(() => {
-    if (homeworks.length === 0) return [];
-    const byId = new Map<string, Student>();
-    for (const hw of homeworks) {
-      for (const s of getAssignees(hw)) byId.set(s.id, s);
-    }
-    return Array.from(byId.values());
-  }, [homeworks, getAssignees]);
-
   useEffect(() => {
     if (!programHomework) {
       setDailyTargetDrafts({});
@@ -378,19 +287,23 @@ const Homework: React.FC = () => {
     }
     const next: Record<string, StudentDailyTarget> = {};
     programAssignees.forEach((student) => {
-      const target = programHomework.studentDailyTargets?.[student.id];
-      next[student.id] = {
-        dailyGameTarget: target?.dailyGameTarget ?? programHomework.dailyGameTarget ?? 0,
-        dailyPuzzleTarget: target?.dailyPuzzleTarget ?? programHomework.dailyPuzzleTarget ?? 0,
-        minPuzzleAccuracyPct: target?.minPuzzleAccuracyPct ?? programHomework.minPuzzleAccuracyPct ?? 60,
-        weeklySchedule: target?.weeklySchedule ? { ...target.weeklySchedule } : undefined,
-      };
+      next[student.id] = resolveProgramDailyTarget(student.id, programHomework, homeworks, getAssignees);
     });
     setDailyTargetDrafts(next);
-  }, [programHomework?.id, programAssigneeIdsKey]);
+  }, [programHomework?.id, programAssigneeIdsKey, homeworks, getAssignees]);
 
   const refreshDailyPlatformStats = useCallback(async (opts?: { silent?: boolean }) => {
-    const scopeAssignees = selectedHw ? assignees : allAssignees;
+    const hw = programSelectedHw;
+    if (!hw) {
+      setStudentDailyGameCounts({});
+      setStudentDailyExternalPuzzleCounts({});
+      setStudentDailyExternalPuzzlePassed({});
+      setStudentDailyExternalPuzzleFailed({});
+      setStudentPlatformDayStats({});
+      setStudentPlatformDayTimeSeconds({});
+      return;
+    }
+    const scopeAssignees = getAssignees(hw).filter((s) => targetStudentIds.has(s.id));
     if (scopeAssignees.length === 0) {
       setStudentDailyGameCounts({});
       setStudentDailyExternalPuzzleCounts({});
@@ -486,15 +399,11 @@ const Homework: React.FC = () => {
 
       const timeEntries: [string, number][] = [];
       for (const s of scopeAssignees) {
-        if (!selectedHw) {
-          timeEntries.push([s.id, 0]);
-          continue;
-        }
-        const target = selectedHw.studentDailyTargets?.[s.id];
+        const target = hw.studentDailyTargets?.[s.id];
         const currentDayKey = weekdayKeyFromIso(todayKey);
         const dayTarget = target?.weeklySchedule?.[currentDayKey];
-        const dailyGameTarget = Math.max(0, dayTarget?.dailyGameTarget ?? target?.dailyGameTarget ?? selectedHw.dailyGameTarget ?? 0);
-        const dailyPuzzleTarget = Math.max(0, dayTarget?.dailyPuzzleTarget ?? target?.dailyPuzzleTarget ?? selectedHw.dailyPuzzleTarget ?? 0);
+        const dailyGameTarget = Math.max(0, dayTarget?.dailyGameTarget ?? target?.dailyGameTarget ?? hw.dailyGameTarget ?? 0);
+        const dailyPuzzleTarget = Math.max(0, dayTarget?.dailyPuzzleTarget ?? target?.dailyPuzzleTarget ?? hw.dailyPuzzleTarget ?? 0);
         if (dailyGameTarget <= 0 && dailyPuzzleTarget <= 0) {
           timeEntries.push([s.id, 0]);
           continue;
@@ -520,182 +429,73 @@ const Homework: React.FC = () => {
     } finally {
       setLoadingDailyPlatformStats(false);
     }
-  }, [selectedHw, assignees, allAssignees, viewDate, showToast]);
+  }, [programSelectedHw, getAssignees, targetStudentIds, viewDate, showToast]);
 
   const isStudentDailyActive = useCallback((studentId: string) => {
     return (studentDailyGameCounts[studentId] ?? 0) > 0
       || (studentDailyExternalPuzzleCounts[studentId] ?? 0) > 0;
   }, [studentDailyGameCounts, studentDailyExternalPuzzleCounts]);
 
-  const homeworkHasDailyTargets = useCallback((hw: HomeworkAssignment) => {
-    if ((hw.dailyGameTarget ?? 0) > 0 || (hw.dailyPuzzleTarget ?? 0) > 0) return true;
-    return Object.values(hw.studentDailyTargets ?? {}).some((target) => {
-      if ((target.dailyGameTarget ?? 0) > 0 || (target.dailyPuzzleTarget ?? 0) > 0) return true;
-      return Object.values(target.weeklySchedule ?? {}).some(
-        (day) => (day.dailyGameTarget ?? 0) > 0 || (day.dailyPuzzleTarget ?? 0) > 0,
-      );
-    });
-  }, []);
+  useEffect(() => {
+    if (panelTab !== 'program' || programAnalysisView !== 'detail' || !programSelectedHw) return;
+    void refreshDailyPlatformStats({ silent: true });
+  }, [panelTab, programAnalysisView, programSelectedHw?.id, viewDate, refreshDailyPlatformStats]);
 
   useEffect(() => {
-    if (panelTab !== 'odev' || analysisView !== 'detail' || !selectedHw) return;
-    if (!homeworkHasDailyTargets(selectedHw)) return;
+    if (!programDetailStat || !programSelectedHw) return;
     void refreshDailyPlatformStats({ silent: true });
-  }, [panelTab, analysisView, selectedHw?.id, viewDate, homeworkHasDailyTargets, refreshDailyPlatformStats]);
-
-  useEffect(() => {
-    if (!detailStat || !selectedHw || !homeworkHasDailyTargets(selectedHw)) return;
-    void refreshDailyPlatformStats({ silent: true });
-  }, [detailStat?.studentId, selectedHw?.id, viewDate, homeworkHasDailyTargets, refreshDailyPlatformStats]);
-
-  const buildStatsForHomework = useCallback((hw: HomeworkAssignment): StudentHwStat[] => {
-    const hwAssignees = getAssignees(hw);
-    return hwAssignees.map(student => {
-      const submitted = homeworkSubmissions.some(
-        s => s.studentId === student.id && s.homeworkId === hw.id
-      );
-      const attempts = homeworkAttempts.filter(
-        a => a.homeworkId === hw.id && a.studentId === student.id
-      );
-      const { correct, wrong, skipped } = countPerPuzzleResults(hw.puzzles, attempts);
-      const answered = correct + wrong;
-      const points = hw.puzzles.reduce((sum, puzzleId) => {
-        if (!attempts.some((a) => a.puzzleId === puzzleId && a.correct)) return sum;
-        return sum + (puzzles.find((p) => p.id === puzzleId)?.points ?? 0);
-      }, 0);
-      const totalPuzzles = hw.puzzles.length;
-      const progress = totalPuzzles > 0 ? Math.round((answered / totalPuzzles) * 100) : 0;
-      const status = homeworkStatusFromPuzzles(submitted, totalPuzzles, attempts.length, answered);
-      const hwTimeSeconds = studentTotalThinkSeconds(attempts);
-      const names = student.name.split(' ');
-      const initials = names.length >= 2 ? (names[0][0] + names[names.length - 1][0]).toUpperCase() : student.name.substring(0, 2).toUpperCase();
-      const todayKey = viewDate;
-      const todayAttempts = attempts.filter(a => a.timestamp?.slice(0, 10) === todayKey);
-      const internalTodayPuzzleSolved = todayAttempts.length;
-      const todayPuzzleCorrect = todayAttempts.filter(a => a.correct).length;
-      const { todayPuzzleSolved, todayPuzzleAccuracy, todayPuzzleCorrect: dailyCorrect, todayPuzzleWrong: dailyWrong } = computeDailyPuzzleProgress(
-        internalTodayPuzzleSolved,
-        todayPuzzleCorrect,
-        studentDailyExternalPuzzleCounts[student.id] ?? 0,
-        studentDailyExternalPuzzlePassed[student.id] ?? 0,
-        studentDailyExternalPuzzleFailed[student.id] ?? 0,
-      );
-      const target = hw.studentDailyTargets?.[student.id];
-      const currentDayKey = weekdayKeyFromIso(viewDate);
-      const dayTarget = target?.weeklySchedule?.[currentDayKey];
-
-      const dailyGameTarget = Math.max(0, dayTarget?.dailyGameTarget ?? target?.dailyGameTarget ?? hw.dailyGameTarget ?? 0);
-      const dailyPuzzleTarget = Math.max(0, dayTarget?.dailyPuzzleTarget ?? target?.dailyPuzzleTarget ?? hw.dailyPuzzleTarget ?? 0);
-      const minPuzzleAccuracy = Math.max(0, Math.min(100, dayTarget?.minPuzzleAccuracyPct ?? target?.minPuzzleAccuracyPct ?? hw.minPuzzleAccuracyPct ?? 60));
-
-      const gameGoalMet = dailyGameTarget <= 0 ? true : (studentDailyGameCounts[student.id] ?? 0) >= dailyGameTarget;
-      const puzzleGoalMet = dailyPuzzleTarget <= 0 ? true : (todayPuzzleSolved >= dailyPuzzleTarget && todayPuzzleAccuracy >= minPuzzleAccuracy);
-      const dailyGoalDone = gameGoalMet && puzzleGoalMet;
-      const timeSeconds = mergeHomeworkTimeSeconds(
-        hwTimeSeconds,
-        student.id,
-        dailyGameTarget,
-        dailyPuzzleTarget,
-        studentPlatformDayTimeSeconds,
-      );
-
-      return applyDailyDisplayToStat({
-        studentId: student.id,
-        name: student.name,
-        initials,
-        correct,
-        wrong,
-        skipped,
-        points,
-        timeSeconds,
-        progress: submitted ? Math.max(progress, 100) : (status === 'Başlamadı' ? 0 : progress),
-        status,
-        dailyGoalDone,
-        todayGames: studentDailyGameCounts[student.id] ?? 0,
-        todayPuzzleSolved,
-        todayPuzzleAccuracy,
-        todayPuzzleCorrect: dailyCorrect,
-        todayPuzzleWrong: dailyWrong,
-        dailyGameTarget,
-        dailyPuzzleTarget,
-        minPuzzleAccuracyPct: minPuzzleAccuracy,
-      }, { hasPuzzleHomework: hw.puzzles.length > 0, attemptCount: attempts.length });
-    });
-  }, [getAssignees, homeworkAttempts, homeworkSubmissions, puzzles, studentDailyExternalPuzzleCounts, studentDailyExternalPuzzlePassed, studentDailyExternalPuzzleFailed, studentDailyGameCounts, studentPlatformDayTimeSeconds, viewDate]);
+  }, [programDetailStat?.studentId, programSelectedHw?.id, viewDate, refreshDailyPlatformStats]);
 
   const stats: StudentHwStat[] = useMemo(() => {
     if (!selectedHw) return [];
-    return assignees.map(student => {
-      const submitted = homeworkSubmissions.some(
-        s => s.studentId === student.id && s.homeworkId === selectedHw.id
-      );
-      const attempts = homeworkAttempts.filter(
-        a => a.homeworkId === selectedHw.id && a.studentId === student.id
-      );
-      const { correct, wrong, skipped } = countPerPuzzleResults(selectedHw.puzzles, attempts);
-      const answered = correct + wrong;
-      const points = selectedHw.puzzles.reduce((sum, puzzleId) => {
-        if (!attempts.some((a) => a.puzzleId === puzzleId && a.correct)) return sum;
-        return sum + (puzzles.find((p) => p.id === puzzleId)?.points ?? 0);
-      }, 0);
-      const totalPuzzles = selectedHw.puzzles.length;
-      const progress = totalPuzzles > 0 ? Math.round((answered / totalPuzzles) * 100) : 0;
-      const status = homeworkStatusFromPuzzles(submitted, totalPuzzles, attempts.length, answered);
-      const hwTimeSeconds = studentTotalThinkSeconds(attempts);
-      const names = student.name.split(' ');
-      const initials = names.length >= 2 ? (names[0][0] + names[names.length - 1][0]).toUpperCase() : student.name.substring(0, 2).toUpperCase();
-      const todayKey = viewDate;
-      const todayAttempts = attempts.filter(a => a.timestamp?.slice(0, 10) === todayKey);
-      const internalTodayPuzzleSolved = todayAttempts.length;
-      const todayPuzzleCorrect = todayAttempts.filter(a => a.correct).length;
-      const { todayPuzzleSolved, todayPuzzleAccuracy, todayPuzzleCorrect: dailyCorrect, todayPuzzleWrong: dailyWrong } = computeDailyPuzzleProgress(
-        internalTodayPuzzleSolved,
-        todayPuzzleCorrect,
-        studentDailyExternalPuzzleCounts[student.id] ?? 0,
-        studentDailyExternalPuzzlePassed[student.id] ?? 0,
-        studentDailyExternalPuzzleFailed[student.id] ?? 0,
-      );
-      const target = selectedHw.studentDailyTargets?.[student.id];
-      const currentDayKey = weekdayKeyFromIso(viewDate);
-      const dayTarget = target?.weeklySchedule?.[currentDayKey];
+    const scoped = assignees.filter((s) => targetStudentIds.has(s.id));
+    return buildInternalHomeworkStats(
+      selectedHw,
+      scoped,
+      homeworkAttempts,
+      homeworkSubmissions,
+      puzzles,
+    );
+  }, [selectedHw, assignees, targetStudentIds, homeworkAttempts, homeworkSubmissions, puzzles]);
 
-      const dailyGameTarget = Math.max(0, dayTarget?.dailyGameTarget ?? target?.dailyGameTarget ?? selectedHw.dailyGameTarget ?? 0);
-      const dailyPuzzleTarget = Math.max(0, dayTarget?.dailyPuzzleTarget ?? target?.dailyPuzzleTarget ?? selectedHw.dailyPuzzleTarget ?? 0);
-      const minPuzzleAccuracy = Math.max(0, Math.min(100, dayTarget?.minPuzzleAccuracyPct ?? target?.minPuzzleAccuracyPct ?? selectedHw.minPuzzleAccuracyPct ?? 60));
-      
-      const gameGoalMet = dailyGameTarget <= 0 ? true : (studentDailyGameCounts[student.id] ?? 0) >= dailyGameTarget;
-      const puzzleGoalMet = dailyPuzzleTarget <= 0 ? true : (todayPuzzleSolved >= dailyPuzzleTarget && todayPuzzleAccuracy >= minPuzzleAccuracy);
-      const dailyGoalDone = gameGoalMet && puzzleGoalMet;
-      const timeSeconds = mergeHomeworkTimeSeconds(
-        hwTimeSeconds,
-        student.id,
-        dailyGameTarget,
-        dailyPuzzleTarget,
-        studentPlatformDayTimeSeconds,
-      );
-      return applyDailyDisplayToStat({
-        studentId: student.id,
-        name: student.name,
-        initials,
-        correct,
-        wrong,
-        skipped,
-        points,
-        timeSeconds,
-        progress: submitted ? Math.max(progress, 100) : (status === 'Başlamadı' ? 0 : progress),
-        status,
-        dailyGoalDone,
-        todayGames: studentDailyGameCounts[student.id] ?? 0,
-        todayPuzzleSolved,
-        todayPuzzleAccuracy,
-        todayPuzzleCorrect: dailyCorrect,
-        todayPuzzleWrong: dailyWrong,
-        dailyGameTarget,
-        dailyPuzzleTarget,
-        minPuzzleAccuracyPct: minPuzzleAccuracy,
-      }, { hasPuzzleHomework: selectedHw.puzzles.length > 0, attemptCount: attempts.length });
-    });
-  }, [assignees, selectedHw, homeworkAttempts, homeworkSubmissions, puzzles, studentDailyGameCounts, studentDailyExternalPuzzleCounts, studentDailyExternalPuzzlePassed, studentDailyExternalPuzzleFailed, studentPlatformDayTimeSeconds, viewDate]);
+  const programAssigneesForStats = useMemo(() => {
+    if (!programSelectedHw) return [];
+    return getAssignees(programSelectedHw).filter((s) => targetStudentIds.has(s.id));
+  }, [programSelectedHw, getAssignees, targetStudentIds]);
+
+  const programHwForStats = useMemo(() => {
+    if (!programSelectedHw) return null;
+    const mergedTargets: Record<string, StudentDailyTarget> = {
+      ...(programSelectedHw.studentDailyTargets ?? {}),
+    };
+    for (const s of programAssigneesForStats) {
+      const draft = dailyTargetDrafts[s.id];
+      if (draft) mergedTargets[s.id] = draft;
+    }
+    return { ...programSelectedHw, studentDailyTargets: mergedTargets };
+  }, [programSelectedHw, programAssigneesForStats, dailyTargetDrafts]);
+
+  const programStats: PlatformStudentStat[] = useMemo(() => {
+    if (!programHwForStats) return [];
+    return buildPlatformHomeworkStats(
+      programHwForStats,
+      programAssigneesForStats,
+      viewDate,
+      studentPlatformDayStats,
+      studentPlatformDayTimeSeconds,
+    );
+  }, [
+    programHwForStats,
+    programAssigneesForStats,
+    viewDate,
+    studentPlatformDayStats,
+    studentPlatformDayTimeSeconds,
+  ]);
+
+  const liveProgramDetailStat = useMemo(() => {
+    if (!programDetailStat || !programSelectedHw) return programDetailStat;
+    return programStats.find((s) => s.studentId === programDetailStat.studentId) ?? programDetailStat;
+  }, [programDetailStat, programStats, programSelectedHw]);
 
   const liveDetailStat = useMemo(() => {
     if (!detailStat || !selectedHw) return detailStat;
@@ -707,12 +507,18 @@ const Homework: React.FC = () => {
     if (homeworks.length === 0) return [];
     const byStudent = new Map<string, { student: Student; hwStats: StudentHwStat[] }>();
     for (const hw of homeworks) {
-      const perHw = buildStatsForHomework(hw);
+      const perHw = buildInternalHomeworkStats(
+        hw,
+        getAssignees(hw),
+        homeworkAttempts,
+        homeworkSubmissions,
+        puzzles,
+      );
       for (const s of perHw) {
         const existing = byStudent.get(s.studentId);
         if (existing) existing.hwStats.push(s);
         else {
-          const st = students.find(x => x.id === s.studentId);
+          const st = students.find((x) => x.id === s.studentId);
           if (st) byStudent.set(s.studentId, { student: st, hwStats: [s] });
         }
       }
@@ -721,8 +527,8 @@ const Homework: React.FC = () => {
     const out: StudentHwStat[] = [];
     for (const { student, hwStats } of byStudent.values()) {
       const total = hwStats.length;
-      const completed = hwStats.filter(h => h.status === 'Tamamlandı').length;
-      const started = hwStats.some(h => h.status !== 'Başlamadı');
+      const completed = hwStats.filter((h) => h.status === 'Tamamlandı').length;
+      const started = hwStats.some((h) => h.status !== 'Başlamadı');
       const status: StudentHwStat['status'] =
         total > 0 && completed === total ? 'Tamamlandı'
           : started ? 'Devam Ediyor'
@@ -735,11 +541,6 @@ const Homework: React.FC = () => {
       const progress = total > 0 ? Math.round(hwStats.reduce((s, h) => s + (h.progress ?? 0), 0) / total) : 0;
       const names = student.name.split(' ');
       const initials = names.length >= 2 ? (names[0][0] + names[names.length - 1][0]).toUpperCase() : student.name.substring(0, 2).toUpperCase();
-      const dailyGoalDone = hwStats.some((h) => h.dailyGoalDone);
-      const dailyGameTarget = Math.max(...hwStats.map((h) => h.dailyGameTarget ?? 0), 0);
-      const dailyPuzzleTarget = Math.max(...hwStats.map((h) => h.dailyPuzzleTarget ?? 0), 0);
-      const todayGames = Math.max(...hwStats.map((h) => h.todayGames ?? 0), 0);
-      const todayPuzzleSolved = Math.max(...hwStats.map((h) => h.todayPuzzleSolved ?? 0), 0);
       out.push({
         studentId: student.id,
         name: student.name,
@@ -751,15 +552,10 @@ const Homework: React.FC = () => {
         timeSeconds,
         progress,
         status,
-        dailyGoalDone,
-        todayGames,
-        todayPuzzleSolved,
-        dailyGameTarget,
-        dailyPuzzleTarget,
       });
     }
     return out;
-  }, [selectedHw, homeworks, buildStatsForHomework, students]);
+  }, [selectedHw, homeworks, getAssignees, homeworkAttempts, homeworkSubmissions, puzzles, students]);
 
   const effectiveStats = selectedHw ? stats : allModeStats;
   const sortedStats = useMemo(() => [...effectiveStats].sort((a, b) => b.points - a.points), [effectiveStats]);
@@ -827,6 +623,7 @@ const Homework: React.FC = () => {
 
   const programDayCompletion = useMemo((): Record<number, DayCompletionStatus> => {
     if (!programHomework) return {};
+    if (programStudentId === PROGRAM_BULK_EDIT_ID) return {};
     const studentId = programStudentId ?? programStudents[0]?.id;
     if (!studentId) return {};
     const draft = dailyTargetDrafts[studentId] ?? {};
@@ -841,21 +638,19 @@ const Homework: React.FC = () => {
       }
       const iso = isoDateForWeekday(monday, day);
       const isFuture = iso > today;
-      const dayAttempts = homeworkAttempts.filter(
-        (a) => a.homeworkId === programHomework.id && a.studentId === studentId && a.timestamp?.slice(0, 10) === iso,
-      );
       const platform = studentPlatformWeekStats[studentId]?.[iso];
-      const { done } = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, dayAttempts);
+      const { done } = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, []);
       if (isFuture) out[day] = 'pending';
       else if (done) out[day] = 'done';
       else if (iso === today) out[day] = 'pending';
       else out[day] = 'missed';
     }
     return out;
-  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, homeworkAttempts, studentPlatformWeekStats]);
+  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, studentPlatformWeekStats]);
 
   const programDayProgress = useMemo(() => {
     if (!programHomework) return {};
+    if (programStudentId === PROGRAM_BULK_EDIT_ID) return {};
     const studentId = programStudentId ?? programStudents[0]?.id;
     const student = programStudents.find((s) => s.id === studentId);
     if (!studentId || !student) return {};
@@ -873,11 +668,8 @@ const Homework: React.FC = () => {
       const { gameTarget, puzzleTarget, minAccuracy } = resolveDayTargets(draft, programHomework, day);
       if (gameTarget <= 0 && puzzleTarget <= 0) continue;
       const iso = isoDateForWeekday(monday, day);
-      const dayAttempts = homeworkAttempts.filter(
-        (a) => a.homeworkId === programHomework.id && a.studentId === studentId && a.timestamp?.slice(0, 10) === iso,
-      );
       const platform = studentPlatformWeekStats[studentId]?.[iso];
-      const evalResult = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, dayAttempts);
+      const evalResult = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, []);
       out[day] = {
         games: platform?.games ?? 0,
         gameTarget,
@@ -887,7 +679,7 @@ const Homework: React.FC = () => {
       };
     }
     return out;
-  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, homeworkAttempts, studentPlatformWeekStats]);
+  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, studentPlatformWeekStats]);
 
   useEffect(() => {
     if (!programHomework || panelTab !== 'program') return;
@@ -902,17 +694,14 @@ const Homework: React.FC = () => {
       if (gameTarget <= 0 && puzzleTarget <= 0) continue;
       const already = homeworkSubmissions.some((s) => s.studentId === student.id && s.homeworkId === programHomework.id);
       if (already) continue;
-      const dayAttempts = homeworkAttempts.filter(
-        (a) => a.homeworkId === programHomework.id && a.studentId === student.id && a.timestamp?.slice(0, 10) === iso,
-      );
       const platform = studentPlatformWeekStats[student.id]?.[iso];
-      const { done } = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, dayAttempts);
+      const { done } = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, []);
       if (done) {
         addHomeworkSubmission({ studentId: student.id, homeworkId: programHomework.id });
       }
     }
   }, [
-    programHomework, panelTab, programStudents, dailyTargetDrafts, homeworkAttempts,
+    programHomework, panelTab, programStudents, dailyTargetDrafts,
     homeworkSubmissions, studentPlatformWeekStats, addHomeworkSubmission,
   ]);
 
@@ -943,6 +732,60 @@ const Homework: React.FC = () => {
     setDailyTargetDrafts((prev) => ({ ...prev, [studentId]: { ...prev[studentId], ...patch } }));
   }, []);
 
+  const handleProgramBulkDraftChange = useCallback((patch: Partial<StudentDailyTarget>) => {
+    setDailyTargetDrafts((prev) => {
+      const next = { ...prev };
+      for (const s of programStudents) {
+        next[s.id] = { ...next[s.id], ...patch };
+      }
+      return next;
+    });
+  }, [programStudents]);
+
+  const handleProgramBulkDayChange = useCallback((
+    day: number,
+    patch: Partial<NonNullable<StudentDailyTarget['weeklySchedule']>[number]>,
+  ) => {
+    setDailyTargetDrafts((prev) => {
+      const next = { ...prev };
+      for (const s of programStudents) {
+        const cur = next[s.id] ?? {};
+        const schedule = {
+          ...(cur.weeklySchedule ?? {}),
+          [day]: { ...(cur.weeklySchedule?.[day] ?? {}), ...patch },
+        };
+        next[s.id] = { ...cur, weeklySchedule: schedule };
+      }
+      return next;
+    });
+  }, [programStudents]);
+
+  const copyProgramDraftToAll = useCallback((sourceStudentId: string) => {
+    const source = dailyTargetDrafts[sourceStudentId];
+    if (!source) {
+      showToast('Kopyalanacak hedef bulunamadı.', 'warning');
+      return;
+    }
+    setDailyTargetDrafts((prev) => {
+      const next = { ...prev };
+      const clonedSchedule = source.weeklySchedule
+        ? Object.fromEntries(
+          Object.entries(source.weeklySchedule).map(([k, v]) => [k, { ...v }]),
+        )
+        : undefined;
+      for (const s of programStudents) {
+        next[s.id] = {
+          dailyGameTarget: source.dailyGameTarget,
+          dailyPuzzleTarget: source.dailyPuzzleTarget,
+          minPuzzleAccuracyPct: source.minPuzzleAccuracyPct,
+          weeklySchedule: clonedSchedule,
+        };
+      }
+      return next;
+    });
+    showToast(`Hedefler ${programStudents.length} öğrenciye kopyalandı. Kaydetmeyi unutmayın.`, 'success');
+  }, [dailyTargetDrafts, programStudents, showToast]);
+
   const summary = useMemo(() => {
     const completed = effectiveStats.filter(s => s.status === 'Tamamlandı').length;
     const inProgress = effectiveStats.filter(s => s.status === 'Devam Ediyor').length;
@@ -952,28 +795,14 @@ const Homework: React.FC = () => {
     return { completed, inProgress, notStarted, avgPoints, avgProgress };
   }, [effectiveStats]);
 
-  const showDailyTracking = useMemo(() => {
-    if (selectedHw) {
-      return stats.some((s) => (s.dailyGameTarget ?? 0) > 0 || (s.dailyPuzzleTarget ?? 0) > 0);
-    }
-    return homeworks.some(
-      (hw) =>
-        (hw.dailyGameTarget ?? 0) > 0
-        || (hw.dailyPuzzleTarget ?? 0) > 0
-        || Object.values(hw.studentDailyTargets ?? {}).some(
-          (t) => (t.dailyGameTarget ?? 0) > 0 || (t.dailyPuzzleTarget ?? 0) > 0,
-        ),
-    );
-  }, [selectedHw, stats, homeworks]);
-
   useEffect(() => {
     if (!dailyPlatformPollEnabledRef.current) return;
-    if (!selectedHw || !showDailyTracking || panelTab !== 'odev') return;
+    if (!programSelectedHw || panelTab !== 'program' || programAnalysisView !== 'detail') return;
     const id = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refreshDailyPlatformStats();
+      if (document.visibilityState === 'visible') void refreshDailyPlatformStats({ silent: true });
     }, PLATFORM_AUTO_POLL_MS);
     return () => window.clearInterval(id);
-  }, [panelTab, selectedHw, showDailyTracking, refreshDailyPlatformStats]);
+  }, [panelTab, programAnalysisView, programSelectedHw, refreshDailyPlatformStats]);
 
   useEffect(() => {
     if (!programPlatformPollEnabledRef.current) return;
@@ -1110,12 +939,12 @@ const Homework: React.FC = () => {
   ]);
 
   const saveStudentDailyTargets = useCallback(() => {
-    if (!programHomework) {
+    if (!programSelectedHw) {
       showToast('Günlük program için önce bir ödev seçin.', 'warning');
       return;
     }
     const merged: Record<string, StudentDailyTarget> = {
-      ...(programHomework.studentDailyTargets ?? {}),
+      ...(programSelectedHw.studentDailyTargets ?? {}),
     };
     let touched = 0;
     for (const student of programStudents) {
@@ -1133,9 +962,9 @@ const Homework: React.FC = () => {
       showToast('Kaydedilecek öğrenci hedefi bulunamadı.', 'warning');
       return;
     }
-    updateHomework(programHomework.id, { studentDailyTargets: merged });
-    showToast(`Günlük program kaydedildi (${programHomework.title}).`, 'success');
-  }, [programHomework, programStudents, dailyTargetDrafts, updateHomework, showToast]);
+    updateHomework(programSelectedHw.id, { studentDailyTargets: merged });
+    showToast(`Günlük program kaydedildi (${programSelectedHw.title}).`, 'success');
+  }, [programSelectedHw, programStudents, dailyTargetDrafts, updateHomework, showToast]);
 
   return (
     <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -1603,7 +1432,6 @@ const Homework: React.FC = () => {
                   attempts={homeworkAttempts}
                   submissions={homeworkSubmissions}
                   onOpenDetail={openHomeworkDetail}
-                  isStudentActive={isStudentDailyActive}
                 />
               ) : selectedHw ? (
                 <HomeworkAssignmentDetail
@@ -1623,37 +1451,71 @@ const Homework: React.FC = () => {
                   attempts={homeworkAttempts}
                   submissions={homeworkSubmissions}
                   onOpenDetail={openHomeworkDetail}
-                  isStudentActive={isStudentDailyActive}
                 />
               )}
             </>
           )}
 
           {panelTab === 'program' && (
-            programHomework && programStudents.length > 0 ? (
-              <WeeklyScheduleGrid
-                students={programStudents}
-                drafts={dailyTargetDrafts}
-                onDraftChange={handleProgramDraftChange}
-                onDayChange={handleProgramDayChange}
-                onSave={saveStudentDailyTargets}
-                onRefreshPlatform={refreshProgramPlatformStats}
-                loadingPlatform={loadingProgramPlatformStats}
-                selectedStudentId={programStudentId}
-                onSelectStudent={setProgramStudentId}
-                dayCompletion={programDayCompletion}
-                dayProgress={programDayProgress}
-                homeworkTitle={programHomework.title}
-                autoSelectedHomework={!selectedHw}
-              />
-            ) : (
-              <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-12 text-center">
-                <Calendar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                <p className="text-sm text-slate-400">
-                  {programHomework ? 'Hedef seçiminde öğrenci bulunamadı' : 'Günlük program için ödev seçin veya hedef öğrenci filtreleyin'}
-                </p>
-              </div>
-            )
+            <>
+              {programAnalysisView === 'list' ? (
+                programHomeworks.length > 0 ? (
+                  <HomeworkAssignmentsList
+                    homeworks={programHomeworks}
+                    students={students}
+                    attempts={homeworkAttempts}
+                    submissions={homeworkSubmissions}
+                    onOpenDetail={openProgramDetail}
+                    isStudentActive={isStudentDailyActive}
+                    variant="platform"
+                  />
+                ) : (
+                  <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-12 text-center">
+                    <Calendar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                    <p className="text-sm text-slate-400">Günlük program için atama bulunamadı</p>
+                    <p className="text-xs text-slate-500 mt-2">Sol panelden şube / grup seçin veya yeni ödev atayın</p>
+                  </div>
+                )
+              ) : programSelectedHw && programAssigneesForStats.length > 0 ? (
+                <DailyProgramAssignmentDetail
+                  homework={programSelectedHw}
+                  students={students}
+                  stats={programStats}
+                  viewDate={viewDate}
+                  onViewDateChange={setViewDate}
+                  onBack={backToProgramList}
+                  onSelectStudent={setProgramDetailStat}
+                  onRefreshPlatform={() => void refreshDailyPlatformStats()}
+                  loadingPlatform={loadingDailyPlatformStats}
+                  scheduleStudents={programStudents}
+                  drafts={dailyTargetDrafts}
+                  onDraftChange={handleProgramDraftChange}
+                  onDayChange={handleProgramDayChange}
+                  onBulkDraftChange={handleProgramBulkDraftChange}
+                  onBulkDayChange={handleProgramBulkDayChange}
+                  onCopyToAll={copyProgramDraftToAll}
+                  onSaveSchedule={saveStudentDailyTargets}
+                  selectedStudentId={programStudentId}
+                  onSelectScheduleStudent={setProgramStudentId}
+                  dayCompletion={programDayCompletion}
+                  dayProgress={programDayProgress}
+                />
+              ) : (
+                <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-12 text-center">
+                  <Calendar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                  <p className="text-sm text-slate-400">
+                    {programSelectedHw ? 'Hedef seçiminde öğrenci bulunamadı' : 'Günlük program için ödev seçin'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={backToProgramList}
+                    className="mt-4 px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-bold"
+                  >
+                    Listeye dön
+                  </button>
+                </div>
+              )}
+            </>
           )}
 
           {panelTab === 'calisma' && (
@@ -1672,43 +1534,6 @@ const Homework: React.FC = () => {
         </div>
       </div>
 
-      {selectedHw && showDailyTracking ? (
-        <div className="flex flex-wrap items-center gap-3 px-1">
-          <label className="flex items-center gap-2 text-xs text-slate-400">
-            <Calendar className="w-3.5 h-3.5" />
-            Gün:
-            <input
-              type="date"
-              value={viewDate}
-              max={todayDayKey()}
-              onChange={(e) => setViewDate(e.target.value || todayDayKey())}
-              className="px-2 py-1 rounded-lg bg-slate-800 border border-slate-600 text-white text-xs [color-scheme:dark]"
-            />
-          </label>
-          {!isToday(viewDate) ? (
-            <button
-              type="button"
-              onClick={() => setViewDate(todayDayKey())}
-              className="text-xs font-bold text-indigo-400 hover:text-indigo-300"
-            >
-              Bugüne dön
-            </button>
-          ) : null}
-          <p className="text-xs text-slate-500">
-            Günlük hedef: sistem + Lichess + Chess.com · otomatik kontrol 10 dk
-          </p>
-          <button
-            type="button"
-            onClick={() => void refreshDailyPlatformStats()}
-            disabled={loadingDailyPlatformStats}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-600 text-xs font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-60"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loadingDailyPlatformStats ? 'animate-spin' : ''}`} />
-            Platform çek
-          </button>
-        </div>
-      ) : null}
-
       {/* Öğrenci bulmaca detayı — 3. seviye modal */}
       {liveDetailStat && selectedHw && (
         <StudentPuzzleDetailModal
@@ -1716,12 +1541,24 @@ const Homework: React.FC = () => {
           homework={selectedHw}
           puzzles={puzzles}
           attempts={homeworkAttempts}
-          student={students.find((s) => s.id === liveDetailStat.studentId)}
-          viewDate={viewDate}
-          platformStats={studentPlatformDayStats[liveDetailStat.studentId]}
           onClose={() => setDetailStat(null)}
         />
       )}
+
+      {liveProgramDetailStat && programSelectedHw && (() => {
+        const student = students.find((s) => s.id === liveProgramDetailStat.studentId);
+        if (!student) return null;
+        return (
+          <StudentPlatformDetailModal
+            stat={liveProgramDetailStat}
+            homework={programSelectedHw}
+            student={student}
+            viewDate={viewDate}
+            platformStats={studentPlatformDayStats[liveProgramDetailStat.studentId]}
+            onClose={() => setProgramDetailStat(null)}
+          />
+        );
+      })()}
 
       {/* Genel öğrenci özeti (ödev seçilmeden — eski akış yedek) */}
       {detailStat && !selectedHw && (

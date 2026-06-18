@@ -3,6 +3,8 @@ import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAs
 import { MOCK_STUDENTS } from './constants';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
 import { homeworkAssigneesOverlap } from './lib/homeworkPanelUtils';
+import { looksLikeLichessPuzzleId } from './lib/puzzlePlayUtils';
+import { insertHomeworkAttemptSupabase, detectHomeworkAttemptPayloadStyle, setCachedHomeworkAttemptPayloadStyle } from './lib/homeworkAttemptDb.mjs';
 import { AlertCircle, CheckCircle2, Info, XCircle, X } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
@@ -576,7 +578,13 @@ function dbToPuzzle(row: Record<string, unknown>): Puzzle {
           ? String(row.gamePgn)
           : undefined,
     lichessThemes: lichessRaw != null ? String(lichessRaw) : undefined,
-    source: (row.source as Puzzle['source']) ?? undefined,
+    lichessId: row.lichess_id != null
+      ? String(row.lichess_id)
+      : row.lichessId != null
+        ? String(row.lichessId)
+        : undefined,
+    source: (row.source as Puzzle['source'])
+      ?? (lichessRaw != null ? 'lichess' : 'custom'),
   };
 }
 
@@ -598,6 +606,7 @@ function puzzleToDb(p: Puzzle): Record<string, unknown> {
   if (p.imageData) row.image_data = p.imageData;
   if (p.gamePgn) row.game_pgn = p.gamePgn;
   if (p.lichessThemes) row.lichess_themes = p.lichessThemes;
+  if (p.lichessId) row.lichess_id = p.lichessId;
   return row;
 }
 
@@ -804,23 +813,6 @@ function dbToSubmission(row: Record<string, unknown>): HomeworkSubmission {
   };
 }
 
-/** homework_attempts: Supabase'e gönderim. PostgreSQL tırnaksız kolonları küçük harfe çevirir (studentid, finalfen). */
-function attemptToDb(r: Record<string, unknown>): Record<string, unknown> {
-  return {
-    id: r.id,
-    studentid: (r as any).studentId,
-    homeworkid: (r as any).homeworkId,
-    puzzleid: (r as any).puzzleId,
-    puzzletitle: (r as any).puzzleTitle,
-    correct: (r as any).correct,
-    movesplayed: (r as any).movesPlayed ?? [],
-    solutionmoves: (r as any).solutionMoves ?? [],
-    finalfen: (r as any).finalFen ?? null,
-    thinkseconds: (r as any).thinkSeconds ?? null,
-    hintused: (r as any).hintUsed ?? false,
-    timestamp: (r as any).timestamp,
-  };
-}
 function dbToHomeworkAttempt(row: Record<string, unknown>): HomeworkPuzzleAttempt {
   const r = row as any;
   return {
@@ -837,6 +829,23 @@ function dbToHomeworkAttempt(row: Record<string, unknown>): HomeworkPuzzleAttemp
     hintUsed: Boolean(r.hint_used ?? r.hintUsed ?? r.hintused ?? false),
     timestamp: String(r.timestamp ?? ''),
   };
+}
+
+function mergeHomeworkAttemptsFromStorage(fromDb: HomeworkPuzzleAttempt[]): HomeworkPuzzleAttempt[] {
+  let localAttempts: HomeworkPuzzleAttempt[] = [];
+  try {
+    const raw = localStorage.getItem('netchess_homework_attempts');
+    if (raw) localAttempts = JSON.parse(raw) as HomeworkPuzzleAttempt[];
+  } catch {
+    /* ignore */
+  }
+  const byId = new Map(fromDb.map((a) => [a.id, a]));
+  for (const a of localAttempts) {
+    if (!byId.has(a.id)) byId.set(a.id, a);
+  }
+  return [...byId.values()].sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
 }
 
 function dbToGalleryItem(row: Record<string, unknown>): GalleryItem {
@@ -1309,7 +1318,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ]);
 
         if (hwRes.data) setHomeworks((hwRes.data as Record<string, unknown>[]).map(dbToHomework));
-        if (attRes.data) setHomeworkAttempts((attRes.data as Record<string, unknown>[]).map(dbToHomeworkAttempt));
+        if (attRes.data) {
+          const rawRows = attRes.data as Record<string, unknown>[];
+          if (rawRows[0]) {
+            setCachedHomeworkAttemptPayloadStyle(detectHomeworkAttemptPayloadStyle(rawRows[0]));
+          }
+          setHomeworkAttempts(
+            mergeHomeworkAttemptsFromStorage(rawRows.map(dbToHomeworkAttempt)),
+          );
+        }
         if (subRes.data) setHomeworkSubmissions((subRes.data as Record<string, unknown>[]).map(dbToSubmission));
         if (puzRes.error) {
           console.error('[Supabase] loadFromSupabase puzzles HATA:', puzRes.error.message, puzRes.error.code, puzRes.error.details);
@@ -1425,8 +1442,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (hydrated.current && !useSupabase) localStorage.setItem('netchess_homeworks', JSON.stringify(homeworks));
   }, [homeworks, useSupabase]);
   useEffect(() => {
-    if (hydrated.current && !useSupabase) localStorage.setItem('netchess_homework_attempts', JSON.stringify(homeworkAttempts));
-  }, [homeworkAttempts, useSupabase]);
+    if (hydrated.current) {
+      try {
+        localStorage.setItem('netchess_homework_attempts', JSON.stringify(homeworkAttempts));
+      } catch { /* ignore */ }
+    }
+  }, [homeworkAttempts]);
   useEffect(() => {
     if (hydrated.current && !useSupabase) localStorage.setItem('netchess_homework_submissions', JSON.stringify(homeworkSubmissions));
   }, [homeworkSubmissions, useSupabase]);
@@ -1587,7 +1608,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sb.from('clubs').select('*')
         ]);
         if (hwRes.data) setHomeworks((hwRes.data as Record<string, unknown>[]).map(dbToHomework));
-        if (attRes.data) setHomeworkAttempts((attRes.data as Record<string, unknown>[]).map(dbToHomeworkAttempt));
+        if (attRes.data) {
+          const rawRows = attRes.data as Record<string, unknown>[];
+          if (rawRows[0]) {
+            setCachedHomeworkAttemptPayloadStyle(detectHomeworkAttemptPayloadStyle(rawRows[0]));
+          }
+          setHomeworkAttempts(
+            mergeHomeworkAttemptsFromStorage(rawRows.map(dbToHomeworkAttempt)),
+          );
+        }
         if (subRes.data) setHomeworkSubmissions((subRes.data as Record<string, unknown>[]).map(dbToSubmission));
         if (puzRes.error) {
           console.error('[Supabase] refreshFromStorage puzzles HATA:', puzRes.error.message, puzRes.error.code, puzRes.error.details);
@@ -2089,7 +2118,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const filtered = incoming.filter(p => !existingIds.has(p.id));
       for (const p of filtered) {
         const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
-        freshWithIds.push({ ...p, id });
+        const lichessId = p.lichessId
+          ?? (looksLikeLichessPuzzleId(p.id) ? p.id : undefined);
+        freshWithIds.push({ ...p, id, lichessId });
       }
       return [...prev, ...freshWithIds];
     });
@@ -2218,13 +2249,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: genId(),
       timestamp: new Date().toISOString(),
     };
-    setHomeworkAttempts(prev => [record, ...prev]);
+    setHomeworkAttempts((prev) => [record, ...prev]);
+
+    const persistLocal = () => {
+      try {
+        const raw = localStorage.getItem('netchess_homework_attempts');
+        const existing = raw ? (JSON.parse(raw) as HomeworkPuzzleAttempt[]) : [];
+        localStorage.setItem(
+          'netchess_homework_attempts',
+          JSON.stringify([record, ...existing.filter((a) => a.id !== record.id)]),
+        );
+      } catch {
+        /* ignore */
+      }
+    };
+    persistLocal();
+
     const sb = getServiceSupabase();
-    if (sb) try {
-      const { error } = await sb.from('homework_attempts').insert(attemptToDb(record as unknown as Record<string, unknown>));
-      if (error) console.error('Supabase homework_attempts insert error:', error);
+    if (sb) {
+      try {
+        const result = await insertHomeworkAttemptSupabase(sb, record);
+        if (result.ok) return;
+        console.error('Supabase homework_attempts insert error:', result.error);
+      } catch (err) {
+        console.error('Supabase homework_attempts throw error:', err);
+      }
+    }
+
+    try {
+      const res = await fetch('/api/homework-attempt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        console.error('API homework-attempt failed:', res.status, errText);
+      }
     } catch (err) {
-      console.error('Supabase homework_attempts throw error:', err);
+      console.error('API homework-attempt throw error:', err);
     }
   }, []);
 

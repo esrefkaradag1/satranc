@@ -13,7 +13,16 @@ import {
 import { useStockfish } from '../hooks/useStockfish';
 import type { PvLine } from '../hooks/useStockfish';
 import { useApp } from '../AppContext';
-import { getServiceSupabase, isSupabaseBackend } from '../services/supabase';
+import { getLiveLessonReadClient, getServiceSupabase, isSupabaseBackend } from '../services/supabase';
+import {
+  mergeChatMessageLists,
+  parseStoredChatMessages,
+  persistLiveLessonChatMessage,
+} from '../lib/liveLessonChatDb.mjs';
+import {
+  persistSessionMediaOp,
+  persistSessionMediaReplace,
+} from '../lib/liveLessonSessionMediaDb.mjs';
 import { getRuntimeEnv } from '../runtimeEnv';
 import AgoraRTC, { type IAgoraRTCClient, type ICameraVideoTrack, type IMicrophoneAudioTrack, type IAgoraRTCRemoteUser } from 'agora-rtc-sdk-ng';
 import type { IVirtualBackgroundProcessor } from 'agora-extension-virtual-background';
@@ -218,6 +227,24 @@ export type LiveChatMessage = {
   /** Özel sohbet: hedef öğrenci kimliği (koç↔öğrenci) */
   privateWithStudentId?: string;
 };
+
+/** Sohbet şeridinde kısa öğrenci etiketi */
+function shortChatStudentName(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) {
+    const p = parts[0];
+    return p.length > 9 ? `${p.slice(0, 8)}…` : p;
+  }
+  if (parts.length === 2) {
+    const first = parts[0].length > 7 ? `${parts[0].slice(0, 6)}.` : parts[0];
+    return `${first} ${parts[1][0]?.toUpperCase() ?? ''}.`;
+  }
+  return parts
+    .map((p) => p[0]?.toUpperCase() ?? '')
+    .join('.')
+    .slice(0, 11);
+}
 
 export type SessionMediaState = {
   /** Söz hakkı: bu öğrenci mikrofonu açabilir (tek kişi) */
@@ -466,6 +493,26 @@ function ClassroomAttendancePanel({
     return map;
   }, [tiles]);
 
+  /** Derse katılan veya bekleme odasındaki öğrenciler — tüm yoklama listesi değil. */
+  const joinedStudents = useMemo(() => {
+    const list = rosterStudents.filter((s) => {
+      const sid = normalizeStudentId(s.id);
+      if (pendingIds.some((k) => idsEqual(k, sid))) return true;
+      if (admittedIds.some((k) => idsEqual(k, sid))) return true;
+      if (tileByStudentId.get(sid)?.stream) return true;
+      return false;
+    });
+    return list.sort((a, b) => {
+      const aSid = normalizeStudentId(a.id);
+      const bSid = normalizeStudentId(b.id);
+      const aPending = pendingIds.some((k) => idsEqual(k, aSid));
+      const bPending = pendingIds.some((k) => idsEqual(k, bSid));
+      if (aPending && !bPending) return -1;
+      if (!aPending && bPending) return 1;
+      return a.name.localeCompare(b.name, 'tr');
+    });
+  }, [rosterStudents, pendingIds, admittedIds, tileByStudentId]);
+
   const summary = useMemo(() => {
     let present = 0;
     let absent = 0;
@@ -527,10 +574,21 @@ function ClassroomAttendancePanel({
             ) : student.photoUrl ? (
               <img src={student.photoUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
             ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
+              <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900 gap-1">
                 <span className="text-lg font-bold text-slate-400">{student.name.charAt(0).toUpperCase()}</span>
+                <VideoOff className="w-3.5 h-3.5 text-slate-600" />
               </div>
             )}
+            {!isPending && !tile?.stream ? (
+              <div className="absolute bottom-1 right-1 flex gap-0.5 pointer-events-none">
+                <span className={`p-0.5 rounded ${camForcedOff ? 'bg-rose-900/80' : 'bg-black/55'}`}>
+                  {camForcedOff ? <VideoOff className="w-2.5 h-2.5 text-rose-300" /> : <Video className="w-2.5 h-2.5 text-slate-400" />}
+                </span>
+                <span className={`p-0.5 rounded ${audioOpen ? 'bg-black/55' : 'bg-rose-900/80'}`}>
+                  {audioOpen ? <Mic className="w-2.5 h-2.5 text-slate-300" /> : <MicOff className="w-2.5 h-2.5 text-rose-300" />}
+                </span>
+              </div>
+            ) : null}
             <span className={`absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold border ${liveAttendanceStatusClass(status)}`}>
               {LIVE_ATTENDANCE_STATUS_LABEL[status]}
             </span>
@@ -554,65 +612,81 @@ function ClassroomAttendancePanel({
             )}
           </div>
         </div>
-        <div className={`px-1.5 ${compact ? 'py-1' : 'py-1.5'} space-y-1`}>
-          <button
-            type="button"
-            onClick={() => onOpenPrivateChat?.(student.id)}
-            className="text-[10px] font-semibold text-white truncate text-left w-full hover:text-indigo-300"
-            title={onOpenPrivateChat ? 'Özel sohbet' : undefined}
-          >
+        <div className="border-t border-white/5 bg-slate-950/80">
+          <p className="text-[9px] font-semibold text-slate-200 truncate px-1.5 pt-1 leading-tight" title={student.name}>
             {student.name}
-          </button>
+          </p>
           {!isPending ? (
-          <>
-          <div className="flex items-center justify-center gap-1">
-            {onToggleStudentMic ? (
-              <button
-                type="button"
-                onClick={() => onToggleStudentMic(student.id)}
-                className={`p-1 rounded ${audioOpen ? 'bg-slate-700/80 text-slate-200' : 'bg-rose-800/60 text-white'}`}
-                title={audioOpen ? 'Sesi kapat' : 'Sesi aç (söz hakkı)'}
-              >
-                {audioOpen ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
-              </button>
-            ) : null}
-            {onToggleStudentCam ? (
-              <button
-                type="button"
-                onClick={() => onToggleStudentCam(student.id)}
-                className={`p-1 rounded ${camForcedOff ? 'bg-rose-800/60 text-white' : 'bg-slate-700/80 text-slate-200'}`}
-                title={camForcedOff ? 'Kamerayı açtır' : 'Kamerayı kapat'}
-              >
-                {camForcedOff ? <VideoOff className="w-3 h-3" /> : <Video className="w-3 h-3" />}
-              </button>
-            ) : null}
-          </div>
-          <div className="grid grid-cols-4 gap-0.5">
-            {(['present', 'absent', 'late', 'excused'] as const).map((mark) => (
-              <button
-                key={mark}
-                type="button"
-                title={LIVE_ATTENDANCE_STATUS_LABEL[mark]}
-                onClick={() => onSetMark(student.id, mark)}
-                className={`p-1 rounded text-[9px] font-bold transition-colors ${
-                  attendanceMarks?.[sid] === mark || (status === mark && !attendanceMarks?.[sid])
-                    ? mark === 'present'
-                      ? 'bg-emerald-600 text-white'
-                      : mark === 'absent'
-                        ? 'bg-rose-600 text-white'
-                        : mark === 'late'
-                          ? 'bg-amber-600 text-white'
-                          : 'bg-sky-600 text-white'
-                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'
-                }`}
-              >
-                {mark === 'present' ? '✓' : mark === 'absent' ? '✗' : mark === 'late' ? '⏱' : 'İ'}
-              </button>
-            ))}
-          </div>
-          </>
+            <>
+              <div className="flex items-center justify-center gap-0.5 px-1 py-0.5">
+                {onOpenPrivateChat ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenPrivateChat(student.id)}
+                    className="p-1 rounded-md bg-slate-800/90 text-slate-300 hover:bg-indigo-600 hover:text-white transition-colors"
+                    title="Özel sohbet"
+                    aria-label={`${student.name} ile sohbet`}
+                  >
+                    <MessageCircle className="w-3 h-3" />
+                  </button>
+                ) : null}
+                {onToggleStudentCam ? (
+                  <button
+                    type="button"
+                    onClick={() => onToggleStudentCam(student.id)}
+                    className={`p-1 rounded-md transition-colors ${
+                      camForcedOff
+                        ? 'bg-rose-800/70 text-white hover:bg-rose-700'
+                        : 'bg-slate-800/90 text-slate-300 hover:bg-indigo-600 hover:text-white'
+                    }`}
+                    title={camForcedOff ? 'Kamerayı açtır' : 'Kamerayı kapat'}
+                    aria-label={camForcedOff ? 'Kamerayı aç' : 'Kamerayı kapat'}
+                  >
+                    {camForcedOff ? <VideoOff className="w-3 h-3" /> : <Video className="w-3 h-3" />}
+                  </button>
+                ) : null}
+                {onToggleStudentMic ? (
+                  <button
+                    type="button"
+                    onClick={() => onToggleStudentMic(student.id)}
+                    className={`p-1 rounded-md transition-colors ${
+                      audioOpen
+                        ? 'bg-slate-800/90 text-slate-300 hover:bg-indigo-600 hover:text-white'
+                        : 'bg-rose-800/70 text-white hover:bg-rose-700'
+                    }`}
+                    title={audioOpen ? 'Sesi kapat' : 'Sesi aç (söz hakkı)'}
+                    aria-label={audioOpen ? 'Sesi kapat' : 'Sesi aç'}
+                  >
+                    {audioOpen ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                  </button>
+                ) : null}
+              </div>
+              <div className="grid grid-cols-4 gap-0.5 px-1 pb-1">
+                {(['present', 'absent', 'late', 'excused'] as const).map((mark) => (
+                  <button
+                    key={mark}
+                    type="button"
+                    title={LIVE_ATTENDANCE_STATUS_LABEL[mark]}
+                    onClick={() => onSetMark(student.id, mark)}
+                    className={`p-0.5 rounded text-[8px] font-bold transition-colors ${
+                      attendanceMarks?.[sid] === mark || (status === mark && !attendanceMarks?.[sid])
+                        ? mark === 'present'
+                          ? 'bg-emerald-600 text-white'
+                          : mark === 'absent'
+                            ? 'bg-rose-600 text-white'
+                            : mark === 'late'
+                              ? 'bg-amber-600 text-white'
+                              : 'bg-sky-600 text-white'
+                        : 'bg-slate-800/80 text-slate-500 hover:bg-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {mark === 'present' ? '✓' : mark === 'absent' ? '✗' : mark === 'late' ? '⏱' : 'İ'}
+                  </button>
+                ))}
+              </div>
+            </>
           ) : (
-            <p className="text-[9px] text-amber-200/90 leading-snug">Bekleme odasında — kabul etmek için üstteki yeşil alana tıklayın.</p>
+            <p className="text-[8px] text-amber-200/90 leading-snug px-1.5 pb-1">Bekleme odasında</p>
           )}
         </div>
       </div>
@@ -624,6 +698,9 @@ function ClassroomAttendancePanel({
       <div className="flex items-center justify-between gap-1">
         <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
           Yoklama · {summary.present}/{summary.total}
+          {joinedStudents.length > 0 ? (
+            <span className="text-indigo-400/90 normal-case font-semibold"> · {joinedStudents.length} bağlı</span>
+          ) : null}
         </span>
         {vbSupported ? (
           <button
@@ -682,10 +759,16 @@ function ClassroomAttendancePanel({
             <ClassroomVideoTile tile={coachTile} muted={coachTile.isSelf} className="w-full h-full" />
           </div>
         ) : null}
-        <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-0.5">
-          {rosterStudents.map((s) => (
-            <div key={s.id} className="shrink-0 w-32">{studentRow(s, true)}</div>
-          ))}
+        <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-0.5 min-h-[7.5rem]">
+          {joinedStudents.length > 0 ? (
+            joinedStudents.map((s) => (
+              <div key={s.id} className="shrink-0 w-32">{studentRow(s, true)}</div>
+            ))
+          ) : (
+            <p className="text-[10px] text-slate-500 py-6 px-2 text-center w-full">
+              Henüz öğrenci katılmadı. Katıldıkça burada görünecek.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -702,13 +785,14 @@ function ClassroomAttendancePanel({
           ) : null}
         </div>
       ) : null}
-      {rosterStudents.length > 0 ? (
+      {joinedStudents.length > 0 ? (
         <div className="grid grid-cols-2 gap-1.5 overflow-y-auto custom-scrollbar min-h-0 flex-1">
-          {rosterStudents.map((s) => studentRow(s, true))}
+          {joinedStudents.map((s) => studentRow(s, true))}
         </div>
       ) : (
-        <p className="text-[10px] text-slate-600 text-center py-4 px-1">
-          Yoklama listesi boş. Oda oluştururken öğrenci davet edin veya oda adını grup adıyla eşleştirin.
+        <p className="text-[10px] text-slate-500 text-center py-6 px-2 border border-dashed border-white/10 rounded-lg">
+          Henüz öğrenci katılmadı.
+          <span className="block mt-1 text-slate-600">Öğrenciler derse girdikçe kareler burada belirir.</span>
         </p>
       )}
     </aside>
@@ -1004,8 +1088,11 @@ function resolveLiveAttendanceStatus(
 ): LiveAttendanceUiStatus {
   const sid = normalizeStudentId(studentId);
   if (marks?.[sid]) return marks[sid];
-  if (pendingIds.some((k) => idsEqual(k, sid))) return 'waiting';
-  if (admittedIds.some((k) => idsEqual(k, sid)) || hasVideoStream) return 'present';
+  const joinedLesson =
+    admittedIds.some((k) => idsEqual(k, sid)) ||
+    pendingIds.some((k) => idsEqual(k, sid)) ||
+    hasVideoStream;
+  if (joinedLesson) return 'present';
   return 'unset';
 }
 
@@ -1238,9 +1325,30 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       (sessionMedia.kickedStudentIds ?? []).some((kid) => idsEqual(kid, sidSelfNormEarly)),
     [isStudentView, sidSelfNormEarly, sessionMedia.kickedStudentIds],
   );
+  const canStudentRequestSpeak = useMemo(() => {
+    if (!isStudentView || !sidSelfNormEarly || isStudentKickedFromRoom) return false;
+    if (!isSupabaseBackend()) return true;
+    const admitted = (sessionMedia.admittedStudentIds ?? []).some((kid) => idsEqual(kid, sidSelfNormEarly));
+    const pending = (sessionMedia.pendingStudentIds ?? []).some((kid) => idsEqual(kid, sidSelfNormEarly));
+    return admitted || pending;
+  }, [
+    isStudentView,
+    sidSelfNormEarly,
+    isStudentKickedFromRoom,
+    sessionMedia.admittedStudentIds,
+    sessionMedia.pendingStudentIds,
+  ]);
   const [chatMessages, setChatMessages] = useState<LiveChatMessage[]>([]);
+
+  useEffect(() => {
+    chatMessagesRef.current = chatMessages;
+  }, [chatMessages]);
   const [chatInput, setChatInput] = useState('');
   const [chatSending, setChatSending] = useState(false);
+  const [chatSendError, setChatSendError] = useState<string | null>(null);
+  const chatMessagesRef = useRef<LiveChatMessage[]>([]);
+  const pendingChatIdsRef = useRef<Set<string>>(new Set());
+  const pendingHandRaiseRef = useRef(false);
   /** Koç: özel sohbet hedefi; null = genel sohbet */
   const [chatPrivateStudentId, setChatPrivateStudentId] = useState<string | null>(null);
   /** Öğrenci: antrenörle özel sohbet modu */
@@ -1392,6 +1500,22 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   );
   const [attendanceSaving, setAttendanceSaving] = useState(false);
   const [attendanceSaveToast, setAttendanceSaveToast] = useState<string | null>(null);
+  const [speakRequestNotice, setSpeakRequestNotice] = useState<string | null>(null);
+  const speakRequestNoticeTimerRef = useRef<number | null>(null);
+
+  const showSpeakRequestNotice = useCallback((message: string, autoClearMs?: number) => {
+    setSpeakRequestNotice(message);
+    if (speakRequestNoticeTimerRef.current != null) {
+      window.clearTimeout(speakRequestNoticeTimerRef.current);
+      speakRequestNoticeTimerRef.current = null;
+    }
+    if (autoClearMs != null && autoClearMs > 0) {
+      speakRequestNoticeTimerRef.current = window.setTimeout(() => {
+        setSpeakRequestNotice(null);
+        speakRequestNoticeTimerRef.current = null;
+      }, autoClearMs);
+    }
+  }, []);
 
   const classroomRosterStudents = useMemo(() => {
     const roster = sessionMedia.rosterStudentIds ?? [];
@@ -1830,8 +1954,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   /** Paylaşılan tahta + medya + sohbet: Supabase’ten oku ve periyodik güncelle */
   useEffect(() => {
     if (!isSupabaseBackend()) return;
-    const sb = getServiceSupabase();
-    if (!sb) return;
+    const sb = getLiveLessonReadClient();
     const fetchState = async () => {
       /** '*' = yalnızca tabloda gerçekten var olan kolonlar döner; eksik kolon adı 400 hatası vermez */
       const result = await sb.from('live_lesson_state').select('*').eq('id', effectiveRoomId).maybeSingle();
@@ -1918,6 +2041,15 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       /** session_media kolonu yoksa bu alan gelmez; varsa ({} dahil) her zaman işle */
       if (data.session_media != null && typeof data.session_media === 'object') {
         let sm = smFromRow ?? parseSessionMedia(data.session_media);
+        if (isStudentView && pendingHandRaiseRef.current) {
+          const sid = normalizeStudentId(studentIdProp);
+          if (sid) {
+            const hands = sm.handRaisedStudentIds ?? [];
+            if (!hands.some((kid) => idsEqual(kid, sid))) {
+              sm = { ...sm, handRaisedStudentIds: [...hands, sid] };
+            }
+          }
+        }
         /** Optimistik koç mik/kam güncellemesi, yoklamanın eski satırla üzerine yazmasını engelle */
         if (!isStudentView && Date.now() < coachLocalMediaShieldUntilRef.current) {
           const cur = sessionMediaRef.current;
@@ -1939,26 +2071,20 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           }
         }
       }
-      if (Array.isArray(data.chat_messages)) {
-        const raw = data.chat_messages as unknown[];
-        const parsed: LiveChatMessage[] = raw
-          .filter((x): x is Record<string, unknown> => x != null && typeof x === 'object')
-          .map((x) => ({
-            id: String(x.id ?? ''),
-            studentId: String(x.studentId ?? ''),
-            role: x.role === 'coach' ? 'coach' : 'student',
-            text: String(x.text ?? ''),
-            at: String(x.at ?? ''),
-            privateWithStudentId: x.privateWithStudentId ? String(x.privateWithStudentId) : undefined,
-          }))
-          .filter((m) => m.id && m.text);
+      if ('chat_messages' in data) {
+        const parsed = parseStoredChatMessages(data.chat_messages) as LiveChatMessage[];
+        const remoteIds = new Set(parsed.map((m) => m.id));
+        const pendingLocal = chatMessagesRef.current.filter(
+          (m) => pendingChatIdsRef.current.has(m.id) && !remoteIds.has(m.id),
+        );
+        const merged = mergeChatMessageLists(parsed, pendingLocal) as LiveChatMessage[];
         /** Toplu derste öğrenci belleğinde ve ekranda yalnızca antrenör + kendi mesajları (diğer öğrenciler gizli) */
         if (isStudentView) {
           const sid = normalizeStudentId(studentIdProp);
           if (!sid) setChatMessages([]);
           else {
             setChatMessages(
-              parsed.filter(
+              merged.filter(
                 (m) =>
                   (m.privateWithStudentId && idsEqual(m.privateWithStudentId, sid)) ||
                   (!m.privateWithStudentId &&
@@ -1967,7 +2093,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             );
           }
         } else {
-          setChatMessages(parsed);
+          setChatMessages(merged);
         }
       }
     };
@@ -2446,37 +2572,56 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const pushSessionMediaRemote = useCallback(
     async (next: SessionMediaState) => {
       if (!isSupabaseBackend()) return;
-      const sb = getServiceSupabase();
-      if (!sb) return;
-      sessionMediaRef.current = next;
-      setSessionMedia(next);
+      const { handRaisedStudentIds: _hands, ...nextWithoutHands } = next;
+      sessionMediaRef.current = {
+        ...nextWithoutHands,
+        handRaisedStudentIds: sessionMediaRef.current.handRaisedStudentIds ?? [],
+      };
+      setSessionMedia((prev) => ({
+        ...nextWithoutHands,
+        handRaisedStudentIds: prev.handRaisedStudentIds ?? [],
+      }));
       if (schemaHasSessionMediaRef.current === false) return;
-      const { error } = await sb
-        .from('live_lesson_state')
-        .update({ session_media: next, updated_at: new Date().toISOString() })
-        .eq('id', effectiveRoomId);
-      if (error) {
-        if (isPgColumnError(error)) schemaHasSessionMediaRef.current = false;
-        else console.warn('[LiveLesson] session_media güncellenemedi:', error.message ?? error);
+      const result = await persistSessionMediaReplace(
+        effectiveRoomId,
+        nextWithoutHands,
+        getServiceSupabase,
+      );
+      if (result.missingColumn) schemaHasSessionMediaRef.current = false;
+      else if (!result.ok) {
+        console.warn('[LiveLesson] session_media güncellenemedi:', result.error ?? result);
       } else {
         schemaHasSessionMediaRef.current = true;
+        if (result.sessionMedia) {
+          const sm = parseSessionMedia(result.sessionMedia);
+          sessionMediaRef.current = sm;
+          setSessionMedia(sm);
+        }
       }
     },
-    [effectiveRoomId, isPgColumnError]
+    [effectiveRoomId],
   );
 
   const sendChatMessage = useCallback(async () => {
     const text = chatInput.trim().slice(0, 600);
     if (!text || !isSupabaseBackend()) return;
-    if (schemaHasChatMessagesRef.current === false) return;
-    const sb = getServiceSupabase();
-    if (!sb) return;
+    if (schemaHasChatMessagesRef.current === false) {
+      setChatSendError('Sohbet bu sunucuda etkin değil (chat_messages kolonu eksik).');
+      return;
+    }
     const sid = !isStudentView ? 'coach' : normalizeStudentId(studentIdProp);
     if (!sid) return;
     const role: LiveChatMessage['role'] = !isStudentView ? 'coach' : 'student';
+    const sidNorm = normalizeStudentId(studentIdProp);
+    const coachPrivateTarget = chatPrivateStudentId ? normalizeStudentId(chatPrivateStudentId) : '';
+    const studentInPrivateThread =
+      isStudentView &&
+      !!sidNorm &&
+      (studentChatPrivate ||
+        chatMessages.some((m) => m.privateWithStudentId && idsEqual(m.privateWithStudentId, sidNorm)));
     const privateWithStudentId = isStudentView
-      ? (studentChatPrivate ? normalizeStudentId(studentIdProp) : undefined)
-      : (chatPrivateStudentId ?? undefined);
+      ? (studentInPrivateThread ? sidNorm : undefined)
+      : (coachPrivateTarget || undefined);
     const msg: LiveChatMessage = {
       id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
       studentId: sid,
@@ -2487,24 +2632,24 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     };
     setChatInput('');
     setChatSending(true);
-    setChatMessages((prev) => {
-      const next = [...prev, msg];
-      void sb
-        .from('live_lesson_state')
-        .update({ chat_messages: next, updated_at: new Date().toISOString() })
-        .eq('id', effectiveRoomId)
-        .then(({ error }) => {
-          if (error) {
-            if (isPgColumnError(error)) schemaHasChatMessagesRef.current = false;
-            else console.warn('[LiveLesson] chat_messages güncellenemedi:', error.message ?? error);
-          } else {
-            schemaHasChatMessagesRef.current = true;
-          }
-        })
-        .finally(() => setChatSending(false));
-      return next;
-    });
-  }, [chatInput, effectiveRoomId, isStudentView, studentIdProp, isPgColumnError, chatPrivateStudentId, studentChatPrivate]);
+    setChatSendError(null);
+    pendingChatIdsRef.current.add(msg.id);
+    setChatMessages((prev) => [...prev, msg]);
+    try {
+      const result = await persistLiveLessonChatMessage(effectiveRoomId, msg, getServiceSupabase);
+      if (!result.ok) {
+        pendingChatIdsRef.current.delete(msg.id);
+        setChatMessages((prev) => prev.filter((m) => m.id !== msg.id));
+        setChatSendError(result.error ?? 'Mesaj gönderilemedi');
+        if (result.missingColumn) schemaHasChatMessagesRef.current = false;
+      } else {
+        pendingChatIdsRef.current.delete(msg.id);
+        schemaHasChatMessagesRef.current = true;
+      }
+    } finally {
+      setChatSending(false);
+    }
+  }, [chatInput, effectiveRoomId, isStudentView, studentIdProp, chatPrivateStudentId, studentChatPrivate, chatMessages]);
 
   const openPrivateChatWithStudent = useCallback((studentId: string) => {
     const id = normalizeStudentId(studentId);
@@ -2523,6 +2668,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const hasFloor = idsEqual(sessionMedia.floorStudentId, id);
       const audioOpenForCoach = !blocked && hasFloor;
       const clearHand = (sessionMedia.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
+      if (clearHand.length < (sessionMedia.handRaisedStudentIds ?? []).length) {
+        void persistSessionMediaOp(effectiveRoomId, 'handLower', id, getServiceSupabase);
+      }
       if (audioOpenForCoach) {
         const nextBlocked = { ...sessionMedia.studentMicBlocked, [id]: true };
         let floor = sessionMedia.floorStudentId;
@@ -2531,58 +2679,92 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           ...sessionMedia,
           studentMicBlocked: nextBlocked,
           floorStudentId: floor,
-          handRaisedStudentIds: clearHand,
         });
       } else {
         void pushSessionMediaRemote({
           ...sessionMedia,
           floorStudentId: id,
           studentMicBlocked: { ...sessionMedia.studentMicBlocked, [id]: false },
-          handRaisedStudentIds: clearHand,
         });
       }
       window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
     },
-    [sessionMedia, pushSessionMediaRemote]
+    [sessionMedia, pushSessionMediaRemote, effectiveRoomId],
   );
 
   const grantFloorToStudent = useCallback(
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
       if (!id || isStudentView) return;
-      const clearHand = (sessionMedia.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
+      void persistSessionMediaOp(effectiveRoomId, 'handLower', id, getServiceSupabase).then((result) => {
+        if (result.ok && result.sessionMedia) {
+          const sm = parseSessionMedia(result.sessionMedia);
+          sessionMediaRef.current = sm;
+          setSessionMedia(sm);
+        }
+      });
       void pushSessionMediaRemote({
         ...sessionMedia,
         floorStudentId: id,
         studentMicBlocked: { ...sessionMedia.studentMicBlocked, [id]: false },
-        handRaisedStudentIds: clearHand,
       });
     },
-    [isStudentView, sessionMedia, pushSessionMediaRemote],
+    [isStudentView, sessionMedia, pushSessionMediaRemote, effectiveRoomId],
   );
 
   const requestSpeakFloor = useCallback(() => {
-    if (!isStudentView || !isStudentAdmittedToClass) return;
+    if (!canStudentRequestSpeak) return;
     const sid = normalizeStudentId(studentIdProp);
     if (!sid) return;
     const raised = sessionMedia.handRaisedStudentIds ?? [];
     if (raised.some((kid) => idsEqual(kid, sid))) return;
-    void pushSessionMediaRemote({
-      ...sessionMedia,
-      handRaisedStudentIds: [...raised, sid],
+    pendingHandRaiseRef.current = true;
+    showSpeakRequestNotice('Söz isteğiniz gönderiliyor…');
+    setSessionMedia((prev) => ({
+      ...prev,
+      handRaisedStudentIds: [...(prev.handRaisedStudentIds ?? []), sid],
+    }));
+    void persistSessionMediaOp(effectiveRoomId, 'handRaise', sid, getServiceSupabase).then((result) => {
+      pendingHandRaiseRef.current = false;
+      if (!result.ok) {
+        setSessionMedia((prev) => ({
+          ...prev,
+          handRaisedStudentIds: (prev.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, sid)),
+        }));
+        showSpeakRequestNotice(result.error ?? 'Söz isteği gönderilemedi. Tekrar deneyin.', 6000);
+        console.warn('[LiveLesson] handRaise başarısız:', result.error);
+        return;
+      }
+      if (result.sessionMedia) {
+        const sm = parseSessionMedia(result.sessionMedia);
+        sessionMediaRef.current = sm;
+        setSessionMedia(sm);
+      }
+      showSpeakRequestNotice('Söz isteğiniz antrenöre iletildi. Onay bekleniyor…');
     });
-  }, [isStudentView, isStudentAdmittedToClass, studentIdProp, sessionMedia, pushSessionMediaRemote]);
+  }, [canStudentRequestSpeak, studentIdProp, sessionMedia.handRaisedStudentIds, effectiveRoomId, showSpeakRequestNotice]);
 
   const cancelSpeakRequest = useCallback(() => {
     if (!isStudentView) return;
     const sid = normalizeStudentId(studentIdProp);
     if (!sid) return;
-    const raised = (sessionMedia.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, sid));
-    void pushSessionMediaRemote({
-      ...sessionMedia,
-      handRaisedStudentIds: raised,
+    setSessionMedia((prev) => ({
+      ...prev,
+      handRaisedStudentIds: (prev.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, sid)),
+    }));
+    setSpeakRequestNotice(null);
+    void persistSessionMediaOp(effectiveRoomId, 'handLower', sid, getServiceSupabase).then((result) => {
+      if (!result.ok) {
+        console.warn('[LiveLesson] handLower başarısız:', result.error);
+        return;
+      }
+      if (result.sessionMedia) {
+        const sm = parseSessionMedia(result.sessionMedia);
+        sessionMediaRef.current = sm;
+        setSessionMedia(sm);
+      }
     });
-  }, [isStudentView, studentIdProp, sessionMedia, pushSessionMediaRemote]);
+  }, [isStudentView, studentIdProp, effectiveRoomId]);
 
   const assignIndependentBoardToStudent = useCallback(
     (studentId: string, snapshot?: LiveStudentBoardSnapshot) => {
@@ -2727,13 +2909,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         const agoraUid = agoraUidForStudent(s.id);
         const hasVideo = !!(agoraUid && remoteStreamsByUid[agoraUid]);
         const resolved = resolveLiveAttendanceStatus(sid, marks, admitted, pending, hasVideo);
-        let status: 'present' | 'absent' | 'late' | 'excused' =
+        const status: 'present' | 'absent' | 'late' | 'excused' =
           marks[sid] ??
-          (resolved === 'present' || resolved === 'late' || resolved === 'excused'
-            ? resolved
-            : resolved === 'waiting' || resolved === 'unset'
-              ? 'absent'
-              : 'absent');
+          (resolved === 'present' || resolved === 'late' || resolved === 'excused' ? resolved : 'absent');
         await addAttendanceRecord({
           date: today,
           studentId: sid,
@@ -2767,12 +2945,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const nextBlocked = { ...sessionMedia.studentMicBlocked, [id]: true };
       let floor = sessionMedia.floorStudentId;
       if (idsEqual(floor, id)) floor = null;
+      void persistSessionMediaOp(effectiveRoomId, 'handLower', id, getServiceSupabase);
       void pushSessionMediaRemote({
         ...sessionMedia,
         kickedStudentIds: Array.from(kicks),
         pendingStudentIds: (sessionMedia.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
         admittedStudentIds: (sessionMedia.admittedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
-        handRaisedStudentIds: (sessionMedia.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
         independentBoardStudentIds: (sessionMedia.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
         studentBoards: Object.fromEntries(
           Object.entries(sessionMedia.studentBoards ?? {}).filter(([kid]) => !idsEqual(kid, id)),
@@ -2783,7 +2961,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       });
       setParticipantMenuStudentId(null);
     },
-    [sessionMedia, pushSessionMediaRemote, isStudentView]
+    [sessionMedia, pushSessionMediaRemote, isStudentView, effectiveRoomId],
   );
 
   const readmitParticipant = useCallback(
@@ -2883,9 +3061,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (pending.some((kid) => idsEqual(kid, sid))) return;
     if (studentJoinRegisteredRef.current) return;
     studentJoinRegisteredRef.current = true;
-    void pushSessionMediaRemote({
-      ...sessionMedia,
-      pendingStudentIds: [...pending, sid],
+    void persistSessionMediaOp(effectiveRoomId, 'joinPending', sid, getServiceSupabase).then((result) => {
+      if (result.ok && result.sessionMedia) {
+        const sm = parseSessionMedia(result.sessionMedia);
+        sessionMediaRef.current = sm;
+        setSessionMedia(sm);
+      } else if (!result.ok) {
+        console.warn('[LiveLesson] joinPending başarısız:', result.error);
+      }
     });
   }, [
     isStudentView,
@@ -2928,6 +3111,23 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   );
   const studentMicToggleDisabled =
     isStudentView && (!studentHasSpeakFloor || (sessionMedia.studentMicBlocked[sidSelfMedia] ?? false));
+
+  const prevStudentHadFloorRef = useRef(false);
+  useEffect(() => {
+    if (!isStudentView) return;
+    if (studentHasSpeakFloor && !prevStudentHadFloorRef.current) {
+      showSpeakRequestNotice('Antrenör size söz hakkı verdi! Mikrofonu açabilirsiniz.', 8000);
+    }
+    prevStudentHadFloorRef.current = studentHasSpeakFloor;
+  }, [isStudentView, studentHasSpeakFloor, showSpeakRequestNotice]);
+
+  useEffect(() => {
+    return () => {
+      if (speakRequestNoticeTimerRef.current != null) {
+        window.clearTimeout(speakRequestNoticeTimerRef.current);
+      }
+    };
+  }, []);
 
   const toggleLocalMic = useCallback(() => {
     if (!isStudentView) {
@@ -3016,25 +3216,80 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const visibleChatMessages = useMemo(() => {
     const sorted = [...chatMessages].sort((a, b) => a.at.localeCompare(b.at));
-    const isPrivate = (m: LiveChatMessage) => !!m.privateWithStudentId;
 
     if (isStudentView) {
       const sid = normalizeStudentId(studentIdProp);
       if (!sid) return [];
       return sorted.filter((m) => {
-        if (studentChatPrivate) {
-          return isPrivate(m) && idsEqual(m.privateWithStudentId, sid);
+        if (m.privateWithStudentId) {
+          return idsEqual(m.privateWithStudentId, sid);
         }
-        if (isPrivate(m)) return false;
+        if (studentChatPrivate) return false;
         return m.role === 'coach' || (m.role === 'student' && idsEqual(m.studentId, sid));
       });
     }
 
     if (chatPrivateStudentId) {
-      return sorted.filter((m) => isPrivate(m) && idsEqual(m.privateWithStudentId, chatPrivateStudentId));
+      const pid = normalizeStudentId(chatPrivateStudentId);
+      return sorted.filter((m) => {
+        if (m.role === 'coach') {
+          return !!m.privateWithStudentId && idsEqual(m.privateWithStudentId, pid);
+        }
+        if (m.role === 'student') {
+          return idsEqual(m.studentId, pid);
+        }
+        return false;
+      });
     }
-    return sorted.filter((m) => !isPrivate(m));
+    return sorted.filter((m) => !m.privateWithStudentId);
   }, [chatMessages, isStudentView, studentIdProp, chatPrivateStudentId, studentChatPrivate]);
+
+  const studentHasCoachPrivateThread = useMemo(() => {
+    if (!isStudentView) return false;
+    const sid = normalizeStudentId(studentIdProp);
+    if (!sid) return false;
+    return chatMessages.some(
+      (m) => m.role === 'coach' && m.privateWithStudentId && idsEqual(m.privateWithStudentId, sid),
+    );
+  }, [chatMessages, isStudentView, studentIdProp]);
+
+  const lastAutoPrivateCoachMsgIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isStudentView) return;
+    const sid = normalizeStudentId(studentIdProp);
+    if (!sid) return;
+    const coachPrivate = chatMessages
+      .filter((m) => m.role === 'coach' && m.privateWithStudentId && idsEqual(m.privateWithStudentId, sid))
+      .sort((a, b) => a.at.localeCompare(b.at));
+    const latest = coachPrivate[coachPrivate.length - 1];
+    if (!latest || latest.id === lastAutoPrivateCoachMsgIdRef.current) return;
+    lastAutoPrivateCoachMsgIdRef.current = latest.id;
+    setStudentChatPrivate(true);
+    setSidebarTab('sohbet');
+    setShowChatDrawer(true);
+  }, [chatMessages, isStudentView, studentIdProp]);
+
+  const chatStudentStripMeta = useMemo(() => {
+    const writers = new Set<string>();
+    let lastWriter: string | null = null;
+    const relevant = chatMessages.filter((m) => {
+      if (chatPrivateStudentId) {
+        const pid = normalizeStudentId(chatPrivateStudentId);
+        if (m.role === 'student' && idsEqual(m.studentId, pid)) return true;
+        return !!m.privateWithStudentId && idsEqual(m.privateWithStudentId, pid);
+      }
+      return !m.privateWithStudentId;
+    });
+    const sorted = [...relevant].sort((a, b) => a.at.localeCompare(b.at));
+    for (const m of sorted) {
+      if (m.role !== 'student') continue;
+      const sid = normalizeStudentId(m.studentId);
+      if (!sid) continue;
+      writers.add(sid);
+      lastWriter = sid;
+    }
+    return { writers, lastWriter };
+  }, [chatMessages, chatPrivateStudentId]);
 
   const chatSenderName = useCallback(
     (msg: LiveChatMessage) => {
@@ -4513,6 +4768,53 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     <div
       className={`flex flex-col overflow-hidden rounded-none sm:rounded-2xl lg:rounded-3xl border-0 sm:border border-white/10 bg-[#0f172a] animate-in fade-in duration-500 shadow-[0_24px_70px_rgba(0,0,0,0.45)] ring-0 sm:ring-1 ring-indigo-500/10 atmospheric-bg h-full min-h-0 max-h-[100dvh]`}
     >
+      {isStudentView && studentHasRaisedHand && !studentHasSpeakFloor ? (
+        <div
+          className="shrink-0 flex items-center justify-center gap-2 px-3 py-2.5 bg-amber-500/20 border-b border-amber-400/40 text-amber-50 text-[13px] font-semibold"
+          role="status"
+          aria-live="polite"
+        >
+          <Hand className="w-4 h-4 shrink-0 text-amber-300 animate-pulse" aria-hidden />
+          <span>Söz isteğiniz antrenöre iletildi — onay bekleniyor</span>
+        </div>
+      ) : null}
+      {isStudentView && studentHasSpeakFloor ? (
+        <div
+          className="shrink-0 flex items-center justify-center gap-2 px-3 py-2.5 bg-emerald-500/20 border-b border-emerald-400/40 text-emerald-50 text-[13px] font-semibold"
+          role="status"
+          aria-live="polite"
+        >
+          <Mic className="w-4 h-4 shrink-0 text-emerald-300" aria-hidden />
+          <span>Söz hakkınız var — mikrofonu açabilirsiniz</span>
+        </div>
+      ) : null}
+      {!isStudentView && (sessionMedia.handRaisedStudentIds ?? []).length > 0 ? (
+        <div
+          className="shrink-0 flex items-center justify-center gap-2 px-3 py-2.5 bg-indigo-500/25 border-b border-indigo-400/40 text-indigo-50 text-[13px] font-semibold cursor-pointer hover:bg-indigo-500/30 transition-colors"
+          role="status"
+          aria-live="polite"
+          onClick={() => {
+            setSidebarTab('katilimcilar');
+            setMobileClassroomPanel('sidebar');
+          }}
+        >
+          <Hand className="w-4 h-4 shrink-0 text-indigo-200 animate-pulse" aria-hidden />
+          <span>
+            {(sessionMedia.handRaisedStudentIds ?? []).length} öğrenci söz istiyor — Katılımcılar sekmesine tıklayın
+          </span>
+        </div>
+      ) : null}
+      {speakRequestNotice &&
+      isStudentView &&
+      !studentHasRaisedHand &&
+      !studentHasSpeakFloor ? (
+        <div
+          className="shrink-0 px-3 py-2 text-center text-[12px] font-medium border-b border-rose-500/30 bg-rose-500/15 text-rose-100"
+          role="alert"
+        >
+          {speakRequestNotice}
+        </div>
+      ) : null}
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col lg:flex-row pb-14 lg:pb-0">
         {/* ── Classroom: Tahta (ekrana oturan kare) ── */}
         <section className={`${mobileClassroomPanel === 'board' ? 'flex' : 'hidden'} lg:flex flex-1 lg:flex-[1.85] xl:flex-[2] min-w-0 min-h-0 flex-col bg-gradient-to-b from-slate-900/90 via-[#0f172a] to-slate-950 lg:border-r lg:border-white/10`}>
@@ -5317,21 +5619,43 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                     <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 divide-y divide-amber-500/10">
                       {(sessionMedia.pendingStudentIds ?? []).map((pid) => {
                         const pendingStudent = students.find((s) => idsEqual(s.id, pid));
+                        const handRaised = (sessionMedia.handRaisedStudentIds ?? []).some((kid) =>
+                          idsEqual(kid, pid),
+                        );
                         return (
                           <div key={pid} className="flex items-center justify-between gap-2 px-3 py-2.5">
-                            <div className="min-w-0">
-                              <p className="text-[13px] font-semibold text-white truncate">
-                                {pendingStudent?.name ?? pid}
-                              </p>
-                              <p className="text-[11px] text-amber-400/80">Onay bekliyor</p>
+                            <div className="min-w-0 flex items-center gap-2">
+                              {handRaised ? <Hand className="w-4 h-4 text-indigo-300 shrink-0" /> : null}
+                              <div className="min-w-0">
+                                <p className="text-[13px] font-semibold text-white truncate">
+                                  {pendingStudent?.name ?? pid}
+                                </p>
+                                <p className={`text-[11px] ${handRaised ? 'text-indigo-300' : 'text-amber-400/80'}`}>
+                                  {handRaised ? 'Söz istedi' : 'Onay bekliyor'}
+                                </p>
+                              </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => admitStudentToClass(pid)}
-                              className="shrink-0 px-3 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-[11px] font-bold"
-                            >
-                              Derse al
-                            </button>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              {handRaised ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    admitStudentToClass(pid);
+                                    grantFloorToStudent(pid);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-500 text-white text-[11px] font-bold"
+                                >
+                                  Söz ver
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() => admitStudentToClass(pid)}
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-[11px] font-bold"
+                              >
+                                Derse al
+                              </button>
+                            </div>
                           </div>
                         );
                       })}
@@ -5384,9 +5708,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         {attendanceSaving ? 'Kaydediliyor…' : 'Yoklamayı kaydet'}
                       </button>
                     </div>
-                    <p className="text-[11px] text-slate-400 leading-snug">
-                      Tahta yanındaki panelden ✓ geldi / ✗ yok işaretleyin. Derse bağlanan öğrenciler otomatik &quot;Geldi&quot; olur.
-                    </p>
                     {attendanceSaveToast ? (
                       <p className="text-[11px] text-indigo-300">{attendanceSaveToast}</p>
                     ) : null}
@@ -5807,11 +6128,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                           Genel sohbet
                         </button>
                       </div>
-                    ) : !isStudentView ? (
-                      <p className="shrink-0 px-3 py-1.5 text-[10px] text-slate-500 border-b border-white/5">
-                        Öğrenci adına tıklayarak özel sohbet başlatabilirsiniz.
-                      </p>
-                    ) : (
+                    ) : !isStudentView ? null : (
                       <div className="shrink-0 px-3 py-1.5 border-b border-white/5">
                         <button
                           type="button"
@@ -5822,9 +6139,67 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         </button>
                       </div>
                     )}
+                    {!isStudentView && classroomRosterStudents.length > 0 ? (
+                      <div className="shrink-0 px-2 py-2 border-b border-white/5">
+                        <p className="text-[9px] text-slate-500 px-0.5 mb-1">
+                          {chatPrivateStudentId ? 'Öğrenci değiştir' : 'Özel sohbet · yeşil = yazdı'}
+                        </p>
+                        <div className="flex flex-nowrap gap-1 overflow-x-auto custom-scrollbar pb-0.5">
+                          {classroomRosterStudents.map((s) => {
+                            const sid = normalizeStudentId(s.id);
+                            const isAdmitted = (sessionMedia.admittedStudentIds ?? []).some((k) => idsEqual(k, sid));
+                            const isPending = (sessionMedia.pendingStudentIds ?? []).some((k) => idsEqual(k, sid));
+                            const isSelected = chatPrivateStudentId ? idsEqual(chatPrivateStudentId, sid) : false;
+                            const hasWritten = chatStudentStripMeta.writers.has(sid);
+                            const isLastWriter = !!(chatStudentStripMeta.lastWriter && idsEqual(chatStudentStripMeta.lastWriter, sid));
+                            return (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => openPrivateChatWithStudent(s.id)}
+                                title={`${s.name}${hasWritten ? ' · mesaj yazdı' : ''}`}
+                                className={`relative shrink-0 inline-flex items-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-bold border transition-colors ${
+                                  isSelected
+                                    ? 'bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-900/40'
+                                    : isLastWriter
+                                      ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-100'
+                                      : hasWritten
+                                        ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-200'
+                                        : isAdmitted
+                                          ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200 hover:bg-indigo-500/20'
+                                          : isPending
+                                            ? 'bg-amber-500/10 border-amber-500/35 text-amber-200'
+                                            : 'bg-slate-800/80 border-white/10 text-slate-400 hover:bg-slate-700 hover:text-white'
+                                }`}
+                              >
+                                <span className="max-w-[4.5rem] truncate">{shortChatStudentName(s.name)}</span>
+                                {hasWritten ? (
+                                  <span
+                                    className={`shrink-0 rounded-full ${
+                                      isLastWriter ? 'w-2 h-2 bg-emerald-400 ring-2 ring-emerald-300/50' : 'w-1.5 h-1.5 bg-emerald-400'
+                                    }`}
+                                    aria-hidden
+                                  />
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : !isStudentView ? (
+                      <p className="shrink-0 px-3 py-2 text-[10px] text-slate-600 text-center border-b border-white/5">
+                        Bu odada öğrenci listesi yok.
+                      </p>
+                    ) : null}
                     <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 custom-scrollbar">
                       {visibleChatMessages.length === 0 ? (
-                        <p className="text-xs text-slate-600 text-center py-6">Henüz mesaj yok.</p>
+                        <p className="text-xs text-slate-600 text-center py-6">
+                          {chatPrivateStudentId || studentChatPrivate
+                            ? 'Henüz mesaj yok.'
+                            : isStudentView
+                              ? 'Henüz mesaj yok.'
+                              : 'Henüz genel mesaj yok. Yukarıdan öğrenci seçerek özel yazışma başlatabilirsiniz.'}
+                        </p>
                       ) : (
                         visibleChatMessages.map((msg) => {
                           const sender = chatSenderName(msg);
@@ -5844,12 +6219,18 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                               <button
                                 type="button"
                                 onClick={() => openPrivateChatWithStudent(msg.studentId)}
-                                className="text-[10px] font-bold text-indigo-300 hover:text-indigo-200 mb-0.5 block"
+                                className="text-[10px] font-bold text-indigo-300 hover:text-indigo-200 mb-0.5 inline-flex items-center gap-1"
                               >
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" aria-hidden />
                                 {sender}
                               </button>
                             ) : (
-                              <p className="text-[10px] font-bold text-slate-400 mb-0.5">{sender}</p>
+                              <p className="text-[10px] font-bold text-slate-400 mb-0.5 inline-flex items-center gap-1">
+                                {!isCoachMsg ? (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" aria-hidden />
+                                ) : null}
+                                {sender}
+                              </p>
                             )}
                             {msg.text}
                           </div>
@@ -5857,7 +6238,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         })
                       )}
                     </div>
-                    <div className="p-2 border-t border-white/10 flex gap-2">
+                    <div className="p-2 border-t border-white/10 flex flex-col gap-1.5">
+                      {chatSendError ? (
+                        <p className="text-[11px] text-rose-400 px-1">{chatSendError}</p>
+                      ) : null}
+                      <div className="flex gap-2">
                       <input
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
@@ -5877,6 +6262,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       >
                         <Send className="w-4 h-4" />
                       </button>
+                      </div>
                     </div>
               </div>
             )}
@@ -6042,7 +6428,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           <div className="row-start-4 border-t border-white/10 bg-slate-900/80 px-3 py-2 flex items-center justify-between gap-2">
             <span className="text-[11px] font-mono text-slate-400 tabular-nums shrink-0">{wallClock}</span>
             <div className="flex items-center justify-end gap-1.5">
-              {isStudentView && isStudentAdmittedToClass ? (
+              {isStudentView && canStudentRequestSpeak ? (
                 studentHasSpeakFloor ? null : studentHasRaisedHand ? (
                   <button
                     type="button"
@@ -6128,10 +6514,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               <button
                 type="button"
                 onClick={() => setSidebarTab('sohbet')}
-                className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${sidebarTab === 'sohbet' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600/80'}`}
+                className={`relative w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${sidebarTab === 'sohbet' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600/80'}`}
                 title="Sohbet"
               >
                 <MessageCircle className="w-4 h-4" />
+                {isStudentView && studentHasCoachPrivateThread && sidebarTab !== 'sohbet' ? (
+                  <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-slate-900" aria-hidden />
+                ) : null}
               </button>
               <button
                 type="button"

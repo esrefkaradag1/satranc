@@ -5,6 +5,9 @@
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { URL } from 'node:url';
+import { insertHomeworkAttemptViaEnv } from '../lib/homeworkAttemptDb.mjs';
+import { appendLiveLessonChatViaEnv } from '../lib/liveLessonChatDb.mjs';
+import { replaceSessionMediaViaEnv, sessionMediaOpViaEnv } from '../lib/liveLessonSessionMediaDb.mjs';
 
 const PORT = Number(process.env.API_PORT || 3001);
 const HOST = process.env.API_HOST || '127.0.0.1';
@@ -28,6 +31,36 @@ function sendText(res, status, body, contentType, cacheControl) {
     ...(cacheControl ? { 'Cache-Control': cacheControl } : {}),
   });
   res.end(body);
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  if (chunks.length === 0) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return {};
+  }
+}
+
+async function handleHomeworkAttempt(req, res) {
+  const body = await readJsonBody(req);
+  const result = await insertHomeworkAttemptViaEnv(body);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLiveLessonChat(req, res) {
+  const body = await readJsonBody(req);
+  const result = await appendLiveLessonChatViaEnv(body);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLiveLessonSessionMedia(req, res) {
+  const body = await readJsonBody(req);
+  const result =
+    body.replace === true ? await replaceSessionMediaViaEnv(body) : await sessionMediaOpViaEnv(body);
+  return sendJson(res, result.status, result.body);
 }
 
 function parseSeconds(value) {
@@ -262,6 +295,18 @@ export async function dispatchApi(req, res, url) {
     }
     if (path === '/api/lichess-proxy') {
       await handleLichessProxy(url, req, res);
+      return true;
+    }
+    if (path === '/api/homework-attempt' && req.method === 'POST') {
+      await handleHomeworkAttempt(req, res);
+      return true;
+    }
+    if (path === '/api/live-lesson-chat' && req.method === 'POST') {
+      await handleLiveLessonChat(req, res);
+      return true;
+    }
+    if (path === '/api/live-lesson-session-media' && req.method === 'POST') {
+      await handleLiveLessonSessionMedia(req, res);
       return true;
     }
 

@@ -113,7 +113,7 @@ export interface LichessPuzzleCSVRow {
 export function csvRowToPuzzle(row: LichessPuzzleCSVRow): Puzzle {
   const { category, theme } = translateThemes(row.Themes);
   const difficulty = ratingToDifficulty(row.Rating);
-  /** Lichess CSV: Moves = tüm çözüm hattı (UCI, boşlukla); ilk hamle de çözümün parçası */
+  /** Lichess CSV: Moves = tüm çözüm hattı (UCI); ilk hamle rakibin kurulumu — oynatma sırasında uygulanır. */
   const uciMoves = row.Moves.trim().split(/\s+/).filter(Boolean);
 
   const themeLabels = row.Themes.split(' ').filter(Boolean);
@@ -130,6 +130,7 @@ export function csvRowToPuzzle(row: LichessPuzzleCSVRow): Puzzle {
 
   return {
     id: row.PuzzleId,
+    lichessId: row.PuzzleId,
     fen: row.FEN,
     solution: uciMoves,
     title,
@@ -137,7 +138,7 @@ export function csvRowToPuzzle(row: LichessPuzzleCSVRow): Puzzle {
     points: ratingToPoints(row.Rating),
     category,
     theme,
-    hint: uciMoves[0] || '',
+    hint: uciMoves[1] || uciMoves[0] || '',
     lichessThemes: row.Themes,
     source: 'lichess',
   };
@@ -267,6 +268,7 @@ function lichessApiResponseToPuzzle(
   const title = titleOverride?.trim() || puzzleTitleFromThemes(themeList, r);
   return {
     id,
+    lichessId: id,
     fen,
     solution: sol,
     title,

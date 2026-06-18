@@ -18,6 +18,9 @@ export const EMPTY_TARGET: TargetFilter = {
   studentId: '',
 };
 
+/** Günlük program haftalık hedeflerinde tüm gruba toplu düzenleme sekmesi */
+export const PROGRAM_BULK_EDIT_ID = '__program_bulk__';
+
 export function studentInitials(name: string): string {
   const names = name.split(' ').filter(Boolean);
   if (names.length >= 2) return (names[0]![0] + names[names.length - 1]![0]).toUpperCase();
