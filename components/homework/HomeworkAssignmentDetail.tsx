@@ -51,7 +51,7 @@ export const HomeworkAssignmentDetail: React.FC<Props> = ({
   onResetStudent,
   onDelete,
 }) => {
-  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('cards');
   const hwPuzzles = useMemo(
     () => puzzles.filter((p) => homework.puzzles.includes(p.id)),
     [puzzles, homework.puzzles],
