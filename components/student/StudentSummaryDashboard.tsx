@@ -2,10 +2,9 @@ import React from 'react';
 import {
   Calendar, CalendarCheck, CalendarDays, CheckSquare, ChevronRight,
   ExternalLink, Image as ImageIcon, ShieldCheck, Trophy,
-  User, Video, Wallet, BarChart3,
+  User, Users, Video, Wallet, BarChart3,
 } from 'lucide-react';
 import type { Student, Transaction } from '../../types';
-import { getDisplayStudentNo } from '../../AppContext';
 import { Dashboard3DBackground } from '../dashboard/Dashboard3DBackground';
 import { DashboardHeroScene } from '../dashboard/DashboardHeroScene';
 import { QuickMenuButton, QuickStatCard } from '../dashboard/dashboardQuickUI';
@@ -50,7 +49,8 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
 }) => {
   const firstName = student.name.split(' ')[0];
   const todayLabel = new Date().toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' });
-  const studentNo = getDisplayStudentNo(student, students);
+  const groupName = student.group?.trim() || '—';
+  const groupMeta = [student.branchOffice, student.branch].filter(Boolean).join(' · ') || 'Henüz grup yok';
 
   return (
     <Dashboard3DBackground>
@@ -91,10 +91,11 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
               onClick={() => onTabChange('attendance')}
             />
             <QuickStatCard
-              icon={<User className="w-5 h-5" />}
-              value={`#${studentNo}`}
-              label="Öğrenci No"
-              sub={formatDateTR(student.registrationDate).slice(0, 6) || 'Kayıt'}
+              icon={<Users className="w-5 h-5" />}
+              value={groupName}
+              valueClassName="text-sm sm:text-base font-bold leading-tight line-clamp-2 px-1 normal-case tracking-tight"
+              label="Grup"
+              sub={groupMeta}
               bg="from-emerald-700 to-green-900"
               onClick={() => onTabChange('profile')}
             />
