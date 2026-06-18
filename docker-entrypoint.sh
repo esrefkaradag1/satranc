@@ -24,4 +24,15 @@ $(write_env VITE_API_URL)
 };
 EOF
 
+# Platform proxy API (Chess.com / Lichess) — Docker'da Vercel serverless yerine
+node /app/server/docker-api.mjs &
+API_PID=$!
+
+cleanup() {
+  if kill -0 "$API_PID" 2>/dev/null; then
+    kill "$API_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
 exec nginx -g 'daemon off;'

@@ -31,10 +31,11 @@ RUN npm run build
 
 FROM nginx:alpine
 
-RUN apk add --no-cache wget
+RUN apk add --no-cache wget nodejs
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY docker-entrypoint.sh /docker-entrypoint.sh
+COPY server/docker-api.mjs /app/server/docker-api.mjs
 RUN chmod +x /docker-entrypoint.sh
 COPY --from=builder /app/dist /usr/share/nginx/html
 
