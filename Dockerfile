@@ -35,7 +35,11 @@ RUN apk add --no-cache wget
 
 WORKDIR /app
 
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+
 COPY server/docker-api.mjs server/docker-production.mjs /app/server/
+COPY lib/homeworkAttemptDb.mjs lib/liveLessonChatDb.mjs lib/liveLessonSessionMediaDb.mjs /app/lib/
 COPY --from=builder /app/dist /app/dist
 
 ENV STATIC_DIR=/app/dist
