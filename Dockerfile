@@ -29,19 +29,22 @@ ENV VITE_OPENROUTER_MODEL=$VITE_OPENROUTER_MODEL
 RUN npm run sync:stockfish
 RUN npm run build
 
-FROM nginx:alpine
+FROM node:22-alpine
 
-RUN apk add --no-cache wget nodejs
+RUN apk add --no-cache wget
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-COPY server/docker-api.mjs /app/server/docker-api.mjs
-RUN chmod +x /docker-entrypoint.sh
-COPY --from=builder /app/dist /usr/share/nginx/html
+WORKDIR /app
+
+COPY server/docker-api.mjs server/docker-production.mjs /app/server/
+COPY --from=builder /app/dist /app/dist
+
+ENV STATIC_DIR=/app/dist
+ENV PORT=3000
+ENV HOST=0.0.0.0
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3000/health || exit 1
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["node", "/app/server/docker-production.mjs"]

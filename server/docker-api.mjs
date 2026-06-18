@@ -3,6 +3,7 @@
  * Vercel serverless `api/*.ts` ile aynı uç noktaları sağlar.
  */
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { URL } from 'node:url';
 
 const PORT = Number(process.env.API_PORT || 3001);
@@ -234,27 +235,52 @@ async function handleLichessProxy(url, req, res) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+/** @returns {Promise<boolean>} true if route handled */
+export async function dispatchApi(req, res, url) {
   try {
-    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const path = url.pathname.replace(/\/+$/, '') || '/';
 
     if (path === '/api/health') {
-      return sendJson(res, 200, { ok: true });
+      sendJson(res, 200, { ok: true });
+      return true;
     }
-    if (path === '/api/chesscom-recent-puzzles') return handleChessComRecentPuzzles(url, res);
-    if (path === '/api/chesscom-puzzle') return handleChessComPuzzle(url, res);
-    if (path === '/api/chesscom-member-stats') return handleChessComMemberStats(url, res);
-    if (path === '/api/chesscom-games') return handleChessComGames(url, res);
-    if (path === '/api/lichess-proxy') return handleLichessProxy(url, req, res);
+    if (path === '/api/chesscom-recent-puzzles') {
+      await handleChessComRecentPuzzles(url, res);
+      return true;
+    }
+    if (path === '/api/chesscom-puzzle') {
+      await handleChessComPuzzle(url, res);
+      return true;
+    }
+    if (path === '/api/chesscom-member-stats') {
+      await handleChessComMemberStats(url, res);
+      return true;
+    }
+    if (path === '/api/chesscom-games') {
+      await handleChessComGames(url, res);
+      return true;
+    }
+    if (path === '/api/lichess-proxy') {
+      await handleLichessProxy(url, req, res);
+      return true;
+    }
 
-    return sendJson(res, 404, { error: 'Not found' });
+    sendJson(res, 404, { error: 'Not found' });
+    return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Sunucu hatası';
-    return sendJson(res, 500, { error: msg });
+    sendJson(res, 500, { error: msg });
+    return true;
   }
-});
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`[docker-api] listening on http://${HOST}:${PORT}`);
-});
+const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+if (isMain) {
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    await dispatchApi(req, res, url);
+  });
+  server.listen(PORT, HOST, () => {
+    console.log(`[docker-api] listening on http://${HOST}:${PORT}`);
+  });
+}
