@@ -11,6 +11,7 @@ import {
   type ChessComPuzzleTab,
 } from '../lib/chesscomPuzzleParse';
 import { timestampMatchesDay, localDayKeyFromMs } from '../lib/homeworkDayUtils';
+import { parseLichessActivityPuzzles } from '../lib/leaderboardUtils';
 
 export type { ChessComPuzzleAttempt, ChessComPuzzleTab };
 export { parseChessComTactics2Puzzles };
@@ -971,8 +972,39 @@ export function formatChessComPuzzleTime(seconds: number): string {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
+/** Chess.com bulmaca denemesi zamanı — API ISO (+offset) veya Unix. */
+export function formatChessComAttemptTime(iso: string): string {
+  try {
+    const ms = new Date(iso).getTime();
+    if (!Number.isFinite(ms)) return iso;
+    return new Date(ms).toLocaleString('tr-TR', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
+
+/** Chess.com maç bitiş zamanı (Unix sn, UTC). */
+export function formatChessComGameTime(endTimeSec?: number): string {
+  if (!endTimeSec) return '—';
+  try {
+    return new Date(endTimeSec * 1000).toLocaleString('tr-TR', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
+}
+
 export function chessComPuzzleAnalysisUrl(puzzleId: number | string): string {
-  return `https://www.chess.com/analysis?puzzleId=${encodeURIComponent(String(puzzleId))}`;
+  return `https://www.chess.com/puzzles/problem/${encodeURIComponent(String(puzzleId))}`;
 }
 
 /** Oyun hızı için Türkçe etiket */
@@ -1100,21 +1132,9 @@ function lichessPuzzleStatsForDayFromActivity(activities: LichessActivity[], day
     if (!row.interval?.start) continue;
     if (!timestampMatchesDay(row.interval.start, target)) continue;
 
-    const puzzles = row.puzzles;
-    if (!puzzles) continue;
-
-    const count = typeof puzzles.count === 'number' ? puzzles.count : 0;
-    if (count > 0) {
-      const win = puzzles.score?.win ?? 0;
-      const loss = puzzles.score?.loss ?? 0;
-      if (loss > 0 && win <= 0) {
-        return { count, passed: 0, failed: count };
-      }
-      if (win > 0 && loss > 0) {
-        const passed = Math.max(0, Math.min(count, Math.round(win / 6)));
-        return { count, passed, failed: Math.max(0, count - passed) };
-      }
-      return { count, passed: count, failed: 0 };
+    const { total, passed, failed } = parseLichessActivityPuzzles(row);
+    if (total > 0) {
+      return { count: total, passed, failed };
     }
   }
   return { count: 0, passed: 0, failed: 0 };
@@ -1161,30 +1181,43 @@ export interface DailyPuzzleActivityStats {
 }
 
 /**
+ * Chess.com aylık arşivden belirtilen güne ait oyunlar (PGN dahil).
+ */
+export async function fetchChessComGamesListForDay(
+  username: string,
+  day: string = new Date().toISOString().slice(0, 10),
+): Promise<ChessComGame[]> {
+  const trimmed = username.trim().toLowerCase();
+  if (!trimmed) return [];
+  const target = day.slice(0, 10);
+  const [y, m] = target.split('-');
+  if (!y || !m) return [];
+  try {
+    const res = await chessComGamesFetch(trimmed, y, m);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { games?: ChessComGame[] };
+    return dedupeChessComGames(
+      (data.games ?? []).filter(
+        (g) =>
+          chessComGameInvolvesUser(g, trimmed) &&
+          g.end_time &&
+          localDayKeyFromMs(g.end_time * 1000) === target,
+      ),
+    ).sort((a, b) => (a.end_time ?? 0) - (b.end_time ?? 0));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Chess.com aylık arşivden belirtilen güne ait oyun sayısı.
  */
 export async function fetchChessComGamesForDay(
   username: string,
   day: string = new Date().toISOString().slice(0, 10),
 ): Promise<number> {
-  const trimmed = username.trim().toLowerCase();
-  if (!trimmed) return 0;
-  const target = day.slice(0, 10);
-  const [y, m] = target.split('-');
-  if (!y || !m) return 0;
-  try {
-    const res = await chessComGamesFetch(trimmed, y, m);
-    if (!res.ok) return 0;
-    const data = (await res.json()) as { games?: ChessComGame[] };
-    return (data.games ?? []).filter(
-      (g) =>
-        chessComGameInvolvesUser(g, trimmed) &&
-        g.end_time &&
-        localDayKeyFromMs(g.end_time * 1000) === target,
-    ).length;
-  } catch {
-    return 0;
-  }
+  const games = await fetchChessComGamesListForDay(username, day);
+  return games.length;
 }
 
 /**

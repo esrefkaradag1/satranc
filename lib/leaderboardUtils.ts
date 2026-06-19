@@ -46,19 +46,31 @@ export function isEpochMsInPeriod(ms: number, bounds: PeriodBounds): boolean {
   return ms >= bounds.startMs && ms <= bounds.endMs;
 }
 
-/** Çözülen bulmaca sayısı (doğru = 1 puan). score.win/loss rating deltasıdır — sayım için count kullanılır. */
-export function lichessActivityPuzzleCount(row: LichessActivity): number {
+/** Lichess aktivite satırından bulmaca istatistiği (güncel API: score.win/loss = adet). */
+export function parseLichessActivityPuzzles(row: LichessActivity): {
+  total: number;
+  passed: number;
+  failed: number;
+} {
   const puzzles = row.puzzles;
-  if (!puzzles) return 0;
-  const count = typeof puzzles.count === 'number' ? puzzles.count : 0;
-  if (count <= 0) return 0;
-  const win = puzzles.score?.win ?? 0;
-  const loss = puzzles.score?.loss ?? 0;
-  if (loss > 0 && win <= 0) return 0;
-  if (win > 0 && loss > 0) {
-    return Math.max(0, Math.min(count, Math.round(win / 6)));
+  if (!puzzles) return { total: 0, passed: 0, failed: 0 };
+
+  const passed = Math.max(0, puzzles.score?.win ?? 0);
+  const failed = Math.max(0, puzzles.score?.loss ?? 0);
+
+  if (passed > 0 || failed > 0) {
+    return { total: passed + failed, passed, failed };
   }
-  return count;
+
+  const legacyCount = typeof puzzles.count === 'number' ? puzzles.count : 0;
+  if (legacyCount <= 0) return { total: 0, passed: 0, failed: 0 };
+
+  return { total: legacyCount, passed: legacyCount, failed: 0 };
+}
+
+/** Çözülen bulmaca sayısı (doğru = 1 puan). */
+export function lichessActivityPuzzleCount(row: LichessActivity): number {
+  return parseLichessActivityPuzzles(row).passed;
 }
 
 export function lichessActivityGameResults(row: LichessActivity): { wins: number; draws: number; losses: number } {

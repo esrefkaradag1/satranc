@@ -97,8 +97,13 @@ function normalizeAttempt(raw) {
   const passed = Boolean(raw.is_passed ?? raw.isPassed ?? raw.passed ?? (raw.result === 1 || raw.result === 'win'));
   const dateRaw = raw.date ?? raw.createDate ?? raw.create_date ?? raw.last_date ?? '';
   const date = typeof dateRaw === 'number'
-    ? new Date(dateRaw * 1000).toISOString()
-    : String(dateRaw || new Date().toISOString());
+    ? new Date((dateRaw > 1e12 ? dateRaw : dateRaw * 1000)).toISOString()
+    : (() => {
+      const s = String(dateRaw || '').trim();
+      if (!s) return new Date().toISOString();
+      const ms = new Date(s).getTime();
+      return Number.isFinite(ms) ? new Date(ms).toISOString() : new Date().toISOString();
+    })();
   return {
     id,
     date,

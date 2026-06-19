@@ -1,5 +1,7 @@
 /** Chess.com bulmaca parse — sunucu (Vercel API) ve istemci tarafında paylaşılır. */
 
+import { Chess } from 'chess.js';
+
 export type ChessComPuzzleTab = 'rated' | 'learning' | 'rush';
 
 export interface ChessComPuzzleAttempt {
@@ -15,6 +17,45 @@ export interface ChessComPuzzleAttempt {
   myRatingAfter: number;
   fen?: string;
   flipBoard?: boolean;
+}
+
+/** Chess.com tarih alanı: Unix sn/ms veya ISO (+offset). */
+export function chessComTimestampToIso(dateRaw: unknown): string {
+  if (typeof dateRaw === 'number' && Number.isFinite(dateRaw)) {
+    const ms = dateRaw > 1e12 ? dateRaw : dateRaw * 1000;
+    return new Date(ms).toISOString();
+  }
+  const s = String(dateRaw ?? '').trim();
+  if (!s) return new Date().toISOString();
+  const ms = new Date(s).getTime();
+  if (!Number.isFinite(ms)) return new Date().toISOString();
+  return new Date(ms).toISOString();
+}
+
+export function sanitizeChessComPuzzlePgn(raw: string): string {
+  return raw
+    .replace(/\{\[%clk[^\]]*\]\}/gi, '')
+    .replace(/\{\[%eval[^\]]*\]\}/gi, '')
+    .replace(/\{\[%emt[^\]]*\]\}/gi, '')
+    .trim();
+}
+
+export function puzzleSetupFenFromPgn(pgn: string): string | null {
+  const m = pgn.match(/\[FEN\s+"([^"]+)"\]/i);
+  return m?.[1]?.trim() ?? null;
+}
+
+export function puzzleMoveListFromPgn(pgn: string): string[] {
+  const clean = sanitizeChessComPuzzlePgn(pgn);
+  if (!clean) return [];
+  try {
+    const setup = puzzleSetupFenFromPgn(clean);
+    const g = new Chess(setup ?? undefined);
+    g.loadPgn(clean, { strict: false });
+    return g.history();
+  } catch {
+    return [];
+  }
 }
 
 function parseChessComSeconds(value: unknown): number {
@@ -47,10 +88,7 @@ function normalizeChessComPuzzleAttempt(raw: Record<string, unknown>): ChessComP
 
   const passed = Boolean(raw.is_passed ?? raw.isPassed ?? raw.passed ?? (raw.result === 1 || raw.result === 'win'));
   const dateRaw = raw.date ?? raw.createDate ?? raw.create_date ?? raw.last_date ?? '';
-  const date =
-    typeof dateRaw === 'number'
-      ? new Date(dateRaw * 1000).toISOString()
-      : String(dateRaw || new Date().toISOString());
+  const date = chessComTimestampToIso(dateRaw);
 
   return {
     id,

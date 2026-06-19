@@ -6,6 +6,11 @@ import {
 } from 'lucide-react';
 import type { Student } from '../../types';
 import type { ChessComPuzzleAttempt, ChessComPuzzleTab } from '../../lib/chesscomPuzzleParse';
+import {
+  puzzleMoveListFromPgn,
+  puzzleSetupFenFromPgn,
+  sanitizeChessComPuzzlePgn,
+} from '../../lib/chesscomPuzzleParse';
 import type { PlatformDayStats } from '../../lib/homeworkPlatformUtils';
 import {
   fetchChessComPuzzlesForDay,
@@ -15,15 +20,20 @@ import {
 import { selectHomeworkGoalPuzzles } from '../../lib/chesscomPuzzleParse';
 import {
   chessComPuzzleAnalysisUrl,
+  fetchChessComGamesListForDay,
   fetchChessComPuzzleDetail,
   fetchLichessGamePgn,
   fetchLichessGamesForDay,
+  formatChessComAttemptTime,
+  formatChessComGameTime,
   formatChessComPuzzleTime,
+  type ChessComGame,
   type LichessGame,
 } from '../../services/chessPlatformService';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
 import ChessComPuzzleViewerModal from '../ChessComPuzzleViewerModal';
+import ChessComGameViewerModal from '../ChessComGameViewerModal';
 import LichessGameViewerModal from '../LichessGameViewerModal';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -113,7 +123,8 @@ function parseSetupFen(pgn: string): string | null {
 
 function buildMoveList(pgn: string): string[] {
   try {
-    const g = new Chess();
+    const setup = parseSetupFen(pgn);
+    const g = new Chess(setup ?? undefined);
     g.loadPgn(pgn, { strict: false });
     return g.history();
   } catch {
@@ -130,19 +141,6 @@ function formatDayLabel(dayIso: string): string {
     });
   } catch {
     return dayIso;
-  }
-}
-
-function formatAttemptTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString('tr-TR', {
-      day: '2-digit',
-      month: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
   }
 }
 
@@ -171,7 +169,7 @@ const ChessComPuzzleCard: React.FC<ChessComCardProps> = ({ row, username, onOpen
           setLoadError('Hamle verisi yüklenemedi');
           return;
         }
-        setPgn(sanitizePuzzlePgn(detail.pgn));
+        setPgn(sanitizeChessComPuzzlePgn(detail.pgn));
       })
       .catch(() => {
         if (!cancelled) setLoadError('Hamle verisi yüklenemedi');
@@ -183,13 +181,13 @@ const ChessComPuzzleCard: React.FC<ChessComCardProps> = ({ row, username, onOpen
     return () => { cancelled = true; };
   }, [attempt.id]);
 
-  const moves = useMemo(() => (pgn ? buildMoveList(pgn) : []), [pgn]);
+  const moves = useMemo(() => (pgn ? puzzleMoveListFromPgn(pgn) : []), [pgn]);
   const boardFen = useMemo(() => {
     if (pgn) {
-      const setup = parseSetupFen(pgn);
+      const setup = puzzleSetupFenFromPgn(pgn);
       if (setup) return setup;
     }
-    if (attempt.fen?.trim()) return attempt.fen;
+    if (attempt.fen?.trim()) return attempt.fen.trim();
     return START_FEN;
   }, [pgn, attempt.fen]);
 
@@ -271,7 +269,7 @@ const ChessComPuzzleCard: React.FC<ChessComCardProps> = ({ row, username, onOpen
         </div>
         <div className="flex items-center justify-between gap-2 text-xs">
           <span className="text-slate-500">Tarih</span>
-          <span className="font-semibold text-slate-300">{formatAttemptTime(attempt.date)}</span>
+          <span className="font-semibold text-slate-300">{formatChessComAttemptTime(attempt.date)}</span>
         </div>
 
         <div className="pt-2 border-t border-white/[0.06]">
@@ -321,21 +319,311 @@ const ChessComPuzzleCard: React.FC<ChessComCardProps> = ({ row, username, onOpen
   );
 };
 
-type LichessMatchCardProps = {
+function sanitizeChessComGamePgn(raw: string): string {
+  return raw
+    .replace(/\{\[%clk[^\]]*\]\}/gi, '')
+    .replace(/\{\[%eval[^\]]*\]\}/gi, '')
+    .replace(/\{\[%emt[^\]]*\]\}/gi, '')
+    .trim();
+}
+
+function chessComGameMoveList(pgn: string): string[] {
+  const clean = sanitizeChessComGamePgn(pgn);
+  if (!clean) return [];
+  try {
+    const g = new Chess();
+    g.loadPgn(clean, { strict: false });
+    return g.history();
+  } catch {
+    return [];
+  }
+}
+
+function chessComGameLabel(game: ChessComGame, username: string): string {
+  const u = username.trim().toLowerCase();
+  const isWhite = game.white?.username?.toLowerCase() === u;
+  const opp = isWhite ? game.black?.username : game.white?.username;
+  const timeClass = game.time_class ?? 'oyun';
+  const myResult = isWhite ? game.white?.result : game.black?.result;
+  const score = myResult === 'win'
+    ? (isWhite ? '1-0' : '0-1')
+    : ['checkmated', 'resigned', 'timeout', 'abandoned', 'lose', 'loss'].includes(myResult ?? '')
+      ? (isWhite ? '0-1' : '1-0')
+      : '½-½';
+  return `${timeClass}${opp ? ` · ${score} · ${opp}` : ` · ${score}`}`;
+}
+
+function chessComMatchResult(game: ChessComGame, username: string): 'win' | 'loss' | 'draw' | null {
+  const u = username.trim().toLowerCase();
+  const isWhite = game.white?.username?.toLowerCase() === u;
+  const isBlack = game.black?.username?.toLowerCase() === u;
+  if (!isWhite && !isBlack) return null;
+  const myResult = isWhite ? game.white?.result : game.black?.result;
+  if (myResult === 'win') return 'win';
+  if (['checkmated', 'resigned', 'timeout', 'abandoned', 'lose', 'loss'].includes(myResult ?? '')) return 'loss';
+  if (['agreed', 'repetition', 'stalemate', 'insufficient', '50move', 'timevsinsufficient'].includes(myResult ?? '')) {
+    return 'draw';
+  }
+  return null;
+}
+
+function chessComPlayerRating(game: ChessComGame, username: string): number | undefined {
+  const u = username.trim().toLowerCase();
+  if (game.white?.username?.toLowerCase() === u) return game.white.rating;
+  if (game.black?.username?.toLowerCase() === u) return game.black.rating;
+  return undefined;
+}
+
+function chessComGameDuration(game: ChessComGame): string {
+  if (!game.end_time || !game.pgn) return '—';
+  const startMatch = game.pgn.match(/\[UTCDate\s+"([^"]+)"\][\s\S]*?\[UTCTime\s+"([^"]+)"\]/i);
+  if (!startMatch) return '—';
+  try {
+    const startMs = Date.parse(`${startMatch[1].replace(/\./g, '-')}T${startMatch[2]}Z`);
+    const endMs = game.end_time * 1000;
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return '—';
+    const sec = Math.max(0, Math.round((endMs - startMs) / 1000));
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  } catch {
+    return '—';
+  }
+}
+
+type ChessComSingleMatchCardProps = {
+  game: ChessComGame;
+  username: string;
+};
+
+const ChessComSingleMatchCard: React.FC<ChessComSingleMatchCardProps> = ({ game, username }) => {
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const rawPgn = game.pgn?.trim() ?? '';
+  const cleanPgn = useMemo(() => (rawPgn ? sanitizeChessComGamePgn(rawPgn) : ''), [rawPgn]);
+  const moves = useMemo(() => (cleanPgn ? chessComGameMoveList(cleanPgn) : []), [cleanPgn]);
+  const fen = useMemo(() => (cleanPgn ? pgnToFinalFen(cleanPgn) : START_FEN), [cleanPgn]);
+  const u = username.trim().toLowerCase();
+  const orientation: 'white' | 'black' =
+    game.black?.username?.toLowerCase() === u && game.white?.username?.toLowerCase() !== u
+      ? 'black'
+      : 'white';
+  const matchResult = chessComMatchResult(game, username);
+  const resultMeta = matchResult === 'win'
+    ? { label: 'Kazandı', icon: CheckCircle2, badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', border: 'border-emerald-500/35' }
+    : matchResult === 'loss'
+      ? { label: 'Kaybetti', icon: XCircle, badge: 'bg-rose-500/20 text-rose-300 border-rose-500/30', border: 'border-rose-500/35' }
+      : matchResult === 'draw'
+        ? { label: 'Berabere', icon: Swords, badge: 'bg-slate-500/20 text-slate-300 border-slate-500/30', border: 'border-slate-500/35' }
+        : { label: 'Maç', icon: Swords, badge: 'bg-slate-500/20 text-slate-300 border-slate-500/30', border: 'border-emerald-500/35' };
+  const StatusIcon = resultMeta.icon;
+  const fullMoves = moves.length > 0 ? Math.ceil(moves.length / 2) : 0;
+  const gameUrl = game.url?.trim() || (game.uuid ? `https://www.chess.com/game/live/${game.uuid}` : '');
+
+  return (
+    <>
+      <div className={`rounded-xl border bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ${resultMeta.border} ring-white/5`}>
+        <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2 bg-white/[0.02]">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="shrink-0 px-2 py-0.5 rounded-md text-[9px] font-black uppercase bg-[#3d6e4e] text-white">
+              Chess.com
+            </span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Maç</span>
+          </div>
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${resultMeta.badge}`}>
+            <StatusIcon className="w-3 h-3" />
+            {resultMeta.label}
+          </span>
+        </div>
+
+        <div className="p-3 bg-black/25">
+          {cleanPgn ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setViewerOpen(true)}
+                className="block w-full max-w-[240px] mx-auto text-left rounded-lg overflow-hidden border border-white/10 shadow-inner hover:border-emerald-500/40 transition-colors"
+                title="Hamleleri göster"
+              >
+                <ChessBoardFrame boardOrientation={orientation} hideCoordinates className="w-full" boardClassName="relative">
+                  <div className="absolute inset-0 w-full h-full">
+                    <Chessboard
+                      options={{
+                        id: `platform-cc-game-${game.uuid ?? game.url ?? 'x'}`,
+                        position: fen,
+                        allowDragging: false,
+                        boardOrientation: orientation,
+                        darkSquareStyle: { backgroundColor: '#779952' },
+                        lightSquareStyle: { backgroundColor: '#edeed1' },
+                        ...CHESSBOARD_ANIMATION,
+                        ...CHESSBOARD_NO_NOTATION,
+                      }}
+                    />
+                  </div>
+                </ChessBoardFrame>
+              </button>
+              <p className="mt-2 text-center text-xs font-semibold text-slate-400 px-1">
+                {chessComGameLabel(game, username)}
+              </p>
+            </>
+          ) : (
+            <p className="text-center text-xs text-amber-400/90 py-8">PGN bulunamadı</p>
+          )}
+        </div>
+
+        <div className="px-4 py-3 border-t border-white/[0.06] space-y-2 text-sm">
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-slate-500">Kullanıcı</span>
+            <span className="font-semibold text-slate-200">@{username}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-slate-500">Maç Rating</span>
+            <span className="font-semibold text-slate-200">{chessComPlayerRating(game, username) ?? '—'}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-slate-500">Hamle</span>
+            <span className="font-semibold text-slate-200">{fullMoves > 0 ? fullMoves : '—'}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-slate-500">Süre</span>
+            <span className="inline-flex items-center gap-1 font-semibold text-slate-200 tabular-nums">
+              <Clock className="w-3 h-3 text-slate-500" />
+              {chessComGameDuration(game)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-slate-500">Tarih</span>
+            <span className="font-semibold text-slate-300">{formatChessComGameTime(game.end_time)}</span>
+          </div>
+
+          <div className="pt-2 border-t border-white/[0.06]">
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+              Oynanan Hamleler
+            </p>
+            {moves.length > 0 ? (
+              <p className="font-mono text-[11px] text-slate-300 break-all leading-relaxed">
+                {moves.join(' · ')}
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500">Hamle kaydı yok</p>
+            )}
+          </div>
+
+          {gameUrl ? (
+            <a
+              href={gameUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 hover:text-emerald-300 mt-1"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Chess.com&apos;da aç
+            </a>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setViewerOpen(true)}
+            disabled={!cleanPgn}
+            className="block w-full mt-2 text-[11px] font-bold text-indigo-400 hover:text-indigo-300 text-left disabled:opacity-40"
+          >
+            Hamleleri göster →
+          </button>
+        </div>
+      </div>
+
+      <ChessComGameViewerModal
+        game={viewerOpen ? game : null}
+        viewerUsername={username}
+        onClose={() => setViewerOpen(false)}
+      />
+    </>
+  );
+};
+
+type ChessComMatchGoalCardsProps = {
   username: string;
   viewDate: string;
   gameTarget: number;
-  gameGoalMet: boolean;
 };
 
-const LichessMatchGoalCard: React.FC<LichessMatchCardProps> = ({
+const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
   username,
   viewDate,
   gameTarget,
+}) => {
+  const [loading, setLoading] = useState(true);
+  const [games, setGames] = useState<ChessComGame[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    setGames([]);
+
+    fetchChessComGamesListForDay(username, viewDate)
+      .then((fetched) => {
+        if (cancelled) return;
+        const picks = fetched.slice(0, Math.max(1, gameTarget));
+        if (picks.length === 0) {
+          setLoadError('Bugünkü maç bulunamadı');
+          return;
+        }
+        setGames(picks);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError('Chess.com maçları alınamadı');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [username, viewDate, gameTarget]);
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-slate-600/40 bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ring-white/5">
+        <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-xs">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Chess.com maçları yükleniyor…
+        </div>
+      </div>
+    );
+  }
+
+  if (games.length === 0) {
+    return (
+      <div className="rounded-xl border border-slate-600/40 bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ring-white/5">
+        <p className="text-center text-xs text-amber-400/90 py-8">{loadError ?? 'Maç yok'}</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {games.map((game) => (
+        <ChessComSingleMatchCard
+          key={game.uuid || game.url || `${game.end_time}`}
+          game={game}
+          username={username}
+        />
+      ))}
+    </>
+  );
+};
+
+type LichessSingleMatchCardProps = {
+  game: LichessGame;
+  username: string;
+  gameGoalMet: boolean;
+};
+
+const LichessSingleMatchCard: React.FC<LichessSingleMatchCardProps> = ({
+  game,
+  username,
   gameGoalMet,
 }) => {
   const [loading, setLoading] = useState(true);
-  const [game, setGame] = useState<LichessGame | null>(null);
   const [pgn, setPgn] = useState('');
   const [fen, setFen] = useState(START_FEN);
   const [pgnError, setPgnError] = useState<string | null>(null);
@@ -345,20 +633,11 @@ const LichessMatchGoalCard: React.FC<LichessMatchCardProps> = ({
     let cancelled = false;
     setLoading(true);
     setPgnError(null);
-    setGame(null);
     setPgn('');
     setFen(START_FEN);
 
-    fetchLichessGamesForDay(username, viewDate)
-      .then(async (games) => {
-        if (cancelled) return;
-        const pick = games.slice(0, Math.max(1, gameTarget))[0] ?? null;
-        if (!pick?.id) {
-          setPgnError('Bugünkü maç bulunamadı');
-          return;
-        }
-        setGame(pick);
-        const fetchedPgn = await fetchLichessGamePgn(pick.id);
+    fetchLichessGamePgn(game.id)
+      .then((fetchedPgn) => {
         if (cancelled) return;
         if (fetchedPgn?.trim()) {
           const clean = sanitizePuzzlePgn(fetchedPgn);
@@ -369,14 +648,14 @@ const LichessMatchGoalCard: React.FC<LichessMatchCardProps> = ({
         }
       })
       .catch(() => {
-        if (!cancelled) setPgnError('Lichess maçı alınamadı');
+        if (!cancelled) setPgnError('Hamle verisi yüklenemedi');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
 
     return () => { cancelled = true; };
-  }, [username, viewDate, gameTarget]);
+  }, [game.id]);
 
   const moves = useMemo(() => (pgn ? buildMoveList(pgn) : []), [pgn]);
   const orientation: 'white' | 'black' = (() => {
@@ -453,8 +732,7 @@ const LichessMatchGoalCard: React.FC<LichessMatchCardProps> = ({
           )}
         </div>
 
-        {game ? (
-          <div className="px-4 py-3 border-t border-white/[0.06] space-y-2 text-sm">
+        <div className="px-4 py-3 border-t border-white/[0.06] space-y-2 text-sm">
             <div className="flex items-center justify-between gap-2 text-xs">
               <span className="text-slate-500">Kullanıcı</span>
               <span className="font-semibold text-slate-200">@{username}</span>
@@ -522,16 +800,94 @@ const LichessMatchGoalCard: React.FC<LichessMatchCardProps> = ({
               onClick={() => setViewerOpen(true)}
               className="block w-full mt-2 text-[11px] font-bold text-indigo-400 hover:text-indigo-300 text-left"
             >
-              Hamleleri göster →
-            </button>
-          </div>
-        ) : null}
+            Hamleleri göster →
+          </button>
+        </div>
       </div>
 
       <LichessGameViewerModal
-        game={viewerOpen && game ? game : null}
+        game={viewerOpen ? game : null}
         onClose={() => setViewerOpen(false)}
       />
+    </>
+  );
+};
+
+type LichessMatchCardProps = {
+  username: string;
+  viewDate: string;
+  gameTarget: number;
+  gameGoalMet: boolean;
+};
+
+const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
+  username,
+  viewDate,
+  gameTarget,
+  gameGoalMet,
+}) => {
+  const [loading, setLoading] = useState(true);
+  const [games, setGames] = useState<LichessGame[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    setGames([]);
+
+    fetchLichessGamesForDay(username, viewDate)
+      .then((fetched) => {
+        if (cancelled) return;
+        const limit = Math.max(1, gameTarget);
+        const picks = [...fetched]
+          .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+          .slice(0, limit);
+        if (picks.length === 0) {
+          setLoadError('Bugünkü maç bulunamadı');
+          return;
+        }
+        setGames(picks);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError('Lichess maçları alınamadı');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [username, viewDate, gameTarget]);
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-slate-600/40 bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ring-white/5">
+        <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-xs">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Lichess maçları yükleniyor…
+        </div>
+      </div>
+    );
+  }
+
+  if (games.length === 0) {
+    return (
+      <div className="rounded-xl border border-slate-600/40 bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ring-white/5">
+        <p className="text-center text-xs text-amber-400/90 py-8">{loadError ?? 'Maç yok'}</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {games.map((game) => (
+        <LichessSingleMatchCard
+          key={game.id}
+          game={game}
+          username={username}
+          gameGoalMet={gameGoalMet}
+        />
+      ))}
     </>
   );
 };
@@ -740,13 +1096,21 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
       {goalPuzzleRows.length > 0 || lichessGames > 0 || chessComGames > 0 || effectiveGameTarget > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           {lichessUsername && lichessGames > 0 ? (
-            <LichessMatchGoalCard
+            <LichessMatchGoalCards
               username={lichessUsername}
               viewDate={viewDate}
               gameTarget={Math.max(effectiveGameTarget, lichessGames)}
               gameGoalMet={gameGoalMet}
             />
-          ) : effectiveGameTarget > 0 ? (
+          ) : null}
+          {chessComUsername && chessComGames > 0 ? (
+            <ChessComMatchGoalCards
+              username={chessComUsername}
+              viewDate={viewDate}
+              gameTarget={Math.max(effectiveGameTarget, chessComGames)}
+            />
+          ) : null}
+          {lichessUsername && lichessGames === 0 && chessComGames === 0 && effectiveGameTarget > 0 ? (
             <div className={`rounded-xl border bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ${gameGoalMet ? 'border-sky-500/35 ring-sky-500/10' : 'border-slate-600/40 ring-slate-500/10'}`}>
               <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2 bg-white/[0.02]">
                 <div className="flex items-center gap-2">

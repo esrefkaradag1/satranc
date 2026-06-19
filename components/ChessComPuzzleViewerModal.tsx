@@ -30,7 +30,8 @@ function parseSetupFen(pgn: string): string | null {
 
 function buildMoveList(pgn: string): string[] {
   try {
-    const g = new Chess();
+    const setup = parseSetupFen(pgn);
+    const g = new Chess(setup ?? undefined);
     g.loadPgn(pgn, { strict: false });
     return g.history();
   } catch {

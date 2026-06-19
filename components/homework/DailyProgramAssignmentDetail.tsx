@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Users, Percent, Trophy, Calendar, RefreshCw, ChevronDown, ChevronUp, Target,
   ChevronLeft, ChevronRight,
@@ -65,6 +65,14 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
   dayProgress,
 }) => {
   const [showSchedule, setShowSchedule] = useState(false);
+  const scheduleSectionRef = useRef<HTMLDivElement>(null);
+
+  const openWeeklySchedule = () => {
+    setShowSchedule(true);
+    window.setTimeout(() => {
+      scheduleSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  };
   const summary = useMemo(() => platformSummaryFromStats(stats), [stats]);
   const sortedStats = useMemo(
     () => [...stats].sort((a, b) => b.correct - a.correct || a.name.localeCompare(b.name, 'tr')),
@@ -116,6 +124,14 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
         >
           <RefreshCw className={`w-4 h-4 ${loadingPlatform ? 'animate-spin' : ''}`} />
           Platform Çek
+        </button>
+        <button
+          type="button"
+          onClick={openWeeklySchedule}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600/25 border border-indigo-500/35 text-indigo-200 hover:bg-indigo-600/40 text-sm font-bold transition-colors"
+        >
+          <Target className="w-4 h-4" />
+          Haftalık Hedef Düzenle
         </button>
       </div>
 
@@ -231,7 +247,10 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
         />
       </div>
 
-      <div className="rounded-xl border border-white/[0.08] bg-[#1a2332]/60 overflow-hidden">
+      <div
+        ref={scheduleSectionRef}
+        className="rounded-xl border border-white/[0.08] bg-[#1a2332]/60 overflow-hidden scroll-mt-4"
+      >
         <button
           type="button"
           onClick={() => setShowSchedule((v) => !v)}
