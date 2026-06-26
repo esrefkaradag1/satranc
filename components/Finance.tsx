@@ -7,7 +7,7 @@ import { DATE_INPUT_MAX, DATE_INPUT_MIN, normalizeDateInputYear } from '../lib/d
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
 const Finance: React.FC = () => {
- const { transactions, addTransaction, students } = useApp();
+ const { scopedTransactions: transactions, addTransaction, scopedStudents: students } = useApp();
  const [isModalOpen, setIsModalOpen] = useState(false);
  const [searchTerm, setSearchTerm] = useState('');
 

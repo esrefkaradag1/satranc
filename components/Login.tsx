@@ -1,11 +1,10 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useState } from 'react';
 import {
   Lock,
   User,
   Shield,
   UserCircle,
   Loader2,
-  Building2,
   ArrowRight,
   Sparkles,
   Trophy,
@@ -14,7 +13,6 @@ import {
 import { useApp } from '../AppContext';
 import { isServerMode } from '../apiConfig';
 import { apiParentLogin } from '../services/backendApi';
-import { BRANCH_OPTIONS } from '../constants';
 import { useDashboard3DEnabled } from './dashboard/useDashboard3D';
 
 const LoginScene3D = React.lazy(() => import('./login/LoginScene3D'));
@@ -91,9 +89,8 @@ const THEME: Record<
 const labelCls = 'block text-[10px] font-bold text-slate-400 uppercase tracking-[0.14em] mb-2';
 
 const Login: React.FC = () => {
-  const { loginAdmin, loginCoach, loginClub, loginParent, loginStudent, setAuthWithStudent, clubs } = useApp();
+  const { loginAdmin, loginCoach, loginClub, loginParent, loginStudent, setAuthWithStudent, initialDataLoaded } = useApp();
   const webgl3d = useDashboard3DEnabled();
-  const clubBranchOptions = clubs?.length ? clubs.map((c) => c.name) : BRANCH_OPTIONS;
 
   const [tab, setTab] = useState<Tab>('parent');
   const theme = THEME[tab];
@@ -101,14 +98,8 @@ const Login: React.FC = () => {
   const [adminPassword, setAdminPassword] = useState('');
   const [coachPassword, setCoachPassword] = useState('');
   const [coachIdentifier, setCoachIdentifier] = useState('');
+  const [clubUsername, setClubUsername] = useState('');
   const [clubPassword, setClubPassword] = useState('');
-  const [clubBranch, setClubBranch] = useState(clubBranchOptions[0] ?? BRANCH_OPTIONS[0]);
-
-  useEffect(() => {
-    if (clubBranchOptions.length > 0 && !clubBranchOptions.includes(clubBranch)) {
-      setClubBranch(clubBranchOptions[0]);
-    }
-  }, [clubBranchOptions, clubBranch]);
 
   const [parentIdOrPhone, setParentIdOrPhone] = useState('');
   const [parentPin, setParentPin] = useState('');
@@ -121,6 +112,7 @@ const Login: React.FC = () => {
   const [studentError, setStudentError] = useState('');
   const [parentLoading, setParentLoading] = useState(false);
   const [studentLoading, setStudentLoading] = useState(false);
+  const [clubLoading, setClubLoading] = useState(false);
 
   const clearErrors = () => {
     setAdminError('');
@@ -148,16 +140,29 @@ const Login: React.FC = () => {
     setCoachError('E-posta/ad veya şifre hatalı.');
   };
 
-  const handleClubSubmit = (e: React.FormEvent) => {
+  const handleClubSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setClubError('');
-    if (loginClub(clubPassword, clubBranch)) return;
-    setClubError('Yanlış parola veya şube.');
+    if (!initialDataLoaded) {
+      setClubError('Veriler yükleniyor, lütfen birkaç saniye bekleyin.');
+      return;
+    }
+    setClubLoading(true);
+    try {
+      if (await loginClub(clubUsername, clubPassword)) return;
+      setClubError('Kullanıcı adı veya parola hatalı.');
+    } finally {
+      setClubLoading(false);
+    }
   };
 
   const handleParentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setParentError('');
+    if (!initialDataLoaded) {
+      setParentError('Veriler yükleniyor, lütfen birkaç saniye bekleyin.');
+      return;
+    }
     if (isServerMode()) {
       setParentLoading(true);
       try {
@@ -169,18 +174,27 @@ const Login: React.FC = () => {
       } catch {
         /* ignore */
       }
-      if (loginParent(parentIdOrPhone, parentPin)) return;
+      if (await loginParent(parentIdOrPhone, parentPin)) return;
       setParentLoading(false);
       setParentError('Giriş başarısız. Öğrenci no veya telefon ile PIN kontrol edin.');
       return;
     }
-    if (loginParent(parentIdOrPhone, parentPin)) return;
-    setParentError('Öğrenci bulunamadı veya PIN hatalı.');
+    setParentLoading(true);
+    try {
+      if (await loginParent(parentIdOrPhone, parentPin)) return;
+      setParentError('Öğrenci bulunamadı veya PIN hatalı.');
+    } finally {
+      setParentLoading(false);
+    }
   };
 
   const handleStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setStudentError('');
+    if (!initialDataLoaded) {
+      setStudentError('Veriler yükleniyor, lütfen birkaç saniye bekleyin.');
+      return;
+    }
     if (isServerMode()) {
       setStudentLoading(true);
       try {
@@ -193,13 +207,18 @@ const Login: React.FC = () => {
       } catch {
         /* ignore */
       }
-      if (loginStudent(studentIdOrPhone, studentPin)) return;
+      if (await loginStudent(studentIdOrPhone, studentPin)) return;
       setStudentLoading(false);
       setStudentError('Giriş başarısız.');
       return;
     }
-    if (loginStudent(studentIdOrPhone, studentPin)) return;
-    setStudentError('Öğrenci bulunamadı veya şifre/PIN hatalı.');
+    setStudentLoading(true);
+    try {
+      if (await loginStudent(studentIdOrPhone, studentPin)) return;
+      setStudentError('Öğrenci bulunamadı veya şifre/PIN hatalı.');
+    } finally {
+      setStudentLoading(false);
+    }
   };
 
   const activeTabMeta = TAB_CONFIG.find((t) => t.id === tab)!;
@@ -399,25 +418,28 @@ const Login: React.FC = () => {
               {tab === 'club' && (
                 <form onSubmit={handleClubSubmit} className="p-6 sm:p-8 space-y-5">
                   <div>
-                    <label className={labelCls}>Şube</label>
+                    <label className={labelCls}>Kullanıcı adı</label>
                     <div className={inputWrap}>
-                      <div className={iconSlot}><Building2 className="w-4 h-4" /></div>
-                      <select value={clubBranch} onChange={(e) => setClubBranch(e.target.value)} className={`${inputInner} cursor-pointer appearance-none`}>
-                        {clubBranchOptions.map((b) => (
-                          <option key={b} value={b} className="bg-slate-900">{b}</option>
-                        ))}
-                      </select>
+                      <div className={iconSlot}><User className="w-4 h-4" /></div>
+                      <input
+                        type="text"
+                        value={clubUsername}
+                        onChange={(e) => setClubUsername(e.target.value)}
+                        placeholder="ornek-kulup"
+                        className={inputInner}
+                        autoComplete="username"
+                      />
                     </div>
                   </div>
                   <div>
-                    <label className={labelCls}>Kulüp parolası</label>
+                    <label className={labelCls}>Parola</label>
                     <div className={inputWrap}>
                       <div className={iconSlot}><Lock className="w-4 h-4" /></div>
                       <input type="password" value={clubPassword} onChange={(e) => setClubPassword(e.target.value)} placeholder="••••" className={inputInner} autoComplete="current-password" />
                     </div>
                   </div>
                   {clubError && <ErrorMsg msg={clubError} />}
-                  <SubmitBtn label="Kulüp Girişi" />
+                  <SubmitBtn label="Kulüp Girişi" loading={clubLoading} />
                 </form>
               )}
 

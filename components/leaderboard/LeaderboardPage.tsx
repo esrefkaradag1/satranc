@@ -7,12 +7,19 @@ import { EMPTY_TARGET, filterStudentsByTarget, type TargetFilter } from '../../l
 
 const LeaderboardPage: React.FC = () => {
   const {
-    students,
+    scopedStudents: students,
     homeworkAttempts,
     branchOffices,
-    disciplineBranches,
-    trainingGroups,
+    scopedDisciplineBranches: disciplineBranches,
+    scopedTrainingGroups: trainingGroups,
+    activeClubBranch,
+    auth,
   } = useApp();
+
+  const visibleBranchOffices = useMemo(
+    () => (auth?.role === 'club' && activeClubBranch ? [activeClubBranch] : branchOffices),
+    [auth?.role, activeClubBranch, branchOffices],
+  );
 
   const [targetFilter, setTargetFilter] = useState<TargetFilter>(EMPTY_TARGET);
 
@@ -58,7 +65,7 @@ const LeaderboardPage: React.FC = () => {
       <HomeworkTargetSelector
         target={targetFilter}
         onChange={handleTargetChange}
-        branchOffices={branchOffices}
+        branchOffices={visibleBranchOffices}
         disciplineBranches={disciplineBranches}
         trainingGroups={trainingGroups}
         filteredStudents={targetStudents}

@@ -148,6 +148,8 @@ export interface Club {
   address?: string;
   /** Haftanın günleri: [Pzt, Sal, Çar, Per, Cum, Cmt, Paz] — true = aktif */
   activeDays?: boolean[];
+  /** Kulüp girişi kullanıcı adı */
+  loginUsername?: string;
   /** Kulüp girişi için parola; boşsa sistem parolası (kulup) kullanılır */
   loginPassword?: string;
   /** Atanan özel rol (app_roles.id); boşsa varsayılan kulüp rolü */

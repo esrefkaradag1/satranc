@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Building2, MapPin, Users, Plus, Pencil, Trash2, X, KeyRound, Copy, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../AppContext';
 import type { Club } from '../types';
+import { isClubUsernameTaken, suggestClubUsername } from '../lib/clubLoginUtils';
 
 const WEEKDAY_LABELS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 const DEFAULT_CLUB_PASSWORD = 'kulup'; // Giriş sayfasında kullanılan varsayılan parola (sadece bilgi için)
@@ -15,6 +16,7 @@ const CorporateStructure: React.FC = () => {
   const [formName, setFormName] = useState('');
   const [formAddress, setFormAddress] = useState('');
   const [formLoginPassword, setFormLoginPassword] = useState('');
+  const [formLoginUsername, setFormLoginUsername] = useState('');
   const [formRoleId, setFormRoleId] = useState('');
   const [formActiveDays, setFormActiveDays] = useState<boolean[]>([true, true, true, true, false, false, false]);
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(new Set());
@@ -24,6 +26,7 @@ const CorporateStructure: React.FC = () => {
     setFormName('');
     setFormAddress('');
     setFormLoginPassword('');
+    setFormLoginUsername('');
     setFormRoleId('');
     setFormActiveDays([true, true, true, true, false, false, false]);
     setModalOpen(true);
@@ -34,6 +37,7 @@ const CorporateStructure: React.FC = () => {
     setFormName(club.name);
     setFormAddress(club.address ?? '');
     setFormLoginPassword(club.loginPassword ?? '');
+    setFormLoginUsername(club.loginUsername ?? suggestClubUsername(club.name, clubs, club.id));
     setFormRoleId(club.roleId ?? '');
     setFormActiveDays(club.activeDays?.length === 7 ? club.activeDays : [true, true, true, true, false, false, false]);
     setModalOpen(true);
@@ -47,19 +51,45 @@ const CorporateStructure: React.FC = () => {
   const save = () => {
     const name = formName.trim();
     if (!name) return;
+    const loginUsername = (formLoginUsername.trim() || suggestClubUsername(name, clubs, editingId ?? undefined)).toLowerCase();
+    if (!loginUsername) {
+      alert('Kulüp kullanıcı adı gerekli.');
+      return;
+    }
+    if (isClubUsernameTaken(clubs, loginUsername, editingId ?? undefined)) {
+      alert('Bu kullanıcı adı başka bir kulüpte kullanılıyor.');
+      return;
+    }
     const loginPassword = formLoginPassword.trim() || undefined;
     const roleId = formRoleId.trim() || undefined;
     if (editingId) {
-      updateClub(editingId, { name, address: formAddress.trim() || undefined, activeDays: formActiveDays, loginPassword, roleId });
+      updateClub(editingId, {
+        name,
+        address: formAddress.trim() || undefined,
+        activeDays: formActiveDays,
+        loginUsername,
+        loginPassword,
+        roleId,
+      });
     } else {
       if (clubs.length >= MAX_CLUBS) {
         alert(`En fazla ${MAX_CLUBS} kulüp ekleyebilirsiniz.`);
         return;
       }
-      addClub({ name, address: formAddress.trim() || undefined, activeDays: formActiveDays, loginPassword, roleId });
+      addClub({
+        name,
+        address: formAddress.trim() || undefined,
+        activeDays: formActiveDays,
+        loginUsername,
+        loginPassword,
+        roleId,
+      });
     }
     closeModal();
   };
+
+  const getClubLoginUsername = (club: Club) =>
+    club.loginUsername?.trim() || suggestClubUsername(club.name, clubs, club.id);
 
   const getClubPassword = (club: Club) =>
     (club.loginPassword != null && club.loginPassword !== '') ? club.loginPassword : DEFAULT_CLUB_PASSWORD;
@@ -121,8 +151,8 @@ const CorporateStructure: React.FC = () => {
           <div>
             <h3 className="text-sm font-bold text-white mb-1">Kulüp girişi</h3>
             <p className="text-slate-400 text-sm">
-              Giriş sayfasında &quot;Kulüp&quot; sekmesini seçin. Şube olarak kulüp adını seçin ve parolayı girin.
-              Aşağıdaki her kulüp kartında o kulübe ait giriş bilgileri (şube adı ve parola) yer alır; yetkililerle paylaşabilirsiniz.
+              Giriş sayfasında &quot;Kulüp&quot; sekmesini seçin. Her kulübe özel kullanıcı adı ve parola ile giriş yapılır.
+              Aşağıdaki kulüp kartlarında giriş bilgilerini görebilir ve yetkililerle paylaşabilirsiniz.
             </p>
           </div>
         </div>
@@ -244,11 +274,11 @@ const CorporateStructure: React.FC = () => {
                       Giriş bilgileri
                     </div>
                     <div className="flex items-center gap-2 text-xs">
-                      <span className="text-slate-400">Şube adı:</span>
-                      <span className="font-mono text-white truncate flex-1">{club.name}</span>
+                      <span className="text-slate-400">Kullanıcı adı:</span>
+                      <span className="font-mono text-white truncate flex-1">{getClubLoginUsername(club)}</span>
                       <button
                         type="button"
-                        onClick={() => copyToClipboard(club.name, 'Şube adı')}
+                        onClick={() => copyToClipboard(getClubLoginUsername(club), 'Kullanıcı adı')}
                         className="p-1.5 rounded text-slate-400 hover:bg-white/10 hover:text-indigo-400"
                         title="Kopyala"
                       >
@@ -331,7 +361,26 @@ const CorporateStructure: React.FC = () => {
               </div>
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                  Kulüp giriş parolası (opsiyonel)
+                  Giriş kullanıcı adı
+                </label>
+                <input
+                  type="text"
+                  value={formLoginUsername}
+                  onChange={(e) => setFormLoginUsername(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
+                  onBlur={() => {
+                    if (!formLoginUsername.trim() && formName.trim()) {
+                      setFormLoginUsername(suggestClubUsername(formName, clubs, editingId ?? undefined));
+                    }
+                  }}
+                  placeholder="ornek-kulup"
+                  className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/50 outline-none font-mono text-sm"
+                  autoComplete="off"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">Kulüp girişinde kullanılacak benzersiz kullanıcı adı.</p>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Giriş parolası (opsiyonel)
                 </label>
                 <input
                   type="password"

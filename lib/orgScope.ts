@@ -1,5 +1,5 @@
-import type { AuthUser, Coach, Student, TrainingGroup } from '../types';
-import { filterStudentsByClub, normalizeClubKey } from './clubScope';
+import type { AuthUser, Coach, Student, TrainingGroup, Transaction, Tournament, DisciplineBranch } from '../types';
+import { filterCoachesByClub, filterStudentsByClub, filterTransactionsByClub, normalizeClubKey, studentBelongsToClub } from './clubScope';
 import { findTrainingGroupById, findTrainingGroupByName } from './trainingGroupUtils';
 
 export function getStudentTrainingGroup(
@@ -73,15 +73,16 @@ export function resolveScopedStudents(
   auth: AuthUser | null,
   students: Student[],
   trainingGroups: TrainingGroup[],
+  coaches: Coach[] = [],
 ): Student[] {
   if (!auth) return students;
   if (auth.role === 'admin') return students;
   if (auth.role === 'coach') {
     if (auth.coachId) return filterStudentsByCoach(students, auth.coachId, trainingGroups);
-    if (auth.branch) return filterStudentsByClub(students, auth.branch);
+    if (auth.branch) return filterStudentsByClub(students, auth.branch, coaches);
     return [];
   }
-  if (auth.role === 'club') return filterStudentsByClub(students, auth.branch);
+  if (auth.role === 'club') return filterStudentsByClub(students, auth.branch, coaches);
   if (auth.role === 'student' || auth.role === 'parent') {
     return students.filter((s) => s.id === auth.studentId);
   }
@@ -91,4 +92,74 @@ export function resolveScopedStudents(
 export function coachesForClub(coaches: Coach[], clubName: string): Coach[] {
   const key = normalizeClubKey(clubName);
   return coaches.filter((c) => normalizeClubKey(c.branch) === key);
+}
+
+export function resolveClubBranch(auth: AuthUser | null): string | undefined {
+  if (!auth) return undefined;
+  if (auth.role === 'club') return normalizeClubKey(auth.branch);
+  return undefined;
+}
+
+function clubKeyForAuth(auth: AuthUser | null): string | undefined {
+  if (!auth) return undefined;
+  if (auth.role === 'club') return normalizeClubKey(auth.branch);
+  if (auth.role === 'coach' && auth.branch) return normalizeClubKey(auth.branch);
+  return undefined;
+}
+
+export function resolveScopedTransactions(
+  auth: AuthUser | null,
+  transactions: Transaction[],
+  students: Student[] = [],
+  coaches: Coach[] = [],
+): Transaction[] {
+  if (!auth || auth.role === 'admin') return transactions;
+  const key = clubKeyForAuth(auth);
+  if (!key) return transactions;
+  return transactions.filter((tx) => {
+    if (filterTransactionsByClub([tx], key).length > 0) return true;
+    if (tx.studentId) {
+      const student = students.find((s) => s.id === tx.studentId);
+      if (student && studentBelongsToClub(student, key, coaches)) return true;
+    }
+    return false;
+  });
+}
+
+export function resolveScopedCoaches(auth: AuthUser | null, coaches: Coach[]): Coach[] {
+  if (!auth || auth.role === 'admin') return coaches;
+  const key = clubKeyForAuth(auth);
+  if (key) return filterCoachesByClub(coaches, key);
+  if (auth.role === 'coach' && auth.coachId) {
+    const coach = coaches.find((c) => c.id === auth.coachId);
+    if (coach?.branch) return filterCoachesByClub(coaches, coach.branch);
+  }
+  return coaches;
+}
+
+export function resolveScopedTrainingGroups(
+  auth: AuthUser | null,
+  trainingGroups: TrainingGroup[],
+): TrainingGroup[] {
+  if (!auth || auth.role === 'admin') return trainingGroups;
+  const key = clubKeyForAuth(auth);
+  if (!key) return trainingGroups;
+  return trainingGroups.filter((g) => normalizeClubKey(g.branchOffice) === key);
+}
+
+export function resolveScopedDisciplineBranches(
+  auth: AuthUser | null,
+  branches: DisciplineBranch[],
+): DisciplineBranch[] {
+  if (!auth || auth.role === 'admin') return branches;
+  const key = clubKeyForAuth(auth);
+  if (!key) return branches;
+  return branches.filter((b) => normalizeClubKey(b.branchOffice) === key);
+}
+
+export function resolveScopedTournaments(auth: AuthUser | null, tournaments: Tournament[]): Tournament[] {
+  if (!auth || auth.role === 'admin') return tournaments;
+  const key = clubKeyForAuth(auth);
+  if (!key) return tournaments;
+  return tournaments.filter((t) => normalizeClubKey(t.branch) === key || (!t.branch && key === 'Merkez'));
 }

@@ -16,7 +16,7 @@ interface TournamentsProps {
 const inputCls = 'w-full px-3 py-2.5 rounded-lg text-sm bg-slate-900 border border-slate-700/60 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500/50 transition-all';
 
 const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => {
-  const { tournaments, addTournament, updateTournament, deleteTournament, students } = useApp();
+  const { tournaments, addTournament, updateTournament, deleteTournament, students, coaches } = useApp();
   const [showForm, setShowForm] = useState(false);
   const [activeTournamentId, setActiveTournamentId] = useState<string | null>(null);
   
@@ -40,9 +40,9 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
   );
 
   const selectableStudents = useMemo(() => {
-    const base = branch ? filterStudentsByClub(students, branch) : students;
+    const base = branch ? filterStudentsByClub(students, branch, coaches) : students;
     return base.filter((s) => s.status !== 'inactive');
-  }, [students, branch]);
+  }, [students, branch, coaches]);
 
   const emptyStanding = (): TournamentStanding => ({ played: 0, wins: 0, draws: 0, losses: 0, points: 0 });
 

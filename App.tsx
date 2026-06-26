@@ -34,42 +34,11 @@ import CoachProfilePage from './components/profile/CoachProfilePage';
 import AdminProfilePage from './components/profile/AdminProfilePage';
 import RoleManagement from './components/roles/RoleManagement';
 import { getSessionDisplay } from './lib/sessionDisplayName';
-import { filterNavByPermissions } from './lib/rolePermissions';
+import { filterNavByPermissions, coachNavForPermissions, isCoachPanelTabAllowed, coachSidebarTabFor } from './lib/rolePermissions';
+import { readPanelHash, writePanelHash } from './lib/panelRouting';
 
-// ─── Türkçe slug haritası ────────────────────────────────────────────────────
-const TAB_TO_SLUG: Record<string, string> = {
-  dashboard: 'anasayfa',
-  corporate: 'kurumsal-yapi',
-  'student-list': 'ogrenci-listesi',
-  'student-add': 'ogrenci-ekle',
-  'student-detail': 'ogrenci-detay',
-  students: 'ogrenci-islemleri',
-  attendance: 'yoklama-al',
-  'qr-attendance': 'qr-yoklama',
-  groups: 'brans-grup',
-  'bulk-actions': 'toplu-islemler',
-  applications: 'basvurular',
-  puzzles: 'bulmaca-yonetimi',
-  study: 'bulmaca-yeni',
-  tournaments: 'turnuvalar',
-  homework: 'odev-yonetimi',
-  leaderboard: 'lider-tablosu',
-  analysis: 'analiz-performans',
-  finance: 'kasa-finans',
-  inventory: 'depo-envanter',
-  gallery: 'galeri',
-  lessons: 'canli-ders',
-  curriculum: 'ders-programi',
-  messages: 'mesajlar',
-  security: 'kullanici-guvenlik',
-  roles: 'rol-yonetimi',
-  profile: 'profil',
-};
-
-const SLUG_TO_TAB: Record<string, string> = {
-  ...Object.fromEntries(Object.entries(TAB_TO_SLUG).map(([tab, slug]) => [slug, tab])),
-  whatsapp: 'messages',
-};
+// ─── Türkçe slug haritası (lib/panelRouting.ts) ───────────────────────────────
+import { readPanelHash as readHash, writePanelHash as writeHash } from './lib/panelRouting';
 
 /** Tahta / çalışma gibi tam genişlik modüller — mobilde yan padding taşmayı önler */
 const FULL_BLEED_TABS = new Set(['study', 'lessons']);
@@ -90,26 +59,6 @@ function getVeliImzaToken(): string | null {
 function isPublicApplicationRoute(): boolean {
   return getPublicFormRoute() !== null;
 }
-
-function readHash(): { tab: string; studentId: string | null } {
-  const raw = window.location.hash.replace(/^#\/?/, '');
-  if (!raw) return { tab: 'dashboard', studentId: null };
-  const [slug, extra] = raw.split('/');
-  const tab = SLUG_TO_TAB[slug] ?? 'dashboard';
-  return { tab, studentId: tab === 'student-detail' && extra ? extra : null };
-}
-
-function writeHash(tab: string, studentId?: string | null) {
-  const slug = TAB_TO_SLUG[tab] ?? 'anasayfa';
-  const next =
-    tab === 'student-detail' && studentId
-      ? `#/${slug}/${studentId}`
-      : `#/${slug}`;
-  if (window.location.hash !== next) {
-    window.location.hash = next;
-  }
-}
-// ─────────────────────────────────────────────────────────────────────────────
 
 function collectNavTabIds(categories: NavCategory[]): Set<string> {
   return new Set(
@@ -360,12 +309,12 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   );
   const coachPermissions = getAuthPermissions();
   const isCoachTabAllowed = useCallback(
-    (tab: string) => (COACH_TAB_IDS.has(tab) || COACH_EXTRA_TAB_IDS.has(tab)) && coachPermissions.has(tab),
+    (tab: string) => isCoachPanelTabAllowed(coachPermissions, tab),
     [coachPermissions],
   );
 
   const coachNavCategories = useMemo(
-    () => filterNavByPermissions(COACH_NAV_CATEGORIES, coachPermissions),
+    () => coachNavForPermissions(coachPermissions),
     [coachPermissions],
   );
 
@@ -410,10 +359,17 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard />;
+      case 'corporate':
+        return <CorporateStructure />;
       case 'student-list':
+      case 'students':
+      case 'bulk-actions':
         return (
           <StudentList
-            onAddNew={() => {}}
+            onAddNew={() => {
+              setActiveTabRaw('student-add');
+              writeHash('student-add', null);
+            }}
             onViewDetail={(id) => {
               setSelectedStudentId(id);
               setActiveTabRaw('student-detail');
@@ -421,6 +377,19 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
             }}
           />
         );
+      case 'student-add': {
+        const coachBranch = auth?.branch || coaches.find((c) => c.id === auth?.coachId)?.branch;
+        return (
+          <StudentAdd
+            defaultBranchOffice={coachBranch}
+            defaultCoachId={auth?.coachId}
+            lockBranchOffice={Boolean(coachBranch)}
+            lockCoachId={Boolean(auth?.coachId)}
+            onCancel={() => setActiveTab('student-list', null)}
+            onSaved={() => setActiveTab('student-list', null)}
+          />
+        );
+      }
       case 'student-detail': {
         const canView =
           !selectedStudentId || scopedStudents.some((s) => s.id === selectedStudentId);
@@ -447,9 +416,14 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         );
       }
       case 'attendance':
+      case 'qr-attendance':
         return <Attendance />;
       case 'groups':
         return <BranchGroupManagement />;
+      case 'applications':
+        return <ApplicationsAdmin />;
+      case 'tournaments':
+        return <Tournaments role="admin" />;
       case 'lessons':
         return <LiveLesson />;
       case 'puzzles':
@@ -464,10 +438,18 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Curriculum />;
       case 'analysis':
         return <Analysis />;
+      case 'finance':
+        return <Finance />;
+      case 'inventory':
+        return <Inventory />;
       case 'gallery':
         return <Gallery />;
       case 'messages':
         return <Messages />;
+      case 'security':
+        return <Security />;
+      case 'roles':
+        return <RoleManagement />;
       case 'profile':
         return <CoachProfilePage />;
       default:
@@ -475,7 +457,7 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
     }
   };
 
-  const sidebarTab = COACH_TAB_IDS.has(activeTab) ? activeTab : (activeTab === 'student-detail' ? 'student-list' : defaultCoachTab);
+  const sidebarTab = coachSidebarTabFor(activeTab, coachPermissions);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarDesktopExpanded, setSidebarDesktopExpanded] = useState(true);
   const sidebarIconOnlyDefault = activeTab === 'lessons';

@@ -236,20 +236,32 @@ const TypeCard: React.FC<{
 );
 
 /* ─── Main Component ─────────────────────────────────────────────────────── */
-const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
+const StudentAdd: React.FC<{
+  onCancel?: () => void;
+  onSaved?: () => void;
+  defaultBranchOffice?: string;
+  defaultCoachId?: string;
+  lockBranchOffice?: boolean;
+  lockCoachId?: boolean;
+}> = ({
   onCancel,
   onSaved,
+  defaultBranchOffice,
+  defaultCoachId,
+  lockBranchOffice = false,
+  lockCoachId = false,
 }) => {
   const { addStudent, updateStudent, branchOffices, disciplines, groups, students, trainingGroups, disciplineBranches, coaches } = useApp();
-  const mergedOffices = useMemo(
-    () => mergeBranchOffices(branchOffices, disciplineBranches),
-    [branchOffices, disciplineBranches],
-  );
-  const branchOfficeOptions = [PLACEHOLDER_OFFICE, ...mergedOffices];
+  const branchOfficeOptions = useMemo(() => {
+    const base = mergeBranchOffices(branchOffices, disciplineBranches);
+    const office = defaultBranchOffice?.trim();
+    const merged = office && !base.includes(office) ? [office, ...base] : base;
+    return [PLACEHOLDER_OFFICE, ...merged];
+  }, [branchOffices, disciplineBranches, defaultBranchOffice]);
 
   const [lessonSchedule, setLessonSchedule] = useState<GroupLessonSlot[]>([]);
 
-  const handleAddDemoStudent = () => {
+  const handleAddDemoStudent = async () => {
     const demoCount = students.filter((s) => s.name.startsWith('Demo Öğrenci')).length + 1;
     const name = demoCount === 1 ? 'Demo Öğrenci' : `Demo Öğrenci ${demoCount}`;
     const loginUsername = suggestStudentUsername(name, students.map((s) => s.username));
@@ -257,7 +269,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
     const branch = branchOffices[0] || 'Merkez';
     const group = groups[0] || 'A Grubu';
     const discipline = disciplines[0] || 'Satranç';
-    addStudent({
+    const newStudent = await addStudent({
       name,
       level: 'Başlangıç',
       elo: 1200,
@@ -279,7 +291,8 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
       username: loginUsername,
       password: loginPassword,
     });
-    onSaved?.();
+    setSavedCredentials({ username: loginUsername, password: loginPassword });
+    setSavedStudent(newStudent);
   };
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
@@ -288,7 +301,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
   const [showExtraContact, setShowExtraContact] = useState(false);
 
   const [form, setForm] = useState<FormState>({
-    branchOffice: PLACEHOLDER_OFFICE,
+    branchOffice: defaultBranchOffice?.trim() || PLACEHOLDER_OFFICE,
     registrationType: 'monthly',
     tcNo: '',
     name: '',
@@ -306,7 +319,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
     healthInfo: '',
     branch: PLACEHOLDER_DISCIPLINE,
     group: PLACEHOLDER_GROUP,
-    coachId: PLACEHOLDER_COACH,
+    coachId: defaultCoachId?.trim() || PLACEHOLDER_COACH,
     monthlyFee: '',
     paymentReminderDay: DEFAULT_REMINDER_DAY,
     latePaymentReminderDay: DEFAULT_REMINDER_DAY,
@@ -670,9 +683,13 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                 value={form.branchOffice}
                 onChange={(e) => set('branchOffice')(e.target.value)}
                 className={selectCls}
+                disabled={lockBranchOffice}
               >
                 {branchOfficeOptions.map((x) => <option key={x}>{x}</option>)}
               </select>
+              {lockBranchOffice && defaultBranchOffice ? (
+                <p className="text-[10px] text-slate-500 mt-1">Öğrenci yalnızca sizin kulübünüze kaydedilir.</p>
+              ) : null}
             </Field>
             <Field label="Branş" required error={errors.branch}>
               <select
@@ -697,6 +714,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                 value={form.coachId}
                 onChange={(e) => set('coachId')(e.target.value)}
                 className={selectCls}
+                disabled={lockCoachId}
               >
                 {coachOptions.map((c) => (
                   <option key={typeof c === 'string' ? c : c.id} value={typeof c === 'string' ? c : c.id}>
@@ -704,6 +722,9 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                   </option>
                 ))}
               </select>
+              {lockCoachId ? (
+                <p className="text-[10px] text-slate-500 mt-1">Öğrenci size atanır; kulübünüz de bu öğrenciyi görür.</p>
+              ) : null}
             </Field>
             {lessonSchedule.length > 0 && (
               <Field label="Ders programı (gruptan)" className="md:col-span-2">

@@ -13,7 +13,11 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../AppContext';
 import type { AppRole, RolePanel } from '../../types';
-import { permissionsForPanel, PERMISSION_CATALOG } from '../../lib/rolePermissions';
+import {
+  groupedPermissionsForRoleEditor,
+  permissionKeysForRoleEditor,
+  sanitizePermissionsForRole,
+} from '../../lib/rolePermissions';
 
 const PANEL_LABELS: Record<RolePanel, string> = {
   admin: 'Yönetim Paneli',
@@ -55,9 +59,12 @@ const RoleManagement: React.FC = () => {
 
   useEffect(() => {
     if (selected) {
-      setDraftPerms(rolePermissionMap[selected.id] ?? []);
+      setDraftPerms(sanitizePermissionsForRole(selected.panel, rolePermissionMap[selected.id] ?? []));
     }
-  }, [selected?.id, rolePermissionMap]);
+  }, [selected?.id, selected?.panel, rolePermissionMap]);
+
+  const editorPanel = selected?.panel ?? 'admin';
+  const editorPermKeys = useMemo(() => permissionKeysForRoleEditor(editorPanel), [editorPanel]);
 
   const filteredRoles = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -70,33 +77,22 @@ const RoleManagement: React.FC = () => {
     );
   }, [appRoles, search]);
 
-  const groupedPerms = useMemo(() => {
-    if (!selected) return [];
-    const panelPerms = permissionsForPanel(selected.panel);
-    const byCat = new Map<string, typeof panelPerms>();
-    for (const p of panelPerms) {
-      const list = byCat.get(p.category) ?? [];
-      list.push(p);
-      byCat.set(p.category, list);
-    }
-    return [...byCat.entries()];
-  }, [selected]);
+  const groupedPerms = useMemo(() => groupedPermissionsForRoleEditor(editorPanel), [editorPanel]);
 
   const togglePerm = (key: string) => {
     setDraftPerms((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   };
 
-  const selectAll = () => {
-    if (!selected) return;
-    setDraftPerms(permissionsForPanel(selected.panel).map((p) => p.key));
-  };
+  const selectAll = () => setDraftPerms(editorPermKeys);
 
   const clearAll = () => setDraftPerms([]);
 
   const handleSave = async () => {
     if (!selected) return;
-    const ok = await setRolePermissions(selected.id, draftPerms);
+    const perms = sanitizePermissionsForRole(selected.panel, draftPerms);
+    const ok = await setRolePermissions(selected.id, perms);
     if (!ok) return;
+    setDraftPerms(perms);
     setSaved(true);
     showToast(`"${selected.name}" izinleri Supabase'e kaydedildi.`, 'success');
     setTimeout(() => setSaved(false), 2000);
@@ -143,7 +139,7 @@ const RoleManagement: React.FC = () => {
             Rol Yönetimi
           </h2>
             <p className="text-slate-400 text-sm mt-1 max-w-xl">
-              Her rol için menü ve özellik erişimini tanımlayın. &quot;Antrenör&quot; sistem rolündeki değişiklikler özel rol atanmamış tüm antrenörlere uygulanır.
+              Her rol için menü ve özellik erişimini tanımlayın. Antrenör ve kulüp rollerinde yönetici panelindeki tüm izinler listelenir; istediğinizi açıp kapatabilirsiniz.
             </p>
         </div>
         <button
@@ -290,9 +286,16 @@ const RoleManagement: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-slate-500">
-                  {draftPerms.length} / {permissionsForPanel(selected.panel).length} izin seçili
-                </p>
+                <div className="min-w-0">
+                  <p className="text-xs text-slate-500">
+                    {draftPerms.length} / {editorPermKeys.length} izin seçili
+                  </p>
+                  {(editorPanel === 'coach' || editorPanel === 'club') && (
+                    <p className="text-[11px] text-slate-600 mt-1">
+                      Yönetici panelindeki tüm menüler burada listelenir. Açtığınız izinler {editorPanel === 'club' ? 'kulüp' : 'antrenör'} panelinde görünür.
+                    </p>
+                  )}
+                </div>
                 <div className="flex gap-2">
                   <button type="button" onClick={selectAll} className="text-xs font-bold text-violet-400 hover:text-violet-300 px-2 py-1">
                     Tümünü seç
@@ -312,14 +315,13 @@ const RoleManagement: React.FC = () => {
                     <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {perms.map((p) => {
                         const checked = draftPerms.includes(p.key);
-                        const meta = PERMISSION_CATALOG.find((x) => x.key === p.key && x.panel === selected.panel);
                         return (
                           <label
-                            key={`${selected.panel}-${p.key}`}
+                            key={`${p.panel}-${p.key}-${p.category}`}
                             className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-all ${
                               checked
                                 ? 'border-violet-500/40 bg-violet-500/10'
-                                : 'border-white/[0.05] bg-slate-950/30 hover:border-white/[0.1]'
+                                : 'border-white/[0.05] bg-slate-950/30 hover:border-white/[0.10]'
                             }`}
                           >
                             <input
@@ -328,7 +330,15 @@ const RoleManagement: React.FC = () => {
                               onChange={() => togglePerm(p.key)}
                               className="rounded border-slate-600 text-violet-500 focus:ring-violet-500/30"
                             />
-                            <span className="text-sm text-slate-200 font-medium">{meta?.label ?? p.label}</span>
+                            <div className="min-w-0 flex-1">
+                              <span className="text-sm text-slate-200 font-medium">{p.label}</span>
+                              <span
+                                className="ml-2 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-white/[0.08]"
+                                style={{ color: PANEL_COLORS[p.panel] }}
+                              >
+                                {PANEL_LABELS[p.panel]}
+                              </span>
+                            </div>
                           </label>
                         );
                       })}

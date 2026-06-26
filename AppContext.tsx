@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { resolveScopedStudents } from './lib/orgScope';
+import { resolveScopedStudents, resolveScopedTransactions, resolveScopedCoaches, resolveScopedTrainingGroups, resolveScopedDisciplineBranches, resolveScopedTournaments, resolveClubBranch } from './lib/orgScope';
 import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, TrainingGroup, AppRole } from './types';
 import { MOCK_STUDENTS } from './constants';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
@@ -7,6 +7,7 @@ import { homeworkAssigneesOverlap } from './lib/homeworkPanelUtils';
 import { looksLikeLichessPuzzleId } from './lib/puzzlePlayUtils';
 import { insertHomeworkAttemptSupabase, detectHomeworkAttemptPayloadStyle, setCachedHomeworkAttemptPayloadStyle } from './lib/homeworkAttemptDb.mjs';
 import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentAuth.ts';
+import { findClubForLogin } from './lib/clubLoginUtils';
 import { getPermissionsForAuth, hasPermission as checkPermission, defaultPermissionsForRole } from './lib/rolePermissions';
 import {
   loadRolesLocal,
@@ -35,6 +36,18 @@ interface AppContextType {
   students: Student[];
   /** Giriş yapan role göre filtrelenmiş öğrenci listesi (admin: tümü, antrenör: kendi öğrencileri, kulüp: şube) */
   scopedStudents: Student[];
+  /** Kulüp/antrenör şubesine göre filtrelenmiş kasa işlemleri */
+  scopedTransactions: Transaction[];
+  /** Kulüp şubesine göre filtrelenmiş antrenörler */
+  scopedCoaches: Coach[];
+  /** Kulüp şubesine göre filtrelenmiş eğitim grupları */
+  scopedTrainingGroups: TrainingGroup[];
+  /** Kulüp şubesine göre filtrelenmiş branşlar */
+  scopedDisciplineBranches: DisciplineBranch[];
+  /** Kulüp şubesine göre filtrelenmiş turnuvalar */
+  scopedTournaments: Tournament[];
+  /** Kulüp girişinde aktif şube adı */
+  activeClubBranch?: string;
   addStudent: (student: Omit<Student, 'id'>) => Promise<Student>;
   updateStudent: (id: string, student: Partial<Student>) => void;
   deleteStudent: (id: string) => void;
@@ -140,6 +153,7 @@ interface AppContextType {
   setRolePermissions: (roleId: string, permKeys: string[]) => Promise<boolean>;
   refreshRoles: () => Promise<void>;
   getAuthPermissions: () => Set<string>;
+  authPermissions: Set<string>;
   hasAuthPermission: (key: string) => boolean;
 
   auth: AuthUser | null;
@@ -147,9 +161,9 @@ interface AppContextType {
   apiStudent: Student | null;
   loginAdmin: (password: string) => boolean;
   loginCoach: (identifier: string, password: string) => boolean;
-  loginClub: (password: string, branch: string) => boolean;
-  loginParent: (studentIdOrPhone: string, pin: string) => boolean;
-  loginStudent: (studentIdOrPhone: string, pin: string) => boolean;
+  loginClub: (username: string, password: string) => Promise<boolean>;
+  loginParent: (studentIdOrPhone: string, pin: string) => Promise<boolean>;
+  loginStudent: (studentIdOrPhone: string, pin: string) => Promise<boolean>;
   logout: () => void;
   /** Sunucu modunda API girişi sonrası auth + öğrenci bilgisini set eder. */
   setAuthWithStudent: (auth: AuthUser | null, student: Student | null) => void;
@@ -185,6 +199,27 @@ function genId(): string {
   return Math.random().toString(36).substr(2, 9);
 }
 
+/** Kulüp/antrenör panelinden eklenen öğrenciler otomatik olarak ilgili şubeye/antrenöre bağlanır */
+function applyStudentScopeFromAuth(
+  student: Omit<Student, 'id'>,
+  auth: AuthUser | null,
+  coaches: Coach[],
+): Omit<Student, 'id'> {
+  if (!auth) return student;
+  const next = { ...student };
+  if (auth.role === 'club' && auth.branch?.trim()) {
+    next.branchOffice = auth.branch.trim();
+  }
+  if (auth.role === 'coach') {
+    if (auth.coachId?.trim()) next.coachId = auth.coachId.trim();
+    const branch =
+      auth.branch?.trim() ||
+      coaches.find((c) => c.id === auth.coachId)?.branch?.trim();
+    if (branch) next.branchOffice = branch;
+  }
+  return next;
+}
+
 /** Supabase students tablosu snake_case; uygulama camelCase. Tabloda olmayan alanlar gönderilmez (örn. group -> group_id yok). */
 const STUDENT_DB_SKIP_KEYS = new Set<string>(['studentNo']);
 const STUDENT_DB_SKIP_COLUMNS_KEY = 'netchess_student_db_skip_cols';
@@ -205,7 +240,7 @@ const STUDENT_DB_OPTIONAL_SNAKE = new Set<string>([
   'registration_type', 'monthly_fee',
   'payment_reminder_day', 'late_payment_reminder_day', 'is_scholarship_student', 'parent_job',
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
-  'coach_id',
+  'coach_id', 'branch_office',
 ]);
 
 let _knownStudentColumns: Set<string> | null = null;
@@ -257,13 +292,30 @@ function learnStudentColumnsFromRows(rows: Record<string, unknown>[]) {
   for (const col of skip) {
     persistSkippedStudentColumn(col);
   }
+  restoreStudentLoginColumnsInSchema();
 }
 
 /** Satır şemasında yok diye otomatik atlanmayacak opsiyonel kolonlar */
 const STUDENT_DB_OPTIONAL_NO_INFER_SKIP = new Set<string>([
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
   'coach_id',
+  'username', 'password', 'parent_pin',
 ]);
+
+function restoreStudentLoginColumnsInSchema() {
+  const loginCols = ['username', 'password', 'parent_pin'];
+  for (const col of loginCols) STUDENT_DB_OPTIONAL_SNAKE.add(col);
+  const skip = loadSkippedStudentColumns();
+  let changed = false;
+  for (const col of loginCols) {
+    if (skip.delete(col)) changed = true;
+  }
+  if (changed) {
+    try {
+      localStorage.setItem(STUDENT_DB_SKIP_COLUMNS_KEY, JSON.stringify([...skip]));
+    } catch { /* ignore */ }
+  }
+}
 
 const LESSON_LOG_STORAGE_KEY = 'netchess_lesson_logs';
 const GROUP_LESSON_LOG_STORAGE_KEY = 'netchess_group_lesson_logs';
@@ -1022,6 +1074,7 @@ function transactionToDb(t: Transaction): Record<string, unknown> {
     total_amount: t.totalAmount ?? null,
     processed_by: t.processedBy ?? null,
     student_id: t.studentId ?? null,
+    branch: t.branch ?? null,
   };
 }
 
@@ -1072,6 +1125,7 @@ function clubToDb(club: Club): Record<string, unknown> {
       ? club.activeDays
       : [true, true, true, true, false, false, false],
     login_password: club.loginPassword ?? null,
+    login_username: club.loginUsername ?? null,
     role_id: club.roleId ?? null,
   };
 }
@@ -1132,6 +1186,12 @@ function dbToClub(row: Record<string, unknown>): Club {
     address: r.address != null ? String(r.address) : undefined,
     activeDays,
     loginPassword: r.login_password != null ? String(r.login_password) : r.loginPassword != null ? String(r.loginPassword) : undefined,
+    loginUsername:
+      r.login_username != null
+        ? String(r.login_username)
+        : r.loginUsername != null
+          ? String(r.loginUsername)
+          : undefined,
     roleId: r.role_id != null ? String(r.role_id) : r.roleId != null ? String(r.roleId) : undefined,
   };
 }
@@ -1224,7 +1284,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const DEFAULT_CLUBS: Club[] = [
-    { id: 'club1', name: 'Sistem Satranç', address: '', activeDays: [true, true, true, true, false, false, false] },
+    {
+      id: 'club1',
+      name: 'Sistem Satranç',
+      address: '',
+      activeDays: [true, true, true, true, false, false, false],
+      loginUsername: 'sistem-satranc',
+    },
   ];
   const [clubs, setClubs] = useState<Club[]>(() =>
     useSupabase ? DEFAULT_CLUBS : loadJSON<Club[]>('netchess_clubs', DEFAULT_CLUBS)
@@ -1288,9 +1354,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const scopedStudents = useMemo(
-    () => resolveScopedStudents(auth, students, trainingGroups),
-    [auth, students, trainingGroups],
+    () => resolveScopedStudents(auth, students, trainingGroups, coaches),
+    [auth, students, trainingGroups, coaches],
   );
+
+  const scopedTransactions = useMemo(
+    () => resolveScopedTransactions(auth, transactions, students, coaches),
+    [auth, transactions, students, coaches],
+  );
+
+  const scopedCoaches = useMemo(
+    () => resolveScopedCoaches(auth, coaches),
+    [auth, coaches],
+  );
+
+  const scopedTrainingGroups = useMemo(
+    () => resolveScopedTrainingGroups(auth, trainingGroups),
+    [auth, trainingGroups],
+  );
+
+  const scopedDisciplineBranches = useMemo(
+    () => resolveScopedDisciplineBranches(auth, disciplineBranches),
+    [auth, disciplineBranches],
+  );
+
+  const scopedTournaments = useMemo(
+    () => resolveScopedTournaments(auth, tournaments),
+    [auth, tournaments],
+  );
+
+  const activeClubBranch = useMemo(() => resolveClubBranch(auth), [auth]);
 
   const [stockfishReady, setStockfishReady] = useState(false);
   const [stockfishLoading, setStockfishLoading] = useState(false);
@@ -1372,60 +1465,117 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   }, [coaches]);
 
-  const loginClub = useCallback((password: string, branch: string): boolean => {
-    const branchTrim = (branch || 'Merkez').trim();
-    const club = clubs.find(c => (c.name || '').trim() === branchTrim);
-    const expectedPassword = (club?.loginPassword != null && club.loginPassword !== '') ? club.loginPassword : CLUB_PASSWORD;
-    if (password !== expectedPassword) return false;
-    setAuth({ role: 'club', branch: branchTrim, clubId: club?.id });
-    return true;
-  }, [clubs]);
+  const loginClub = useCallback(async (username: string, password: string): Promise<boolean> => {
+    const idRaw = username.trim();
+    const pwd = password.trim();
+    if (!idRaw || !pwd) return false;
 
-  const loginParent = useCallback((studentIdOrPhone: string, pin: string): boolean => {
-    const trimmed = studentIdOrPhone.trim();
-    const trimmedDigits = trimmed.replace(/\D/g, '');
-    const allPhones = (s: Student) =>
-      [
-        s.parentPhone,
-        s.fatherPhone,
-        s.motherPhone,
-        ...(s.contactNumbers ?? []),
-      ].filter(Boolean) as string[];
-    const student = students.find((s) => {
-      if (s.id === trimmed) return true;
-      const num = parseInt(trimmed, 10);
-      if (!Number.isNaN(num) && getDisplayStudentNo(s, students) === num) return true;
-      const phones = allPhones(s);
-      return phones.some((tel) => {
-        const digits = tel.replace(/\D/g, '');
-        return digits.length >= 7 && (digits.endsWith(trimmedDigits) || trimmedDigits.endsWith(digits.slice(-10)));
-      });
-    });
-    if (!student) return false;
-    if (student.parentPin && student.parentPin === pin) {
-      setAuth({ role: 'parent', studentId: student.id });
+    const attempt = (list: Club[]): boolean => {
+      const club = findClubForLogin(list, idRaw);
+      if (!club) return false;
+      const expectedPassword =
+        club.loginPassword != null && club.loginPassword !== '' ? club.loginPassword : CLUB_PASSWORD;
+      if (pwd !== expectedPassword) return false;
+      setAuth({ role: 'club', branch: (club.name || 'Merkez').trim(), clubId: club.id });
       return true;
+    };
+
+    if (attempt(clubs)) return true;
+
+    if (useSupabase && supabase) {
+      try {
+        const { data, error } = await supabase.from('clubs').select('*');
+        if (!error && data?.length) {
+          const loaded = (data as Record<string, unknown>[]).map(dbToClub);
+          setClubs(loaded);
+          if (attempt(loaded)) return true;
+        }
+      } catch {
+        /* yedek: yerel liste ile devam */
+      }
     }
-    const last4 = pin.replace(/\D/g, '').slice(-4);
-    const phonesForPin = allPhones(student);
-    const hasMatch = last4.length >= 4 && phonesForPin.some((tel) => {
-      const digits = tel.replace(/\D/g, '');
-      return digits.length >= 4 && digits.slice(-4) === last4;
-    });
-    if (hasMatch) {
-      setAuth({ role: 'parent', studentId: student.id });
-      return true;
-    }
+
     return false;
-  }, [students]);
+  }, [clubs, useSupabase]);
+
+  const loginParent = useCallback(async (studentIdOrPhone: string, pin: string): Promise<boolean> => {
+    const trimmedPin = pin.trim();
+    if (!studentIdOrPhone.trim() || !trimmedPin) return false;
+
+    const attempt = (list: Student[]): boolean => {
+      const student = findStudentForLogin(list, studentIdOrPhone);
+      if (!student) return false;
+      if (student.parentPin && student.parentPin === trimmedPin) {
+        setAuth({ role: 'parent', studentId: student.id });
+        return true;
+      }
+      const last4 = trimmedPin.replace(/\D/g, '').slice(-4);
+      if (last4.length < 4) return false;
+      const phones = [
+        student.parentPhone,
+        student.fatherPhone,
+        student.motherPhone,
+        ...(student.contactNumbers ?? []),
+      ].filter(Boolean) as string[];
+      const hasMatch = phones.some((tel) => {
+        const digits = tel.replace(/\D/g, '');
+        return digits.length >= 4 && digits.slice(-4) === last4;
+      });
+      if (!hasMatch) return false;
+      setAuth({ role: 'parent', studentId: student.id });
+      return true;
+    };
+
+    if (attempt(students)) return true;
+
+    if (useSupabase && supabase) {
+      try {
+        const { data, error } = await supabase.from('students').select('*');
+        if (!error && data?.length) {
+          learnStudentColumnsFromRows(data as Record<string, unknown>[]);
+          const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
+          setStudents(loaded);
+          if (attempt(loaded)) return true;
+        }
+      } catch {
+        /* yerel liste ile devam */
+      }
+    }
+
+    return false;
+  }, [students, useSupabase]);
 
   /** Öğrenci girişi: öğrenci no, kullanıcı adı veya veli telefonu + şifre/PIN */
-  const loginStudent = useCallback((studentIdOrPhone: string, pin: string): boolean => {
-    const student = findStudentForLogin(students, studentIdOrPhone);
-    if (!student || !verifyStudentLoginPin(student, pin)) return false;
-    setAuth({ role: 'student', studentId: student.id });
-    return true;
-  }, [students]);
+  const loginStudent = useCallback(async (studentIdOrPhone: string, pin: string): Promise<boolean> => {
+    const idRaw = studentIdOrPhone.trim();
+    const trimmedPin = pin.trim();
+    if (!idRaw || !trimmedPin) return false;
+
+    const attempt = (list: Student[]): boolean => {
+      const student = findStudentForLogin(list, idRaw);
+      if (!student || !verifyStudentLoginPin(student, trimmedPin)) return false;
+      setAuth({ role: 'student', studentId: student.id });
+      return true;
+    };
+
+    if (attempt(students)) return true;
+
+    if (useSupabase && supabase) {
+      try {
+        const { data, error } = await supabase.from('students').select('*');
+        if (!error && data?.length) {
+          learnStudentColumnsFromRows(data as Record<string, unknown>[]);
+          const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
+          setStudents(loaded);
+          if (attempt(loaded)) return true;
+        }
+      } catch {
+        /* yerel liste ile devam */
+      }
+    }
+
+    return false;
+  }, [students, useSupabase]);
 
   const [apiStudent, setApiStudent] = useState<Student | null>(() => {
     try {
@@ -1590,6 +1740,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return getPermissionsForAuth(auth, rolePermissionMap, customRoleId, rolesLoaded);
   }, [auth, coaches, clubs, rolePermissionMap, rolesLoaded]);
+
+  const authPermissions = useMemo(() => getAuthPermissions(), [getAuthPermissions]);
 
   const hasAuthPermission = useCallback(
     (key: string) => {
@@ -2263,9 +2415,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [addActivityLog]);
 
   const addStudent = useCallback(async (student: Omit<Student, 'id'>): Promise<Student> => {
+    const scoped = applyStudentScopeFromAuth(student, auth, coaches);
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
     const nextNo = 1 + Math.max(0, ...students.map((s) => s.studentNo).filter((n): n is number => typeof n === 'number'));
-    const newStudent = { ...student, id, studentNo: nextNo } as Student;
+    const newStudent = { ...scoped, id, studentNo: nextNo } as Student;
     setStudents(prev => [...prev, newStudent]);
     addActivityLog({ user: CURRENT_USER, action: 'Öğrenci Eklendi', target: student.name, type: 'success' });
     const sb = getServiceSupabase();
@@ -2273,10 +2426,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const result = await studentInsertWithRetry(sb, newStudent as unknown as Record<string, unknown>);
       if (!result.ok) {
         console.warn('[Students] Supabase insert (yerel kayıt korundu):', result.error);
+        showToast('Öğrenci kaydedildi ancak sunucuya yazılamadı. Giriş bilgileri bu cihazda geçerli olabilir.', 'warning');
+      } else if (result.synced === false && (student.username || student.password)) {
+        showToast('Öğrenci kaydedildi; giriş bilgileri sunucuya yazılamadı. Supabase migration dosyasını çalıştırın.', 'warning');
       }
     }
     return newStudent;
-  }, [addActivityLog, students]);
+  }, [addActivityLog, students, showToast, auth, coaches]);
 
   const updateStudent = useCallback(async (id: string, updatedFields: Partial<Student>) => {
     if (updatedFields.lessonLog !== undefined) {
@@ -2362,7 +2518,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addTransaction = useCallback(async (transaction: Omit<Transaction, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
-    const newTransaction = { ...transaction, id } as Transaction;
+    const branch =
+      transaction.branch ??
+      (auth?.role === 'club' ? auth.branch : auth?.role === 'coach' && auth.branch ? auth.branch : undefined);
+    const newTransaction = { ...transaction, id, branch } as Transaction;
     setTransactions(prev => [newTransaction, ...prev]);
     addActivityLog({
       user: transaction.processedBy || CURRENT_USER,
@@ -2375,7 +2534,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const { error } = await sb.from('transactions').insert(transactionToDb(newTransaction));
       if (error) console.error('Supabase transactions insert error:', error);
     } catch (err) { console.error('Supabase transactions throw error:', err); }
-  }, [addActivityLog]);
+  }, [addActivityLog, auth]);
 
   const updateTransaction = useCallback(async (id: string, transaction: Partial<Transaction>) => {
     setTransactions(prev => prev.map(t => t.id === id ? { ...t, ...transaction } : t));
@@ -2388,6 +2547,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (transaction.paymentType != null) payload.payment_type = transaction.paymentType;
       if (transaction.amount != null) payload.amount = transaction.amount;
       if (transaction.processedBy !== undefined) payload.processed_by = transaction.processedBy ?? null;
+      if (transaction.branch !== undefined) payload.branch = transaction.branch ?? null;
+      if (transaction.studentId !== undefined) payload.student_id = transaction.studentId ?? null;
       if (Object.keys(payload).length === 0) return;
       const { error } = await sb.from('transactions').update(payload).eq('id', id);
       if (error) console.error('Supabase transactions update error:', error);
@@ -2804,7 +2965,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name: club.name.trim() || 'Yeni Kulüp',
       address: club.address?.trim(),
       activeDays: Array.isArray(club.activeDays) && club.activeDays.length === 7 ? club.activeDays : [true, true, true, true, false, false, false],
+      loginUsername: club.loginUsername?.trim() || undefined,
       loginPassword: club.loginPassword?.trim() || undefined,
+      roleId: club.roleId,
     };
     setClubs(prev => [...prev, full].sort((a, b) => a.name.localeCompare(b.name)));
     addActivityLog({ user: CURRENT_USER, action: 'Kulüp Eklendi', target: full.name, type: 'info' });
@@ -2825,6 +2988,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (patch.address !== undefined) payload.address = patch.address ?? null;
       if (patch.activeDays !== undefined) payload.active_days = patch.activeDays;
       if (patch.loginPassword !== undefined) payload.login_password = patch.loginPassword ?? null;
+      if (patch.loginUsername !== undefined) payload.login_username = patch.loginUsername ?? null;
+      if (patch.roleId !== undefined) payload.role_id = patch.roleId ?? null;
       if (Object.keys(payload).length > 0) {
         sb.from('clubs').update(payload).eq('id', id).then(({ error }) => {
           if (error) console.error('Supabase clubs update error:', error);
@@ -3008,7 +3173,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{ 
-      students, scopedStudents, addStudent, updateStudent, deleteStudent,
+      students, scopedStudents, scopedTransactions, scopedCoaches, scopedTrainingGroups, scopedDisciplineBranches, scopedTournaments, activeClubBranch,
+      addStudent, updateStudent, deleteStudent,
       bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach,
       transactions, addTransaction, updateTransaction, removeTransaction,
       attendanceRecords, addAttendanceRecord,
@@ -3033,7 +3199,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       coachAiReports, addCoachAiReport, deleteCoachAiReport,
       tournaments, addTournament, updateTournament, deleteTournament,
       appRoles, rolePermissionMap, rolesLoaded, createAppRole, updateAppRole, deleteAppRole, setRolePermissions, refreshRoles,
-      getAuthPermissions, hasAuthPermission,
+      getAuthPermissions, authPermissions, hasAuthPermission,
       auth, apiStudent, loginAdmin, loginCoach, loginClub, loginParent, loginStudent, logout, setAuthWithStudent, refreshFromStorage,
       refreshStudentsFromSupabase,
       initialDataLoaded,

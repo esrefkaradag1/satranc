@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Building2, MapPin, KeyRound, Save, Eye, EyeOff, CalendarDays } from 'lucide-react';
+import { Building2, MapPin, Save, CalendarDays, User } from 'lucide-react';
 import type { Club } from '../types';
-import { DEFAULT_CLUB_PASSWORD } from '../../lib/clubScope';
 
 const WEEKDAY_LABELS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 
@@ -13,7 +12,7 @@ interface ClubProfileProps {
   branchName: string;
   coachCount: number;
   studentCount: number;
-  onSave: (patch: { address?: string; activeDays: boolean[]; loginPassword?: string }) => void;
+  onSave: (patch: { address?: string; activeDays: boolean[] }) => void;
 }
 
 const ClubProfile: React.FC<ClubProfileProps> = ({
@@ -24,20 +23,15 @@ const ClubProfile: React.FC<ClubProfileProps> = ({
   onSave,
 }) => {
   const [address, setAddress] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
   const [activeDays, setActiveDays] = useState<boolean[]>([true, true, true, true, false, false, false]);
-  const [showPassword, setShowPassword] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setAddress(club?.address ?? '');
-    setLoginPassword(club?.loginPassword ?? '');
     setActiveDays(
       club?.activeDays?.length === 7 ? club.activeDays : [true, true, true, true, false, false, false],
     );
   }, [club]);
-
-  const effectivePassword = loginPassword.trim() || DEFAULT_CLUB_PASSWORD;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,7 +39,6 @@ const ClubProfile: React.FC<ClubProfileProps> = ({
     onSave({
       address: address.trim() || undefined,
       activeDays,
-      loginPassword: loginPassword.trim() || undefined,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
@@ -141,30 +134,12 @@ const ClubProfile: React.FC<ClubProfileProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-              <KeyRound className="w-3.5 h-3.5" /> Giriş parolası
+          <div className="rounded-lg border border-white/5 bg-slate-900/40 px-4 py-3">
+            <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+              <User className="w-3.5 h-3.5" /> Giriş kullanıcı adı
             </label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                className={`${inputCls} pr-10`}
-                placeholder={`Boş bırakılırsa varsayılan: ${DEFAULT_CLUB_PASSWORD}`}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-            <p className="text-xs text-slate-500 mt-1.5">
-              Giriş: Kulüp sekmesi → Şube: <strong className="text-slate-400">{club.name}</strong> → Parola:{' '}
-              <strong className="text-slate-400">{effectivePassword}</strong>
-            </p>
+            <p className="font-mono text-sm text-emerald-300">{club.loginUsername || '—'}</p>
+            <p className="text-[11px] text-slate-500 mt-1">Kullanıcı adı ve parola yönetici panelinden değiştirilir.</p>
           </div>
 
           <button

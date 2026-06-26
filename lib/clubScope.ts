@@ -3,15 +3,22 @@ import type { Coach, Student, Transaction } from '../types';
 export const DEFAULT_CLUB_PASSWORD = 'kulup';
 
 export function normalizeClubKey(name: string | undefined | null): string {
-  return (name || 'Merkez').trim();
+  return (name || 'Merkez').trim().toLocaleLowerCase('tr-TR');
 }
 
-/** Öğrenci kulübe şube (branchOffice) veya eski kayıtlarda branch alanı ile bağlı olabilir */
-export function studentBelongsToClub(student: Student, clubName: string): boolean {
+/** Öğrenci kulübe şube (branchOffice) veya atanmış antrenörün kulübü ile bağlı */
+export function studentBelongsToClub(
+  student: Student,
+  clubName: string,
+  coaches: Coach[] = [],
+): boolean {
   const key = normalizeClubKey(clubName);
-  const office = normalizeClubKey(student.branchOffice);
-  const branch = normalizeClubKey(student.branch);
-  return office === key || branch === key;
+  if (normalizeClubKey(student.branchOffice) === key) return true;
+  if (student.coachId) {
+    const coach = coaches.find((c) => c.id === student.coachId);
+    if (coach && normalizeClubKey(coach.branch) === key) return true;
+  }
+  return false;
 }
 
 export function coachBelongsToClub(coach: Coach, clubName: string): boolean {
@@ -24,8 +31,8 @@ export function transactionBelongsToClub(tx: Transaction, clubName: string): boo
   return txBranch === key || (!tx.branch && key === 'Merkez');
 }
 
-export function filterStudentsByClub(students: Student[], clubName: string): Student[] {
-  return students.filter((s) => studentBelongsToClub(s, clubName));
+export function filterStudentsByClub(students: Student[], clubName: string, coaches: Coach[] = []): Student[] {
+  return students.filter((s) => studentBelongsToClub(s, clubName, coaches));
 }
 
 export function filterCoachesByClub(coaches: Coach[], clubName: string): Coach[] {

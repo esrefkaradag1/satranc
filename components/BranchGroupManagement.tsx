@@ -17,18 +17,25 @@ const BranchGroupManagement: React.FC = () => {
     branchOffices,
     addBranchOffice,
     removeBranchOffice,
-    disciplineBranches,
+    disciplineBranches: allDisciplineBranches,
     addDisciplineBranch,
     updateDisciplineBranch,
     removeDisciplineBranch,
-    trainingGroups,
+    trainingGroups: allTrainingGroups,
     addTrainingGroup,
     updateTrainingGroup,
     removeTrainingGroup,
     scopedStudents: students,
+    scopedDisciplineBranches: disciplineBranches,
+    scopedTrainingGroups: trainingGroups,
+    scopedCoaches: coaches,
     updateStudent,
-    coaches,
+    auth,
+    activeClubBranch,
   } = useApp();
+
+  const isClubUser = auth?.role === 'club';
+  const clubBranch = activeClubBranch ?? auth?.branch ?? '';
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [newOfficeName, setNewOfficeName] = useState('');
@@ -56,10 +63,10 @@ const BranchGroupManagement: React.FC = () => {
     [disciplineBranches]
   );
 
-  const officeOptions = useMemo(
-    () => mergeBranchOffices(branchOffices, disciplineBranches),
-    [branchOffices, disciplineBranches],
-  );
+  const officeOptions = useMemo(() => {
+    if (isClubUser && clubBranch) return [clubBranch];
+    return mergeBranchOffices(branchOffices, allDisciplineBranches);
+  }, [branchOffices, allDisciplineBranches, isClubUser, clubBranch]);
 
   const countStudentsInGroup = (group: TrainingGroup) => studentsInTrainingGroup(students, group).length;
 

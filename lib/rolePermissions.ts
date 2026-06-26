@@ -5,8 +5,7 @@ import {
   CLUB_NAV_CATEGORIES,
   STUDENT_NAV_CATEGORIES,
 } from '../constants';
-import type { AppRole, RolePanel } from '../types';
-import type { AuthUser } from '../types';
+import type { AppRole, RolePanel, AuthUser } from '../types';
 
 export type PermissionDef = {
   key: string;
@@ -130,6 +129,74 @@ export function permissionsForPanel(panel: RolePanel): PermissionDef[] {
   });
 }
 
+function uniquePermissionKeys(perms: PermissionDef[]): string[] {
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const p of perms) {
+    if (seen.has(p.key)) continue;
+    seen.add(p.key);
+    keys.push(p.key);
+  }
+  return keys;
+}
+
+/** Aynı izin anahtarı birden fazla panelde varsa ilk tanım (öncelik sırası) kullanılır */
+function mergePermissionDefs(...lists: PermissionDef[][]): PermissionDef[] {
+  const byKey = new Map<string, PermissionDef>();
+  for (const list of lists) {
+    for (const p of list) {
+      if (!byKey.has(p.key)) byKey.set(p.key, p);
+    }
+  }
+  return [...byKey.values()];
+}
+
+/** Rol düzenleyicide gösterilecek izinler — öğrenci/veli panelleri yalnızca kendi rollerinde */
+export function permissionsForRoleEditor(panel: RolePanel): PermissionDef[] {
+  if (panel === 'student') {
+    return PERMISSION_CATALOG.filter((p) => p.panel === 'student');
+  }
+  if (panel === 'parent') {
+    return PERMISSION_CATALOG.filter((p) => p.panel === 'parent');
+  }
+  if (panel === 'admin') {
+    return permissionsForPanel('admin');
+  }
+  if (panel === 'coach') {
+    // Antrenör rolleri: yönetici izinlerinin tamamı + antrenöre özel menüler
+    return mergePermissionDefs(permissionsForPanel('admin'), permissionsForPanel('coach'), EXTRA_COACH);
+  }
+  if (panel === 'club') {
+    // Kulüp rolleri: yönetici + antrenör + kulübe özel menüler
+    return mergePermissionDefs(
+      permissionsForPanel('admin'),
+      permissionsForPanel('coach'),
+      permissionsForPanel('club'),
+    );
+  }
+  return permissionsForPanel('admin');
+}
+
+export function permissionKeysForRoleEditor(panel: RolePanel): string[] {
+  return uniquePermissionKeys(permissionsForRoleEditor(panel));
+}
+
+/** Rol düzenlemede izinleri kategori bazında listeler (panel etiketiyle) */
+export function groupedPermissionsForRoleEditor(panel: RolePanel): [string, PermissionDef[]][] {
+  const byCat = new Map<string, PermissionDef[]>();
+  for (const p of permissionsForRoleEditor(panel)) {
+    const list = byCat.get(p.category) ?? [];
+    list.push(p);
+    byCat.set(p.category, list);
+  }
+  return [...byCat.entries()];
+}
+
+export function sanitizePermissionsForRole(panel: RolePanel, keys: string[]): string[] {
+  const allowed = new Set(permissionKeysForRoleEditor(panel));
+  return keys.filter((k) => allowed.has(k));
+}
+
 export function defaultPermissionsForRole(slug: string): string[] {
   switch (slug) {
     case 'admin':
@@ -173,6 +240,98 @@ export function filterNavByPermissions(categories: NavCategory[], allowed: Set<s
     .filter((cat) => cat.items.length > 0);
 }
 
+/** Birden fazla panel menüsünü izinlere göre birleştirir (kulüp paneli için) */
+export function mergeNavForPermissions(allowed: Set<string>, catalogs: NavCategory[][]): NavCategory[] {
+  const merged: NavCategory[] = [];
+  const seenItemIds = new Set<string>();
+
+  for (const catalog of catalogs) {
+    if (!catalog?.length) continue;
+    const filtered = filterNavByPermissions(catalog, allowed);
+    for (const cat of filtered) {
+      let bucket = merged.find((m) => m.title === cat.title);
+      if (!bucket) {
+        bucket = { title: cat.title, icon: cat.icon, items: [] };
+        merged.push(bucket);
+      }
+      for (const item of cat.items) {
+        if (seenItemIds.has(item.id)) continue;
+        seenItemIds.add(item.id);
+        bucket.items.push(item);
+      }
+    }
+  }
+
+  return merged.filter((cat) => cat.items.length > 0);
+}
+
+export function clubNavForPermissions(allowed: Set<string>): NavCategory[] {
+  const effective = new Set(allowed);
+  // Kulüp "students" ile admin/antrenör "student-list" aynı menü — çift kayıt önlenir
+  if (effective.has('student-list')) effective.delete('students');
+
+  const coachesItem = CLUB_NAV_CATEGORIES.flatMap((c) => c.items).find((i) => i.id === 'coaches');
+  const clubExtras: NavCategory[] =
+    coachesItem && effective.has('coaches')
+      ? [
+          {
+            title: 'Kulüp Yönetimi',
+            icon: CLUB_NAV_CATEGORIES.find((c) => c.items.some((i) => i.id === 'coaches'))?.icon,
+            items: [coachesItem],
+          },
+        ]
+      : [];
+
+  // Yönetim + antrenör menüsü öncelikli; kulübe özel antrenörler en sonda
+  return mergeNavForPermissions(effective, [NAV_CATEGORIES, COACH_NAV_CATEGORIES, clubExtras]);
+}
+
+/** Antrenör paneli: yönetim menüsü + antrenör menüsü (izinlere göre) */
+export function coachNavForPermissions(allowed: Set<string>): NavCategory[] {
+  const effective = new Set(allowed);
+  if (effective.has('student-list')) effective.delete('students');
+  return mergeNavForPermissions(effective, [NAV_CATEGORIES, COACH_NAV_CATEGORIES]);
+}
+
+/** Antrenör panelinde sekme izni (alt sayfalar dahil) */
+export function isCoachPanelTabAllowed(allowed: Set<string>, tab: string): boolean {
+  if (allowed.has(tab)) return true;
+  if (tab === 'student-detail' && (allowed.has('student-list') || allowed.has('students'))) return true;
+  if (tab === 'qr-attendance' && allowed.has('attendance')) return true;
+  return false;
+}
+
+/** Antrenör sidebar vurgusu */
+export function coachSidebarTabFor(activeTab: string, allowed: Set<string>): string {
+  if (activeTab === 'student-detail' || activeTab === 'student-add') {
+    return allowed.has('student-list') ? 'student-list' : 'students';
+  }
+  return activeTab;
+}
+
+/** Kulüp panelinde öğrenci listesi sekmesi (admin listesi öncelikli) */
+export function clubPreferredStudentListTab(allowed: Set<string>): string {
+  if (allowed.has('student-list')) return 'student-list';
+  if (allowed.has('students')) return 'students';
+  return 'dashboard';
+}
+
+/** Kulüp panelinde sekme izni (alt sayfalar dahil) */
+export function isClubPanelTabAllowed(allowed: Set<string>, tab: string): boolean {
+  if (allowed.has(tab)) return true;
+  if (tab === 'student-detail' && (allowed.has('student-list') || allowed.has('students'))) return true;
+  if (tab === 'qr-attendance' && allowed.has('attendance')) return true;
+  return false;
+}
+
+/** Sidebar vurgusu için üst menü kimliği */
+export function clubSidebarTabFor(activeTab: string, allowed: Set<string>): string {
+  if (activeTab === 'student-detail' || activeTab === 'student-add') {
+    return allowed.has('student-list') ? 'student-list' : 'students';
+  }
+  return activeTab;
+}
+
 export function resolveRoleIdForAuth(
   auth: AuthUser,
   ctx: { coachRoleId?: string; clubRoleId?: string },
@@ -211,14 +370,6 @@ export function getPermissionsForAuth(
     return new Set(permissionsForPanel('admin').map((p) => p.key));
   }
 
-  const roleId = customRoleId || systemRoleIdForAuth(auth);
-
-  if (roleId in rolePermissionMap) {
-    return new Set(rolePermissionMap[roleId]);
-  }
-
-  if (!rolesLoaded) return new Set();
-
   const slug =
     auth.role === 'coach'
       ? 'coach'
@@ -229,7 +380,26 @@ export function getPermissionsForAuth(
           : auth.role === 'parent'
             ? 'parent'
             : 'admin';
-  return new Set(defaultPermissionsForRole(slug));
+
+  const fallback = () => new Set(defaultPermissionsForRole(slug));
+  if (!rolesLoaded) return fallback();
+
+  const systemRoleId = systemRoleIdForAuth(auth);
+  const roleId = customRoleId || systemRoleId;
+
+  if (roleId in rolePermissionMap) {
+    const keys = rolePermissionMap[roleId];
+    if (keys.length > 0) return new Set(keys);
+    if (!customRoleId || customRoleId === systemRoleId) return new Set(keys);
+  }
+
+  if (customRoleId && customRoleId !== systemRoleId) {
+    const systemKeys = rolePermissionMap[systemRoleId];
+    if (systemKeys?.length) return new Set(systemKeys);
+    return fallback();
+  }
+
+  return fallback();
 }
 
 export function hasPermission(

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Building2,
   Users,
@@ -18,15 +18,31 @@ import {
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import Sidebar from './Sidebar';
-import { CLUB_NAV_CATEGORIES } from '../constants';
-import { filterNavByPermissions } from '../lib/rolePermissions';
+import { clubNavForPermissions, isClubPanelTabAllowed, clubSidebarTabFor, clubPreferredStudentListTab } from '../lib/rolePermissions';
+import { readPanelHash, writePanelHash } from '../lib/panelRouting';
+import StudentAdd from './StudentAdd';
+import Finance from './Finance';
+import Security from './Security';
+import RoleManagement from './roles/RoleManagement';
+import CorporateStructure from './CorporateStructure';
 import Tournaments from './Tournaments';
 import ClubProfile from './club/ClubProfile';
-import {
-  filterCoachesByClub,
-  filterStudentsByClub,
-  filterTransactionsByClub,
-} from '../lib/clubScope';
+import ClubDashboard from './club/ClubDashboard';
+import StudentList from './StudentList';
+import StudentDetail from './StudentDetail';
+import Attendance from './Attendance';
+import BranchGroupManagement from './BranchGroupManagement';
+import Analysis from './Analysis';
+import Gallery from './Gallery';
+import Messages from './Messages';
+import LeaderboardPage from './leaderboard/LeaderboardPage';
+import Homework from './Homework';
+import ChessBoard from './ChessBoard';
+import StudyPage from './StudyPage';
+import LiveLesson from './LiveLesson';
+import Curriculum from './Curriculum';
+import Inventory from './Inventory';
+import ApplicationsAdmin from './ApplicationsAdmin';
 import { getCoachNamesForStudent } from '../lib/orgScope';
 import type { Coach, Student } from '../types';
 
@@ -41,11 +57,9 @@ interface ClubPanelProps {
 
 const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   const {
-    students,
-    transactions,
-    coaches,
     groups,
-    trainingGroups,
+    scopedTrainingGroups: trainingGroups,
+    scopedCoaches: coaches,
     clubs,
     addCoach,
     updateCoach,
@@ -54,29 +68,87 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     updateStudent,
     updateClub,
     appRoles,
-    getAuthPermissions,
+    authPermissions,
+    scopedStudents: branchStudents,
+    scopedCoaches: branchCoaches,
+    scopedTransactions: branchTx,
   } = useApp();
-
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const club = useMemo(
-    () => clubs.find((c) => c.id === clubId) ?? clubs.find((c) => (c.name || '').trim() === branch.trim()),
-    [clubs, clubId, branch],
-  );
-
-  const branchStudents = useMemo(() => filterStudentsByClub(students, branch), [students, branch]);
-  const branchCoaches = useMemo(() => filterCoachesByClub(coaches, branch), [coaches, branch]);
-  const branchTx = useMemo(() => filterTransactionsByClub(transactions, branch), [transactions, branch]);
 
   const coachRoleOptions = useMemo(
     () => appRoles.filter((r) => r.panel === 'coach'),
     [appRoles],
   );
 
+  const defaultClubTab = authPermissions.has('dashboard')
+    ? 'dashboard'
+    : [...authPermissions][0] || 'dashboard';
+
+  const studentListTab = useMemo(
+    () => clubPreferredStudentListTab(authPermissions),
+    [authPermissions],
+  );
+  const studentAddTab = authPermissions.has('student-add') ? 'student-add' : studentListTab;
+
+  const isClubTabAllowed = useCallback(
+    (tab: string) => isClubPanelTabAllowed(authPermissions, tab),
+    [authPermissions],
+  );
+
+  const initialHash = useMemo(() => readPanelHash(), []);
+  const safeInitialTab = isClubPanelTabAllowed(authPermissions, initialHash.tab)
+    ? initialHash.tab
+    : defaultClubTab;
+
+  const [activeTab, setActiveTabRaw] = useState(safeInitialTab);
+  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(
+    initialHash.studentId && isClubPanelTabAllowed(authPermissions, 'student-detail')
+      ? initialHash.studentId
+      : null,
+  );
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const setActiveTab = useCallback(
+    (tab: string, studentId?: string | null) => {
+      const safe = isClubTabAllowed(tab) ? tab : defaultClubTab;
+      setActiveTabRaw(safe);
+      if (studentId !== undefined) {
+        setSelectedStudentId(studentId);
+        writePanelHash(safe, studentId);
+        return;
+      }
+      if (safe !== 'student-detail') setSelectedStudentId(null);
+      writePanelHash(safe, null);
+    },
+    [defaultClubTab, isClubTabAllowed],
+  );
+
+  useEffect(() => {
+    const onHash = () => {
+      const { tab, studentId } = readPanelHash();
+      const safe = isClubTabAllowed(tab) ? tab : defaultClubTab;
+      setActiveTabRaw(safe);
+      if (studentId !== null) setSelectedStudentId(studentId);
+      else if (safe !== 'student-detail') setSelectedStudentId(null);
+    };
+    window.addEventListener('hashchange', onHash);
+    if (!window.location.hash) writePanelHash(safeInitialTab);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, [defaultClubTab, isClubTabAllowed, safeInitialTab]);
+
+  useEffect(() => {
+    if (!isClubTabAllowed(activeTab)) {
+      setActiveTab(defaultClubTab);
+    }
+  }, [authPermissions, activeTab, defaultClubTab, isClubTabAllowed, setActiveTab]);
+
+  const club = useMemo(
+    () => clubs.find((c) => c.id === clubId) ?? clubs.find((c) => (c.name || '').trim() === branch.trim()),
+    [clubs, clubId, branch],
+  );
+
   const clubNavCategories = useMemo(
-    () => filterNavByPermissions(CLUB_NAV_CATEGORIES, getAuthPermissions()),
-    [getAuthPermissions],
+    () => clubNavForPermissions(authPermissions),
+    [authPermissions],
   );
 
   const clubGroupOptions = useMemo(() => {
@@ -91,8 +163,6 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   const paid = branchStudents.filter((s) => s.paymentStatus === 'Paid').length;
   const unpaid = branchStudents.filter((s) => s.paymentStatus === 'Unpaid').length;
   const partial = branchStudents.filter((s) => s.paymentStatus === 'Partial').length;
-  const totalIncome = branchTx.filter((t) => t.type === 'income').reduce((sum, t) => sum + (t.amount || 0), 0);
-  const totalExpense = branchTx.filter((t) => t.type === 'expense').reduce((sum, t) => sum + (t.amount || 0), 0);
 
   const [studentSearch, setStudentSearch] = useState('');
   const [showCoachModal, setShowCoachModal] = useState(false);
@@ -264,7 +334,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     setShowStudentModal(false);
   };
 
-  const handleProfileSave = (patch: { address?: string; activeDays: boolean[]; loginPassword?: string }) => {
+  const handleProfileSave = (patch: { address?: string; activeDays: boolean[] }) => {
     if (!club) return;
     updateClub(club.id, patch);
   };
@@ -285,67 +355,17 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     switch (activeTab) {
       case 'dashboard':
         return (
-          <div className="space-y-8">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5">
-                <div className="flex items-center gap-3 mb-2">
-                  <Users className="w-5 h-5 text-emerald-400" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Öğrenci</span>
-                </div>
-                <p className="text-2xl font-black text-white">{branchStudents.length}</p>
-                <p className="text-xs text-slate-500 mt-1">Aktif kayıt</p>
-              </div>
-              <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5">
-                <div className="flex items-center gap-3 mb-2">
-                  <User className="w-5 h-5 text-teal-400" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Antrenör</span>
-                </div>
-                <p className="text-2xl font-black text-white">{branchCoaches.length}</p>
-                <p className="text-xs text-slate-500 mt-1">Personel</p>
-              </div>
-              <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5">
-                <div className="flex items-center gap-3 mb-2">
-                  <Wallet className="w-5 h-5 text-amber-400" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Ödeme</span>
-                </div>
-                <p className="text-sm text-slate-300">
-                  <span className="text-emerald-400 font-bold">{paid}</span> ödedi ·{' '}
-                  <span className="text-rose-400 font-bold">{unpaid}</span> ödemedi
-                  {partial > 0 && (
-                    <>
-                      {' '}
-                      · <span className="text-amber-400 font-bold">{partial}</span> kısmi
-                    </>
-                  )}
-                </p>
-              </div>
-              <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5">
-                <div className="flex items-center gap-3 mb-2">
-                  <Wallet className="w-5 h-5 text-indigo-400" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Kasa</span>
-                </div>
-                <p className="text-sm text-slate-300">
-                  Gelir: <span className="text-emerald-400 font-bold">₺{totalIncome.toLocaleString('tr-TR')}</span>
-                  <br />
-                  Gider: <span className="text-rose-400 font-bold">₺{totalExpense.toLocaleString('tr-TR')}</span>
-                </p>
-              </div>
-            </div>
-            <section className="bg-slate-800/30 border border-white/5 rounded-xl p-5">
-              <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider mb-3">Hoş geldiniz</h2>
-              <p className="text-slate-400 text-sm leading-relaxed">
-                <strong className="text-slate-200">{branch}</strong> kulüp panelindesiniz. Kulüp bilgilerinizi
-                güncelleyebilir, antrenör ekleyebilir, öğrencilerinizi görüntüleyebilir ve turnuva
-                düzenleyebilirsiniz.
-              </p>
-              {club?.address && (
-                <p className="text-xs text-slate-500 mt-3 flex items-start gap-2">
-                  <Building2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                  {club.address}
-                </p>
-              )}
-            </section>
-          </div>
+          <ClubDashboard
+            branch={branch}
+            club={club}
+            students={branchStudents}
+            coaches={branchCoaches}
+            transactions={branchTx}
+            studentListTab={studentListTab}
+            studentAddTab={studentAddTab}
+            onNavigate={setActiveTab}
+            canAccess={isClubTabAllowed}
+          />
         );
 
       case 'profile':
@@ -503,55 +523,104 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
         );
 
       case 'finance':
-        return (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-6">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Toplam Gelir</p>
-                <p className="text-2xl font-black text-emerald-400">₺{totalIncome.toLocaleString('tr-TR')}</p>
-              </div>
-              <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-6">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Toplam Gider</p>
-                <p className="text-2xl font-black text-rose-400">₺{totalExpense.toLocaleString('tr-TR')}</p>
-              </div>
-            </div>
-            <section className="bg-slate-800/30 border border-white/5 rounded-xl overflow-hidden">
-              <h2 className="px-5 py-4 border-b border-white/5 text-sm font-black text-slate-300 uppercase tracking-wider">
-                Son işlemler ({branchTx.length})
-              </h2>
-              {branchTx.length === 0 ? (
-                <p className="p-5 text-slate-500 text-sm">Henüz işlem kaydı yok.</p>
-              ) : (
-                <ul className="divide-y divide-white/5 max-h-80 overflow-y-auto custom-scrollbar">
-                  {branchTx.slice(0, 50).map((t) => (
-                    <li key={t.id} className="px-5 py-3 flex items-center justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-medium text-slate-200">{t.description || t.category}</p>
-                        <p className="text-xs text-slate-500">{t.date}</p>
-                      </div>
-                      <span className={t.type === 'income' ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                        {t.type === 'income' ? '+' : '-'}₺{(t.amount || 0).toLocaleString('tr-TR')}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          </div>
-        );
+        return <Finance />;
 
       case 'tournaments':
         return <Tournaments role="club" branch={branch} />;
+
+      case 'student-list':
+      case 'bulk-actions':
+        return (
+          <StudentList
+            onAddNew={() => {
+              if (isClubTabAllowed('student-add')) setActiveTab('student-add');
+            }}
+            onViewDetail={(id) => {
+              setActiveTab('student-detail', id);
+            }}
+          />
+        );
+
+      case 'student-add':
+        return (
+          <StudentAdd
+            defaultBranchOffice={branch}
+            lockBranchOffice
+            onCancel={() => setActiveTab(studentListTab)}
+            onSaved={() => setActiveTab(studentListTab)}
+          />
+        );
+
+      case 'student-detail': {
+        const canView = !selectedStudentId || branchStudents.some((s) => s.id === selectedStudentId);
+        if (!canView) {
+          return (
+            <div className="p-8 text-center text-slate-400">
+              <p className="font-medium">Bu öğrenciye erişim yetkiniz yok.</p>
+              <button
+                type="button"
+                onClick={() => setActiveTab(studentListTab)}
+                className="mt-4 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold"
+              >
+                Listeye dön
+              </button>
+            </div>
+          );
+        }
+        return (
+          <StudentDetail
+            studentId={selectedStudentId}
+            onBack={() => setActiveTab(studentListTab)}
+            onNavigate={(tab) => setActiveTab(isClubTabAllowed(tab) ? tab : defaultClubTab)}
+          />
+        );
+      }
+
+      case 'qr-attendance':
+      case 'attendance':
+        return <Attendance />;
+      case 'groups':
+        return <BranchGroupManagement />;
+      case 'applications':
+        return <ApplicationsAdmin />;
+      case 'corporate':
+        return <CorporateStructure />;
+      case 'analysis':
+        return <Analysis />;
+      case 'gallery':
+        return <Gallery />;
+      case 'messages':
+        return <Messages />;
+      case 'leaderboard':
+        return <LeaderboardPage />;
+      case 'homework':
+        return <Homework />;
+      case 'puzzles':
+        return <ChessBoard />;
+      case 'study':
+        return <StudyPage />;
+      case 'lessons':
+        return <LiveLesson />;
+      case 'curriculum':
+        return <Curriculum />;
+      case 'inventory':
+        return <Inventory />;
+      case 'security':
+        return <Security />;
+      case 'roles':
+        return <RoleManagement />;
 
       default:
         return null;
     }
   };
 
+  const sidebarTab = clubSidebarTabFor(activeTab, authPermissions);
+
   return (
     <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
       <Sidebar
-        activeTab={activeTab}
+        activeTab={sidebarTab}
         setActiveTab={setActiveTab}
         navCategories={clubNavCategories}
         onLogout={onLogout}
@@ -584,7 +653,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
             K
           </div>
         </header>
-        <div className="relative z-10 p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto w-full min-w-0 flex-1">
+        <div className="relative z-10 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full min-w-0 flex-1">
           {renderContent()}
         </div>
       </main>
