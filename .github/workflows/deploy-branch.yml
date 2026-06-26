@@ -33,7 +33,7 @@ jobs:
           cp -r dist deploy-bundle/dist
           cp package.json package-lock.json deploy-bundle/
           cp server/docker-api.mjs server/docker-production.mjs deploy-bundle/server/
-          cp lib/homeworkAttemptDb.mjs lib/liveLessonChatDb.mjs lib/liveLessonSessionMediaDb.mjs deploy-bundle/lib/
+          cp lib/*.mjs deploy-bundle/lib/
           cat > deploy-bundle/Dockerfile <<'EOF'
           FROM node:22-alpine
 
@@ -45,7 +45,7 @@ jobs:
           RUN npm ci --omit=dev --ignore-scripts
 
           COPY server/docker-api.mjs server/docker-production.mjs /app/server/
-          COPY lib/homeworkAttemptDb.mjs lib/liveLessonChatDb.mjs lib/liveLessonSessionMediaDb.mjs /app/lib/
+          COPY lib/*.mjs /app/lib/
           COPY dist /app/dist
 
           ENV STATIC_DIR=/app/dist
