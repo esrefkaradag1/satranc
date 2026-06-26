@@ -5,21 +5,88 @@ import tailwindcss from '@tailwindcss/vite';
 import { insertHomeworkAttemptViaEnv } from './lib/homeworkAttemptDb.mjs';
 import { appendLiveLessonChatViaEnv } from './lib/liveLessonChatDb.mjs';
 import { replaceSessionMediaViaEnv, sessionMediaOpViaEnv } from './lib/liveLessonSessionMediaDb.mjs';
+import { insertSiteMessageViaEnv, listSiteMessagesViaEnv } from './lib/siteMessagesDb.mjs';
+import {
+  lichessOAuthDisconnectViaEnv,
+  lichessOAuthStatusViaEnv,
+  lichessOAuthTokenViaEnv,
+  lichessPuzzleActivityViaEnv,
+  lichessPuzzleDashboardViaEnv,
+} from './lib/lichessOAuthApi.mjs';
+import { lichessProxyRequest } from './lib/lichessProxyThrottle.mjs';
+import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
+import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
+
+const DEV_GET_ROUTES = new Set([
+  '/api/site-messages',
+  '/api/lichess-oauth-status',
+  '/api/lichess-puzzle-activity',
+  '/api/lichess-puzzle-dashboard',
+  '/api/lichess-proxy',
+]);
+const DEV_POST_ROUTES = new Set([
+  '/api/homework-attempt',
+  '/api/live-lesson-chat',
+  '/api/live-lesson-session-media',
+  '/api/site-messages',
+  '/api/fetch-ukd',
+  '/api/auth-parent',
+  '/api/lichess-oauth-token',
+  '/api/lichess-oauth-disconnect',
+]);
 
 function devApiPlugin(env: Record<string, string>): Plugin {
   return {
     name: 'dev-api-routes',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        const route = req.url?.split('?')[0];
-        if (
-          route !== '/api/homework-attempt' &&
-          route !== '/api/live-lesson-chat' &&
-          route !== '/api/live-lesson-session-media'
-        ) {
+        const fullUrl = req.url ?? '';
+        const route = fullUrl.split('?')[0];
+
+        if (DEV_GET_ROUTES.has(route) && req.method === 'GET') {
+          void (async () => {
+            try {
+              const parsed = new URL(fullUrl, 'http://local');
+              let result;
+              if (route === '/api/site-messages') {
+                const conversationId = parsed.searchParams.get('conversationId')?.trim() ?? '';
+                result = await listSiteMessagesViaEnv(conversationId || undefined, env);
+              } else if (route === '/api/lichess-oauth-status') {
+                result = await lichessOAuthStatusViaEnv(parsed.searchParams.get('studentId'), env);
+              } else if (route === '/api/lichess-puzzle-activity') {
+                result = await lichessPuzzleActivityViaEnv(parsed.searchParams, env);
+              } else if (route === '/api/lichess-puzzle-dashboard') {
+                result = await lichessPuzzleDashboardViaEnv(parsed.searchParams, env);
+              } else {
+                const accept = req.headers.accept || 'application/json';
+                const upstream = await lichessProxyRequest(
+                  parsed.searchParams.get('path') ?? '',
+                  parsed.searchParams,
+                  Array.isArray(accept) ? accept[0] : accept,
+                );
+                res.statusCode = upstream.status;
+                if (upstream.contentType) res.setHeader('Content-Type', upstream.contentType);
+                res.setHeader('Cache-Control', 's-maxage=90, stale-while-revalidate=180');
+                res.end(upstream.body);
+                return;
+              }
+              res.statusCode = result.status;
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              res.end(JSON.stringify(result.body));
+            } catch (err) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Sunucu hatası' }));
+            }
+          })();
+          return;
+        }
+
+        if (!DEV_POST_ROUTES.has(route)) {
           next();
           return;
         }
+
         if (req.method !== 'POST') {
           next();
           return;
@@ -33,14 +100,32 @@ function devApiPlugin(env: Record<string, string>): Plugin {
               const body = chunks.length
                 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
                 : {};
-              const result =
-                route === '/api/homework-attempt'
-                  ? await insertHomeworkAttemptViaEnv(body, env)
-                  : route === '/api/live-lesson-chat'
-                    ? await appendLiveLessonChatViaEnv(body, env)
-                    : body.replace === true
-                      ? await replaceSessionMediaViaEnv(body, env)
-                      : await sessionMediaOpViaEnv(body, env);
+              let result;
+              if (route === '/api/homework-attempt') {
+                result = await insertHomeworkAttemptViaEnv(body, env);
+              } else if (route === '/api/live-lesson-chat') {
+                result = await appendLiveLessonChatViaEnv(body, env);
+              } else if (route === '/api/site-messages') {
+                result = await insertSiteMessageViaEnv(body, env);
+              } else if (route === '/api/lichess-oauth-token') {
+                result = await lichessOAuthTokenViaEnv(body, env, req.headers as Record<string, string | string[] | undefined>);
+              } else if (route === '/api/lichess-oauth-disconnect') {
+                result = await lichessOAuthDisconnectViaEnv(body, env);
+              } else if (route === '/api/fetch-ukd') {
+                result = {
+                  status: 200,
+                  body: await fetchUkdFromTsfServer({
+                    tc: typeof body.tc === 'string' ? body.tc : undefined,
+                    soyad: typeof body.soyad === 'string' ? body.soyad : undefined,
+                  }),
+                };
+              } else if (route === '/api/auth-parent') {
+                result = await parentStudentLoginViaEnv(body, env);
+              } else if (body.replace === true) {
+                result = await replaceSessionMediaViaEnv(body, env);
+              } else {
+                result = await sessionMediaOpViaEnv(body, env);
+              }
               res.statusCode = result.status;
               res.setHeader('Content-Type', 'application/json; charset=utf-8');
               res.end(JSON.stringify(result.body));
@@ -105,18 +190,6 @@ export default defineConfig(({ mode }) => {
               if (!username || !year || !month) return path;
               const mm = month.padStart(2, '0');
               return `/pub/player/${encodeURIComponent(username)}/games/${year}/${mm}`;
-            },
-          },
-          '/api/lichess-proxy': {
-            target: 'https://lichess.org',
-            changeOrigin: true,
-            rewrite: (path) => {
-              const u = new URL(path, 'http://local');
-              const apiPath = u.searchParams.get('path');
-              if (!apiPath) return path;
-              u.searchParams.delete('path');
-              const qs = u.searchParams.toString();
-              return `/api/${apiPath}${qs ? `?${qs}` : ''}`;
             },
           },
         },

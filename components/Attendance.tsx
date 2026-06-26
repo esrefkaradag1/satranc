@@ -31,6 +31,7 @@ import {
 import type { Student, StudentLessonLogEntry } from '../types';
 import { GroupLessonLogPanel } from './attendance/GroupLessonLogPanel';
 import { mergeGroupLessonLogsFromStudents, isoDateToTr } from '../lib/lessonLogUtils';
+import { findTrainingGroupByName, studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { StudentLessonLogInline } from './attendance/StudentLessonLogInline';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
@@ -166,10 +167,10 @@ function formatMsDate(ms?: number): string {
 
 const Attendance: React.FC = () => {
   const {
-    students,
+    scopedStudents: students,
     addAttendanceRecord,
     attendanceRecords,
-    groups: contextGroups,
+    trainingGroups,
     refreshFromStorage,
     groupLessonLogs,
     updateGroupLessonLog,
@@ -199,17 +200,22 @@ const Attendance: React.FC = () => {
   const [chessComGames, setChessComGames] = useState<ChessComGame[]>([]);
   const [expandedNoteStudentId, setExpandedNoteStudentId] = useState<string | null>(null);
 
-  /** Gruplar: hem öğrencilerdeki grup adları hem Branş & Grup'tan tanımlı gruplar (boş olmayan, sıralı) */
+  /** Yalnızca Branş & Grup'ta tanımlı aktif gruplar (silinen gruplar listelenmez) */
   const groups = useMemo(() => {
-    const fromStudents = new Set(students.map((s) => s.group).filter((g): g is string => Boolean(g)));
-    const combined = new Set([...contextGroups, ...fromStudents]);
-    return Array.from(combined).filter(Boolean).sort();
-  }, [students, contextGroups]);
+    const names = [...new Set(trainingGroups.map((g) => g.name.trim()).filter(Boolean))];
+    return names.sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [trainingGroups]);
 
-  const filteredStudents = useMemo(
-    () => (group ? students.filter((s) => s.group === group) : []),
-    [students, group]
+  const selectedTrainingGroup = useMemo(
+    () => findTrainingGroupByName(trainingGroups, group, { branchOffice, discipline: branch }),
+    [trainingGroups, group, branchOffice, branch],
   );
+
+  const filteredStudents = useMemo(() => {
+    if (!group.trim()) return [];
+    if (selectedTrainingGroup) return studentsInTrainingGroup(students, selectedTrainingGroup);
+    return students.filter((s) => (s.group ?? '').trim() === group.trim());
+  }, [students, group, selectedTrainingGroup]);
 
   const groupLogEntries = useCallback(
     (groupKey: string) =>
@@ -317,7 +323,9 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
     if (!group) return;
     const dateNorm = date.slice(0, 10);
     const existing: Record<string, AttendanceStatus> = {};
-    const inGroup = students.filter((s) => s.group === group);
+    const inGroup = selectedTrainingGroup
+      ? studentsInTrainingGroup(students, selectedTrainingGroup)
+      : students.filter((s) => (s.group ?? '').trim() === group.trim());
     inGroup.forEach((s) => {
       const rec = attendanceRecords.find(
         (r) => r.studentId === s.id && r.date && r.date.slice(0, 10) === dateNorm
@@ -662,15 +670,6 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
    />
  </div>
  </div>
-
- {group ? (
-   <GroupLessonLogPanel
-     groupName={group}
-     entries={groupLogEntries(group)}
-     onSave={(entries: StudentLessonLogEntry[]) => updateGroupLessonLog(group, entries)}
-     compact
-   />
- ) : null}
 
  <div className="flex gap-2 overflow-x-auto scrollbar-none -mx-0.5 px-0.5 pb-0.5">
  <button type="button" onClick={() => handleSetAll('Present')} className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition-all">

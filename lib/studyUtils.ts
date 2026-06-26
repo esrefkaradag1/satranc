@@ -1,5 +1,5 @@
 import { Chess, type Square } from 'chess.js';
-import type { Study, StudyChapter } from './studyTypes';
+import type { Study, StudyChapter, StudentPlaysColor } from './studyTypes';
 import { formatMoveGlyphs, parseMoveGlyphs } from './studyAnnotations';
 
 export const DEFAULT_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -140,7 +140,7 @@ export function migrateStudy(s: Partial<Study>): Study {
     chatMessages: s.chatMessages ?? [],
     liked: s.liked ?? false,
     likes: s.likes ?? 0,
-    studentPlaysColor: s.studentPlaysColor === 'white' || s.studentPlaysColor === 'black' ? s.studentPlaysColor : 'both',
+    studentPlaysColor: normalizeStudentPlaysColor(s.studentPlaysColor),
     studentCreated: s.studentCreated ?? false,
     createdByStudentId: s.createdByStudentId ?? null,
     practiceLogs: s.practiceLogs ?? {},
@@ -309,6 +309,42 @@ export function sideToMove(fen: string): 'white' | 'black' {
   return parts[1] === 'b' ? 'black' : 'white';
 }
 
+export function normalizeStudentPlaysColor(value: unknown): StudentPlaysColor {
+  if (value === 'white' || value === 'black' || value === 'both' || value === 'none') return value;
+  return 'both';
+}
+
+export function studentPlaysColorLabel(value: StudentPlaysColor): string {
+  switch (value) {
+    case 'none':
+      return 'Taş oynatma kapalı';
+    case 'white':
+      return 'Sadece beyaz';
+    case 'black':
+      return 'Sadece siyah';
+    default:
+      return 'Her iki taraf';
+  }
+}
+
+/** Öğrencinin verilen FEN'de bu renkteki taşı sürükleyip oynatıp oynatamayacağı. */
+export function canStudentDragPieceOnFen(
+  studentPlaysColor: StudentPlaysColor,
+  fen: string,
+  pieceColorChar: string,
+): boolean {
+  if (studentPlaysColor === 'none') return false;
+  if (studentPlaysColor === 'both') return true;
+  const allowed = studentPlaysColor === 'white' ? 'w' : 'b';
+  if (pieceColorChar !== allowed) return false;
+  const turnCode = sideToMove(fen) === 'white' ? 'w' : 'b';
+  return turnCode === allowed;
+}
+
+export function studentCanMovePieces(studentPlaysColor: StudentPlaysColor): boolean {
+  return studentPlaysColor !== 'none';
+}
+
 export function buildPgn(study: Study, chapter: StudyChapter): string {
   const lines = [
     `[Event "${study.title}"]`,
@@ -474,6 +510,40 @@ export function chapterModeBadge(ch: StudyChapter): { label: string; cls: string
     return { label: 'VS Bilgisayar', cls: 'bg-orange-500/15 text-orange-300 border-orange-500/30' };
   }
   return { label: 'Puzzle', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' };
+}
+
+/** Sidebar list label: "Bölüm 2 · Puzzle" (same as student view). */
+export function formatChapterListLabel(
+  ch: StudyChapter,
+  opts?: { titleOverride?: string; allChapters?: StudyChapter[] },
+): string {
+  const rawTitle = String(opts?.titleOverride ?? ch.title ?? '').trim();
+  const modeLabel = chapterModeBadge(ch).label;
+  const all = opts?.allChapters;
+  let disambig = '';
+  if (all && all.length > 1) {
+    const sameMeta = (c: StudyChapter) =>
+      (c.title || '').trim() === (rawTitle || 'Adsız') &&
+      (c.lessonMode ?? 'direct') === (ch.lessonMode ?? 'direct') &&
+      (c.interactiveType ?? 'puzzle') === (ch.interactiveType ?? 'puzzle');
+    if (all.filter(sameMeta).length > 1) {
+      disambig = ` (${ch.id.slice(0, 6)})`;
+    }
+  }
+  return rawTitle
+    ? `${rawTitle} · ${modeLabel}${disambig}`
+    : `${modeLabel}${disambig}`;
+}
+
+export function chapterListLabelMatches(
+  ch: StudyChapter,
+  query: string,
+  allChapters?: StudyChapter[],
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const label = formatChapterListLabel(ch, { allChapters }).toLowerCase();
+  return label.includes(q) || (ch.title || '').toLowerCase().includes(q);
 }
 
 export const LICHESS_PIECE = (p: string) => `https://lichess1.org/assets/piece/cburnett/${p}.svg`;

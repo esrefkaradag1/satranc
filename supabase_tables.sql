@@ -165,6 +165,13 @@ CREATE TABLE IF NOT EXISTS public.attendance_records (
   lesson_summary text
 );
 
+-- Grup ders konuları (yoklama — grup adı → konu listesi jsonb)
+CREATE TABLE IF NOT EXISTS public.group_lesson_logs (
+  group_name text PRIMARY KEY,
+  entries jsonb NOT NULL DEFAULT '[]'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Turnuvalar (admin + kulüp ortak)
 CREATE TABLE IF NOT EXISTS public.tournaments (
   id text PRIMARY KEY,

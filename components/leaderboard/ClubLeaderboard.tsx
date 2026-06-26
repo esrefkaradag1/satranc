@@ -1,8 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Medal, RefreshCw, Trophy, Target, Gamepad2 } from 'lucide-react';
+import {
+  Loader2,
+  Medal,
+  RefreshCw,
+  Trophy,
+  Target,
+  Gamepad2,
+  TrendingDown,
+  TrendingUp,
+  Zap,
+} from 'lucide-react';
 import type { HomeworkPuzzleAttempt, Student } from '../../types';
-import type { LeaderboardEntry, LeaderboardPeriod } from '../../lib/leaderboardUtils';
-import { clubDisplayName, getClubPeerStudents, getPeriodBounds } from '../../lib/leaderboardUtils';
+import type { LeaderboardEntry, LeaderboardPeriod, LeaderboardRankMode } from '../../lib/leaderboardUtils';
+import {
+  LEADERBOARD_RANK_MODES,
+  clubDisplayName,
+  getClubPeerStudents,
+  getPeriodBounds,
+  leaderboardModeLabel,
+  leaderboardModeProg,
+  leaderboardModeRating,
+} from '../../lib/leaderboardUtils';
 import { buildClubLeaderboard } from '../../services/leaderboardService';
 import { scheduleHourlyRefresh } from '../../lib/scheduleHourlyRefresh';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
@@ -17,6 +35,62 @@ type Props = {
   compact?: boolean;
 };
 
+function PlatformBadges({ entry }: { entry: LeaderboardEntry }) {
+  const { platform } = entry;
+  if (platform.primaryPlatform === 'none') {
+    return <span className="text-[9px] text-slate-600">—</span>;
+  }
+  return (
+    <div className="flex items-center gap-1">
+      {platform.lichessUsername ? (
+        <span className="text-[8px] px-1 py-0.5 rounded bg-sky-500/20 text-sky-400 font-black">L</span>
+      ) : null}
+      {platform.chessComUsername ? (
+        <span className="text-[8px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-black">C</span>
+      ) : null}
+    </div>
+  );
+}
+
+function MetricCell({ entry, rankMode }: { entry: LeaderboardEntry; rankMode: LeaderboardRankMode }) {
+  if (rankMode === 'activity') {
+    return (
+      <div className="text-center">
+        <div className="font-black text-white tabular-nums">{entry.score}</div>
+        <div className="text-[9px] text-slate-500">puan</div>
+      </div>
+    );
+  }
+
+  const modeRating = leaderboardModeRating(entry.platform, rankMode);
+  const prog = leaderboardModeProg(entry.platform, rankMode);
+  const value =
+    rankMode === 'ukd'
+      ? entry.platform.ukd
+      : rankMode === 'fide'
+        ? entry.platform.fideElo
+        : modeRating?.rating;
+
+  if (value == null || value <= 0) {
+    return <span className="text-slate-600 text-xs">—</span>;
+  }
+
+  return (
+    <div className="text-center">
+      <div className="font-black text-white tabular-nums">{value}</div>
+      {prog != null && prog !== 0 ? (
+        <div className={`text-[10px] font-bold flex items-center justify-center gap-0.5 ${prog > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+          {prog > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+          {prog > 0 ? '+' : ''}
+          {prog}
+        </div>
+      ) : modeRating?.games ? (
+        <div className="text-[9px] text-slate-500">{modeRating.games.toLocaleString('tr-TR')} oyun</div>
+      ) : null}
+    </div>
+  );
+}
+
 export const ClubLeaderboard: React.FC<Props> = ({
   allStudents,
   anchorStudent,
@@ -26,6 +100,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
   compact = false,
 }) => {
   const [period, setPeriod] = useState<LeaderboardPeriod>('week');
+  const [rankMode, setRankMode] = useState<LeaderboardRankMode>('activity');
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -47,7 +122,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
     setLoading(true);
     setError('');
     try {
-      const result = await buildClubLeaderboard(peers, homeworkAttempts, period, (done, total) => {
+      const result = await buildClubLeaderboard(peers, homeworkAttempts, period, rankMode, (done, total) => {
         setProgress({ done, total });
       });
       setEntries(result);
@@ -57,7 +132,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
     } finally {
       setLoading(false);
     }
-  }, [peers, homeworkAttempts, period]);
+  }, [peers, homeworkAttempts, period, rankMode]);
 
   useEffect(() => {
     void load();
@@ -78,6 +153,24 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const medalClass = (rank: number) =>
     rank === 1 ? 'text-amber-400' : rank === 2 ? 'text-slate-300' : 'text-amber-700';
 
+  const ratingSummary = useMemo(() => {
+    if (rankMode === 'activity' || rankMode === 'ukd' || rankMode === 'fide') return [];
+    const withRating = entries
+      .map((e) => ({
+        entry: e,
+        rating: leaderboardModeRating(e.platform, rankMode),
+      }))
+      .filter((r) => r.rating && r.rating.rating > 0)
+      .sort((a, b) => b.rating!.rating - a.rating!.rating)
+      .slice(0, 6);
+    return withRating;
+  }, [entries, rankMode]);
+
+  const subtitle =
+    rankMode === 'activity'
+      ? `${bounds.label} · bulmaca 1p, galibiyet 10p, beraberlik 5p, mağlubiyet 1p`
+      : `${bounds.label} · ${leaderboardModeLabel(rankMode)} sıralaması · Lichess + Chess.com`;
+
   return (
     <div className={`space-y-5 ${compact ? '' : 'animate-in fade-in duration-300'}`}>
       <div className="rounded-2xl bg-[#1e293b] border border-white/5 p-5">
@@ -88,10 +181,10 @@ export const ClubLeaderboard: React.FC<Props> = ({
               Kulüp Lider Tablosu
             </h2>
             <p className="text-sm text-slate-400 mt-1">
-              {clubName} · {bounds.label} · bulmaca 1p, galibiyet 10p, beraberlik 5p, mağlubiyet 1p
+              {clubName} · {subtitle}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="flex bg-black/30 p-1 rounded-xl">
               {(['week', 'month'] as const).map((p) => (
                 <button
@@ -120,16 +213,63 @@ export const ClubLeaderboard: React.FC<Props> = ({
           </div>
         </div>
 
+        <div className="mt-4 flex flex-wrap gap-1.5">
+          {LEADERBOARD_RANK_MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setRankMode(m.id)}
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                rankMode === m.id
+                  ? 'bg-indigo-600/30 text-indigo-100 ring-1 ring-indigo-500/40'
+                  : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
         {loading && (
           <div className="mt-4 flex items-center gap-2 text-sm text-slate-400">
             <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
             {progress.total > 0
-              ? `Öğrenci verileri alınıyor… ${progress.done}/${progress.total}`
+              ? `Platform verileri alınıyor… ${progress.done}/${progress.total}`
               : 'Hesaplanıyor…'}
           </div>
         )}
         {error && <p className="mt-3 text-sm text-rose-400">{error}</p>}
       </div>
+
+      {!loading && ratingSummary.length > 0 && (
+        <div className="rounded-2xl bg-[#1e293b] border border-white/5 p-4">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+            <Zap className="w-3.5 h-3.5 text-amber-400" />
+            {leaderboardModeLabel(rankMode)} özeti
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {ratingSummary.map(({ entry, rating }) => (
+              <div
+                key={entry.studentId}
+                className="rounded-xl bg-slate-900/50 border border-slate-700/50 px-3 py-2 min-w-[120px]"
+              >
+                <div className="text-[10px] text-slate-500 font-bold truncate max-w-[110px]">{entry.name}</div>
+                <div className="text-lg font-black text-white tabular-nums">{rating!.rating}</div>
+                {rating!.prog != null && rating!.prog !== 0 ? (
+                  <div className={`text-[10px] font-bold ${rating!.prog > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {rating!.prog > 0 ? '+' : ''}
+                    {rating!.prog}
+                  </div>
+                ) : (
+                  <div className="text-[9px] text-slate-600">
+                    {(rating!.games ?? 0).toLocaleString('tr-TR')} oyun
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!loading && entries.length === 0 && (
         <div className="rounded-2xl border border-dashed border-white/10 p-10 text-center text-slate-500 text-sm">
@@ -154,12 +294,21 @@ export const ClubLeaderboard: React.FC<Props> = ({
               </div>
               <p className="text-sm font-bold text-white truncate">{e.name}</p>
               <p className="text-[10px] text-slate-500 mt-0.5">{e.group}</p>
+              <div className="flex justify-center mt-2">
+                <PlatformBadges entry={e} />
+              </div>
+              <div className="mt-3">
+                <MetricCell entry={e} rankMode={rankMode} />
+              </div>
               <div className="flex justify-center gap-4 mt-3 text-xs">
                 <span className="text-violet-400 font-bold">{e.puzzles} bulmaca</span>
                 <span className="text-indigo-400 font-bold">{e.games} maç</span>
+                {e.wins + e.losses + e.draws > 0 ? (
+                  <span className="text-emerald-400 font-bold">
+                    %{Math.round((e.wins / (e.wins + e.losses + e.draws)) * 100)} G
+                  </span>
+                ) : null}
               </div>
-              <p className="text-2xl font-black text-white mt-2">{e.score}</p>
-              <p className="text-[9px] text-slate-500 uppercase tracking-wider">toplam puan</p>
             </div>
           ))}
         </div>
@@ -167,19 +316,21 @@ export const ClubLeaderboard: React.FC<Props> = ({
 
       {entries.length > 0 && (
         <div className="rounded-2xl bg-[#1e293b] border border-white/5 overflow-hidden">
-          <ResponsiveTable minWidth={500}>
+          <ResponsiveTable minWidth={720}>
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="text-[10px] text-slate-500 uppercase tracking-wider border-b border-white/5">
                   <th className="px-4 py-3 w-12">#</th>
                   <th className="px-4 py-3">Öğrenci</th>
+                  <th className="px-4 py-3 text-center">Platform</th>
+                  <th className="px-4 py-3 text-center">{leaderboardModeLabel(rankMode)}</th>
                   <th className="px-4 py-3 text-center">
                     <span className="inline-flex items-center gap-1"><Target className="w-3 h-3" /> Bulmaca</span>
                   </th>
                   <th className="px-4 py-3 text-center">
                     <span className="inline-flex items-center gap-1"><Gamepad2 className="w-3 h-3" /> Maç</span>
                   </th>
-                  <th className="px-4 py-3 text-center">Toplam</th>
+                  <th className="px-4 py-3 text-center">G/B/M</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -213,16 +364,28 @@ export const ClubLeaderboard: React.FC<Props> = ({
                         )}
                       </div>
                     </td>
+                    <td data-label="Platform" className="px-4 py-3 text-center">
+                      <PlatformBadges entry={e} />
+                    </td>
+                    <td data-label={leaderboardModeLabel(rankMode)} className="px-4 py-3">
+                      <MetricCell entry={e} rankMode={rankMode} />
+                    </td>
                     <td data-label="Bulmaca" className="px-4 py-3 text-center font-black text-violet-400">{e.puzzles}</td>
                     <td data-label="Maç" className="px-4 py-3 text-center font-black text-indigo-400">{e.games}</td>
-                    <td data-label="Toplam" className="px-4 py-3 text-center font-black text-white">{e.score}</td>
+                    <td data-label="G/B/M" className="px-4 py-3 text-center text-xs">
+                      <span className="text-emerald-400 font-bold">{e.wins}</span>
+                      <span className="text-slate-600 mx-0.5">/</span>
+                      <span className="text-slate-400 font-bold">{e.draws}</span>
+                      <span className="text-slate-600 mx-0.5">/</span>
+                      <span className="text-rose-400 font-bold">{e.losses}</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </ResponsiveTable>
           <p className="px-4 py-3 text-[10px] text-slate-500 border-t border-white/5">
-            Sistem ödevleri + Lichess + Chess.com. Saatlik otomatik yenilenir.
+            Sistem ödevleri + Lichess + Chess.com rating ve aktivite verileri. Saatlik otomatik yenilenir.
           </p>
         </div>
       )}

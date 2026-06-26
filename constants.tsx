@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, FileText, CheckSquare, BarChart3, 
   Wallet, MessageCircle, Video, Image, ExternalLink, Trophy,
   CalendarCheck, BookOpen, ShieldCheck, Box, CalendarDays, Grid, CreditCard, User, Building2,
-  GraduationCap, TrendingUp, MessageSquare, BookMarked
+  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog
 } from 'lucide-react';
 
 /** Menü öğesi ikon kutusu rengi: Tailwind sınıfı (bg-* veya gradient) */
@@ -50,7 +50,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" /> },
   { id: 'lessons', label: 'Canlı Ders & Video', icon: <Video className="w-5 h-5" /> },
   { id: 'curriculum', label: 'Ders Programı & Müfredat', icon: <BookOpen className="w-5 h-5" /> },
-  { id: 'messages', label: 'WhatsApp İşlemleri', icon: <MessageCircle className="w-5 h-5" /> },
+  { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" /> },
   { id: 'security', label: 'Kullanıcı & Güvenlik', icon: <ShieldCheck className="w-5 h-5" /> },
 ];
 
@@ -66,41 +66,33 @@ export const NAV_CATEGORIES: NavCategory[] = [
     ],
   },
   {
-    title: 'Yönetim',
+    title: 'Öğrenci İşleri',
+    icon: <Users className="w-4 h-4" />,
+    items: [
+      { id: 'student-list', label: 'Öğrenci Listesi', icon: <Users className="w-5 h-5" />, iconColor: 'violet-pink' },
+      { id: 'student-add', label: 'Öğrenci Ekle', icon: <User className="w-5 h-5" />, iconColor: 'violet' },
+      { id: 'attendance', label: 'Yoklama Al', icon: <CalendarCheck className="w-5 h-5" />, iconColor: 'emerald' },
+      { id: 'groups', label: 'Branş & Grup', icon: <Building2 className="w-5 h-5" />, iconColor: 'violet' },
+      { id: 'bulk-actions', label: 'Toplu İşlemler', icon: <Grid className="w-5 h-5" />, iconColor: 'teal' },
+      { id: 'applications', label: 'Başvurular', icon: <FileText className="w-5 h-5" />, iconColor: 'amber' },
+    ],
+  },
+  {
+    title: 'Kurumsal Yapı',
     icon: <Building2 className="w-4 h-4" />,
     items: [
       { id: 'corporate', label: 'Kurumsal Yapı', icon: <Building2 className="w-5 h-5" />, iconColor: 'violet' },
-      {
-        id: 'students',
-        label: 'Öğrenci İşlemleri',
-        icon: <Users className="w-5 h-5" />,
-        iconColor: 'violet-pink',
-        subItems: [
-          { id: 'student-add', label: 'Öğrenci Ekle' },
-          { id: 'student-list', label: 'Öğrenci Listesi' },
-          { id: 'attendance', label: 'Yoklama Al' },
-          { id: 'groups', label: 'Branş & Grup' },
-          { id: 'bulk-actions', label: 'Toplu İşlemler' },
-          { id: 'applications', label: 'Başvurular' },
-        ],
-      },
     ],
   },
   {
-    title: 'Eğitim & İçerik',
-    icon: <GraduationCap className="w-4 h-4" />,
+    title: 'Turnuvalar',
+    icon: <Trophy className="w-4 h-4" />,
     items: [
-      { id: 'puzzles', label: 'Bulmaca Yönetimi', icon: <FileText className="w-5 h-5" />, iconColor: 'amber' },
-      { id: 'study', label: 'Çalışma', icon: <BookMarked className="w-5 h-5" />, iconColor: 'teal' },
       { id: 'tournaments', label: 'Turnuvalar', icon: <Trophy className="w-5 h-5" />, iconColor: 'indigo' },
-      { id: 'homework', label: 'Ödev Yönetimi', icon: <CheckSquare className="w-5 h-5" />, iconColor: 'emerald' },
-      { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
-      { id: 'lessons', label: 'Canlı Ders & Video', icon: <Video className="w-5 h-5" />, iconColor: 'blue-violet' },
-      { id: 'curriculum', label: 'Ders Programı & Müfredat', icon: <BookOpen className="w-5 h-5" />, iconColor: 'teal' },
     ],
   },
   {
-    title: 'Finans & Operasyon',
+    title: 'Kasa Operasyon',
     icon: <Wallet className="w-4 h-4" />,
     items: [
       { id: 'finance', label: 'Kasa & Finans', icon: <Wallet className="w-5 h-5" />, iconColor: 'emerald' },
@@ -112,7 +104,15 @@ export const NAV_CATEGORIES: NavCategory[] = [
     icon: <MessageSquare className="w-4 h-4" />,
     items: [
       { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
-      { id: 'messages', label: 'WhatsApp İşlemleri', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+      { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+    ],
+  },
+  {
+    title: 'Sistem',
+    icon: <ShieldCheck className="w-4 h-4" />,
+    items: [
+      { id: 'security', label: 'Kullanıcı & Güvenlik', icon: <ShieldCheck className="w-5 h-5" />, iconColor: 'violet' },
+      { id: 'roles', label: 'Rol Yönetimi', icon: <UserCog className="w-5 h-5" />, iconColor: 'indigo' },
     ],
   },
   {
@@ -124,10 +124,10 @@ export const NAV_CATEGORIES: NavCategory[] = [
     ],
   },
   {
-    title: 'Sistem',
-    icon: <ShieldCheck className="w-4 h-4" />,
+    title: 'Hesap',
+    icon: <User className="w-4 h-4" />,
     items: [
-      { id: 'security', label: 'Kullanıcı & Güvenlik', icon: <ShieldCheck className="w-5 h-5" />, iconColor: 'violet' },
+      { id: 'profile', label: 'Profil', icon: <User className="w-5 h-5" />, iconColor: 'indigo' },
     ],
   },
 ];
@@ -137,15 +137,19 @@ export const COACH_NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Anasayfa', icon: <LayoutDashboard className="w-5 h-5" />, iconColor: 'blue' },
   { id: 'student-list', label: 'Öğrenci Listesi', icon: <Users className="w-5 h-5" />, iconColor: 'violet-pink' },
   { id: 'attendance', label: 'Yoklama Al', icon: <CalendarCheck className="w-5 h-5" />, iconColor: 'emerald' },
+  { id: 'groups', label: 'Branş & Grup', icon: <Building2 className="w-5 h-5" />, iconColor: 'violet' },
   { id: 'lessons', label: 'Canlı Ders', icon: <Video className="w-5 h-5" />, iconColor: 'violet' },
   { id: 'puzzles', label: 'Bulmaca Yönetimi', icon: <FileText className="w-5 h-5" />, iconColor: 'amber' },
+  { id: 'study', label: 'Çalışma', icon: <BookMarked className="w-5 h-5" />, iconColor: 'teal' },
   { id: 'homework', label: 'Ödev Yönetimi', icon: <CheckSquare className="w-5 h-5" />, iconColor: 'teal' },
-  { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
   { id: 'curriculum', label: 'Ders Programı & Müfredat', icon: <BookOpen className="w-5 h-5" />, iconColor: 'indigo' },
+  { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
+  { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+  { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
   { id: 'analysis', label: 'Analiz & Performans', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'rose' },
 ];
 
-/** Antrenör paneli — kategorize ve renkli ikonlu menü (Canlı Ders dahil) */
+/** Antrenör paneli — kategorize ve renkli ikonlu menü */
 export const COACH_NAV_CATEGORIES: NavCategory[] = [
   {
     title: 'Genel',
@@ -155,16 +159,17 @@ export const COACH_NAV_CATEGORIES: NavCategory[] = [
     ],
   },
   {
-    title: 'Öğrenci & Yoklama',
+    title: 'Öğrenci İşleri',
     icon: <Users className="w-4 h-4" />,
     items: [
       { id: 'student-list', label: 'Öğrenci Listesi', icon: <Users className="w-5 h-5" />, iconColor: 'violet-pink' },
       { id: 'attendance', label: 'Yoklama Al', icon: <CalendarCheck className="w-5 h-5" />, iconColor: 'emerald' },
+      { id: 'groups', label: 'Branş & Grup', icon: <Building2 className="w-5 h-5" />, iconColor: 'violet' },
     ],
   },
   {
-    title: 'Canlı Ders & İçerik',
-    icon: <Video className="w-4 h-4" />,
+    title: 'Eğitim & İçerik',
+    icon: <GraduationCap className="w-4 h-4" />,
     items: [
       { id: 'lessons', label: 'Canlı Ders', icon: <Video className="w-5 h-5" />, iconColor: 'violet' },
       { id: 'puzzles', label: 'Bulmaca Yönetimi', icon: <FileText className="w-5 h-5" />, iconColor: 'amber' },
@@ -174,22 +179,84 @@ export const COACH_NAV_CATEGORIES: NavCategory[] = [
     ],
   },
   {
+    title: 'Medya & İletişim',
+    icon: <MessageSquare className="w-4 h-4" />,
+    items: [
+      { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
+      { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+    ],
+  },
+  {
     title: 'Raporlama',
-    icon: <BarChart3 className="w-4 h-4" />,
+    icon: <TrendingUp className="w-4 h-4" />,
     items: [
       { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
       { id: 'analysis', label: 'Analiz & Performans', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'rose' },
     ],
   },
+  {
+    title: 'Hesap',
+    icon: <User className="w-4 h-4" />,
+    items: [
+      { id: 'profile', label: 'Profil', icon: <User className="w-5 h-5" />, iconColor: 'indigo' },
+    ],
+  },
 ];
 
-/** Kulüp paneli menü öğeleri (admin gibi renkli ikonlu) */
+/** Kulüp paneli menü öğeleri (geri uyumluluk) */
 export const CLUB_NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Anasayfa', icon: <LayoutDashboard className="w-5 h-5" />, iconColor: 'blue' },
-  { id: 'tournaments', label: 'Turnuvalar', icon: <Trophy className="w-5 h-5" />, iconColor: 'indigo' },
+  { id: 'profile', label: 'Kulüp Bilgileri', icon: <Building2 className="w-5 h-5" />, iconColor: 'violet' },
   { id: 'coaches', label: 'Antrenörler', icon: <Users className="w-5 h-5" />, iconColor: 'teal' },
   { id: 'students', label: 'Öğrenciler', icon: <Users className="w-5 h-5" />, iconColor: 'violet-pink' },
+  { id: 'tournaments', label: 'Turnuvalar', icon: <Trophy className="w-5 h-5" />, iconColor: 'indigo' },
   { id: 'finance', label: 'Kasa Özeti', icon: <Wallet className="w-5 h-5" />, iconColor: 'emerald' },
+];
+
+/** Kulüp paneli — kategorize menü */
+export const CLUB_NAV_CATEGORIES: NavCategory[] = [
+  {
+    title: 'Genel',
+    icon: <LayoutDashboard className="w-4 h-4" />,
+    items: [
+      { id: 'dashboard', label: 'Anasayfa', icon: <LayoutDashboard className="w-5 h-5" />, iconColor: 'blue' },
+    ],
+  },
+  {
+    title: 'Kulüp Bilgileri',
+    icon: <Building2 className="w-4 h-4" />,
+    items: [
+      { id: 'profile', label: 'Profil & Ayarlar', icon: <Building2 className="w-5 h-5" />, iconColor: 'violet' },
+    ],
+  },
+  {
+    title: 'Personel',
+    icon: <Users className="w-4 h-4" />,
+    items: [
+      { id: 'coaches', label: 'Antrenörler', icon: <Users className="w-5 h-5" />, iconColor: 'teal' },
+    ],
+  },
+  {
+    title: 'Öğrenci İşleri',
+    icon: <GraduationCap className="w-4 h-4" />,
+    items: [
+      { id: 'students', label: 'Öğrenci Listesi', icon: <Users className="w-5 h-5" />, iconColor: 'violet-pink' },
+    ],
+  },
+  {
+    title: 'Turnuvalar',
+    icon: <Trophy className="w-4 h-4" />,
+    items: [
+      { id: 'tournaments', label: 'Turnuvalar', icon: <Trophy className="w-5 h-5" />, iconColor: 'indigo' },
+    ],
+  },
+  {
+    title: 'Finans',
+    icon: <Wallet className="w-4 h-4" />,
+    items: [
+      { id: 'finance', label: 'Kasa Özeti', icon: <Wallet className="w-5 h-5" />, iconColor: 'emerald' },
+    ],
+  },
 ];
 
 /** Öğrenci / Veli paneli menü öğeleri (sidebar) — düz liste, geri uyumluluk */
@@ -201,6 +268,7 @@ export const STUDENT_NAV_ITEMS: NavItem[] = [
   { id: 'live-lesson', label: 'Canlı Derse Katıl', icon: <Video className="w-5 h-5" /> },
   { id: 'puzzles', label: 'Bulmaca', icon: <Grid className="w-5 h-5" /> },
   { id: 'attendance', label: 'Devam', icon: <CalendarCheck className="w-5 h-5" /> },
+  { id: 'messages', label: 'Mesajlar', icon: <MessageCircle className="w-5 h-5" /> },
   { id: 'profile', label: 'Profil', icon: <User className="w-5 h-5" /> },
 ];
 
@@ -212,6 +280,7 @@ export const STUDENT_NAV_CATEGORIES: NavCategory[] = [
     items: [
       { id: 'summary', label: 'Özet', icon: <LayoutDashboard className="w-5 h-5" />, iconColor: 'blue' },
       { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'messages', label: 'Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
     ],
   },
   {

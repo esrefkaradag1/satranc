@@ -80,6 +80,8 @@ ALTER TABLE public.students ADD COLUMN IF NOT EXISTS mother_job text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS address text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS health_info text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS lichess_username text;
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS lichess_access_token text;
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS lichess_oauth_connected_at timestamptz;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS chess_com_username text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS photo_url text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS tc_no text;

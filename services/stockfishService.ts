@@ -120,6 +120,31 @@ function handleWorkerMessage(line: string): void {
   }
 }
 
+let engineQueue: Promise<void> = Promise.resolve();
+
+function runOnEngineQueue<T>(job: () => Promise<T>): Promise<T> {
+  const next = engineQueue.then(() => job());
+  engineQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+async function stopOngoingEngineWork(): Promise<void> {
+  if (!worker || !ready) return;
+  if (analysisRunning) {
+    worker.postMessage('stop');
+    analysisRunning = false;
+    await waitReady();
+  }
+  if (pending) {
+    const p = pending;
+    pending = null;
+    p.reject(new Error('Interrupted'));
+  }
+}
+
 function tryCreateWorker(url: string): Promise<Worker> {
   return new Promise((resolve, reject) => {
     log('Trying worker at', url);
@@ -201,33 +226,47 @@ export async function initStockfish(): Promise<boolean> {
 
 export function getBestMoveFromStockfish(fen: string, movetimeMs: number): Promise<string | null> {
   if (!worker || !ready) return Promise.resolve(null);
-  return new Promise((resolve, reject) => {
-    if (pending) pending.reject(new Error('Interrupted'));
-    pending = { resolve, reject };
-    worker!.postMessage(`position fen ${fen}`);
-    worker!.postMessage(`go movetime ${Math.max(100, movetimeMs)}`);
-    setTimeout(() => { if (pending) worker?.postMessage('stop'); }, movetimeMs + 1000);
+  return runOnEngineQueue(async () => {
+    await stopOngoingEngineWork();
+    return new Promise<string | null>((resolve, reject) => {
+      pending = { resolve, reject };
+      worker!.postMessage(`position fen ${fen}`);
+      worker!.postMessage(`go movetime ${Math.max(100, movetimeMs)}`);
+      setTimeout(() => {
+        if (pending) worker?.postMessage('stop');
+      }, movetimeMs + 2000);
+    });
   });
 }
 
-export function getEvalFromStockfish(fen: string): Promise<number> {
+export function getEvalFromStockfish(fen: string, movetimeMs = 500): Promise<number> {
   if (!worker || !ready) return Promise.resolve(0);
   const w = worker;
-  return new Promise(resolve => {
-    const onMsg = (e: MessageEvent<string>) => {
-      const line = e.data;
-      if (typeof line === 'string' && line.startsWith('bestmove ')) {
+  return runOnEngineQueue(async () => {
+    await stopOngoingEngineWork();
+    return new Promise<number>((resolve) => {
+      let score = 0;
+      const onMsg = (e: MessageEvent) => {
+        for (const line of uciIncomingLines(e.data)) {
+          const cpMatch = line.match(/\bscore cp (-?\d+)/);
+          if (cpMatch) score = parseInt(cpMatch[1], 10) / 100;
+          const mateMatch = line.match(/\bscore mate (-?\d+)/);
+          if (mateMatch) score = parseInt(mateMatch[1], 10) > 0 ? 100 : -100;
+          if (line.startsWith('bestmove ')) {
+            w.removeEventListener('message', onMsg);
+            resolve(score);
+            return;
+          }
+        }
+      };
+      w.addEventListener('message', onMsg);
+      w.postMessage(`position fen ${fen}`);
+      w.postMessage(`go movetime ${Math.max(150, movetimeMs)}`);
+      setTimeout(() => {
         w.removeEventListener('message', onMsg);
-        resolve(lastScore);
-      }
-    };
-    w.addEventListener('message', onMsg);
-    w.postMessage(`position fen ${fen}`);
-    w.postMessage('go movetime 400');
-    setTimeout(() => {
-      w.removeEventListener('message', onMsg);
-      resolve(lastScore);
-    }, 1200);
+        resolve(score);
+      }, movetimeMs + 1800);
+    });
   });
 }
 

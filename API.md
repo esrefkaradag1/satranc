@@ -18,8 +18,8 @@ Temel adres: `VITE_API_URL` (örn. `https://api.ornek.com`), sondaki `/` olmadan
 }
 ```
 
-- `phoneOrStudentId`: Öğrenci numarası (id) veya veli telefonu
-- `pin`: PIN veya telefon son 4 hane
+- `phoneOrStudentId`: Öğrenci no, kullanıcı adı, öğrenci id veya veli telefonu
+- `pin`: Öğrenci kayıt şifresi, veli PIN veya telefon son 4 hane
 
 **Başarı (200):**
 ```json

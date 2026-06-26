@@ -9,12 +9,13 @@ const DEFAULT_CLUB_PASSWORD = 'kulup'; // Giriş sayfasında kullanılan varsay�
 const MAX_CLUBS = 20;
 
 const CorporateStructure: React.FC = () => {
-  const { clubs, addClub, updateClub, removeClub, coaches } = useApp();
+  const { clubs, addClub, updateClub, removeClub, coaches, appRoles } = useApp();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState('');
   const [formAddress, setFormAddress] = useState('');
   const [formLoginPassword, setFormLoginPassword] = useState('');
+  const [formRoleId, setFormRoleId] = useState('');
   const [formActiveDays, setFormActiveDays] = useState<boolean[]>([true, true, true, true, false, false, false]);
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(new Set());
 
@@ -23,6 +24,7 @@ const CorporateStructure: React.FC = () => {
     setFormName('');
     setFormAddress('');
     setFormLoginPassword('');
+    setFormRoleId('');
     setFormActiveDays([true, true, true, true, false, false, false]);
     setModalOpen(true);
   };
@@ -32,6 +34,7 @@ const CorporateStructure: React.FC = () => {
     setFormName(club.name);
     setFormAddress(club.address ?? '');
     setFormLoginPassword(club.loginPassword ?? '');
+    setFormRoleId(club.roleId ?? '');
     setFormActiveDays(club.activeDays?.length === 7 ? club.activeDays : [true, true, true, true, false, false, false]);
     setModalOpen(true);
   };
@@ -45,14 +48,15 @@ const CorporateStructure: React.FC = () => {
     const name = formName.trim();
     if (!name) return;
     const loginPassword = formLoginPassword.trim() || undefined;
+    const roleId = formRoleId.trim() || undefined;
     if (editingId) {
-      updateClub(editingId, { name, address: formAddress.trim() || undefined, activeDays: formActiveDays, loginPassword });
+      updateClub(editingId, { name, address: formAddress.trim() || undefined, activeDays: formActiveDays, loginPassword, roleId });
     } else {
       if (clubs.length >= MAX_CLUBS) {
         alert(`En fazla ${MAX_CLUBS} kulüp ekleyebilirsiniz.`);
         return;
       }
-      addClub({ name, address: formAddress.trim() || undefined, activeDays: formActiveDays, loginPassword });
+      addClub({ name, address: formAddress.trim() || undefined, activeDays: formActiveDays, loginPassword, roleId });
     }
     closeModal();
   };
@@ -337,6 +341,24 @@ const CorporateStructure: React.FC = () => {
                   className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/50 outline-none"
                   autoComplete="new-password"
                 />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Kulüp rolü (opsiyonel)
+                </label>
+                <select
+                  value={formRoleId}
+                  onChange={(e) => setFormRoleId(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                >
+                  <option value="">Varsayılan (Kulüp)</option>
+                  {appRoles.filter((r) => r.panel === 'club').map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500 mt-1">Kulüp paneli menü erişimini belirler</p>
               </div>
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">

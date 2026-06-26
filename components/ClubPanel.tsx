@@ -1,87 +1,284 @@
-import React, { useState } from 'react';
-import { Building2, Users, Wallet, UserPlus, Trash2, Phone, Mail, Menu } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  Building2,
+  Users,
+  Wallet,
+  UserPlus,
+  Trash2,
+  Phone,
+  Mail,
+  Menu,
+  Search,
+  Pencil,
+  X,
+  User,
+  Lock,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
 import { useApp } from '../AppContext';
 import Sidebar from './Sidebar';
-import { CLUB_NAV_ITEMS } from '../constants';
+import { CLUB_NAV_CATEGORIES } from '../constants';
+import { filterNavByPermissions } from '../lib/rolePermissions';
 import Tournaments from './Tournaments';
+import ClubProfile from './club/ClubProfile';
+import {
+  filterCoachesByClub,
+  filterStudentsByClub,
+  filterTransactionsByClub,
+} from '../lib/clubScope';
+import { getCoachNamesForStudent } from '../lib/orgScope';
+import type { Coach, Student } from '../types';
 
-const inputCls = 'w-full px-4 py-2.5 rounded-lg text-sm font-medium outline-none bg-slate-900/60 border border-slate-700/60 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50';
+const inputCls =
+  'w-full px-4 py-2.5 rounded-lg text-sm font-medium outline-none bg-slate-900/60 border border-slate-700/60 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50';
 
 interface ClubPanelProps {
   branch: string;
+  clubId?: string;
   onLogout: () => void;
 }
 
-const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
-  const { students, transactions, coaches, groups, addCoach, deleteCoach, addStudent } = useApp();
+const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
+  const {
+    students,
+    transactions,
+    coaches,
+    groups,
+    trainingGroups,
+    clubs,
+    addCoach,
+    updateCoach,
+    deleteCoach,
+    addStudent,
+    updateStudent,
+    updateClub,
+    appRoles,
+    getAuthPermissions,
+  } = useApp();
+
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const branchStudents = students.filter((s) => (s.branch || 'Merkez') === branch);
-  const branchCoaches = coaches.filter((c) => c.branch === branch);
+
+  const club = useMemo(
+    () => clubs.find((c) => c.id === clubId) ?? clubs.find((c) => (c.name || '').trim() === branch.trim()),
+    [clubs, clubId, branch],
+  );
+
+  const branchStudents = useMemo(() => filterStudentsByClub(students, branch), [students, branch]);
+  const branchCoaches = useMemo(() => filterCoachesByClub(coaches, branch), [coaches, branch]);
+  const branchTx = useMemo(() => filterTransactionsByClub(transactions, branch), [transactions, branch]);
+
+  const coachRoleOptions = useMemo(
+    () => appRoles.filter((r) => r.panel === 'coach'),
+    [appRoles],
+  );
+
+  const clubNavCategories = useMemo(
+    () => filterNavByPermissions(CLUB_NAV_CATEGORIES, getAuthPermissions()),
+    [getAuthPermissions],
+  );
+
+  const clubGroupOptions = useMemo(() => {
+    const fromTraining = trainingGroups
+      .filter((g) => (g.branchOffice || '').trim() === branch.trim())
+      .map((g) => g.name)
+      .filter(Boolean);
+    if (fromTraining.length > 0) return [...new Set(fromTraining)];
+    return groups;
+  }, [trainingGroups, groups, branch]);
+
   const paid = branchStudents.filter((s) => s.paymentStatus === 'Paid').length;
   const unpaid = branchStudents.filter((s) => s.paymentStatus === 'Unpaid').length;
   const partial = branchStudents.filter((s) => s.paymentStatus === 'Partial').length;
-  const branchTx = transactions.filter((t) => t.branch === branch || (!t.branch && branch === 'Merkez'));
   const totalIncome = branchTx.filter((t) => t.type === 'income').reduce((sum, t) => sum + (t.amount || 0), 0);
   const totalExpense = branchTx.filter((t) => t.type === 'expense').reduce((sum, t) => sum + (t.amount || 0), 0);
 
+  const [studentSearch, setStudentSearch] = useState('');
   const [showCoachModal, setShowCoachModal] = useState(false);
+  const [editingCoach, setEditingCoach] = useState<Coach | null>(null);
   const [showStudentModal, setShowStudentModal] = useState(false);
-  const [coachForm, setCoachForm] = useState({ name: '', phone: '', email: '' });
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [detailStudent, setDetailStudent] = useState<Student | null>(null);
+
+  const [coachForm, setCoachForm] = useState({ name: '', phone: '', email: '', password: '', roleId: '' });
+  const [showCoachPassword, setShowCoachPassword] = useState(false);
   const [studentForm, setStudentForm] = useState({
     name: '',
     parentName: '',
     parentPhone: '',
-    group: groups[0] || '',
+    group: '',
+    coachId: '',
     birthDate: new Date().toISOString().slice(0, 10),
+    level: 'Başlangıç' as Student['level'],
+    status: 'active' as NonNullable<Student['status']>,
   });
 
   const todayIso = () => new Date().toISOString().slice(0, 10);
   const onlyDigits = (v: string) => v.replace(/\D/g, '');
 
-  const handleAddCoach = (e: React.FormEvent) => {
+  const filteredStudents = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return branchStudents;
+    return branchStudents.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.parentName.toLowerCase().includes(q) ||
+        (s.group || '').toLowerCase().includes(q) ||
+        (s.parentPhone || '').includes(q),
+    );
+  }, [branchStudents, studentSearch]);
+
+  const resetCoachForm = () => {
+    setCoachForm({ name: '', phone: '', email: '', password: '', roleId: '' });
+    setEditingCoach(null);
+    setShowCoachPassword(false);
+  };
+
+  const resetStudentForm = () => {
+    setStudentForm({
+      name: '',
+      parentName: '',
+      parentPhone: '',
+      group: clubGroupOptions[0] || '',
+      coachId: branchCoaches[0]?.id || '',
+      birthDate: new Date().toISOString().slice(0, 10),
+      level: 'Başlangıç',
+      status: 'active',
+    });
+    setEditingStudent(null);
+  };
+
+  const openAddCoach = () => {
+    resetCoachForm();
+    setShowCoachModal(true);
+  };
+
+  const openEditCoach = (coach: Coach) => {
+    setEditingCoach(coach);
+    setCoachForm({
+      name: coach.name,
+      phone: coach.phone || '',
+      email: coach.email || '',
+      password: '',
+      roleId: coach.roleId || '',
+    });
+    setShowCoachModal(true);
+  };
+
+  const handleCoachSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const name = coachForm.name.trim();
+    const email = coachForm.email.trim();
+    const password = coachForm.password.trim();
     if (!name) return;
-    addCoach({
+    if (!editingCoach && !password) {
+      alert('Yeni antrenör için giriş şifresi zorunludur.');
+      return;
+    }
+    const payload: Omit<Coach, 'id'> = {
       name,
       branch,
       phone: coachForm.phone.trim() || undefined,
-      email: coachForm.email.trim() || undefined,
-    });
-    setCoachForm({ name: '', phone: '', email: '' });
+      email: email || undefined,
+    };
+    if (password) payload.password = password;
+    if (coachForm.roleId.trim()) payload.roleId = coachForm.roleId.trim();
+    else if (editingCoach) payload.roleId = undefined;
+    if (editingCoach) {
+      updateCoach(editingCoach.id, payload);
+    } else {
+      addCoach(payload);
+    }
+    resetCoachForm();
     setShowCoachModal(false);
   };
 
-  const handleAddStudent = (e: React.FormEvent) => {
+  const openAddStudent = () => {
+    resetStudentForm();
+    setShowStudentModal(true);
+  };
+
+  const openEditStudent = (student: Student) => {
+    setEditingStudent(student);
+    setStudentForm({
+      name: student.name,
+      parentName: student.parentName,
+      parentPhone: student.parentPhone,
+      group: student.group || clubGroupOptions[0] || '',
+      coachId: student.coachId || branchCoaches[0]?.id || '',
+      birthDate: student.birthDate || todayIso(),
+      level: student.level,
+      status: student.status || 'active',
+    });
+    setShowStudentModal(true);
+  };
+
+  const handleStudentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const name = studentForm.name.trim();
     const parentName = studentForm.parentName.trim() || 'Veli';
     const parentPhone = onlyDigits(studentForm.parentPhone);
     if (!name) return;
-    addStudent({
-      name,
-      level: 'Başlangıç',
-      elo: 0,
-      ukd: 0,
-      lastAttendance: todayIso(),
-      paymentStatus: 'Unpaid',
-      group: studentForm.group || groups[0] || '',
-      parentName,
-      parentPhone: parentPhone || '',
-      birthDate: studentForm.birthDate,
-      registrationDate: todayIso(),
-      branch,
-      status: 'active',
-    });
-    setStudentForm({
-      name: '',
-      parentName: '',
-      parentPhone: '',
-      group: groups[0] || '',
-      birthDate: new Date().toISOString().slice(0, 10),
-    });
+
+    const groupName = studentForm.group || clubGroupOptions[0] || '';
+    const tg = trainingGroups.find((g) => g.name === groupName && (g.branchOffice || '').trim() === branch.trim());
+    const discipline = tg?.discipline || 'Satranç';
+    const coachId = studentForm.coachId.trim() || undefined;
+
+    if (editingStudent) {
+      updateStudent(editingStudent.id, {
+        name,
+        parentName,
+        parentPhone: parentPhone || editingStudent.parentPhone,
+        group: groupName,
+        birthDate: studentForm.birthDate,
+        level: studentForm.level,
+        status: studentForm.status,
+        branchOffice: branch,
+        branch: discipline,
+        coachId,
+        trainingGroupId: tg?.id,
+      });
+    } else {
+      addStudent({
+        name,
+        level: studentForm.level,
+        elo: 0,
+        ukd: 0,
+        lastAttendance: todayIso(),
+        paymentStatus: 'Unpaid',
+        group: groupName,
+        parentName,
+        parentPhone: parentPhone || '',
+        birthDate: studentForm.birthDate,
+        registrationDate: todayIso(),
+        branchOffice: branch,
+        branch: discipline,
+        status: studentForm.status,
+        coachId,
+        trainingGroupId: tg?.id,
+      });
+    }
+    resetStudentForm();
     setShowStudentModal(false);
+  };
+
+  const handleProfileSave = (patch: { address?: string; activeDays: boolean[]; loginPassword?: string }) => {
+    if (!club) return;
+    updateClub(club.id, patch);
+  };
+
+  const paymentBadge = (status: Student['paymentStatus']) => {
+    if (status === 'Paid') return 'bg-emerald-500/20 text-emerald-400';
+    if (status === 'Unpaid') return 'bg-rose-500/20 text-rose-400';
+    return 'bg-amber-500/20 text-amber-400';
+  };
+
+  const paymentLabel = (status: Student['paymentStatus']) => {
+    if (status === 'Paid') return 'Ödedi';
+    if (status === 'Unpaid') return 'Ödemedi';
+    return 'Kısmi';
   };
 
   const renderContent = () => {
@@ -89,29 +286,43 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
       case 'dashboard':
         return (
           <div className="space-y-8">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5">
                 <div className="flex items-center gap-3 mb-2">
                   <Users className="w-5 h-5 text-emerald-400" />
                   <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Öğrenci</span>
                 </div>
                 <p className="text-2xl font-black text-white">{branchStudents.length}</p>
-                <p className="text-xs text-slate-500 mt-1">Bu şubede kayıtlı</p>
+                <p className="text-xs text-slate-500 mt-1">Aktif kayıt</p>
+              </div>
+              <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5">
+                <div className="flex items-center gap-3 mb-2">
+                  <User className="w-5 h-5 text-teal-400" />
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Antrenör</span>
+                </div>
+                <p className="text-2xl font-black text-white">{branchCoaches.length}</p>
+                <p className="text-xs text-slate-500 mt-1">Personel</p>
               </div>
               <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5">
                 <div className="flex items-center gap-3 mb-2">
                   <Wallet className="w-5 h-5 text-amber-400" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Ödeme durumu</span>
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Ödeme</span>
                 </div>
                 <p className="text-sm text-slate-300">
-                  <span className="text-emerald-400 font-bold">{paid}</span> ödedi · <span className="text-rose-400 font-bold">{unpaid}</span> ödemedi
-                  {partial > 0 && <> · <span className="text-amber-400 font-bold">{partial}</span> kısmi</>}
+                  <span className="text-emerald-400 font-bold">{paid}</span> ödedi ·{' '}
+                  <span className="text-rose-400 font-bold">{unpaid}</span> ödemedi
+                  {partial > 0 && (
+                    <>
+                      {' '}
+                      · <span className="text-amber-400 font-bold">{partial}</span> kısmi
+                    </>
+                  )}
                 </p>
               </div>
-              <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5 sm:col-span-2 lg:col-span-1">
+              <div className="bg-slate-800/50 border border-white/5 rounded-xl p-5">
                 <div className="flex items-center gap-3 mb-2">
                   <Wallet className="w-5 h-5 text-indigo-400" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Kasa özeti</span>
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Kasa</span>
                 </div>
                 <p className="text-sm text-slate-300">
                   Gelir: <span className="text-emerald-400 font-bold">₺{totalIncome.toLocaleString('tr-TR')}</span>
@@ -121,48 +332,94 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
               </div>
             </div>
             <section className="bg-slate-800/30 border border-white/5 rounded-xl p-5">
-              <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider mb-3">Şube özeti</h2>
-              <p className="text-slate-400 text-sm">
-                <strong className="text-slate-200">{branch}</strong> şubesinde toplam <strong>{branchStudents.length}</strong> öğrenci, <strong>{branchCoaches.length}</strong> antrenör kayıtlı.
+              <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider mb-3">Hoş geldiniz</h2>
+              <p className="text-slate-400 text-sm leading-relaxed">
+                <strong className="text-slate-200">{branch}</strong> kulüp panelindesiniz. Kulüp bilgilerinizi
+                güncelleyebilir, antrenör ekleyebilir, öğrencilerinizi görüntüleyebilir ve turnuva
+                düzenleyebilirsiniz.
               </p>
+              {club?.address && (
+                <p className="text-xs text-slate-500 mt-3 flex items-start gap-2">
+                  <Building2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  {club.address}
+                </p>
+              )}
             </section>
           </div>
         );
+
+      case 'profile':
+        return (
+          <ClubProfile
+            club={club}
+            branchName={branch}
+            coachCount={branchCoaches.length}
+            studentCount={branchStudents.length}
+            onSave={handleProfileSave}
+          />
+        );
+
       case 'coaches':
         return (
           <section className="bg-slate-800/30 border border-white/5 rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
-              <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider">Antrenörler</h2>
+            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider">Antrenörler</h2>
+                <p className="text-xs text-slate-500 mt-0.5">{branch} kulübüne bağlı personel</p>
+              </div>
               <button
                 type="button"
-                onClick={() => setShowCoachModal(true)}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all"
+                onClick={openAddCoach}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shrink-0"
               >
                 <UserPlus className="w-4 h-4" /> Antrenör Ekle
               </button>
             </div>
             <div className="p-4">
               {branchCoaches.length === 0 ? (
-                <p className="text-slate-500 text-sm">Henüz antrenör eklenmedi. &quot;Antrenör Ekle&quot; ile ekleyebilirsiniz.</p>
+                <p className="text-slate-500 text-sm">Henüz antrenör eklenmedi.</p>
               ) : (
                 <ul className="space-y-2">
                   {branchCoaches.map((c) => (
-                    <li key={c.id} className="flex items-center justify-between gap-3 py-2.5 px-3 rounded-lg bg-slate-900/50 border border-white/5">
+                    <li
+                      key={c.id}
+                      className="flex items-center justify-between gap-3 py-3 px-3 rounded-lg bg-slate-900/50 border border-white/5"
+                    >
                       <div className="min-w-0">
                         <p className="font-bold text-white truncate">{c.name}</p>
                         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-400 mt-0.5">
-                          {c.phone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> {c.phone}</span>}
-                          {c.email && <span className="flex items-center gap-1"><Mail className="w-3 h-3" /> {c.email}</span>}
+                          {c.phone && (
+                            <span className="flex items-center gap-1">
+                              <Phone className="w-3 h-3" /> {c.phone}
+                            </span>
+                          )}
+                          {c.email && (
+                            <span className="flex items-center gap-1">
+                              <Mail className="w-3 h-3" /> {c.email}
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => deleteCoach(c.id)}
-                        className="p-2 rounded-lg text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-all shrink-0"
-                        title="Sil"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => openEditCoach(c)}
+                          className="p-2 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-emerald-400 transition-all"
+                          title="Düzenle"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`"${c.name}" antrenörünü silmek istiyor musunuz?`)) deleteCoach(c.id);
+                          }}
+                          className="p-2 rounded-lg text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-all"
+                          title="Sil"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -170,33 +427,73 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
             </div>
           </section>
         );
+
       case 'students':
         return (
           <section className="bg-slate-800/30 border border-white/5 rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
-              <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider">Öğrenciler</h2>
-              <button
-                type="button"
-                onClick={() => setShowStudentModal(true)}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all"
-              >
-                <UserPlus className="w-4 h-4" /> Öğrenci Ekle
-              </button>
+            <div className="px-5 py-4 border-b border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider">Öğrenciler</h2>
+                <p className="text-xs text-slate-500 mt-0.5">{filteredStudents.length} kayıt</p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={studentSearch}
+                    onChange={(e) => setStudentSearch(e.target.value)}
+                    placeholder="Ara..."
+                    className="pl-9 pr-3 py-2 rounded-lg text-sm bg-slate-900/60 border border-slate-700/60 text-white placeholder:text-slate-500 w-full sm:w-48"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={openAddStudent}
+                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all"
+                >
+                  <UserPlus className="w-4 h-4" /> Öğrenci Ekle
+                </button>
+              </div>
             </div>
             <div className="p-4">
-              {branchStudents.length === 0 ? (
-                <p className="text-slate-500 text-sm">Henüz öğrenci eklenmedi. &quot;Öğrenci Ekle&quot; ile ekleyebilirsiniz.</p>
+              {filteredStudents.length === 0 ? (
+                <p className="text-slate-500 text-sm">
+                  {branchStudents.length === 0 ? 'Henüz öğrenci eklenmedi.' : 'Arama sonucu bulunamadı.'}
+                </p>
               ) : (
                 <ul className="space-y-2 max-h-[70vh] overflow-y-auto custom-scrollbar">
-                  {branchStudents.map((s) => (
-                    <li key={s.id} className="flex items-center justify-between gap-3 py-2.5 px-3 rounded-lg bg-slate-900/50 border border-white/5">
-                      <div className="min-w-0">
+                  {filteredStudents.map((s) => (
+                    <li
+                      key={s.id}
+                      className="flex items-center justify-between gap-3 py-2.5 px-3 rounded-lg bg-slate-900/50 border border-white/5 hover:border-emerald-500/20 transition-colors"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setDetailStudent(s)}
+                        className="min-w-0 text-left flex-1"
+                      >
                         <p className="font-bold text-white truncate">{s.name}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{s.group} · {s.parentName}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          {s.group || 'Grup yok'} · {getCoachNamesForStudent(s, coaches, trainingGroups).join(', ') || 'Antrenör yok'}
+                          {s.status === 'inactive' && (
+                            <span className="ml-2 text-rose-400 font-bold">Pasif</span>
+                          )}
+                        </p>
+                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${paymentBadge(s.paymentStatus)}`}>
+                          {paymentLabel(s.paymentStatus)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => openEditStudent(s)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-emerald-400"
+                          title="Düzenle"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
                       </div>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 ${s.paymentStatus === 'Paid' ? 'bg-emerald-500/20 text-emerald-400' : s.paymentStatus === 'Unpaid' ? 'bg-rose-500/20 text-rose-400' : 'bg-amber-500/20 text-amber-400'}`}>
-                        {s.paymentStatus === 'Paid' ? 'Ödedi' : s.paymentStatus === 'Unpaid' ? 'Ödemedi' : 'Kısmi'}
-                      </span>
                     </li>
                   ))}
                 </ul>
@@ -204,6 +501,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
             </div>
           </section>
         );
+
       case 'finance':
         return (
           <div className="space-y-6">
@@ -218,7 +516,9 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
               </div>
             </div>
             <section className="bg-slate-800/30 border border-white/5 rounded-xl overflow-hidden">
-              <h2 className="px-5 py-4 border-b border-white/5 text-sm font-black text-slate-300 uppercase tracking-wider">Son işlemler ({branchTx.length})</h2>
+              <h2 className="px-5 py-4 border-b border-white/5 text-sm font-black text-slate-300 uppercase tracking-wider">
+                Son işlemler ({branchTx.length})
+              </h2>
               {branchTx.length === 0 ? (
                 <p className="p-5 text-slate-500 text-sm">Henüz işlem kaydı yok.</p>
               ) : (
@@ -239,8 +539,10 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
             </section>
           </div>
         );
+
       case 'tournaments':
         return <Tournaments role="club" branch={branch} />;
+
       default:
         return null;
     }
@@ -251,7 +553,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        navItems={CLUB_NAV_ITEMS}
+        navCategories={clubNavCategories}
         onLogout={onLogout}
         mobileOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -260,7 +562,12 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
         <header className="relative z-10 h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/40 backdrop-blur-xl border-b border-white/5 shrink-0">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-            <button type="button" onClick={() => setSidebarOpen(true)} className="p-2 rounded-lg lg:hidden hover:bg-slate-800 text-slate-300 shrink-0" aria-label="Menüyü aç">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className="p-2 rounded-lg lg:hidden hover:bg-slate-800 text-slate-300 shrink-0"
+              aria-label="Menüyü aç"
+            >
               <Menu className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-3 min-w-0">
@@ -269,7 +576,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
               </div>
               <div className="min-w-0">
                 <h1 className="text-base sm:text-lg font-black text-white truncate">Kulüp Paneli</h1>
-                <p className="text-xs text-emerald-400/90 font-bold truncate">{branch} şubesi</p>
+                <p className="text-xs text-emerald-400/90 font-bold truncate">{branch}</p>
               </div>
             </div>
           </div>
@@ -282,72 +589,372 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, onLogout }) => {
         </div>
       </main>
 
-      {/* Antrenör Ekle Modal */}
+      {/* Antrenör modal */}
       {showCoachModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCoachModal(false)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-slate-700">
-              <h3 className="text-lg font-black text-white">Antrenör Ekle</h3>
-              <p className="text-xs text-slate-400 mt-0.5">{branch} şubesi</p>
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => {
+            setShowCoachModal(false);
+            resetCoachForm();
+          }}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-black text-white">
+                  {editingCoach ? 'Antrenör Düzenle' : 'Antrenör Ekle'}
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">{branch}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCoachModal(false);
+                  resetCoachForm();
+                }}
+                className="p-2 rounded-lg text-slate-400 hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <form onSubmit={handleAddCoach} className="p-5 space-y-4">
+            <form onSubmit={handleCoachSubmit} className="p-5 space-y-4">
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Ad Soyad *</label>
-                <input type="text" value={coachForm.name} onChange={(e) => setCoachForm((f) => ({ ...f, name: e.target.value }))} className={inputCls} placeholder="Antrenör adı" required />
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Ad Soyad *
+                </label>
+                <input
+                  type="text"
+                  value={coachForm.name}
+                  onChange={(e) => setCoachForm((f) => ({ ...f, name: e.target.value }))}
+                  className={inputCls}
+                  required
+                />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Telefon</label>
-                <input type="tel" value={coachForm.phone} onChange={(e) => setCoachForm((f) => ({ ...f, phone: e.target.value }))} className={inputCls} placeholder="5XX XXX XX XX" />
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Telefon
+                </label>
+                <input
+                  type="tel"
+                  value={coachForm.phone}
+                  onChange={(e) => setCoachForm((f) => ({ ...f, phone: e.target.value }))}
+                  className={inputCls}
+                />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">E-posta</label>
-                <input type="email" value={coachForm.email} onChange={(e) => setCoachForm((f) => ({ ...f, email: e.target.value }))} className={inputCls} placeholder="ornek@email.com" />
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  E-posta
+                </label>
+                <input
+                  type="email"
+                  value={coachForm.email}
+                  onChange={(e) => setCoachForm((f) => ({ ...f, email: e.target.value }))}
+                  className={inputCls}
+                  placeholder="Giriş için kullanılır"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Giriş Şifresi {editingCoach ? '' : '*'}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showCoachPassword ? 'text' : 'password'}
+                    value={coachForm.password}
+                    onChange={(e) => setCoachForm((f) => ({ ...f, password: e.target.value }))}
+                    className={`${inputCls} pr-10`}
+                    placeholder={editingCoach ? 'Değiştirmek için yeni şifre' : 'Antrenör paneli şifresi'}
+                    required={!editingCoach}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCoachPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  >
+                    {showCoachPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
+                  <Lock className="w-3 h-3" />
+                  Antrenör girişinde e-posta/ad + bu şifre kullanılır
+                </p>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Rol
+                </label>
+                <select
+                  value={coachForm.roleId}
+                  onChange={(e) => setCoachForm((f) => ({ ...f, roleId: e.target.value }))}
+                  className={inputCls}
+                >
+                  <option value="">Varsayılan (Antrenör)</option>
+                  {coachRoleOptions.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500 mt-1">Menü erişimini belirler</p>
               </div>
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setShowCoachModal(false)} className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm">İptal</button>
-                <button type="submit" className="flex-1 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm">Ekle</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCoachModal(false);
+                    resetCoachForm();
+                  }}
+                  className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm"
+                >
+                  İptal
+                </button>
+                <button type="submit" className="flex-1 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm">
+                  {editingCoach ? 'Kaydet' : 'Ekle'}
+                </button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* Öğrenci Ekle Modal */}
+      {/* Öğrenci modal */}
       {showStudentModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowStudentModal(false)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-slate-700">
-              <h3 className="text-lg font-black text-white">Öğrenci Ekle</h3>
-              <p className="text-xs text-slate-400 mt-0.5">{branch} şubesi</p>
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => {
+            setShowStudentModal(false);
+            resetStudentForm();
+          }}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-2xl shadow-xl w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between sticky top-0 bg-slate-900">
+              <div>
+                <h3 className="text-lg font-black text-white">
+                  {editingStudent ? 'Öğrenci Düzenle' : 'Öğrenci Ekle'}
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">{branch}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStudentModal(false);
+                  resetStudentForm();
+                }}
+                className="p-2 rounded-lg text-slate-400 hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <form onSubmit={handleAddStudent} className="p-5 space-y-4">
+            <form onSubmit={handleStudentSubmit} className="p-5 space-y-4">
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Öğrenci Ad Soyad *</label>
-                <input type="text" value={studentForm.name} onChange={(e) => setStudentForm((f) => ({ ...f, name: e.target.value }))} className={inputCls} placeholder="Ad Soyad" required />
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Öğrenci Ad Soyad *
+                </label>
+                <input
+                  type="text"
+                  value={studentForm.name}
+                  onChange={(e) => setStudentForm((f) => ({ ...f, name: e.target.value }))}
+                  className={inputCls}
+                  required
+                />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Veli Adı</label>
-                <input type="text" value={studentForm.parentName} onChange={(e) => setStudentForm((f) => ({ ...f, parentName: e.target.value }))} className={inputCls} placeholder="Veli adı" />
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Veli Adı
+                </label>
+                <input
+                  type="text"
+                  value={studentForm.parentName}
+                  onChange={(e) => setStudentForm((f) => ({ ...f, parentName: e.target.value }))}
+                  className={inputCls}
+                />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Veli Telefonu *</label>
-                <input type="tel" value={studentForm.parentPhone} onChange={(e) => setStudentForm((f) => ({ ...f, parentPhone: e.target.value }))} className={inputCls} placeholder="5XX XXX XX XX" required />
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Veli Telefonu *
+                </label>
+                <input
+                  type="tel"
+                  value={studentForm.parentPhone}
+                  onChange={(e) => setStudentForm((f) => ({ ...f, parentPhone: e.target.value }))}
+                  className={inputCls}
+                  required={!editingStudent}
+                />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Grup</label>
-                <select value={studentForm.group} onChange={(e) => setStudentForm((f) => ({ ...f, group: e.target.value }))} className={inputCls}>
-                  {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Grup
+                </label>
+                <select
+                  value={studentForm.group}
+                  onChange={(e) => setStudentForm((f) => ({ ...f, group: e.target.value }))}
+                  className={inputCls}
+                >
+                  {clubGroupOptions.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Doğum Tarihi</label>
-                <input type="date" value={studentForm.birthDate} onChange={(e) => setStudentForm((f) => ({ ...f, birthDate: e.target.value }))} className={inputCls} />
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Antrenör *
+                </label>
+                <select
+                  value={studentForm.coachId}
+                  onChange={(e) => setStudentForm((f) => ({ ...f, coachId: e.target.value }))}
+                  className={inputCls}
+                  required
+                >
+                  {branchCoaches.length === 0 ? (
+                    <option value="">Önce antrenör ekleyin</option>
+                  ) : (
+                    branchCoaches.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Seviye
+                  </label>
+                  <select
+                    value={studentForm.level}
+                    onChange={(e) =>
+                      setStudentForm((f) => ({ ...f, level: e.target.value as Student['level'] }))
+                    }
+                    className={inputCls}
+                  >
+                    <option value="Başlangıç">Başlangıç</option>
+                    <option value="Orta">Orta</option>
+                    <option value="İleri">İleri</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Durum
+                  </label>
+                  <select
+                    value={studentForm.status}
+                    onChange={(e) =>
+                      setStudentForm((f) => ({
+                        ...f,
+                        status: e.target.value as NonNullable<Student['status']>,
+                      }))
+                    }
+                    className={inputCls}
+                  >
+                    <option value="active">Aktif</option>
+                    <option value="inactive">Pasif</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Doğum Tarihi
+                </label>
+                <input
+                  type="date"
+                  value={studentForm.birthDate}
+                  onChange={(e) => setStudentForm((f) => ({ ...f, birthDate: e.target.value }))}
+                  className={inputCls}
+                />
               </div>
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setShowStudentModal(false)} className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm">İptal</button>
-                <button type="submit" className="flex-1 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm">Ekle</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStudentModal(false);
+                    resetStudentForm();
+                  }}
+                  className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm"
+                >
+                  İptal
+                </button>
+                <button type="submit" className="flex-1 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm">
+                  {editingStudent ? 'Kaydet' : 'Ekle'}
+                </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Öğrenci detay */}
+      {detailStudent && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => setDetailStudent(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+              <h3 className="text-lg font-black text-white">{detailStudent.name}</h3>
+              <button
+                type="button"
+                onClick={() => setDetailStudent(null)}
+                className="p-2 rounded-lg text-slate-400 hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3 text-sm">
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500">Grup</span>
+                <span className="text-slate-200 font-medium">{detailStudent.group || '—'}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500">Seviye</span>
+                <span className="text-slate-200 font-medium">{detailStudent.level}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500">Veli</span>
+                <span className="text-slate-200 font-medium">{detailStudent.parentName}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500">Telefon</span>
+                <span className="text-slate-200 font-medium">{detailStudent.parentPhone || '—'}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500">UKD / ELO</span>
+                <span className="text-slate-200 font-medium">
+                  {detailStudent.ukd} / {detailStudent.elo}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4 items-center">
+                <span className="text-slate-500">Ödeme</span>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${paymentBadge(detailStudent.paymentStatus)}`}>
+                  {paymentLabel(detailStudent.paymentStatus)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-500">Kayıt</span>
+                <span className="text-slate-200 font-medium">{detailStudent.registrationDate}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDetailStudent(null);
+                  openEditStudent(detailStudent);
+                }}
+                className="w-full mt-2 py-2.5 rounded-lg bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 font-bold text-sm hover:bg-emerald-600/30"
+              >
+                Düzenle
+              </button>
+            </div>
           </div>
         </div>
       )}

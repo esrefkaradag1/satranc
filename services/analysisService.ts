@@ -4,6 +4,8 @@
  * stockfishService (best move / eval) ile çakışmasın diye bağımsız bir worker kullanır.
  */
 
+import { buildTerminalPvLines, getTerminalEval } from '../lib/analysisTerminal';
+
 export interface PvLine {
   multipv: number;
   depth: number;
@@ -39,14 +41,18 @@ let lastFen: string | null = null;
 const listeners = new Set<Listener>();
 let readyWaitResolve: (() => void) | null = null;
 let restartScheduled = false;
+let stopInFlight = false;
 
 // Debounce ve Retry yönetimi
 let analysisDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let restartFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 let stopWaitListener: ((ev: MessageEvent) => void) | null = null;
-let analysisSeq = 0;
+let analysisGeneration = 0;
 let recoveryRetryCount = 0;
 const MAX_RECOVERY_RETRIES = 3;
+let subscriberCount = 0;
+let lastMainLineDepth = 0;
+let lastMainLineUpdateMs = 0;
 
 function isValidFen(fen: string): boolean {
   const parts = fen.trim().split(/\s+/);
@@ -145,6 +151,10 @@ function handleMessage(line: string) {
         next.length = currentNumPv;
         next[idx] = parsed;
         pvLines = next;
+        if (idx === 0) {
+          lastMainLineDepth = parsed.depth;
+          lastMainLineUpdateMs = Date.now();
+        }
         emitLines();
         const valid = next.filter((l): l is PvLine => l !== null);
         const maxD = valid.reduce((m, l) => Math.max(m, l.depth), 0);
@@ -156,7 +166,85 @@ function handleMessage(line: string) {
   if (line.startsWith('bestmove ')) {
     log('bestmove:', line);
     analysisRunning = false;
+    stopInFlight = false;
+    const moveToken = line.slice(9).trim().split(/\s+/)[0] ?? '';
+    if ((moveToken === '(none)' || !moveToken) && lastFen && pvLines.every((l) => l === null)) {
+      const terminal = getTerminalEval(lastFen);
+      if (terminal) {
+        applyTerminalAnalysis(terminal);
+      }
+    }
   }
+}
+
+function applyTerminalAnalysis(terminal: NonNullable<ReturnType<typeof getTerminalEval>>): void {
+  pvLines = buildTerminalPvLines(terminal, currentNumPv);
+  lastMainLineDepth = 1;
+  lastMainLineUpdateMs = Date.now();
+  emitLines();
+  emitDepth(1);
+}
+
+function stopEngineAndWait(): Promise<void> {
+  if (!worker || !analysisRunning) {
+    analysisRunning = false;
+    stopInFlight = false;
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearStopWait();
+      analysisRunning = false;
+      stopInFlight = false;
+      resolve();
+    };
+
+    stopInFlight = true;
+    restartScheduled = true;
+    stopWaitListener = (ev: MessageEvent) => {
+      for (const ln of uciIncomingLines(ev.data)) {
+        if (ln.startsWith('bestmove ')) finish();
+      }
+    };
+    worker!.addEventListener('message', stopWaitListener);
+    restartFallbackTimer = setTimeout(finish, 400);
+
+    try {
+      worker!.postMessage('stop');
+    } catch {
+      finish();
+    }
+  });
+}
+
+async function runAnalysis(generation: number): Promise<void> {
+  if (generation !== analysisGeneration) return;
+  const fen = lastFen;
+  if (!fen || !worker || !ready) return;
+
+  const terminal = getTerminalEval(fen);
+  if (terminal) {
+    if (analysisRunning) {
+      try { worker.postMessage('stop'); } catch { /* ignore */ }
+      analysisRunning = false;
+      stopInFlight = false;
+      clearStopWait();
+    }
+    applyTerminalAnalysis(terminal);
+    return;
+  }
+
+  if (analysisRunning || stopInFlight) {
+    await stopEngineAndWait();
+    if (generation !== analysisGeneration) return;
+  }
+
+  if (!worker || !ready) return;
+  doStartAnalysis(fen);
 }
 
 function waitReady(timeoutMs = 2000): Promise<void> {
@@ -194,6 +282,8 @@ function doStartAnalysis(fen: string): void {
   if (!worker || !ready) return;
 
   pvLines = new Array(currentNumPv).fill(null);
+  lastMainLineDepth = 0;
+  lastMainLineUpdateMs = 0;
   emitLines();
   emitDepth(0);
 
@@ -262,7 +352,7 @@ function tryCreate(url: string, timeoutMs = 8000): Promise<Worker> {
           analysisRunning = false;
           initializing = false;
           initPromise = null;
-          analysisSeq += 1;
+          analysisGeneration += 1;
 
           if (recoveryRetryCount < MAX_RECOVERY_RETRIES) {
             recoveryRetryCount++;
@@ -333,15 +423,13 @@ export function startAnalysis(fen: string, force = false): void {
     return;
   }
 
-  const seq = ++analysisSeq;
-
-  if (analysisDebounceTimer) {
-    clearTimeout(analysisDebounceTimer);
-    analysisDebounceTimer = null;
-  }
+  const generation = ++analysisGeneration;
+  pendingFen = trimmed;
 
   if (trimmed !== lastFen) {
     pvLines = new Array(currentNumPv).fill(null);
+    lastMainLineDepth = 0;
+    lastMainLineUpdateMs = 0;
     emitLines();
     emitDepth(0);
   }
@@ -349,64 +437,24 @@ export function startAnalysis(fen: string, force = false): void {
   lastFen = trimmed;
 
   if (!worker || !ready) {
-    pendingFen = trimmed;
     if (!initializing) void initAnalysis();
     return;
   }
 
+  if (analysisDebounceTimer) {
+    clearTimeout(analysisDebounceTimer);
+    analysisDebounceTimer = null;
+  }
+
   analysisDebounceTimer = setTimeout(() => {
     analysisDebounceTimer = null;
-    if (seq !== analysisSeq) return;
-
-    if (!worker || !ready) {
-      pendingFen = trimmed;
-      return;
-    }
-
-    const begin = (targetFen: string) => {
-      if (seq !== analysisSeq || !worker || !ready) return;
-      doStartAnalysis(targetFen);
-    };
-
-    if (analysisRunning) {
-      pendingFen = trimmed;
-      if (restartScheduled) return;
-      restartScheduled = true;
-      clearStopWait();
-
-      const resume = () => {
-        if (seq !== analysisSeq) return;
-        restartScheduled = false;
-        clearStopWait();
-        const f = pendingFen ?? trimmed;
-        pendingFen = null;
-        begin(f);
-      };
-
-      stopWaitListener = (ev: MessageEvent) => {
-        for (const line of uciIncomingLines(ev.data)) {
-          if (line.startsWith('bestmove ')) resume();
-        }
-      };
-      worker.addEventListener('message', stopWaitListener);
-      restartFallbackTimer = setTimeout(resume, 600);
-
-      try {
-        worker.postMessage('stop');
-        analysisRunning = false;
-      } catch (e) {
-        log('Stop message failed:', e);
-        resume();
-      }
-      return;
-    }
-
-    begin(trimmed);
-  }, 180);
+    void runAnalysis(generation);
+  }, 120);
 }
 
-export function stopAnalysis(): void {
-  analysisSeq += 1;
+export function stopAnalysis(force = false): void {
+  if (!force && subscriberCount > 0) return;
+  analysisGeneration += 1;
   if (analysisDebounceTimer) {
     clearTimeout(analysisDebounceTimer);
     analysisDebounceTimer = null;
@@ -422,7 +470,7 @@ export function stopAnalysis(): void {
 
 function resetEngineState(): void {
   clearStopWait();
-  analysisSeq += 1;
+  analysisGeneration += 1;
   try { worker?.terminate(); } catch {}
   worker = null;
   ready = false;
@@ -473,11 +521,38 @@ export function setEngineOptions(opts: { numPv?: number; threads?: number; hash?
 }
 
 export function subscribeAnalysis(l: Listener): () => void {
+  subscriberCount += 1;
   listeners.add(l);
   // Mevcut durumu hemen gönder
   if (l.onLines) l.onLines([...pvLines]);
   if (ready && l.onReady) l.onReady();
-  return () => { listeners.delete(l); };
+  return () => {
+    listeners.delete(l);
+    subscriberCount = Math.max(0, subscriberCount - 1);
+    if (subscriberCount === 0) stopAnalysis(true);
+  };
+}
+
+export function getAnalysisHealth(): {
+  ready: boolean;
+  running: boolean;
+  depth: number;
+  filledLines: number;
+  numPv: number;
+  lastUpdateMs: number;
+  recoveryRetries: number;
+} {
+  const filledLines = pvLines.filter((l): l is PvLine => l !== null).length;
+  const maxD = pvLines.reduce((m, l) => (l ? Math.max(m, l.depth) : m), 0);
+  return {
+    ready,
+    running: analysisRunning,
+    depth: maxD,
+    filledLines,
+    numPv: currentNumPv,
+    lastUpdateMs: lastMainLineUpdateMs,
+    recoveryRetries: recoveryRetryCount,
+  };
 }
 
 export function isAnalysisReady(): boolean {

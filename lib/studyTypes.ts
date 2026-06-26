@@ -54,8 +54,8 @@ export interface Study {
   chatMessages: StudyChatMessage[];
   liked: boolean;
   likes: number;
-  /** Öğrencinin çalışmada oynadığı taraf; `both` = tüm hamleler (varsayılan). */
-  studentPlaysColor?: 'white' | 'black' | 'both';
+  /** Öğrencinin taş oynatma izni; `none` = sadece izleme, `both` = her iki taraf (varsayılan). */
+  studentPlaysColor?: StudentPlaysColor;
   /** true ise çalışma öğrenci panelinden oluşturulmuştur. */
   studentCreated?: boolean;
   /** Çalışmayı oluşturan öğrenci id'si (varsa). */
@@ -65,6 +65,8 @@ export interface Study {
   /** Antrenör listesi klasörleri; yerel netchess_study_categories + StudyPage */
   categoryId?: string | null;
 }
+
+export type StudentPlaysColor = 'white' | 'black' | 'both' | 'none';
 
 export type BottomTab = 'tags' | 'comments' | 'annotations' | 'analysis' | 'liveNotes' | 'multiboard' | 'share' | 'info';
 export type LeftTab = 'chapters' | 'members';

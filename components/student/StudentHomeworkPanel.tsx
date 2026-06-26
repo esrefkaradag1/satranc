@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../../types';
 import { evaluatePlatformDailyGoals } from '../../lib/homeworkPlatformUtils';
+import { LichessOAuthConnect } from './LichessOAuthConnect';
 
 type FilterKey = 'all' | 'todo' | 'progress' | 'done';
 
@@ -366,7 +367,8 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
                 Günlük hedefler Lichess veya Chess.com hesabınızdan otomatik sayılır.
-                Profilinize kullanıcı adınızı ekletin.
+                Lichess&apos;te tek tek bulmaca listesi için yukarıdan hesabınızı OAuth ile bağlayın.
+                Profilinizde kullanıcı adınız tanımlı olmalı.
               </span>
             </div>
           )}
@@ -507,6 +509,11 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
           Yenile
         </button>
       </div>
+
+      <LichessOAuthConnect
+        student={student}
+        onDisconnected={onRefreshPlatform ?? onRefresh}
+      />
 
       {homeworksLoading && (
         <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-8 text-center">

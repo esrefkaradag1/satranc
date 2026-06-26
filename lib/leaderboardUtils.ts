@@ -1,6 +1,11 @@
 import type { Student } from '../types';
 import type { LichessActivity } from '../services/chessPlatformService';
 import { studentInitials } from './homeworkPanelUtils';
+import type { LeaderboardPlatformSnapshot, LeaderboardRankMode } from './leaderboardPlatformUtils';
+import { leaderboardSortValue, type PlatformModeRating } from './leaderboardPlatformUtils';
+
+export type { LeaderboardRankMode } from './leaderboardPlatformUtils';
+export { LEADERBOARD_RANK_MODES, leaderboardModeLabel, leaderboardModeProg, leaderboardModeRating } from './leaderboardPlatformUtils';
 
 export type LeaderboardPeriod = 'week' | 'month';
 
@@ -131,6 +136,8 @@ export interface LeaderboardEntry {
   losses: number;
   score: number;
   rank: number;
+  platform: LeaderboardPlatformSnapshot;
+  rankMetric: number;
 }
 
 /** Bulmaca 1p, galibiyet 10p, beraberlik 5p, mağlubiyet 1p */
@@ -139,14 +146,34 @@ export function computeLeaderboardScore(puzzles: number, wins: number, draws: nu
 }
 
 export function rankLeaderboardEntries(
-  rows: Omit<LeaderboardEntry, 'rank' | 'score'>[],
+  rows: Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>[],
+  mode: LeaderboardRankMode = 'activity',
 ): LeaderboardEntry[] {
-  const withScore = rows.map((r) => ({
-    ...r,
-    score: computeLeaderboardScore(r.puzzles, r.wins, r.draws, r.losses),
-    rank: 0,
-  }));
-  withScore.sort((a, b) => b.score - a.score || b.puzzles - a.puzzles || b.wins - a.wins || a.name.localeCompare(b.name, 'tr'));
+  const activityScores = rows.map((r) =>
+    computeLeaderboardScore(r.puzzles, r.wins, r.draws, r.losses),
+  );
+  const withScore = rows.map((r, i) => {
+    const score = activityScores[i]!;
+    const draft = { ...r, score, rank: 0, rankMetric: 0 };
+    return {
+      ...draft,
+      rankMetric: leaderboardSortValue(draft, mode),
+    };
+  });
+  withScore.sort((a, b) => {
+    const diff = b.rankMetric - a.rankMetric;
+    if (diff !== 0) return diff;
+    if (mode !== 'activity' && mode !== 'ukd' && mode !== 'fide') {
+      const modeKey = mode === 'classical' ? 'classical' : mode;
+      const pA = a.platform[modeKey as keyof LeaderboardPlatformSnapshot] as PlatformModeRating | undefined;
+      const pB = b.platform[modeKey as keyof LeaderboardPlatformSnapshot] as PlatformModeRating | undefined;
+      const progDiff = (pB?.prog ?? 0) - (pA?.prog ?? 0);
+      if (progDiff !== 0) return progDiff;
+      const gamesDiff = (pB?.games ?? 0) - (pA?.games ?? 0);
+      if (gamesDiff !== 0) return gamesDiff;
+    }
+    return b.puzzles - a.puzzles || b.wins - a.wins || b.games - a.games || a.name.localeCompare(b.name, 'tr');
+  });
   return withScore.map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
@@ -155,10 +182,11 @@ export function entryForStudent(
   puzzles: number,
   games: number,
   internalPuzzles: number,
+  platform: LeaderboardPlatformSnapshot,
   wins = 0,
   draws = 0,
   losses = 0,
-): Omit<LeaderboardEntry, 'rank' | 'score'> {
+): Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'> {
   return {
     studentId: student.id,
     name: student.name,
@@ -170,5 +198,6 @@ export function entryForStudent(
     wins,
     draws,
     losses,
+    platform,
   };
 }

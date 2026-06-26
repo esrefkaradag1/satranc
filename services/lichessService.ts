@@ -369,9 +369,11 @@ export async function fetchLichessPuzzlesFiltered(options: FetchBatchOptions): P
   const seen = new Set<string>();
   const result: Puzzle[] = [];
 
-  const maxAttempts = Math.min(40, Math.max(12, Math.ceil(target / 5) * angles.length));
+  // API tur sayısı hedef bulmaca adedine göre ölçeklenir (eski min. 12, 5 istekte 12 deneme gösteriyordu).
+  const maxAttempts = Math.min(40, Math.max(2, Math.ceil(target / 2) + angles.length * 2));
   let attempts = 0;
   let consecutiveEmpty = 0;
+  const maxConsecutiveEmpty = target <= 10 ? 5 : 8;
 
   onProgress?.(0, target, 'Lichess API bağlantısı kuruluyor...');
 
@@ -380,7 +382,11 @@ export async function fetchLichessPuzzlesFiltered(options: FetchBatchOptions): P
     const difficulty = difficulties[attempts % difficulties.length];
     attempts += 1;
 
-    onProgress?.(result.length, target, `${angle} / ${difficulty} çekiliyor (${attempts}/${maxAttempts})...`);
+    onProgress?.(
+      result.length,
+      target,
+      `${result.length}/${target} bulmaca toplanıyor… (${angle}, ${difficulty})`,
+    );
 
     try {
       const controller = new AbortController();
@@ -418,7 +424,7 @@ export async function fetchLichessPuzzlesFiltered(options: FetchBatchOptions): P
         onProgress?.(result.length, target, `${result.length} / ${target} bulmaca hazır`);
       }
       consecutiveEmpty = addedThisRound === 0 ? consecutiveEmpty + 1 : 0;
-      if (consecutiveEmpty >= 8) break;
+      if (consecutiveEmpty >= maxConsecutiveEmpty) break;
     } catch {
       consecutiveEmpty += 1;
     }

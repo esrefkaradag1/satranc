@@ -1,10 +1,27 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, TrainingGroup } from './types';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { resolveScopedStudents } from './lib/orgScope';
+import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, TrainingGroup, AppRole } from './types';
 import { MOCK_STUDENTS } from './constants';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
 import { homeworkAssigneesOverlap } from './lib/homeworkPanelUtils';
 import { looksLikeLichessPuzzleId } from './lib/puzzlePlayUtils';
 import { insertHomeworkAttemptSupabase, detectHomeworkAttemptPayloadStyle, setCachedHomeworkAttemptPayloadStyle } from './lib/homeworkAttemptDb.mjs';
+import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentAuth.ts';
+import { getPermissionsForAuth, hasPermission as checkPermission, defaultPermissionsForRole } from './lib/rolePermissions';
+import {
+  loadRolesLocal,
+  loadRolePermissionsLocal,
+  saveRolesLocal,
+  saveRolePermissionsLocal,
+  fetchRolesFromSupabase,
+  persistRoleToSupabase,
+  deleteRoleFromSupabase,
+  persistRolePermissionsToSupabase,
+  seedSystemRolesIfEmpty,
+  generateRoleId,
+  slugifyRoleName,
+  ROLES_UPDATED_EVENT,
+} from './lib/roleStorage';
 import { AlertCircle, CheckCircle2, Info, XCircle, X } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
@@ -16,11 +33,14 @@ export interface Toast {
 
 interface AppContextType {
   students: Student[];
+  /** Giriş yapan role göre filtrelenmiş öğrenci listesi (admin: tümü, antrenör: kendi öğrencileri, kulüp: şube) */
+  scopedStudents: Student[];
   addStudent: (student: Omit<Student, 'id'>) => Promise<Student>;
   updateStudent: (id: string, student: Partial<Student>) => void;
   deleteStudent: (id: string) => void;
   bulkDeleteStudents: (ids: string[]) => void;
   bulkUpdateStudentGroup: (ids: string[], newGroup: string) => void;
+  bulkUpdateStudentCoach: (ids: string[], coachId: string) => void;
   
   transactions: Transaction[];
   addTransaction: (transaction: Omit<Transaction, 'id'>) => void;
@@ -111,11 +131,22 @@ interface AppContextType {
   updateTournament: (id: string, patch: Partial<Tournament>) => void;
   deleteTournament: (id: string) => void;
 
+  appRoles: AppRole[];
+  rolePermissionMap: Record<string, string[]>;
+  rolesLoaded: boolean;
+  createAppRole: (role: Omit<AppRole, 'id' | 'createdAt' | 'slug'> & { slug?: string }) => AppRole;
+  updateAppRole: (id: string, patch: Partial<AppRole>) => void;
+  deleteAppRole: (id: string) => void;
+  setRolePermissions: (roleId: string, permKeys: string[]) => Promise<boolean>;
+  refreshRoles: () => Promise<void>;
+  getAuthPermissions: () => Set<string>;
+  hasAuthPermission: (key: string) => boolean;
+
   auth: AuthUser | null;
   /** Sunucu modunda veli/öğrenci girişinde API'den dönen öğrenci (farklı cihazda öğrenci listesi yok). */
   apiStudent: Student | null;
   loginAdmin: (password: string) => boolean;
-  loginCoach: (password: string) => boolean;
+  loginCoach: (identifier: string, password: string) => boolean;
   loginClub: (password: string, branch: string) => boolean;
   loginParent: (studentIdOrPhone: string, pin: string) => boolean;
   loginStudent: (studentIdOrPhone: string, pin: string) => boolean;
@@ -167,13 +198,14 @@ const STUDENT_DB_CORE_SNAKE = new Set<string>([
 
 /** İlk insert'ten sonra update ile eklenir (şemada yoksa atlanır). */
 const STUDENT_DB_OPTIONAL_SNAKE = new Set<string>([
-  'fide_id', 'username', 'password', 'photo_url', 'lichess_username', 'chess_com_username', 'parent_pin',
+  'fide_id', 'username', 'password', 'photo_url', 'lichess_username', 'lichess_access_token', 'lichess_oauth_connected_at', 'chess_com_username', 'parent_pin',
   'contact_numbers', 'father_name', 'father_phone', 'father_job', 'mother_name', 'mother_phone', 'mother_job',
   'address', 'health_info', 'school', 'teacher', 'notes', 'branch_group',
   'has_sibling_discount', 'sibling_discount_type', 'sibling_discount_percent', 'sibling_discount_amount',
   'registration_type', 'monthly_fee',
   'payment_reminder_day', 'late_payment_reminder_day', 'is_scholarship_student', 'parent_job',
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
+  'coach_id',
 ]);
 
 let _knownStudentColumns: Set<string> | null = null;
@@ -230,6 +262,7 @@ function learnStudentColumnsFromRows(rows: Record<string, unknown>[]) {
 /** Satır şemasında yok diye otomatik atlanmayacak opsiyonel kolonlar */
 const STUDENT_DB_OPTIONAL_NO_INFER_SKIP = new Set<string>([
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
+  'coach_id',
 ]);
 
 const LESSON_LOG_STORAGE_KEY = 'netchess_lesson_logs';
@@ -248,6 +281,96 @@ function loadGroupLessonLogsMap(): Record<string, StudentLessonLogEntry[]> {
     return out;
   } catch {
     return {};
+  }
+}
+
+function persistGroupLessonLogLocal(groupKey: string, entries: StudentLessonLogEntry[]) {
+  const map = loadGroupLessonLogsMap();
+  map[groupKey] = entries;
+  try {
+    localStorage.setItem(GROUP_LESSON_LOG_STORAGE_KEY, JSON.stringify(map));
+  } catch { /* quota */ }
+}
+
+function mergeGroupLessonLogsMaps(
+  a: Record<string, StudentLessonLogEntry[]>,
+  b: Record<string, StudentLessonLogEntry[]>,
+): Record<string, StudentLessonLogEntry[]> {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  const out: Record<string, StudentLessonLogEntry[]> = {};
+  for (const key of keys) {
+    out[key] = mergeLessonLogEntries(a[key] ?? [], b[key] ?? []);
+  }
+  return out;
+}
+
+function groupLessonLogsFromDbRows(rows: Record<string, unknown>[]): Record<string, StudentLessonLogEntry[]> {
+  const out: Record<string, StudentLessonLogEntry[]> = {};
+  for (const row of rows) {
+    const name = String(row.group_name ?? '').trim();
+    if (!name) continue;
+    out[name] = parseLessonLogFromDb(row.entries);
+  }
+  return out;
+}
+
+function isMissingSupabaseTableError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const msg = String(error.message ?? '').toLowerCase();
+  return (
+    error.code === 'PGRST205' ||
+    error.code === 'PGRST204' ||
+    msg.includes('could not find the table') ||
+    msg.includes('schema cache')
+  );
+}
+
+async function loadGroupLessonLogsFromSupabase(
+  sb: NonNullable<ReturnType<typeof getServiceSupabase>> | typeof supabase,
+): Promise<Record<string, StudentLessonLogEntry[]>> {
+  try {
+    const { data, error } = await sb.from('group_lesson_logs').select('group_name, entries');
+    if (error) {
+      if (!isMissingSupabaseTableError(error)) {
+        console.warn('[Supabase] group_lesson_logs yükleme:', error.message);
+      }
+      return {};
+    }
+    return groupLessonLogsFromDbRows((data ?? []) as Record<string, unknown>[]);
+  } catch (e) {
+    console.warn('[Supabase] group_lesson_logs yükleme hatası:', e);
+    return {};
+  }
+}
+
+function applyGroupLessonLogsMerge(
+  fromDb: Record<string, StudentLessonLogEntry[]>,
+): Record<string, StudentLessonLogEntry[]> {
+  return mergeGroupLessonLogsMaps(loadGroupLessonLogsMap(), fromDb);
+}
+
+async function migrateLocalGroupLessonLogsToSupabase(
+  sb: NonNullable<ReturnType<typeof getServiceSupabase>>,
+  merged: Record<string, StudentLessonLogEntry[]>,
+): Promise<void> {
+  const local = loadGroupLessonLogsMap();
+  const keys = Object.keys(local).filter((k) => (local[k]?.length ?? 0) > 0);
+  if (keys.length === 0) return;
+  for (const key of keys) {
+    const entries = merged[key] ?? [];
+    if (entries.length === 0) continue;
+    const { error } = await sb.from('group_lesson_logs').upsert(
+      {
+        group_name: key,
+        entries,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'group_name' },
+    );
+    if (error) {
+      if (isMissingSupabaseTableError(error)) return;
+      console.warn('[Supabase] group_lesson_logs migrate:', key, error.message);
+    }
   }
 }
 
@@ -486,6 +609,7 @@ function dbToStudent(row: Record<string, unknown>): Student {
       out.trainingGroupId = v;
       continue;
     }
+    if (k === 'lichess_access_token') continue;
     const camel = k.replace(/_([a-z])/g, (_, c) => (c as string).toUpperCase());
     out[camel] = v;
   }
@@ -948,6 +1072,51 @@ function clubToDb(club: Club): Record<string, unknown> {
       ? club.activeDays
       : [true, true, true, true, false, false, false],
     login_password: club.loginPassword ?? null,
+    role_id: club.roleId ?? null,
+  };
+}
+
+function coachToDb(coach: Coach): Record<string, unknown> {
+  return {
+    id: coach.id,
+    name: coach.name,
+    branch: coach.branch,
+    phone: coach.phone ?? null,
+    email: coach.email ?? null,
+    password: coach.password ?? null,
+    photo_url: coach.photoUrl ?? null,
+    title: coach.title ?? null,
+    specialization: coach.specialization ?? null,
+    bio: coach.bio ?? null,
+    birth_date: coach.birthDate ?? null,
+    fide_id: coach.fideId ?? null,
+    lichess_username: coach.lichessUsername ?? null,
+    role_id: coach.roleId ?? null,
+  };
+}
+
+function dbToCoach(row: Record<string, unknown>): Coach {
+  const r = row as Record<string, unknown>;
+  return {
+    id: String(r.id ?? ''),
+    name: String(r.name ?? ''),
+    branch: String(r.branch ?? ''),
+    phone: r.phone != null ? String(r.phone) : undefined,
+    email: r.email != null ? String(r.email) : undefined,
+    password: r.password != null ? String(r.password) : undefined,
+    photoUrl: r.photo_url != null ? String(r.photo_url) : r.photoUrl != null ? String(r.photoUrl) : undefined,
+    title: r.title != null ? String(r.title) : undefined,
+    specialization: r.specialization != null ? String(r.specialization) : undefined,
+    bio: r.bio != null ? String(r.bio) : undefined,
+    birthDate: r.birth_date != null ? String(r.birth_date) : r.birthDate != null ? String(r.birthDate) : undefined,
+    fideId: r.fide_id != null ? String(r.fide_id) : r.fideId != null ? String(r.fideId) : undefined,
+    lichessUsername:
+      r.lichess_username != null
+        ? String(r.lichess_username)
+        : r.lichessUsername != null
+          ? String(r.lichessUsername)
+          : undefined,
+    roleId: r.role_id != null ? String(r.role_id) : r.roleId != null ? String(r.roleId) : undefined,
   };
 }
 
@@ -963,6 +1132,7 @@ function dbToClub(row: Record<string, unknown>): Club {
     address: r.address != null ? String(r.address) : undefined,
     activeDays,
     loginPassword: r.login_password != null ? String(r.login_password) : r.loginPassword != null ? String(r.loginPassword) : undefined,
+    roleId: r.role_id != null ? String(r.role_id) : r.roleId != null ? String(r.roleId) : undefined,
   };
 }
 
@@ -1082,6 +1252,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadJSON<Tournament[]>('netchess_tournaments', [])
   );
 
+  const [appRoles, setAppRoles] = useState<AppRole[]>(() => (useSupabase ? [] : loadRolesLocal()));
+  const [rolePermissionMap, setRolePermissionMap] = useState<Record<string, string[]>>(() =>
+    useSupabase ? {} : loadRolePermissionsLocal(),
+  );
+  const [rolesLoaded, setRolesLoaded] = useState(() => !useSupabase);
+
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const showToast = useCallback((message: string, type: ToastType = 'info') => {
@@ -1110,6 +1286,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return null;
     }
   });
+
+  const scopedStudents = useMemo(
+    () => resolveScopedStudents(auth, students, trainingGroups),
+    [auth, students, trainingGroups],
+  );
 
   const [stockfishReady, setStockfishReady] = useState(false);
   const [stockfishLoading, setStockfishLoading] = useState(false);
@@ -1152,18 +1333,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   }, []);
 
-  const loginCoach = useCallback((password: string): boolean => {
-    if (password !== COACH_PASSWORD) return false;
-    setAuth({ role: 'coach', branch: 'Merkez' });
-    return true;
-  }, []);
+  const loginCoach = useCallback((identifier: string, password: string): boolean => {
+    const idRaw = identifier.trim();
+    const idLower = idRaw.toLowerCase();
+    const idDigits = idRaw.replace(/\D/g, '');
+    const pwd = password.trim();
+    if (!pwd) return false;
+
+    const coach = coaches.find((c) => {
+      const email = (c.email || '').trim().toLowerCase();
+      const phone = (c.phone || '').replace(/\D/g, '');
+      const name = (c.name || '').trim().toLowerCase();
+      const matchesId =
+        (idLower && email === idLower) ||
+        (idLower && name === idLower) ||
+        (idDigits.length >= 4 && phone === idDigits) ||
+        (idDigits.length >= 4 && phone.endsWith(idDigits));
+      if (!matchesId) return false;
+      const expected = (c.password && c.password.trim()) ? c.password.trim() : COACH_PASSWORD;
+      return pwd === expected;
+    });
+
+    if (coach) {
+      setAuth({ role: 'coach', coachId: coach.id, branch: coach.branch || 'Merkez' });
+      return true;
+    }
+
+    // Geriye dönük: tanımlayıcı boş veya eşleşme yoksa eski ortak parola
+    if (!idRaw && pwd === COACH_PASSWORD) {
+      setAuth({ role: 'coach', branch: 'Merkez' });
+      return true;
+    }
+    if (pwd === COACH_PASSWORD && coaches.length === 0) {
+      setAuth({ role: 'coach', branch: 'Merkez' });
+      return true;
+    }
+
+    return false;
+  }, [coaches]);
 
   const loginClub = useCallback((password: string, branch: string): boolean => {
     const branchTrim = (branch || 'Merkez').trim();
     const club = clubs.find(c => (c.name || '').trim() === branchTrim);
     const expectedPassword = (club?.loginPassword != null && club.loginPassword !== '') ? club.loginPassword : CLUB_PASSWORD;
     if (password !== expectedPassword) return false;
-    setAuth({ role: 'club', branch: branchTrim });
+    setAuth({ role: 'club', branch: branchTrim, clubId: club?.id });
     return true;
   }, [clubs]);
 
@@ -1205,54 +1419,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   }, [students]);
 
-  /** Öğrenci girişi: öğrenci no (1, 2, 3... veya id), kullanıcı adı veya veli telefonu + PIN ile aynı arama, role 'student' olarak kaydedilir */
+  /** Öğrenci girişi: öğrenci no, kullanıcı adı veya veli telefonu + şifre/PIN */
   const loginStudent = useCallback((studentIdOrPhone: string, pin: string): boolean => {
-    const trimmed = studentIdOrPhone.trim();
-    const trimmedLower = trimmed.toLowerCase();
-    const trimmedDigits = trimmed.replace(/\D/g, '');
-    const allPhones = (s: Student) =>
-      [
-        s.parentPhone,
-        s.fatherPhone,
-        s.motherPhone,
-        ...(s.contactNumbers ?? []),
-      ].filter(Boolean) as string[];
-    const student = students.find((s) => {
-      // Match by student ID
-      if (s.id === trimmed) return true;
-      // Match by display student no (1, 2, 3...)
-      const num = parseInt(trimmed, 10);
-      if (!Number.isNaN(num) && getDisplayStudentNo(s, students) === num) return true;
-      // Match by username
-      if (s.username && s.username.toLowerCase() === trimmedLower) return true;
-      // Match by phone number
-      const phones = allPhones(s);
-      return phones.some((tel) => {
-        const digits = tel.replace(/\D/g, '');
-        return digits.length >= 7 && (digits.endsWith(trimmedDigits) || trimmedDigits.endsWith(digits.slice(-10)));
-      });
-    });
-    if (!student) return false;
-    // Check dedicated student password first
-    if (student.password && student.password === pin) {
-      setAuth({ role: 'student', studentId: student.id });
-      return true;
-    }
-    if (student.parentPin && student.parentPin === pin) {
-      setAuth({ role: 'student', studentId: student.id });
-      return true;
-    }
-    const last4 = pin.replace(/\D/g, '').slice(-4);
-    const phonesForPin = allPhones(student);
-    const hasMatch = last4.length >= 4 && phonesForPin.some((tel) => {
-      const digits = tel.replace(/\D/g, '');
-      return digits.length >= 4 && digits.slice(-4) === last4;
-    });
-    if (hasMatch) {
-      setAuth({ role: 'student', studentId: student.id });
-      return true;
-    }
-    return false;
+    const student = findStudentForLogin(students, studentIdOrPhone);
+    if (!student || !verifyStudentLoginPin(student, pin)) return false;
+    setAuth({ role: 'student', studentId: student.id });
+    return true;
   }, [students]);
 
   const [apiStudent, setApiStudent] = useState<Student | null>(() => {
@@ -1280,6 +1452,165 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const hydrated = useRef(false);
+
+  const refreshRoles = useCallback(async () => {
+    if (useSupabase) {
+      await seedSystemRolesIfEmpty();
+      const remote = await fetchRolesFromSupabase();
+      if (remote) {
+        setAppRoles(remote.roles);
+        setRolePermissionMap(remote.permissions);
+        setRolesLoaded(true);
+        return;
+      }
+      console.error('[roles] Supabase yükleme başarısız');
+      setRolesLoaded(true);
+      return;
+    }
+    setAppRoles(loadRolesLocal());
+    setRolePermissionMap(loadRolePermissionsLocal());
+    setRolesLoaded(true);
+  }, [useSupabase]);
+
+  useEffect(() => {
+    void refreshRoles();
+    const onRoles = () => void refreshRoles();
+    window.addEventListener(ROLES_UPDATED_EVENT, onRoles);
+    return () => window.removeEventListener(ROLES_UPDATED_EVENT, onRoles);
+  }, [refreshRoles]);
+
+  useEffect(() => {
+    if (auth) void refreshRoles();
+  }, [auth?.role, auth?.coachId, auth?.clubId, refreshRoles]);
+
+  useEffect(() => {
+    if (!hydrated.current || useSupabase) return;
+    saveRolesLocal(appRoles);
+    saveRolePermissionsLocal(rolePermissionMap);
+  }, [appRoles, rolePermissionMap, useSupabase]);
+
+  const createAppRole = useCallback(
+    (input: Omit<AppRole, 'id' | 'createdAt' | 'slug'> & { slug?: string }): AppRole => {
+      const baseSlug = slugifyRoleName(input.slug ?? input.name) || 'rol';
+      let slug = baseSlug;
+      let n = 1;
+      while (appRoles.some((r) => r.slug === slug)) {
+        slug = `${baseSlug}-${n++}`;
+      }
+      const role: AppRole = {
+        id: generateRoleId(),
+        slug,
+        name: input.name.trim(),
+        panel: input.panel,
+        description: input.description?.trim() || undefined,
+        color: input.color,
+        isSystem: false,
+        createdAt: new Date().toISOString(),
+      };
+      setAppRoles((prev) => [...prev, role]);
+      const defaultPerms = defaultPermissionsForRole(input.panel === 'parent' ? 'parent' : input.panel);
+      setRolePermissionMap((prev) => ({ ...prev, [role.id]: defaultPerms }));
+      if (useSupabase) {
+        void persistRoleToSupabase(role);
+        void persistRolePermissionsToSupabase(role.id, defaultPerms);
+      }
+      return role;
+    },
+    [appRoles, useSupabase],
+  );
+
+  const updateAppRole = useCallback(
+    (id: string, patch: Partial<AppRole>) => {
+      setAppRoles((prev) => {
+        const next = prev.map((r) => (r.id === id ? { ...r, ...patch } : r));
+        const updated = next.find((r) => r.id === id);
+        if (updated && useSupabase) void persistRoleToSupabase(updated);
+        return next;
+      });
+    },
+    [useSupabase],
+  );
+
+  const deleteAppRole = useCallback(
+    (id: string) => {
+      const role = appRoles.find((r) => r.id === id);
+      if (!role || role.isSystem) return;
+      setAppRoles((prev) => prev.filter((r) => r.id !== id));
+      setRolePermissionMap((prev) => {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      });
+      setCoaches((prev) => prev.map((c) => (c.roleId === id ? { ...c, roleId: undefined } : c)));
+      setClubs((prev) => prev.map((c) => (c.roleId === id ? { ...c, roleId: undefined } : c)));
+      if (useSupabase) void deleteRoleFromSupabase(id);
+    },
+    [appRoles, useSupabase],
+  );
+
+  const setRolePermissions = useCallback(
+    async (roleId: string, permKeys: string[]) => {
+      const unique = [...new Set(permKeys)];
+
+      if (useSupabase) {
+        const result = await persistRolePermissionsToSupabase(roleId, unique);
+        if (!result.ok) {
+          showToast(
+            result.error
+              ? `İzinler kaydedilemedi: ${result.error}`
+              : 'İzinler kaydedilemedi. Supabase yazma izni kontrol edin.',
+            'error',
+          );
+          return false;
+        }
+      } else {
+        saveRolePermissionsLocal({ ...rolePermissionMap, [roleId]: unique });
+      }
+
+      setRolePermissionMap((prev) => ({ ...prev, [roleId]: unique }));
+      window.dispatchEvent(new Event(ROLES_UPDATED_EVENT));
+      return true;
+    },
+    [useSupabase, rolePermissionMap, showToast],
+  );
+
+  const getAuthPermissions = useCallback((): Set<string> => {
+    if (!auth) return new Set();
+    let customRoleId: string | undefined;
+    if (auth.role === 'coach') {
+      const coach =
+        (auth.coachId ? coaches.find((c) => c.id === auth.coachId) : undefined) ??
+        coaches.find((c) => (c.branch || '').trim() === (auth.branch || '').trim());
+      customRoleId = coach?.roleId;
+    } else if (auth.role === 'club') {
+      const club =
+        (auth.clubId ? clubs.find((c) => c.id === auth.clubId) : undefined) ??
+        clubs.find((c) => (c.name || '').trim() === (auth.branch || '').trim());
+      customRoleId = club?.roleId;
+    }
+    return getPermissionsForAuth(auth, rolePermissionMap, customRoleId, rolesLoaded);
+  }, [auth, coaches, clubs, rolePermissionMap, rolesLoaded]);
+
+  const hasAuthPermission = useCallback(
+    (key: string) => {
+      if (!auth) return false;
+      let customRoleId: string | undefined;
+      if (auth.role === 'coach') {
+        const coach =
+          (auth.coachId ? coaches.find((c) => c.id === auth.coachId) : undefined) ??
+          coaches.find((c) => (c.branch || '').trim() === (auth.branch || '').trim());
+        customRoleId = coach?.roleId;
+      } else if (auth.role === 'club') {
+        const club =
+          (auth.clubId ? clubs.find((c) => c.id === auth.clubId) : undefined) ??
+          clubs.find((c) => (c.name || '').trim() === (auth.branch || '').trim());
+        customRoleId = club?.roleId;
+      }
+      return checkPermission(auth, rolePermissionMap, key, customRoleId, rolesLoaded);
+    },
+    [auth, coaches, clubs, rolePermissionMap, rolesLoaded],
+  );
+
   const [initialDataLoaded, setInitialDataLoaded] = useState(() => !isSupabaseBackend());
 
   useEffect(() => {
@@ -1353,7 +1684,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (galRes.data) setGallery((galRes.data as Record<string, unknown>[]).map(dbToGalleryItem));
         if (actRes.data) setActivityLogs(actRes.data as ActivityLog[]);
         if (schedRes.data) setScheduleEntries((schedRes.data as Record<string, unknown>[]).map(dbToScheduleEntry));
-        if (coachRes.data) setCoaches(coachRes.data as Coach[]);
+        if (coachRes.data) setCoaches((coachRes.data as Record<string, unknown>[]).map(dbToCoach));
         if (perfRes.data) setPerformanceAnalyses((perfRes.data as Record<string, unknown>[]).map(dbToPerformanceAnalysis));
         if (tourRes.data) setTournaments((tourRes.data as Record<string, unknown>[]).map(dbToTournament));
         if (clubsRes.data) setClubs((clubsRes.data as Record<string, unknown>[]).map(dbToClub));
@@ -1364,6 +1695,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         } catch {
           /* tablo yoksa yerel liste kullanılır */
+        }
+
+        try {
+          const gllClient = getServiceSupabase() ?? sb;
+          const fromDb = await loadGroupLessonLogsFromSupabase(gllClient);
+          const merged = applyGroupLessonLogsMerge(fromDb);
+          setGroupLessonLogs(merged);
+          const gllWrite = getServiceSupabase();
+          if (gllWrite) void migrateLocalGroupLessonLogsToSupabase(gllWrite, merged);
+        } catch {
+          /* yerel yedek */
         }
 
       } catch (e) {
@@ -1636,10 +1978,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (galRes.data) setGallery((galRes.data as Record<string, unknown>[]).map(dbToGalleryItem));
         if (actRes.data) setActivityLogs(actRes.data as ActivityLog[]);
         if (schedRes.data) setScheduleEntries((schedRes.data as Record<string, unknown>[]).map(dbToScheduleEntry));
-        if (coachRes.data) setCoaches(coachRes.data as Coach[]);
+        if (coachRes.data) setCoaches((coachRes.data as Record<string, unknown>[]).map(dbToCoach));
         if (perfRes.data) setPerformanceAnalyses((perfRes.data as Record<string, unknown>[]).map(dbToPerformanceAnalysis));
         if (tourRes.data) setTournaments((tourRes.data as Record<string, unknown>[]).map(dbToTournament));
         if (clubsRes.data) setClubs((clubsRes.data as Record<string, unknown>[]).map(dbToClub));
+        try {
+          const fromDb = await loadGroupLessonLogsFromSupabase(sb);
+          setGroupLessonLogs(applyGroupLessonLogsMerge(fromDb));
+        } catch {
+          /* yerel yedek */
+        }
         return;
       }
       const rawSchedule = localStorage.getItem('netchess_schedule_entries');
@@ -1771,18 +2119,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addActivityLog({ user: CURRENT_USER, action: 'Antrenör Eklendi', target: coach.name, type: 'success' });
     const sb = getServiceSupabase();
     if (sb) try {
-      const { error } = await sb.from('coaches').insert(newCoach);
+      const { error } = await sb.from('coaches').insert(coachToDb(newCoach));
       if (error) console.error('Supabase coaches insert error:', error);
     } catch (err) { console.error('Supabase coaches throw error:', err); }
   }, [addActivityLog]);
   const updateCoach = useCallback(async (id: string, fields: Partial<Coach>) => {
-    setCoaches(prev => prev.map(c => c.id === id ? { ...c, ...fields } : c));
+    const patch = { ...fields };
+    if (patch.password === '') delete patch.password;
+    setCoaches(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
     const sb = getServiceSupabase();
     if (sb) try {
-      const { error } = await sb.from('coaches').update(fields).eq('id', id);
+      const current = coaches.find((c) => c.id === id);
+      const merged = current ? { ...current, ...patch } : ({ id, ...patch } as Coach);
+      const { error } = await sb.from('coaches').update(coachToDb(merged)).eq('id', id);
       if (error) console.error('Supabase coaches update error:', error);
     } catch (err) { console.error('Supabase coaches throw error:', err); }
-  }, []);
+  }, [coaches]);
   const deleteCoach = useCallback(async (id: string) => {
     setCoaches(prev => {
       const found = prev.find(c => c.id === id);
@@ -1986,6 +2338,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (error) console.error('Supabase students bulk update error:', error);
     } catch (err) { console.error('Supabase students bulk throw error:', err); }
   }, [addActivityLog]);
+
+  const bulkUpdateStudentCoach = useCallback(async (ids: string[], coachId: string) => {
+    const coach = coaches.find((c) => c.id === coachId);
+    const coachLabel = coach?.name ?? coachId;
+    setStudents((prev) => prev.map((s) => (ids.includes(s.id) ? { ...s, coachId } : s)));
+    addActivityLog({
+      user: CURRENT_USER,
+      action: 'Antrenör Atandı',
+      target: `${ids.length} öğrenci → ${coachLabel}`,
+      type: 'info',
+    });
+    const sb = getServiceSupabase();
+    if (sb) {
+      try {
+        const { error } = await sb.from('students').update({ coach_id: coachId }).in('id', ids);
+        if (error) console.error('Supabase students bulk coach update error:', error);
+      } catch (err) {
+        console.error('Supabase students bulk coach throw error:', err);
+      }
+    }
+  }, [addActivityLog, coaches]);
 
   const addTransaction = useCallback(async (transaction: Omit<Transaction, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
@@ -2583,10 +2956,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, [addActivityLog, syncGroupNames]);
 
-  const updateGroupLessonLog = useCallback((groupKey: string, entries: StudentLessonLogEntry[]) => {
+  const updateGroupLessonLog = useCallback(async (groupKey: string, entries: StudentLessonLogEntry[]) => {
     const key = groupKey.trim();
     if (!key) return;
     setGroupLessonLogs((prev) => ({ ...prev, [key]: entries }));
+    persistGroupLessonLogLocal(key, entries);
+
+    const sb = getServiceSupabase();
+    if (sb) {
+      const { error } = await sb.from('group_lesson_logs').upsert(
+        {
+          group_name: key,
+          entries,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'group_name' },
+      );
+      if (error) {
+        if (isMissingSupabaseTableError(error)) {
+          showToast(
+            'Grup konuları bu cihazda saklandı. Supabase\'de group_lesson_logs tablosunu oluşturun (supabase_group_lesson_logs.sql).',
+            'warning',
+          );
+        } else {
+          console.error('[Supabase] group_lesson_logs upsert:', error.message);
+          showToast('Grup konuları cihazda saklandı; sunucuya yazılamadı.', 'warning');
+        }
+        return;
+      }
+    }
     showToast('Grup ders konuları kaydedildi', 'success');
   }, [showToast]);
 
@@ -2610,8 +3008,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{ 
-      students, addStudent, updateStudent, deleteStudent,
-      bulkDeleteStudents, bulkUpdateStudentGroup,
+      students, scopedStudents, addStudent, updateStudent, deleteStudent,
+      bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach,
       transactions, addTransaction, updateTransaction, removeTransaction,
       attendanceRecords, addAttendanceRecord,
       lessons, addLesson,
@@ -2634,6 +3032,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       performanceAnalyses, addPerformanceAnalysis, updatePerformanceAnalysis, deletePerformanceAnalysis,
       coachAiReports, addCoachAiReport, deleteCoachAiReport,
       tournaments, addTournament, updateTournament, deleteTournament,
+      appRoles, rolePermissionMap, rolesLoaded, createAppRole, updateAppRole, deleteAppRole, setRolePermissions, refreshRoles,
+      getAuthPermissions, hasAuthPermission,
       auth, apiStudent, loginAdmin, loginCoach, loginClub, loginParent, loginStudent, logout, setAuthWithStudent, refreshFromStorage,
       refreshStudentsFromSupabase,
       initialDataLoaded,

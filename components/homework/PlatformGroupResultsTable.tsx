@@ -56,8 +56,8 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
             <tr className="text-[10px] text-slate-500 uppercase tracking-wider border-b border-white/5">
               <th className="text-left py-2.5 px-4 font-bold">Öğrenci</th>
               <th className="text-center py-2.5 px-2 font-bold">Maç</th>
-              <th className="text-center py-2.5 px-2 font-bold">Doğru</th>
-              <th className="text-center py-2.5 px-2 font-bold">Yanlış</th>
+              <th className="text-center py-2.5 px-2 font-bold" title="Platform bulmaca doğru">Bulmaca doğru</th>
+              <th className="text-center py-2.5 px-2 font-bold" title="Platform bulmaca yanlış">Bulmaca yanlış</th>
               <th className="text-center py-2.5 px-2 font-bold hidden sm:table-cell">Toplam süre</th>
               <th className="text-center py-2.5 px-2 font-bold">Durum</th>
               <th className="text-center py-2.5 px-3 font-bold w-10" />

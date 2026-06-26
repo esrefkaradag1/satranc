@@ -42,8 +42,15 @@ async function lichessApiFetch(
   init?: RequestInit,
   params?: URLSearchParams,
 ): Promise<Response> {
-  const proxyUrl = lichessProxyUrl(apiPath, params);
-  return fetchWithTimeout(proxyUrl, init);
+  return runLichessThrottled(async () => {
+    if (isLichessGloballyRateLimited()) {
+      return new Response(null, { status: 429, statusText: 'Lichess rate limit (bekleme)' });
+    }
+    const proxyUrl = lichessProxyUrl(apiPath, params);
+    const res = await fetchWithTimeout(proxyUrl, init);
+    if (res.status === 429) markLichessRateLimited();
+    return res;
+  });
 }
 
 async function chessComGamesFetch(username: string, year: string, month: string): Promise<Response> {
@@ -53,7 +60,45 @@ async function chessComGamesFetch(username: string, year: string, month: string)
 }
 const LICHESS_ACTIVITY_CACHE_TTL_MS = 5 * 60 * 1000;
 const LICHESS_ACTIVITY_RATE_LIMIT_MS = 5 * 60 * 1000;
+/** Lichess public API — ardışık istekler arası minimum süre (429 önleme) */
+const LICHESS_MIN_REQUEST_GAP_MS = 1200;
+const LICHESS_GLOBAL_BACKOFF_MS = 90_000;
 const CHESSCOM_API = CHESSCOM_DIRECT_API;
+
+let lichessRequestChain: Promise<unknown> = Promise.resolve();
+let lichessLastRequestDoneAt = 0;
+let lichessGlobalBackoffUntil = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+/** Tüm Lichess proxy isteklerini sıraya alır; Lichess rate limit (429) riskini azaltır. */
+async function runLichessThrottled<T>(fn: () => Promise<T>): Promise<T> {
+  const task = async () => {
+    const now = Date.now();
+    const backoffWait = lichessGlobalBackoffUntil - now;
+    if (backoffWait > 0) await sleep(backoffWait);
+    const gapWait = lichessLastRequestDoneAt + LICHESS_MIN_REQUEST_GAP_MS - Date.now();
+    if (gapWait > 0) await sleep(gapWait);
+    try {
+      return await fn();
+    } finally {
+      lichessLastRequestDoneAt = Date.now();
+    }
+  };
+  const next = lichessRequestChain.then(task, task);
+  lichessRequestChain = next.catch(() => {});
+  return next;
+}
+
+function markLichessRateLimited(): void {
+  lichessGlobalBackoffUntil = Date.now() + LICHESS_GLOBAL_BACKOFF_MS;
+}
+
+export function isLichessGloballyRateLimited(): boolean {
+  return Date.now() < lichessGlobalBackoffUntil;
+}
 
 type LichessActivityCacheEntry = {
   fetchedAt: number;
@@ -524,11 +569,13 @@ export async function fetchLichessGamesForDay(
   const [y, m, d] = target.split('-').map(Number);
   if (!y || !m || !d) return [];
   const since = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+  const until = new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
   try {
     const params = new URLSearchParams();
-    params.set('max', '20');
+    params.set('max', '100');
     params.set('moves', '0');
     params.set('since', String(since));
+    params.set('until', String(until));
     const res = await lichessApiFetch(
       `games/user/${encodeURIComponent(trimmed)}`,
       { headers: { Accept: 'application/x-ndjson' } },
@@ -1150,11 +1197,14 @@ export async function fetchLichessDayStats(
     const activityRateLimited = isLichessActivityRateLimited(username);
     let games = lichessGamesForDayFromActivity(activities, day);
     const puzzles = lichessPuzzleStatsForDayFromActivity(activities, day);
-    if (games === 0 && (activities.length === 0 || activityRateLimited)) {
+    if (games === 0 && activities.length === 0 && !activityRateLimited) {
       games = await fetchLichessGamesCountForDay(username, day);
     }
     return { games, puzzles, activityRateLimited: isLichessActivityRateLimited(username) };
   } catch {
+    if (isLichessGloballyRateLimited()) {
+      return { games: 0, puzzles: { count: 0, passed: 0, failed: 0 }, activityRateLimited: true };
+    }
     const games = await fetchLichessGamesCountForDay(username, day).catch(() => 0);
     return { games, puzzles: { count: 0, passed: 0, failed: 0 }, activityRateLimited: true };
   }

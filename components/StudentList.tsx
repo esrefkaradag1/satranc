@@ -11,6 +11,7 @@ import {
  Users,
  UserCheck,
  UserX,
+ UserCog,
  GraduationCap,
  FileText,
  QrCode,
@@ -30,10 +31,13 @@ import type { StudentApplication } from'../lib/applicationTypes';
 import { APPLICATIONS_UPDATED_EVENT, loadApplicationsAsync } from'../services/applicationStorage';
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
 import { ResponsiveTable } from './ui/ResponsiveTable';
+import { getCoachNamesForStudent, coachesForClub } from '../lib/orgScope';
+import { normalizeClubKey } from '../lib/clubScope';
 
 const PLACEHOLDER_OFFICE = 'Şube Seçiniz';
 const PLACEHOLDER_DISCIPLINE = 'Branş Seçiniz';
 const PLACEHOLDER_GROUP = 'Grup Seçiniz';
+const PLACEHOLDER_COACH = 'Antrenör Seçiniz';
 
 const BRANCH_OFFICES = ['Tüm Şubeler', 'Merkez', 'Çayyolu', 'Ümitköy'];
 const BRANCHES = ['Tüm Branşlar', 'Satranç', 'Robotik', 'Kodlama'];
@@ -45,20 +49,26 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, branchOffices, disciplines, groups, trainingGroups, disciplineBranches } = useApp();
+ const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, disciplines, groups, trainingGroups, disciplineBranches, coaches, auth } = useApp();
+ const isAdmin = auth?.role === 'admin';
+ const isCoach = auth?.role === 'coach';
+ const baseStudents = scopedStudents;
  const [searchTerm, setSearchTerm] = useState('');
  const [filterBranchOffice, setFilterBranchOffice] = useState(BRANCH_OFFICES[0]);
  const [filterBranch, setFilterBranch] = useState(BRANCHES[0]);
  const [filterGroup, setFilterGroup] = useState(GROUPS[0]);
  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
  const [filterScholarship, setFilterScholarship] = useState<'all' | 'yes' | 'no'>('all');
+ const [filterCoach, setFilterCoach] = useState('Tüm Antrenörler');
  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(true);
 
  const [isModalOpen, setIsModalOpen] = useState(false);
  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
  const [selectedIds, setSelectedIds] = useState<string[]>([]);
  const [isBulkGroupModalOpen, setIsBulkGroupModalOpen] = useState(false);
+ const [isBulkCoachModalOpen, setIsBulkCoachModalOpen] = useState(false);
  const [newBulkGroup, setNewBulkGroup] = useState('');
+ const [newBulkCoachId, setNewBulkCoachId] = useState('');
  const [signedFormsStudent, setSignedFormsStudent] = useState<Student | null>(null);
  const [applications, setApplications] = useState<StudentApplication[]>([]);
 
@@ -102,6 +112,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  elo: 0,
  ukd: 0,
  paymentStatus: 'Unpaid'as'Paid' | 'Unpaid' | 'Partial',
+ coachId: PLACEHOLDER_COACH,
  });
 
  const mergedOffices = useMemo(
@@ -133,8 +144,20 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   return [PLACEHOLDER_GROUP, ...groups.filter((g) => g !== 'Tüm Gruplar')];
  }, [formData.branchOffice, formData.branch, trainingGroups, groups]);
 
+ const editCoachOptions = useMemo(() => {
+  const office = formData.branchOffice !== PLACEHOLDER_OFFICE ? formData.branchOffice : '';
+  const clubCoaches = office ? coachesForClub(coaches, office) : coaches;
+  const names = clubCoaches.map((c) => ({ id: c.id, name: c.name }));
+  return [PLACEHOLDER_COACH, ...names];
+ }, [coaches, formData.branchOffice]);
+
+ const coachFilterOptions = useMemo(() => {
+  const names = coaches.map((c) => c.name).sort((a, b) => a.localeCompare(b, 'tr'));
+  return ['Tüm Antrenörler', ...names];
+ }, [coaches]);
+
  const filteredStudents = useMemo(() => {
- return students.filter((s) => {
+ return baseStudents.filter((s) => {
  const matchSearch =
  !searchTerm ||
  s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -154,26 +177,32 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  filterScholarship === 'all' ||
  (filterScholarship === 'yes' && s.isScholarshipStudent) ||
  (filterScholarship === 'no' && !s.isScholarshipStudent);
- return matchSearch && matchBranchOffice && matchBranch && matchGroup && matchStatus && matchScholarship;
+ const matchCoach =
+ filterCoach === 'Tüm Antrenörler' ||
+ getCoachNamesForStudent(s, coaches, trainingGroups).includes(filterCoach);
+ return matchSearch && matchBranchOffice && matchBranch && matchGroup && matchStatus && matchScholarship && matchCoach;
  });
  }, [
- students,
+ baseStudents,
+ coaches,
+ trainingGroups,
  searchTerm,
  filterBranchOffice,
  filterBranch,
  filterGroup,
  filterStatus,
  filterScholarship,
+ filterCoach,
  ]);
 
  const stats = useMemo(() => {
- const total = students.length;
- const active = students.filter((s) => s.status !== 'inactive').length;
- const inactive = students.filter((s) => s.status === 'inactive').length;
- const scholarship = students.filter((s) => s.isScholarshipStudent).length;
- const privateLesson = students.filter((s) => s.group?.toLowerCase().includes('özel') || s.registrationType === 'package').length;
+ const total = baseStudents.length;
+ const active = baseStudents.filter((s) => s.status !== 'inactive').length;
+ const inactive = baseStudents.filter((s) => s.status === 'inactive').length;
+ const scholarship = baseStudents.filter((s) => s.isScholarshipStudent).length;
+ const privateLesson = baseStudents.filter((s) => s.group?.toLowerCase().includes('özel') || s.registrationType === 'package').length;
  return { total, active, inactive, scholarship, privateLesson };
- }, [students]);
+ }, [baseStudents]);
 
  const clearFilters = () => {
  setSearchTerm('');
@@ -182,6 +211,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setFilterGroup(GROUPS[0]);
  setFilterStatus('all');
  setFilterScholarship('all');
+ setFilterCoach('Tüm Antrenörler');
  };
 
  const toggleSelectAll = () => {
@@ -214,6 +244,29 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setSelectedIds([]);
  };
 
+ const bulkCoachOptions = useMemo(() => {
+  const selected = students.filter((s) => selectedIds.includes(s.id));
+  const offices = new Set(selected.map((s) => normalizeClubKey(s.branchOffice)));
+  const matched = coaches.filter((c) => offices.has(normalizeClubKey(c.branch)));
+  const list = matched.length > 0 ? matched : coaches;
+  return [...list].sort(
+    (a, b) => a.branch.localeCompare(b.branch, 'tr') || a.name.localeCompare(b.name, 'tr'),
+  );
+ }, [students, selectedIds, coaches]);
+
+ const handleBulkUpdateCoach = () => {
+  if (!newBulkCoachId) return;
+  bulkUpdateStudentCoach(selectedIds, newBulkCoachId);
+  setIsBulkCoachModalOpen(false);
+  setNewBulkCoachId('');
+  setSelectedIds([]);
+ };
+
+ const openBulkCoachModal = () => {
+  setNewBulkCoachId(bulkCoachOptions[0]?.id ?? '');
+  setIsBulkCoachModalOpen(true);
+ };
+
  const handleOpenModal = (student?: Student) => {
  if (student) {
  setEditingStudent(student);
@@ -226,6 +279,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  elo: student.elo,
  ukd: student.ukd,
  paymentStatus: student.paymentStatus,
+ coachId: student.coachId || (isCoach && auth?.coachId ? auth.coachId : PLACEHOLDER_COACH),
  });
  } else {
  setEditingStudent(null);
@@ -238,6 +292,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  elo: 0,
  ukd: 0,
  paymentStatus: 'Unpaid',
+ coachId: PLACEHOLDER_COACH,
  });
  }
  setIsModalOpen(true);
@@ -252,10 +307,13 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    const tg = findTrainingGroupByName(trainingGroups, groupName, { branchOffice: office, discipline });
    if (!tg) return next;
    const defaults = applyGroupDefaultsToStudent(tg, disciplineBranches);
+   const autoCoachId =
+    tg.coachIds?.length === 1 ? tg.coachIds[0] : prev.coachId !== PLACEHOLDER_COACH ? prev.coachId : PLACEHOLDER_COACH;
    return {
     ...next,
     branch: defaults.branch || prev.branch,
     branchOffice: defaults.branchOffice || prev.branchOffice,
+    coachId: autoCoachId || PLACEHOLDER_COACH,
    };
   });
  };
@@ -270,6 +328,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    ? findTrainingGroupByName(trainingGroups, groupName, { branchOffice: office, discipline })
    : undefined;
   const groupDefaults = tg ? applyGroupDefaultsToStudent(tg, disciplineBranches) : null;
+  const coachId = formData.coachId !== PLACEHOLDER_COACH ? formData.coachId : undefined;
   updateStudent(editingStudent.id, {
    name: formData.name,
    level: formData.level,
@@ -280,6 +339,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    branch: discipline,
    group: groupName ?? '',
    trainingGroupId: tg?.id,
+   coachId,
    ...(groupDefaults
     ? {
        monthlyFee: groupDefaults.monthlyFee,
@@ -318,7 +378,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
  <div className="min-w-0">
  <h1 className="text-lg sm:text-2xl font-black tracking-tight text-white">Öğrenci Listesi</h1>
- <p className="text-white/80 text-xs sm:text-sm mt-0.5">Tüm öğrencileri görüntüleyin ve yönetin</p>
+ <p className="text-white/80 text-xs sm:text-sm mt-0.5">
+  {isCoach ? 'Size atanmış öğrenciler' : isAdmin ? 'Tüm kurumlar — şube ve antrenör bilgisiyle' : 'Öğrencileri görüntüleyin ve yönetin'}
+ </p>
  </div>
  </div>
  </div>
@@ -462,6 +524,17 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <option value="yes">Burslu</option>
  <option value="no">Burslu Değil</option>
  </select>
+ {isAdmin && (
+ <select
+ value={filterCoach}
+ onChange={(e) => setFilterCoach(e.target.value)}
+ className="w-full lg:w-auto lg:flex-1 lg:min-w-[130px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
+ >
+ {coachFilterOptions.map((c) => (
+ <option key={c} value={c}>{c}</option>
+ ))}
+ </select>
+ )}
    </>
  )}
  <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-1">
@@ -508,7 +581,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
 
  {/* Bulk bar */}
- {selectedIds.length > 0 && (
+ {selectedIds.length > 0 && !isCoach && (
  <div className="fixed bottom-4 left-3 right-3 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 bg-slate-900/95 backdrop-blur-xl border border-slate-700/60 px-4 sm:px-6 py-3 sm:py-4 rounded-xl sm:rounded-lg shadow-2xl flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-6 animate-in slide-in-from-bottom-4 duration-300 max-w-lg sm:max-w-none mx-auto sm:mx-0">
  <div className="flex items-center gap-3 sm:pr-6 sm:border-r border-white/10">
  <span className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-black text-white">
@@ -522,6 +595,12 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-lg text-xs font-bold transition-all"
  >
  <Edit2 className="w-3.5 h-3.5" /> Grup Güncelle
+ </button>
+ <button
+ onClick={openBulkCoachModal}
+ className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 rounded-lg text-xs font-bold transition-all"
+ >
+ <UserCog className="w-3.5 h-3.5" /> Antrenör Ata
  </button>
  <button
  onClick={handleBulkDelete}
@@ -576,7 +655,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <button type="button" title="Detay" onClick={() => onViewDetail?.(student.id)} className="p-2.5 rounded-lg text-slate-400 hover:bg-indigo-500/10 hover:text-indigo-400"><Eye className="w-4 h-4" /></button>
  <button type="button" onClick={() => { void loadApplicationsAsync().then(setApplications); setSignedFormsStudent(student); }} title="Başvuru formu" className="p-2.5 rounded-lg text-slate-400 hover:bg-violet-500/10 hover:text-violet-400"><PenLine className="w-4 h-4" /></button>
  <button type="button" onClick={() => handleOpenModal(student)} title="Düzenle" className="p-2.5 rounded-lg text-slate-400 hover:bg-amber-500/10 hover:text-amber-400"><Edit2 className="w-4 h-4" /></button>
+ {!isCoach && (
  <button type="button" onClick={() => deleteStudent(student.id)} title="Sil" className="p-2.5 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-400"><Trash2 className="w-4 h-4" /></button>
+ )}
  </div>
  </div>
  ))}
@@ -605,6 +686,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">#</th>
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Öğrenci</th>
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Şube / Branş</th>
+ {isAdmin && (
+ <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Kurum / Antrenör</th>
+ )}
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Grup / Paket</th>
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Aidat / Ders</th>
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Kayıt Tarihi</th>
@@ -645,6 +729,14 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  {student.branchOffice || '—'} {student.branch ? ` / ${student.branch}` : ''}
  </p>
  </td>
+ {isAdmin && (
+ <td data-label="Kurum / Antrenör" className="px-6 py-4">
+ <p className="text-sm text-slate-300">{student.branchOffice || '—'}</p>
+ <p className="text-[11px] text-teal-400/90 font-medium mt-0.5">
+ {getCoachNamesForStudent(student, coaches, trainingGroups).join(', ') || 'Atanmamış'}
+ </p>
+ </td>
+ )}
  <td data-label="Grup / Paket" className="px-6 py-4">
  <p className="text-sm font-medium text-slate-200">{student.group}</p>
  {student.registrationType && (
@@ -705,6 +797,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  >
  <Edit2 className="w-4 h-4" />
  </button>
+ {!isCoach && (
  <button
  type="button"
  onClick={() => deleteStudent(student.id)}
@@ -713,6 +806,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  >
  <Trash2 className="w-4 h-4" />
  </button>
+ )}
  </div>
  </td>
  </tr>
@@ -764,6 +858,57 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  className="flex-1 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm transition-all"
  >
  Güncelle
+ </button>
+ </div>
+ </div>
+ </div>
+ </div>
+ </div>
+ )}
+
+ {/* Bulk coach modal */}
+ {isBulkCoachModalOpen && (
+ <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+ <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" onClick={() => setIsBulkCoachModalOpen(false)} />
+ <div className="relative w-full max-w-md bg-[#1e293b]/90 backdrop-blur-2xl border border-slate-700/60 rounded-lg shadow-2xl overflow-hidden">
+ <div className="p-6">
+ <div className="flex justify-between items-center mb-6">
+ <div>
+ <h3 className="text-lg font-bold text-white">Antrenör Ata</h3>
+ <p className="text-slate-400 text-sm mt-1">{selectedIds.length} öğrenciye antrenör atanacak</p>
+ </div>
+ <button onClick={() => setIsBulkCoachModalOpen(false)} className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-slate-200 transition-colors">
+ <X className="w-5 h-5" />
+ </button>
+ </div>
+ <div className="space-y-4">
+ <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Antrenör</label>
+ {bulkCoachOptions.length === 0 ? (
+ <p className="text-sm text-amber-400">Henüz antrenör tanımlı değil. Önce kulüp panelinden antrenör ekleyin.</p>
+ ) : (
+ <select
+ className="w-full px-4 py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-white focus:ring-2 focus:ring-teal-500/40 outline-none"
+ value={newBulkCoachId}
+ onChange={(e) => setNewBulkCoachId(e.target.value)}
+ >
+ {bulkCoachOptions.map((c) => (
+ <option key={c.id} value={c.id}>
+ {c.name} ({c.branch})
+ </option>
+ ))}
+ </select>
+ )}
+ <div className="flex gap-3 pt-2">
+ <button type="button" onClick={() => setIsBulkCoachModalOpen(false)} className="flex-1 py-3 rounded-lg bg-slate-800 text-slate-200 font-bold text-sm transition-all">
+ İptal
+ </button>
+ <button
+ type="button"
+ onClick={handleBulkUpdateCoach}
+ disabled={!newBulkCoachId || bulkCoachOptions.length === 0}
+ className="flex-1 py-3 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm transition-all"
+ >
+ Ata
  </button>
  </div>
  </div>
@@ -866,6 +1011,20 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <option value="İleri">İleri</option>
  </select>
  </div>
+ </div>
+ <div>
+ <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Antrenör</label>
+ <select
+ className="w-full px-4 py-3 rounded-lg bg-slate-900/50 border border-slate-700/60 text-white focus:ring-2 focus:ring-indigo-500/40 outline-none"
+ value={formData.coachId}
+ onChange={(e) => setFormData({ ...formData, coachId: e.target.value })}
+ >
+ {editCoachOptions.map((c) => (
+  <option key={typeof c === 'string' ? c : c.id} value={typeof c === 'string' ? c : c.id}>
+   {typeof c === 'string' ? c : c.name}
+  </option>
+ ))}
+ </select>
  </div>
  <div className="grid grid-cols-2 gap-4">
  <div>

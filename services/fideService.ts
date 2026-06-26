@@ -73,6 +73,28 @@ export async function searchFidePlayer(query: string): Promise<FidePlayer[]> {
   }
 }
 
+/**
+ * Öğrenci kaydından FIDE profilini çözer (ID yoksa ad + doğum yılı ile arar).
+ */
+export async function resolveFideProfileForStudent(
+  student: { fideId?: string; name?: string; birthDate?: string },
+): Promise<{ profile: FidePlayer | null; resolvedId?: string }> {
+  let id = student.fideId?.trim().replace(/\D/g, '') || '';
+  if (!id && student.name?.trim()) {
+    const birthYear = student.birthDate ? Number(student.birthDate.slice(0, 4)) : null;
+    const searchResults = await searchFidePlayer(student.name);
+    if (searchResults.length > 0) {
+      const matched = birthYear
+        ? searchResults.find((p) => p.year === birthYear)
+        : searchResults[0];
+      if (matched?.id) id = String(matched.id);
+    }
+  }
+  if (!id) return { profile: null };
+  const profile = await fetchFidePlayer(id);
+  return { profile, resolvedId: id };
+}
+
 /** Federasyon kodu için tam ad (ör. TUR → Türkiye) */
 export function federationLabel(code: string): string {
   const labels: Record<string, string> = {

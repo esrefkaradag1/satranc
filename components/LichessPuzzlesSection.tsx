@@ -4,9 +4,11 @@ import type { Puzzle } from '../types';
 import type { LichessActivity } from '../services/chessPlatformService';
 import { lichessActivityPuzzleCount } from '../lib/leaderboardUtils';
 import StudentPuzzlePlayModal from './StudentPuzzlePlayModal';
+import LichessPuzzleDashboardSection from './LichessPuzzleDashboardSection';
 
 type LichessPuzzlesSectionProps = {
   username?: string;
+  studentId?: string;
   dailyPuzzle: Puzzle | null;
   practicePuzzles: Puzzle[];
   loadingDaily?: boolean;
@@ -17,6 +19,7 @@ type LichessPuzzlesSectionProps = {
 /** Lichess bulmaca pratiği — Chess.com Bulmacalar sekmesiyle aynı mantık */
 const LichessPuzzlesSection: React.FC<LichessPuzzlesSectionProps> = ({
   username,
+  studentId,
   dailyPuzzle,
   practicePuzzles,
   loadingDaily = false,
@@ -44,6 +47,9 @@ const LichessPuzzlesSection: React.FC<LichessPuzzlesSectionProps> = ({
 
   return (
     <div className="space-y-4">
+      {studentId?.trim() ? (
+        <LichessPuzzleDashboardSection studentId={studentId} days={30} />
+      ) : null}
       <div className="rounded-xl bg-slate-800/60 border border-sky-500/25 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -133,7 +139,6 @@ const LichessPuzzlesSection: React.FC<LichessPuzzlesSectionProps> = ({
         <StudentPuzzlePlayModal
           puzzle={playing.puzzle}
           homeworkId={playing.puzzle.id.startsWith('lichess') ? 'lichess-daily' : 'lichess-practice'}
-          openKey={playing.openKey}
           onClose={() => setPlaying(null)}
         />
       ) : null}

@@ -129,6 +129,20 @@ export function mainlineSansDiffer(a: string[], b: string[]): boolean {
   return false;
 }
 
+/** Kayıtlı bölüm hamleleri ile canlı sync ağacını birleştirir; oynanan hamleler listede kaybolmasın. */
+export function mergeMainlineMoves(raw: string[], tree: string[]): string[] {
+  if (!tree.length) return raw;
+  if (!raw.length) return tree;
+  if (!mainlineSansDiffer(raw, tree)) {
+    return tree.length >= raw.length ? tree : raw;
+  }
+  if (tree.length >= raw.length) return tree;
+  for (let i = 0; i < tree.length; i++) {
+    if (raw[i] !== tree[i]) return tree;
+  }
+  return raw;
+}
+
 /** Ağaç + kayıtlı bölüm varyasyonlarını birleştirir (legacy-only dallar kaybolmasın). */
 export function mergeVariationRecords(
   chapterVars: Record<number, string[][]>,

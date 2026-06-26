@@ -7,15 +7,19 @@ import {
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { useApp } from '../AppContext';
+import { getSessionDisplay } from '../lib/sessionDisplayName';
 import { DashboardHeroScene } from './dashboard/DashboardHeroScene';
 import { Dashboard3DBackground } from './dashboard/Dashboard3DBackground';
 
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 
-const DISPLAY_NAME = 'Çağrı Çankaya';
-
 const Dashboard: React.FC = () => {
-  const { students, transactions, homeworks, lessons } = useApp();
+  const { scopedStudents, transactions, homeworks, lessons, auth, coaches, clubs } = useApp();
+  const students = scopedStudents;
+  const session = useMemo(
+    () => getSessionDisplay(auth, { students, coaches, clubs }),
+    [auth, students, coaches, clubs],
+  );
 
   const totalIncome = useMemo(() =>
     transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0),
@@ -125,7 +129,7 @@ const Dashboard: React.FC = () => {
           <div className="relative z-10 h-full flex flex-col justify-center pl-5 sm:pl-6 pr-[42%] sm:pr-[38%]">
             <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest capitalize">{todayLabel}</p>
             <h1 className="text-lg sm:text-xl font-black text-white tracking-tight mt-0.5 leading-tight">
-              Hoş geldiniz, {DISPLAY_NAME.split(' ')[0]}
+              Hoş geldiniz, {session.firstName}
             </h1>
             <p className="text-xs sm:text-sm text-indigo-100/80 font-medium mt-1">
               Tüm istatistikleri ve işlemleri buradan yönetin
@@ -390,7 +394,7 @@ const Dashboard: React.FC = () => {
               <ActionButton icon={<Wallet className="w-4 h-4" />} label="Kasa" href="#/kasa-finans" accent="rose" />
               <ActionButton icon={<ImageIcon className="w-4 h-4" />} label="Galeri" href="#/galeri" accent="pink" />
               <ActionButton icon={<Video className="w-4 h-4" />} label="Canlı Ders" href="#/canli-ders" accent="cyan" />
-              <ActionButton icon={<MessageSquare className="w-4 h-4" />} label="WhatsApp" href="#/whatsapp" accent="green" className="col-span-2" />
+              <ActionButton icon={<MessageSquare className="w-4 h-4" />} label="Mesajlar" href="#/mesajlar" accent="green" className="col-span-2" />
             </div>
           </div>
 

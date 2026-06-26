@@ -8,6 +8,16 @@ import { URL } from 'node:url';
 import { insertHomeworkAttemptViaEnv } from '../lib/homeworkAttemptDb.mjs';
 import { appendLiveLessonChatViaEnv } from '../lib/liveLessonChatDb.mjs';
 import { replaceSessionMediaViaEnv, sessionMediaOpViaEnv } from '../lib/liveLessonSessionMediaDb.mjs';
+import { insertSiteMessageViaEnv, listSiteMessagesViaEnv } from '../lib/siteMessagesDb.mjs';
+import {
+  lichessOAuthDisconnectViaEnv,
+  lichessOAuthStatusViaEnv,
+  lichessOAuthTokenViaEnv,
+  lichessPuzzleActivityViaEnv,
+  lichessPuzzleDashboardViaEnv,
+} from '../lib/lichessOAuthApi.mjs';
+import { lichessProxyRequest } from '../lib/lichessProxyThrottle.mjs';
+import { parentStudentLoginViaEnv } from '../lib/studentParentAuth.mjs';
 
 const PORT = Number(process.env.API_PORT || 3001);
 const HOST = process.env.API_HOST || '127.0.0.1';
@@ -50,6 +60,12 @@ async function handleHomeworkAttempt(req, res) {
   return sendJson(res, result.status, result.body);
 }
 
+async function handleAuthParent(req, res) {
+  const body = await readJsonBody(req);
+  const result = await parentStudentLoginViaEnv(body, process.env);
+  return sendJson(res, result.status, result.body);
+}
+
 async function handleLiveLessonChat(req, res) {
   const body = await readJsonBody(req);
   const result = await appendLiveLessonChatViaEnv(body);
@@ -60,6 +76,45 @@ async function handleLiveLessonSessionMedia(req, res) {
   const body = await readJsonBody(req);
   const result =
     body.replace === true ? await replaceSessionMediaViaEnv(body) : await sessionMediaOpViaEnv(body);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleSiteMessages(req, res, url) {
+  if (req.method === 'GET') {
+    const conversationId = qp(url, 'conversationId');
+    const result = await listSiteMessagesViaEnv(conversationId || undefined, process.env);
+    return sendJson(res, result.status, result.body);
+  }
+  if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+  const body = await readJsonBody(req);
+  const result = await insertSiteMessageViaEnv(body, process.env);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLichessOAuthToken(req, res) {
+  const body = await readJsonBody(req);
+  const result = await lichessOAuthTokenViaEnv(body, process.env, req.headers);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLichessOAuthStatus(url, res) {
+  const result = await lichessOAuthStatusViaEnv(url.searchParams.get('studentId'), process.env);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLichessOAuthDisconnect(req, res) {
+  const body = await readJsonBody(req);
+  const result = await lichessOAuthDisconnectViaEnv(body, process.env);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLichessPuzzleActivity(url, res) {
+  const result = await lichessPuzzleActivityViaEnv(url.searchParams, process.env);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLichessPuzzleDashboard(url, res) {
+  const result = await lichessPuzzleDashboardViaEnv(url.searchParams, process.env);
   return sendJson(res, result.status, result.body);
 }
 
@@ -239,34 +294,13 @@ async function handleChessComGames(url, res) {
   }
 }
 
-function isAllowedLichessPath(path) {
-  if (!path || path.includes('..')) return false;
-  return (
-    /^user\/[A-Za-z0-9_-]{1,30}$/.test(path)
-    || /^user\/[A-Za-z0-9_-]{1,30}\/activity$/.test(path)
-    || /^games\/user\/[A-Za-z0-9_-]{1,30}$/.test(path)
-    || /^game\/export\/[a-zA-Z0-9]+$/.test(path)
-  );
-}
-
 async function handleLichessProxy(url, req, res) {
   if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed' });
   const path = qp(url, 'path').replace(/^\/+/, '');
-  if (!isAllowedLichessPath(path)) return sendJson(res, 400, { error: 'Geçersiz Lichess API yolu' });
-
-  const qs = new URLSearchParams(url.searchParams);
-  qs.delete('path');
-  const upstreamUrl = `https://lichess.org/api/${path}${qs.toString() ? `?${qs}` : ''}`;
   const accept = req.headers.accept || 'application/json';
-
   try {
-    const upstream = await fetch(upstreamUrl, {
-      headers: { Accept: accept, 'User-Agent': 'NetChessAcademy/1.0' },
-      signal: AbortSignal.timeout(20000),
-    });
-    const body = await upstream.text();
-    const contentType = upstream.headers.get('content-type') || 'application/json';
-    return sendText(res, upstream.status, body, contentType, 's-maxage=90, stale-while-revalidate=180');
+    const upstream = await lichessProxyRequest(path, url.searchParams, accept);
+    return sendText(res, upstream.status, upstream.body, upstream.contentType, 's-maxage=90, stale-while-revalidate=180');
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Lichess bağlantı hatası';
     return sendJson(res, 502, { error: msg });
@@ -306,12 +340,40 @@ export async function dispatchApi(req, res, url) {
       await handleHomeworkAttempt(req, res);
       return true;
     }
+    if (path === '/api/auth-parent' && req.method === 'POST') {
+      await handleAuthParent(req, res);
+      return true;
+    }
     if (path === '/api/live-lesson-chat' && req.method === 'POST') {
       await handleLiveLessonChat(req, res);
       return true;
     }
     if (path === '/api/live-lesson-session-media' && req.method === 'POST') {
       await handleLiveLessonSessionMedia(req, res);
+      return true;
+    }
+    if (path === '/api/site-messages' && (req.method === 'GET' || req.method === 'POST')) {
+      await handleSiteMessages(req, res, url);
+      return true;
+    }
+    if (path === '/api/lichess-oauth-token' && req.method === 'POST') {
+      await handleLichessOAuthToken(req, res);
+      return true;
+    }
+    if (path === '/api/lichess-oauth-status' && req.method === 'GET') {
+      await handleLichessOAuthStatus(url, res);
+      return true;
+    }
+    if (path === '/api/lichess-oauth-disconnect' && req.method === 'POST') {
+      await handleLichessOAuthDisconnect(req, res);
+      return true;
+    }
+    if (path === '/api/lichess-puzzle-activity' && req.method === 'GET') {
+      await handleLichessPuzzleActivity(url, res);
+      return true;
+    }
+    if (path === '/api/lichess-puzzle-dashboard' && req.method === 'GET') {
+      await handleLichessPuzzleDashboard(url, res);
       return true;
     }
 

@@ -9,6 +9,7 @@ import {
   WEEKDAY_OPTIONS, applyGroupDefaultsToStudent, emptyLessonSlot, formatLessonSchedule, getGroupMonthlyFee,
   mergeBranchOffices, studentsInTrainingGroup,
 } from '../lib/trainingGroupUtils';
+import { coachesForClub } from '../lib/orgScope';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
 const BranchGroupManagement: React.FC = () => {
@@ -24,7 +25,7 @@ const BranchGroupManagement: React.FC = () => {
     addTrainingGroup,
     updateTrainingGroup,
     removeTrainingGroup,
-    students,
+    scopedStudents: students,
     updateStudent,
     coaches,
   } = useApp();
@@ -43,6 +44,7 @@ const BranchGroupManagement: React.FC = () => {
     monthlyFee: '',
     capacity: '14',
     lessonSlots: [emptyLessonSlot()] as GroupLessonSlot[],
+    coachIds: [] as string[],
   });
   const [showStudentModal, setShowStudentModal] = useState(false);
   const [studentModalGroup, setStudentModalGroup] = useState<TrainingGroup | null>(null);
@@ -97,7 +99,9 @@ const BranchGroupManagement: React.FC = () => {
       return;
     }
     const defaults = applyGroupDefaultsToStudent(studentModalGroup, disciplineBranches);
-    selectedStudentIds.forEach((id) => updateStudent(id, defaults));
+    const coachId =
+      studentModalGroup.coachIds?.length === 1 ? studentModalGroup.coachIds[0] : undefined;
+    selectedStudentIds.forEach((id) => updateStudent(id, { ...defaults, ...(coachId ? { coachId } : {}) }));
     setShowStudentModal(false);
     setStudentModalGroup(null);
     setSelectedStudentIds([]);
@@ -143,6 +147,7 @@ const BranchGroupManagement: React.FC = () => {
       monthlyFee: '',
       capacity: '14',
       lessonSlots: [emptyLessonSlot()],
+      coachIds: [],
     });
     setShowGroupModal(true);
   };
@@ -155,6 +160,7 @@ const BranchGroupManagement: React.FC = () => {
       monthlyFee: group.monthlyFee != null ? String(group.monthlyFee) : '',
       capacity: String(group.capacity || 0),
       lessonSlots: group.lessonSlots.length ? group.lessonSlots.map((s) => ({ ...s })) : [emptyLessonSlot()],
+      coachIds: group.coachIds ? [...group.coachIds] : [],
     });
     setShowGroupModal(true);
   };
@@ -170,6 +176,7 @@ const BranchGroupManagement: React.FC = () => {
       monthlyFee: groupForm.monthlyFee.trim() ? Number(groupForm.monthlyFee) : undefined,
       capacity: Number(groupForm.capacity) || 0,
       lessonSlots: groupForm.lessonSlots.filter((s) => s.dayLabel && s.startTime),
+      coachIds: groupForm.coachIds.length ? groupForm.coachIds : undefined,
     };
     if (editingGroup) {
       updateTrainingGroup(editingGroup.id, payload);
@@ -201,6 +208,21 @@ const BranchGroupManagement: React.FC = () => {
     setGroupForm((prev) => ({ ...prev, lessonSlots: prev.lessonSlots.filter((_, i) => i !== idx) }));
 
   const coachName = (id: string) => coaches.find((c) => c.id === id)?.name ?? 'Atanmamış';
+
+  const groupCoachOptions = useMemo(() => {
+    if (!groupParentBranch) return coaches;
+    return coachesForClub(coaches, groupParentBranch.branchOffice);
+  }, [coaches, groupParentBranch]);
+
+  const toggleGroupCoach = (coachId: string) => {
+    setGroupForm((prev) => {
+      const has = prev.coachIds.includes(coachId);
+      return {
+        ...prev,
+        coachIds: has ? prev.coachIds.filter((id) => id !== coachId) : [...prev.coachIds, coachId],
+      };
+    });
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -645,6 +667,32 @@ const BranchGroupManagement: React.FC = () => {
                   className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
                 />
               </div>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Antrenörler</label>
+              {groupCoachOptions.length === 0 ? (
+                <p className="text-xs text-slate-500">Bu şubede antrenör yok. Önce kulüp panelinden antrenör ekleyin.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {groupCoachOptions.map((c) => {
+                    const selected = groupForm.coachIds.includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => toggleGroupCoach(c.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                          selected
+                            ? 'bg-teal-600/20 border-teal-500/40 text-teal-300'
+                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div>
               <div className="flex items-center justify-between mb-2">

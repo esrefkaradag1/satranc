@@ -95,7 +95,6 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
 
     return () => {
       unsub();
-      stopAnalysis();
     };
   }, [enabled]);
 

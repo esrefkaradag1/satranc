@@ -26,6 +26,8 @@ export interface Student {
   branchOffice?: string;
   tcNo?: string;
   lichessUsername?: string;
+  /** OAuth bağlantı zamanı (token istemciye gönderilmez; yalnızca bağlı mı kontrolü için) */
+  lichessOauthConnectedAt?: string | null;
   chessComUsername?: string;
   /** FIDE oyuncu ID (ratings.fide.com profilinden); girilince FIDE bilgileri çekilir */
   fideId?: string;
@@ -64,6 +66,8 @@ export interface Student {
   parentPin?: string;
   /** Antrenör ders günlüğü: tarih, konu, bilgi (link/not) */
   lessonLog?: StudentLessonLogEntry[];
+  /** Birincil antrenör (coaches.id) */
+  coachId?: string;
   /** Branş–grup tanımına bağlantı */
   trainingGroupId?: string;
   /** Ders günleri ve saatleri (gruptan kopyalanır; öğrenci bazında düzenlenebilir) */
@@ -120,7 +124,22 @@ export type AuthUser =
   | { role: 'coach'; coachId?: string; branch?: string }
   | { role: 'parent'; studentId: string }
   | { role: 'student'; studentId: string }
-  | { role: 'club'; branch: string };
+  | { role: 'club'; branch: string; clubId?: string };
+
+/** Rol paneli türü */
+export type RolePanel = 'admin' | 'coach' | 'club' | 'student' | 'parent';
+
+/** Uygulama rolü tanımı */
+export interface AppRole {
+  id: string;
+  slug: string;
+  name: string;
+  panel: RolePanel;
+  description?: string;
+  color?: string;
+  isSystem: boolean;
+  createdAt?: string;
+}
 
 /** Kurumsal yapıda yönetilen kulüp (şube) — ad, adres, aktif günler, giriş parolası */
 export interface Club {
@@ -131,6 +150,8 @@ export interface Club {
   activeDays?: boolean[];
   /** Kulüp girişi için parola; boşsa sistem parolası (kulup) kullanılır */
   loginPassword?: string;
+  /** Atanan özel rol (app_roles.id); boşsa varsayılan kulüp rolü */
+  roleId?: string;
 }
 
 /** Kulüp tarafından eklenen antrenör (şubeye bağlı) */
@@ -140,6 +161,20 @@ export interface Coach {
   branch: string;
   phone?: string;
   email?: string;
+  /** Antrenör paneli giriş şifresi */
+  password?: string;
+  photoUrl?: string;
+  /** Ünvan: FIDE Usta, Kıdemli Antrenör vb. */
+  title?: string;
+  /** Uzmanlık alanı */
+  specialization?: string;
+  /** Kısa özgeçmiş */
+  bio?: string;
+  birthDate?: string;
+  fideId?: string;
+  lichessUsername?: string;
+  /** Atanan özel rol (app_roles.id); boşsa varsayılan antrenör rolü */
+  roleId?: string;
 }
 
 export interface Transaction {

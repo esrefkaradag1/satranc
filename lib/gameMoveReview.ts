@@ -38,6 +38,15 @@ export function loadPgnHeaders(pgn: string): Record<string, string> {
   return headers;
 }
 
+/** Chess.com PGN saat/eval notlarını kaldırır (chess.js uyumu). */
+export function normalizeGamePgn(pgn: string): string {
+  return pgn
+    .replace(/\{\[%clk[^\]]*\]\}/gi, '')
+    .replace(/\{\[%eval[^\]]*\]\}/gi, '')
+    .replace(/\{\[%emt[^\]]*\]\}/gi, '')
+    .trim();
+}
+
 export function inferPlayerColorFromPgn(
   pgn: string,
   username: string
@@ -51,6 +60,10 @@ export function inferPlayerColorFromPgn(
   return null;
 }
 
+export type ReviewPgnResult =
+  | { ok: true; mistakes: ReviewedMove[] }
+  | { ok: false; reason: 'parse' | 'empty' };
+
 /**
  * Tek bir oyunda öğrencinin hamlelerini Stockfish ile tarar; yalnızca isabetsizlik ve üzeri döner.
  */
@@ -60,28 +73,30 @@ export async function reviewPlayerMovesInPgn(
   opts?: {
     maxPlies?: number;
     engineLevel?: number;
+    evalMovetimeMs?: number;
     onProgress?: (done: number, total: number) => void;
   }
-): Promise<ReviewedMove[]> {
+): Promise<ReviewPgnResult> {
+  const normalized = normalizeGamePgn(pgn);
   const chess = new Chess();
   try {
-    chess.loadPgn(pgn, { sloppy: true });
+    chess.loadPgn(normalized, { strict: false });
   } catch {
-    return [];
+    return { ok: false, reason: 'parse' };
   }
 
   const history = chess.history({ verbose: true });
-  if (!history.length) return [];
+  if (!history.length) return { ok: false, reason: 'empty' };
 
   const replay = new Chess();
-  const startFen = replay.fen();
   const mistakes: ReviewedMove[] = [];
-  const maxPlies = opts?.maxPlies ?? 120;
-  const level = opts?.engineLevel ?? 6;
+  const maxPlies = opts?.maxPlies ?? 160;
+  const level = opts?.engineLevel ?? 12;
+  const evalMs = opts?.evalMovetimeMs ?? 600;
   const total = Math.min(history.length, maxPlies);
 
   for (let i = 0; i < total; i++) {
-    if (i > 0 && i % 4 === 0) {
+    if (i > 0 && i % 2 === 0) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     opts?.onProgress?.(i + 1, total);
@@ -94,24 +109,24 @@ export async function reviewPlayerMovesInPgn(
 
     const fenBefore = replay.fen();
     const posBefore = new Chess(fenBefore);
-    const bestSan = await getBestMoveAsync(posBefore, level);
+    const bestSan = await getBestMoveAsync(posBefore, level, { strictFallback: true });
 
     let bestEval = 0;
     if (bestSan) {
       const bestPos = new Chess(fenBefore);
       try {
         bestPos.move(bestSan);
-        bestEval = await getEvaluationPawnsAsync(bestPos);
+        bestEval = await getEvaluationPawnsAsync(bestPos, evalMs);
       } catch {
-        bestEval = await getEvaluationPawnsAsync(posBefore);
+        bestEval = await getEvaluationPawnsAsync(posBefore, evalMs);
       }
     } else {
-      bestEval = await getEvaluationPawnsAsync(posBefore);
+      bestEval = await getEvaluationPawnsAsync(posBefore, evalMs);
     }
 
     const playedPos = new Chess(fenBefore);
     playedPos.move({ from: mv.from, to: mv.to, promotion: mv.promotion });
-    const playedEval = await getEvaluationPawnsAsync(playedPos);
+    const playedEval = await getEvaluationPawnsAsync(playedPos, evalMs);
 
     const sign = playerColor === 'w' ? 1 : -1;
     const cpLoss = Math.max(0, Math.round((bestEval - playedEval) * 100 * sign));
@@ -134,9 +149,5 @@ export async function reviewPlayerMovesInPgn(
     replay.move({ from: mv.from, to: mv.to, promotion: mv.promotion });
   }
 
-  if (replay.fen() !== chess.fen()) {
-    void startFen;
-  }
-
-  return mistakes.sort((a, b) => b.cpLoss - a.cpLoss);
+  return { ok: true, mistakes: mistakes.sort((a, b) => b.cpLoss - a.cpLoss) };
 }

@@ -51,7 +51,7 @@ const LeaderboardPage: React.FC = () => {
           Lider Tablosu
         </h1>
         <p className="text-sm text-slate-400 mt-1">
-          Kulüp içi haftalık ve aylık sıralama — çözülen bulmaca ve oynanan maç sayısına göre.
+          Kulüp içi sıralama — aktivite puanı, Lichess/Chess.com rating (Rapid, Blitz, Bullet, Bulmaca), UKD ve FIDE ELO.
         </p>
       </div>
 

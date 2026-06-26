@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Settings2, Search, Menu, ChevronUp, ChevronDown, Copy, FlipHorizontal, Plus, Trash2, Import } from 'lucide-react';
 import type { StudyChapter, LeftTab } from '../../lib/studyTypes';
+import { formatChapterListLabel, chapterListLabelMatches } from '../../lib/studyUtils';
 
 type MemberItem = {
   id: string;
@@ -50,7 +51,7 @@ export const StudyChapterList: React.FC<StudyChapterListProps> = ({
   const [bulkPgn, setBulkPgn] = useState('');
 
   const filteredChapters = chapters.filter(ch =>
-    ch.title.toLowerCase().includes(chapterSearch.toLowerCase())
+    chapterListLabelMatches(ch, chapterSearch, chapters),
   );
 
   const handleBulkImport = () => {
@@ -160,7 +161,7 @@ export const StudyChapterList: React.FC<StudyChapterListProps> = ({
                 <span className={`w-6 text-[10px] font-bold text-slate-600 ${active ? 'text-indigo-500' : ''}`}>{realIdx + 1}</span>
                 <div className="flex-1 min-w-0 py-2">
                   <span className={`text-[13px] font-medium truncate ${active ? 'text-indigo-200' : 'text-slate-300'}`}>
-                    {ch.title}
+                    {formatChapterListLabel(ch, { allChapters: chapters })}
                   </span>
                 </div>
                 

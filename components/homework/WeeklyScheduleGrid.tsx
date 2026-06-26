@@ -24,6 +24,8 @@ type Props = {
   dayProgress?: Record<number, { games: number; gameTarget: number; puzzles: number; puzzleTarget: number; syncNote?: string | null }>;
   homeworkTitle?: string;
   autoSelectedHomework?: boolean;
+  /** program: kayıt + platform; assign: yeni ödev atama (salt düzenleme) */
+  variant?: 'program' | 'assign';
 };
 
 function completionStyles(status: DayCompletionStatus | undefined): string {
@@ -96,7 +98,12 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
   dayProgress,
   homeworkTitle,
   autoSelectedHomework = false,
+  variant = 'program',
 }) => {
+  const isAssign = variant === 'assign';
+  const showSaveButton = !isAssign;
+  const showPlatformRefresh = !isAssign && Boolean(onRefreshPlatform);
+  const showProgress = !isAssign;
   const showBulkTab = students.length > 1;
   const resolvedId = selectedStudentId ?? (showBulkTab ? PROGRAM_BULK_EDIT_ID : students[0]?.id ?? null);
   const isBulk = resolvedId === PROGRAM_BULK_EDIT_ID;
@@ -128,7 +135,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
         <div className="flex items-center gap-2">
           <Calendar className="w-5 h-5 text-violet-400" />
           <div>
-            <h3 className="text-sm font-black text-white">Günlük Program</h3>
+            <h3 className="text-sm font-black text-white">{isAssign ? 'Haftalık Hedef' : 'Günlük Program'}</h3>
             <p className="text-[10px] text-slate-500 mt-0.5">
               Pazartesi–Pazar · maç ve bulmaca hedefi
               {homeworkTitle ? (
@@ -138,13 +145,22 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                   {autoSelectedHomework ? <span className="text-amber-400/90"> (otomatik seçildi)</span> : null}
                 </>
               ) : null}
-              <span className="text-slate-600"> · </span>
-              <span className="text-slate-500">Platform: butonla çekilir, 10 dk aralıkla güncellenir</span>
+              {isAssign ? (
+                <>
+                  <span className="text-slate-600"> · </span>
+                  <span className="text-slate-500">Ödev kaydedildiğinde öğrencilere uygulanır · Lichess / Chess.com ile takip</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-slate-600"> · </span>
+                  <span className="text-slate-500">Platform: butonla çekilir, 10 dk aralıkla güncellenir</span>
+                </>
+              )}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {onRefreshPlatform ? (
+          {showPlatformRefresh ? (
             <button
               type="button"
               onClick={onRefreshPlatform}
@@ -156,13 +172,15 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
               Platform
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={onSave}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl premium-gradient text-white text-xs font-bold shadow-lg shadow-indigo-500/20"
-          >
-            <Save className="w-4 h-4" /> Kaydet
-          </button>
+          {showSaveButton ? (
+            <button
+              type="button"
+              onClick={onSave}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl premium-gradient text-white text-xs font-bold shadow-lg shadow-indigo-500/20"
+            >
+              <Save className="w-4 h-4" /> Kaydet
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -230,13 +248,13 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
               </>
             )}
 
-            {!isBulk && Object.values(dayProgress ?? {}).some((p) => p.syncNote) ? (
+            {!isBulk && showProgress && Object.values(dayProgress ?? {}).some((p) => p.syncNote) ? (
               <p className="text-[10px] text-amber-400/90">
                 {Object.values(dayProgress ?? {}).find((p) => p.syncNote)?.syncNote}
               </p>
             ) : null}
 
-            {!isBulk ? (
+            {!isBulk && showProgress ? (
               <div className="flex flex-wrap gap-3 text-[10px] text-slate-500">
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Tamam</span>
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Bekliyor</span>
@@ -251,9 +269,9 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                   const d = new Date().getDay();
                   return (d === 0 ? 7 : d) === day;
                 })();
-                const completion = isBulk ? undefined : dayCompletion?.[day];
+                const completion = isBulk || !showProgress ? undefined : dayCompletion?.[day];
                 const completionText = completionLabel(completion);
-                const progress = isBulk ? undefined : dayProgress?.[day];
+                const progress = isBulk || !showProgress ? undefined : dayProgress?.[day];
                 return (
                   <div
                     key={day}

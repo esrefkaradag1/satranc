@@ -35,12 +35,15 @@ import {
   formatLessonSchedule,
   mergeBranchOffices,
 } from '../lib/trainingGroupUtils';
+import { coachesForClub } from '../lib/orgScope';
 import { isValidTrPhone, normalizeTrPhoneDigits } from '../lib/phoneUtils';
+import { generateStudentPassword, suggestStudentUsername } from '../lib/studentCredentials';
 
 /* ─── Constants ──────────────────────────────────────────────────────────── */
 const PLACEHOLDER_OFFICE = 'Şube Seçiniz';
 const PLACEHOLDER_DISCIPLINE = 'Branş Seçiniz';
 const PLACEHOLDER_GROUP = 'Grup Seçiniz';
+const PLACEHOLDER_COACH = 'Antrenör Seçiniz';
 
 type RegistrationType = 'monthly' | 'package';
 
@@ -63,6 +66,7 @@ type FormState = {
   healthInfo: string;
   branch: string;
   group: string;
+  coachId: string;
   monthlyFee: string;
   paymentReminderDay: string;
   latePaymentReminderDay: string;
@@ -74,8 +78,6 @@ type FormState = {
   motherPhone: string;
   motherJob: string;
   address: string;
-  username: string;
-  password: string;
 };
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
@@ -125,13 +127,22 @@ const Section: React.FC<{
   icon: React.ReactNode;
   children: React.ReactNode;
   noGrid?: boolean;
-}> = ({ title, icon, children, noGrid }) => (
+  columns?: 2 | 3;
+}> = ({ title, icon, children, noGrid, columns = 2 }) => (
   <section className="rounded-2xl border border-slate-700/50 bg-[#1e293b]/90 overflow-hidden shadow-sm">
     <div className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
       {React.cloneElement(icon as React.ReactElement<any>, { className: 'w-4 h-4 shrink-0' })}
       <h2 className="text-sm font-black uppercase tracking-wide">{title}</h2>
     </div>
-    <div className={noGrid ? 'p-5' : 'p-5 grid grid-cols-1 md:grid-cols-2 gap-4'}>{children}</div>
+    <div
+      className={
+        noGrid
+          ? 'p-5'
+          : `p-5 grid grid-cols-1 ${columns === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4`
+      }
+    >
+      {children}
+    </div>
   </section>
 );
 
@@ -229,7 +240,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
   onCancel,
   onSaved,
 }) => {
-  const { addStudent, updateStudent, branchOffices, disciplines, groups, students, trainingGroups, disciplineBranches } = useApp();
+  const { addStudent, updateStudent, branchOffices, disciplines, groups, students, trainingGroups, disciplineBranches, coaches } = useApp();
   const mergedOffices = useMemo(
     () => mergeBranchOffices(branchOffices, disciplineBranches),
     [branchOffices, disciplineBranches],
@@ -241,6 +252,8 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
   const handleAddDemoStudent = () => {
     const demoCount = students.filter((s) => s.name.startsWith('Demo Öğrenci')).length + 1;
     const name = demoCount === 1 ? 'Demo Öğrenci' : `Demo Öğrenci ${demoCount}`;
+    const loginUsername = suggestStudentUsername(name, students.map((s) => s.username));
+    const loginPassword = generateStudentPassword();
     const branch = branchOffices[0] || 'Merkez';
     const group = groups[0] || 'A Grubu';
     const discipline = disciplines[0] || 'Satranç';
@@ -263,6 +276,8 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
       motherName: 'Demo Anne',
       motherPhone: '5559876543',
       status: 'active',
+      username: loginUsername,
+      password: loginPassword,
     });
     onSaved?.();
   };
@@ -291,6 +306,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
     healthInfo: '',
     branch: PLACEHOLDER_DISCIPLINE,
     group: PLACEHOLDER_GROUP,
+    coachId: PLACEHOLDER_COACH,
     monthlyFee: '',
     paymentReminderDay: DEFAULT_REMINDER_DAY,
     latePaymentReminderDay: DEFAULT_REMINDER_DAY,
@@ -302,8 +318,6 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
     motherPhone: '',
     motherJob: '',
     address: '',
-    username: '',
-    password: '',
   });
 
   const disciplineOptions = useMemo(() => {
@@ -325,6 +339,12 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
     return [PLACEHOLDER_GROUP, ...groups];
   }, [form.branchOffice, form.branch, trainingGroups, groups]);
 
+  const coachOptions = useMemo(() => {
+    const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
+    const list = office ? coachesForClub(coaches, office) : coaches;
+    return [PLACEHOLDER_COACH, ...list.map((c) => ({ id: c.id, name: c.name }))];
+  }, [coaches, form.branchOffice]);
+
   const handleGroupChange = (groupName: string) => {
     setForm((prev) => {
       const next = { ...prev, group: groupName };
@@ -339,11 +359,18 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
       if (tg) {
         const defaults = applyGroupDefaultsToStudent(tg, disciplineBranches);
         setLessonSchedule(defaults.lessonSchedule ?? []);
+        const autoCoach =
+          tg.coachIds?.length === 1
+            ? tg.coachIds[0]
+            : prev.coachId !== PLACEHOLDER_COACH
+              ? prev.coachId
+              : PLACEHOLDER_COACH;
         return {
           ...next,
           branch: defaults.branch || prev.branch,
           branchOffice: defaults.branchOffice || prev.branchOffice,
           monthlyFee: defaults.monthlyFee ? String(defaults.monthlyFee) : prev.monthlyFee,
+          coachId: autoCoach,
         };
       }
       setLessonSchedule([]);
@@ -361,8 +388,21 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
     if (form.group === PLACEHOLDER_GROUP) e.group = 'Grup seçiniz.';
     if (form.tcNo && onlyDigits(form.tcNo).length !== 11) e.tcNo = '11 haneli olmalıdır.';
     if (form.tcNo && students.some((s) => (s.tcNo ?? '') === onlyDigits(form.tcNo))) e.tcNo = 'Bu T.C. ile kayıtlı öğrenci var.';
-    if (form.username.trim() && students.some((s) => (s.username ?? '').toLowerCase() === form.username.trim().toLowerCase())) e.username = 'Bu kullanıcı adı zaten kullanılıyor.';
-    if (!isValidTrPhone(form.fatherPhone)) e.fatherPhone = 'Geçerli cep telefonu girin (05XX veya 5XX).';
+    const fatherPhoneFilled = form.fatherPhone.trim().length > 0;
+    const motherPhoneFilled = form.motherPhone.trim().length > 0;
+    const fatherPhoneValid = isValidTrPhone(form.fatherPhone);
+    const motherPhoneValid = isValidTrPhone(form.motherPhone);
+    if (fatherPhoneFilled && !fatherPhoneValid) {
+      e.fatherPhone = 'Geçerli cep telefonu girin (05XX veya 5XX).';
+    }
+    if (motherPhoneFilled && !motherPhoneValid) {
+      e.motherPhone = 'Geçerli cep telefonu girin (05XX veya 5XX).';
+    }
+    if (!fatherPhoneValid && !motherPhoneValid && !fatherPhoneFilled && !motherPhoneFilled) {
+      const parentPhoneMsg = 'Anne veya baba telefonundan en az biri zorunludur.';
+      e.fatherPhone = parentPhoneMsg;
+      e.motherPhone = parentPhoneMsg;
+    }
     if (form.registrationType === 'monthly' && !form.isScholarshipStudent && !form.monthlyFee.trim()) {
       e.monthlyFee = 'Aylık aidat zorunludur.';
     }
@@ -387,7 +427,14 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
   const [parentFormUrl, setParentFormUrl] = useState('');
   const [ratingsSyncNote, setRatingsSyncNote] = useState('');
   const [linkCopied, setLinkCopied] = useState(false);
+  const [credsCopied, setCredsCopied] = useState(false);
   const [whatsAppSent, setWhatsAppSent] = useState(false);
+  const [savedCredentials, setSavedCredentials] = useState<{ username: string; password: string } | null>(null);
+
+  const generatedUsername = useMemo(
+    () => suggestStudentUsername(form.name, students.map((s) => s.username)),
+    [form.name, students],
+  );
 
   const handlePickPhoto = (file: File) => {
     if (file.size > 5 * 1024 * 1024) {
@@ -440,6 +487,10 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
       ].filter(Boolean);
       const contacts = [...new Set(contactPhones)];
 
+      const loginUsername = suggestStudentUsername(form.name.trim(), students.map((s) => s.username));
+      const loginPassword = generateStudentPassword();
+      setSavedCredentials({ username: loginUsername, password: loginPassword });
+
       const newStudent = await addStudent({
         name: form.name.trim(),
         level: 'Başlangıç',
@@ -486,13 +537,14 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
         address: form.address.trim() || undefined,
         contactNumbers: contacts.length ? contacts : undefined,
         status: 'active',
-        username: form.username.trim() || undefined,
-        password: form.password.trim() || undefined,
+        username: loginUsername,
+        password: loginPassword,
         photoUrl: photoUrl,
         trainingGroupId: findTrainingGroupByName(trainingGroups, form.group, {
           branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
           discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
         })?.id,
+        coachId: form.coachId !== PLACEHOLDER_COACH ? form.coachId : undefined,
         lessonSchedule: lessonSchedule.length ? lessonSchedule : undefined,
       });
 
@@ -640,6 +692,19 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                 {groupOptions.map((x) => <option key={x}>{x}</option>)}
               </select>
             </Field>
+            <Field label="Antrenör" className="md:col-span-2">
+              <select
+                value={form.coachId}
+                onChange={(e) => set('coachId')(e.target.value)}
+                className={selectCls}
+              >
+                {coachOptions.map((c) => (
+                  <option key={typeof c === 'string' ? c : c.id} value={typeof c === 'string' ? c : c.id}>
+                    {typeof c === 'string' ? c : c.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
             {lessonSchedule.length > 0 && (
               <Field label="Ders programı (gruptan)" className="md:col-span-2">
                 <div className="px-4 py-3 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-200 text-sm font-medium">
@@ -670,6 +735,21 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                 className={inputCls}
               />
             </Field>
+            {form.tcNo.length === 11 ? (
+              <div className="md:col-span-2 rounded-xl border border-indigo-500/25 bg-indigo-500/5 px-4 py-3 text-xs text-slate-400 leading-relaxed">
+                <span className="font-bold text-indigo-300">UKD:</span>{' '}
+                Kayıt tamamlandığında TC ile TSF UKD otomatik sorgulanır ve öğrenci profiline yazılır.
+                {' '}
+                <a
+                  href="https://ukd.tsf.org.tr/ukdsorgulama.php"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-indigo-400 hover:text-indigo-300 underline font-semibold"
+                >
+                  TSF UKD Sorgula
+                </a>
+              </div>
+            ) : null}
             <Field label="Ad Soyad" required error={errors.name}>
               <input
                 value={form.name}
@@ -694,22 +774,15 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                 className={inputCls}
               />
             </Field>
-            <Field label="Kullanıcı Adı" hint="Öğrenci girişi için" error={errors.username}>
-              <input
-                value={form.username}
-                onChange={(e) => set('username')(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))}
-                placeholder="kullanici_adi"
-                className={inputCls}
-              />
+            <Field label="Kullanıcı adı" hint="Ad soyaddan otomatik oluşturulur">
+              <div className={`${inputCls} text-slate-300 font-mono text-sm`}>
+                {form.name.trim() ? generatedUsername : '—'}
+              </div>
             </Field>
-            <Field label="Giriş Şifresi" hint="Öğrenci girişinde kullanılacak">
-              <input
-                type="password"
-                value={form.password}
-                onChange={(e) => set('password')(e.target.value)}
-                placeholder="••••••"
-                className={inputCls}
-              />
+            <Field label="Giriş şifresi" hint="Kayıt sırasında otomatik karma şifre üretilir">
+              <div className={`${inputCls} text-slate-500 text-sm italic`}>
+                Kayıt anında otomatik oluşturulacak
+              </div>
             </Field>
             <Field label="Lichess kullanıcı adı" hint="Opsiyonel, küçük harf">
               <input
@@ -743,89 +816,6 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                 className={inputCls}
               />
             </Field>
-            <Field label="Kardeş indirimi" className="md:col-span-2">
-              <label className={`flex items-center gap-3 w-fit ${form.isScholarshipStudent ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
-                <div
-                  onClick={() => {
-                    if (form.isScholarshipStudent) return;
-                    set('hasSiblingDiscount')(!form.hasSiblingDiscount);
-                  }}
-                  className={`w-11 h-6 rounded-full transition-all relative ${form.hasSiblingDiscount ? 'bg-indigo-500' : 'bg-slate-700'}`}
-                >
-                  <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${form.hasSiblingDiscount ? 'translate-x-5' : 'translate-x-0'}`} />
-                </div>
-                <span className="text-sm text-slate-300">Kardeş indirimi uygula</span>
-              </label>
-            </Field>
-            {form.hasSiblingDiscount && !form.isScholarshipStudent ? (
-              <>
-                <Field label="İndirim türü" className="md:col-span-2">
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => set('siblingDiscountType')('percent')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${form.siblingDiscountType === 'percent' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
-                    >
-                      % İndirim
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => set('siblingDiscountType')('amount')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${form.siblingDiscountType === 'amount' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
-                    >
-                      Tutar İndirim (₺)
-                    </button>
-                  </div>
-                </Field>
-                {form.siblingDiscountType === 'percent' ? (
-                  <Field label="Kardeş indirimi (%)" required error={errors.siblingDiscountPercent}>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={form.siblingDiscountPercent}
-                        onChange={(e) => set('siblingDiscountPercent')(e.target.value.replace(/[^\d]/g, ''))}
-                        placeholder="10"
-                        className={inputCls + ' pr-8'}
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">%</span>
-                    </div>
-                  </Field>
-                ) : (
-                  <Field label="Kardeş indirimi (₺)" required error={errors.siblingDiscountAmount}>
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-black text-sm">₺</span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={form.siblingDiscountAmount}
-                        onChange={(e) => set('siblingDiscountAmount')(e.target.value.replace(/[^\d]/g, ''))}
-                        placeholder="500"
-                        className={inputCls + ' pl-9'}
-                      />
-                    </div>
-                  </Field>
-                )}
-                {form.registrationType === 'monthly' && form.monthlyFee ? (
-                  <Field label="İndirimli aidat (önizleme)">
-                    <div className={inputCls + ' flex items-center justify-between'}>
-                      <span className="text-slate-400 text-xs line-through">
-                        ₺{Number(form.monthlyFee || 0).toLocaleString('tr-TR')}
-                      </span>
-                      <span className="text-emerald-400 font-black">
-                        ₺{applySiblingDiscount(Number(form.monthlyFee || 0), {
-                          hasSiblingDiscount: true,
-                          siblingDiscountType: form.siblingDiscountType,
-                          siblingDiscountPercent: Number(form.siblingDiscountPercent || 0),
-                          siblingDiscountAmount: Number(form.siblingDiscountAmount || 0),
-                        }).finalFee.toLocaleString('tr-TR')}
-                      </span>
-                    </div>
-                  </Field>
-                ) : null}
-              </>
-            ) : null}
             <Field label="Açıklama" className="md:col-span-2">
               <textarea
                 value={form.notes}
@@ -905,10 +895,93 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                   <span className="text-sm text-slate-300">Burs kapsamında kayıt — aidat tahsil edilmez</span>
                 </label>
               </Field>
+              <Field label="Kardeş indirimi" className="md:col-span-2">
+                <label className={`flex items-center gap-3 w-fit ${form.isScholarshipStudent ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                  <div
+                    onClick={() => {
+                      if (form.isScholarshipStudent) return;
+                      set('hasSiblingDiscount')(!form.hasSiblingDiscount);
+                    }}
+                    className={`w-11 h-6 rounded-full transition-all relative ${form.hasSiblingDiscount ? 'bg-indigo-500' : 'bg-slate-700'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${form.hasSiblingDiscount ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </div>
+                  <span className="text-sm text-slate-300">Kardeş indirimi uygula</span>
+                </label>
+              </Field>
+              {form.hasSiblingDiscount && !form.isScholarshipStudent ? (
+                <>
+                  <Field label="İndirim türü" className="md:col-span-2">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => set('siblingDiscountType')('percent')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${form.siblingDiscountType === 'percent' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                      >
+                        % İndirim
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => set('siblingDiscountType')('amount')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${form.siblingDiscountType === 'amount' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                      >
+                        Tutar İndirim (₺)
+                      </button>
+                    </div>
+                  </Field>
+                  {form.siblingDiscountType === 'percent' ? (
+                    <Field label="Kardeş indirimi (%)" required error={errors.siblingDiscountPercent}>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={form.siblingDiscountPercent}
+                          onChange={(e) => set('siblingDiscountPercent')(e.target.value.replace(/[^\d]/g, ''))}
+                          placeholder="10"
+                          className={inputCls + ' pr-8'}
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">%</span>
+                      </div>
+                    </Field>
+                  ) : (
+                    <Field label="Kardeş indirimi (₺)" required error={errors.siblingDiscountAmount}>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-black text-sm">₺</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={form.siblingDiscountAmount}
+                          onChange={(e) => set('siblingDiscountAmount')(e.target.value.replace(/[^\d]/g, ''))}
+                          placeholder="500"
+                          className={inputCls + ' pl-9'}
+                        />
+                      </div>
+                    </Field>
+                  )}
+                  {form.monthlyFee ? (
+                    <Field label="İndirimli aidat (önizleme)">
+                      <div className={inputCls + ' flex items-center justify-between'}>
+                        <span className="text-slate-400 text-xs line-through">
+                          ₺{Number(form.monthlyFee || 0).toLocaleString('tr-TR')}
+                        </span>
+                        <span className="text-emerald-400 font-black">
+                          ₺{applySiblingDiscount(Number(form.monthlyFee || 0), {
+                            hasSiblingDiscount: true,
+                            siblingDiscountType: form.siblingDiscountType,
+                            siblingDiscountPercent: Number(form.siblingDiscountPercent || 0),
+                            siblingDiscountAmount: Number(form.siblingDiscountAmount || 0),
+                          }).finalFee.toLocaleString('tr-TR')}
+                        </span>
+                      </div>
+                    </Field>
+                  ) : null}
+                </>
+              ) : null}
             </Section>
           ) : null}
 
-          <Section title="Veli Bilgileri" icon={<Users />}>
+          <Section title="Veli Bilgileri" icon={<Users />} columns={3}>
             <Field label="Baba ad soyad">
               <input
                 value={form.fatherName}
@@ -917,7 +990,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                 className={inputCls}
               />
             </Field>
-            <Field label="Baba telefon" required error={errors.fatherPhone} hint="05XX veya 5XX ile başlayın">
+            <Field label="Baba telefon" required error={errors.fatherPhone} hint="Anne veya baba — en az biri zorunlu">
               <input
                 value={form.fatherPhone}
                 onChange={(e) => set('fatherPhone')(formatTrPhone(e.target.value))}
@@ -942,7 +1015,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                 className={inputCls}
               />
             </Field>
-            <Field label="Anne telefon" hint="0 ile başlamalı">
+            <Field label="Anne telefon" required error={errors.motherPhone} hint="Anne veya baba — en az biri zorunlu">
               <input
                 value={form.motherPhone}
                 onChange={(e) => set('motherPhone')(formatTrPhone(e.target.value))}
@@ -975,7 +1048,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
               <div className="flex items-start gap-2">
                 <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Kayıt sonrası veli form linki <span className="text-emerald-300 font-semibold">baba ve anne telefonlarına</span> otomatik WhatsApp ile gönderilir. Ayrı numara seçimi gerekmez.
+                  Kayıt sonrası veli form linki <span className="text-emerald-300 font-semibold">kayıtlı veli telefonlarına</span> otomatik WhatsApp ile gönderilir. Ayrı numara seçimi gerekmez.
                 </p>
               </div>
               {showExtraContact ? (
@@ -1078,6 +1151,36 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                   : ' Veli telefonu bulunamadı; linki aşağıdan manuel paylaşabilirsiniz.'}
                 {' '}Veli imzaladıktan sonra form öğrenci listesinde &quot;İmzalı&quot; görünür.
               </p>
+              {savedCredentials ? (
+                <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3 space-y-2">
+                  <p className="text-[10px] font-bold text-indigo-300 uppercase">Öğrenci giriş bilgileri</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase font-bold">Kullanıcı adı</span>
+                      <p className="font-mono text-white mt-0.5">{savedCredentials.username}</p>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase font-bold">Şifre</span>
+                      <p className="font-mono text-white mt-0.5">{savedCredentials.password}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = `Kullanıcı adı: ${savedCredentials.username}\nŞifre: ${savedCredentials.password}`;
+                      void navigator.clipboard?.writeText(text).then(() => {
+                        setCredsCopied(true);
+                        setTimeout(() => setCredsCopied(false), 2000);
+                      });
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white text-xs font-bold"
+                  >
+                    {credsCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    Giriş bilgilerini kopyala
+                  </button>
+                  <p className="text-[10px] text-slate-500">Bu bilgileri öğrenci/veli ile paylaşın; şifre yalnızca burada gösterilir.</p>
+                </div>
+              ) : null}
               {parentFormUrl ? (
                 <div className="rounded-xl border border-slate-600/60 bg-black/30 p-3">
                   <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Veli form linki</p>
@@ -1124,6 +1227,7 @@ const StudentAdd: React.FC<{ onCancel?: () => void; onSaved?: () => void }> = ({
                   setParentFormUrl('');
                   setRatingsSyncNote('');
                   setWhatsAppSent(false);
+                  setSavedCredentials(null);
                   onSaved?.();
                 }}
                 className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm"

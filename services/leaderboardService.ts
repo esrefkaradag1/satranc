@@ -1,12 +1,17 @@
 import type { HomeworkPuzzleAttempt, Student } from '../types';
 import {
   fetchChessComAllUserGames,
+  fetchChessComMemberStats,
   fetchChessComPuzzlesBundle,
+  fetchChessComStats,
   fetchLichessActivity,
+  fetchLichessUser,
 } from './chessPlatformService';
+import { buildLeaderboardPlatformSnapshot } from '../lib/leaderboardPlatformUtils';
 import {
   type LeaderboardEntry,
   type LeaderboardPeriod,
+  type LeaderboardRankMode,
   type PeriodBounds,
   entryForStudent,
   getPeriodBounds,
@@ -94,11 +99,25 @@ async function studentPeriodStats(
   };
 }
 
+async function studentPlatformSnapshot(student: Student) {
+  const lichessUsername = student.lichessUsername?.trim();
+  const chessComUsername = student.chessComUsername?.trim();
+
+  const [lichessProfile, memberStats, pubStats] = await Promise.all([
+    lichessUsername ? fetchLichessUser(lichessUsername).catch(() => null) : Promise.resolve(null),
+    chessComUsername ? fetchChessComMemberStats(chessComUsername).catch(() => null) : Promise.resolve(null),
+    chessComUsername ? fetchChessComStats(chessComUsername).catch(() => null) : Promise.resolve(null),
+  ]);
+
+  return buildLeaderboardPlatformSnapshot(student, lichessProfile, memberStats, pubStats);
+}
+
 /** Kulüp öğrencileri için haftalık/aylık lider tablosu (sırayla, API yükünü sınırlar) */
 export async function buildClubLeaderboard(
   peers: Student[],
   homeworkAttempts: HomeworkPuzzleAttempt[],
   period: LeaderboardPeriod,
+  rankMode: LeaderboardRankMode = 'activity',
   onProgress?: (done: number, total: number) => void,
 ): Promise<LeaderboardEntry[]> {
   const bounds = getPeriodBounds(period);
@@ -106,13 +125,27 @@ export async function buildClubLeaderboard(
 
   for (let i = 0; i < peers.length; i++) {
     const student = peers[i]!;
-    const stats = await studentPeriodStats(student, bounds, homeworkAttempts);
-    rows.push(entryForStudent(student, stats.puzzles, stats.games, stats.internalPuzzles, stats.wins, stats.draws, stats.losses));
+    const [stats, platform] = await Promise.all([
+      studentPeriodStats(student, bounds, homeworkAttempts),
+      studentPlatformSnapshot(student),
+    ]);
+    rows.push(
+      entryForStudent(
+        student,
+        stats.puzzles,
+        stats.games,
+        stats.internalPuzzles,
+        platform,
+        stats.wins,
+        stats.draws,
+        stats.losses,
+      ),
+    );
     onProgress?.(i + 1, peers.length);
     if (i < peers.length - 1) {
-      await new Promise((r) => setTimeout(r, 120));
+      await new Promise((r) => setTimeout(r, 400));
     }
   }
 
-  return rankLeaderboardEntries(rows);
+  return rankLeaderboardEntries(rows, rankMode);
 }

@@ -114,7 +114,8 @@ Function fetch-ukd deployed successfully.
 | Sorun | Olası neden | Çözüm |
 |--------|--------------|--------|
 | "UKD çek" tıklanınca hiçbir şey olmuyor | Edge Function deploy edilmemiş veya link yanlış | `supabase link` ve `supabase functions deploy fetch-ukd` tekrar çalıştırın. |
-| TC var ama "Kayıt bulunamadı" | TSF’de bu TC’ye kayıtlı oyuncu yok | TSF’de [UKD Sorgulama](https://ukd.tsf.org.tr/ukdsorgulama.php) ile TC’yi kontrol edin; yoksa elle aktarın. |
+| TC var ama "Kayıt bulunamadı" | TC 11 hane değil veya TSF’de kayıt yok | TC’nin tam 11 hane olduğunu kontrol edin; TSF sitesinde aynı TC ile deneyin. |
+| Vercel’de çalışmıyor | `/api/fetch-ukd` deploy edilmemiş | Vercel’e yeniden deploy edin; Edge Function olmadan da API route çalışır. |
 | 400 / 500 hatası | TSF form alan adı değişmiş veya sayfa değişti | `supabase/functions/fetch-ukd/index.ts` içinde form parametrelerini (`tc`, `soyad`) TSF sayfasının HTML’ine göre güncelleyin. |
 
 ---
@@ -125,4 +126,4 @@ Function fetch-ukd deployed successfully.
 - **Frontend çağrısı:** `services/ukdService.ts` → `fetchUkdFromTsf()`
 - **Buton ve güncelleme:** `components/StudentDetail.tsx` (UKD/FIDE sekmesi)
 
-Form alanlarını değiştirmek için sadece `supabase/functions/fetch-ukd/index.ts` içindeki `form.set('tc', ...)` / `form.set('soyad', ...)` satırlarını düzenlemeniz yeterlidir.
+Form alanlarını değiştirmek için `lib/tsfUkdFetch.ts` (Vercel API) ve `supabase/functions/_shared/tsfUkdFetch.ts` (Edge Function) dosyalarını güncelleyin.

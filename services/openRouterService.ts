@@ -331,6 +331,8 @@ export interface StudentComprehensiveContext {
   homeworkLine: string;
   platformLine: string;
   recentOpeningsLine: string;
+  detailedStatsLine?: string;
+  activityLine?: string;
 }
 
 /** Lichess + Chess.com + ödev + beceri verisiyle kapsamlı AI raporu */
@@ -359,6 +361,12 @@ ${context.homeworkLine}
 
 ONLİNE PLATFORM (Lichess + Chess.com):
 ${context.platformLine}
+
+PLATFORM BECERİ SKORLARI:
+${context.detailedStatsLine || context.skillLines}
+
+TEMPO / AKTİVİTE DAĞILIMI:
+${context.activityLine || '(Tempo verisi yok)'}
 
 SON AÇILIŞLAR:
 ${context.recentOpeningsLine}

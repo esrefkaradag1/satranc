@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { Chess, Square } from 'chess.js';
 import {
@@ -7,7 +7,7 @@ import {
   Cpu, Lightbulb, RotateCcw, Zap, FlipHorizontal,
   Search, ListChecks, Star, Globe, Lock, Clock, Heart, ArrowLeft, Video, Highlighter, Plus,
   MessageSquare, Send, Menu, Users, MousePointer2, Highlighter as HighlighterIcon, Loader2,
-  UserPlus, Trash2,
+  UserPlus, Trash2, Keyboard, Settings2,
 } from 'lucide-react';
 import { Study, StudyChapter, StudyChatMessage, BottomTab } from '../lib/studyTypes';
 import StudyCallPanel from './StudyCallPanel';
@@ -21,27 +21,29 @@ import { useStudyCall } from '../hooks/useStudyCall';
 import { useApp } from '../AppContext';
 import { canExportStudy } from '../lib/studyPermissions';
 import { useStudyChapterSync } from '../hooks/useStudyChapterSync';
-import {
-  DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
-  chapterModeBadge, loadStudySelection, saveStudySelection,
+import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
+  chapterModeBadge, formatChapterListLabel, chapterListLabelMatches, loadStudySelection, saveStudySelection,
   loadProgress, saveProgress, fenToCurrentFen,
   loadVcProgress, saveVcProgress,
   describeGameOutcomeFromFen, matedKingSquareFromFen,
   genId, migrateStudy, migrateChapter,
+  normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
 } from '../lib/studyUtils';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
 import { loadStudyPresence, subscribeStudyPresence } from '../services/studyActions';
-import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath } from '../lib/studySync/moveList';
+import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, mergeMainlineMoves } from '../lib/studySync/moveList';
+import { liveLessonFenAt } from '../lib/liveLessonVariations';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
-import { BoardViewToggle } from './chess/BoardViewToggle';
-import { useBoardViewMode } from '../hooks/useBoardViewMode';
-import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
+import { useStudyBoardSettings } from '../hooks/useStudyBoardSettings';
+import { useStudyKeyboardShortcuts } from '../hooks/useStudyKeyboardShortcuts';
+import { StudyKeyboardHelpModal } from './study/StudyKeyboardHelpModal';
+import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
+import { computeThreatOverlay } from '../lib/chessThreats';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
 
-const Chessboard3D = lazy(() => import('./chess/Chessboard3D'));
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Feedback = 'correct' | 'wrong' | 'solved' | null;
@@ -58,17 +60,30 @@ type ChapterMoveAnalysisItem = {
 interface StudentStudyViewProps {
   studentId: string | null;
   studentName?: string;
+  /** Admin/öğretmen: çalışmayı öğrencinin gördüğü gibi salt okunur önizle */
+  previewMode?: boolean;
+  previewStudyId?: string | null;
+  onExitPreview?: () => void;
 }
 
-const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentName = 'Öğrenci' }) => {
+const StudentStudyView: React.FC<StudentStudyViewProps> = ({
+  studentId,
+  studentName = 'Öğrenci',
+  previewMode = false,
+  previewStudyId = null,
+  onExitPreview,
+}) => {
   const { students, coaches, auth } = useApp();
   const [studies, setStudies] = useState<Study[]>([]);
   /** Öğretmendeki gibi girişte tüm çalışmalar listesi; son dosyaya otomatik gitme. */
-  const [selectedStudyId, setSelectedStudyId] = useState<string | null>(null);
+  const [selectedStudyId, setSelectedStudyId] = useState<string | null>(
+    () => (previewMode && previewStudyId ? previewStudyId : null),
+  );
   const [selectedChapterIndex, setSelectedChapterIndex] = useState(0);
   const [listSearch, setListSearch] = useState('');
   const [studyListCategory, setStudyListCategory] = useState<'mine' | 'teacher'>('mine');
   const [currentMoveIndex, setCurrentMoveIndex] = useState(0);
+  const [currentVariation, setCurrentVariation] = useState<[number, number, number] | null>(null);
   const [hoverPly, setHoverPly] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [feedbackText, setFeedbackText] = useState<string | null>(null);
@@ -80,7 +95,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
   const [optionSquares, setOptionSquares] = useState<Record<string, React.CSSProperties>>({});
   const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const [moveFrom, setMoveFrom] = useState<string | null>(null);
-  const [boardViewMode, setBoardViewMode] = useBoardViewMode();
   const [squareMarks, setSquareMarks] = useState<Partial<Record<string, SquareMarkColor>>>({});
   const [markBrush, setMarkBrush] = useState<'off' | SquareMarkColor>('off');
   const [drawArrowsEnabled, setDrawArrowsEnabled] = useState(false);
@@ -118,7 +132,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Motor analizi için state
-  const [engineEnabled, setEngineEnabled] = useState(true);
+  const { settings: boardSettings, toggleSetting: toggleBoardSetting } = useStudyBoardSettings();
+  const [showStudyHelp, setShowStudyHelp] = useState(false);
+  const [showStudySettings, setShowStudySettings] = useState(false);
   const [engineHoverMove, setEngineHoverMove] = useState<{ from: string; to: string } | null>(null);
   const [engineTopMove, setEngineTopMove] = useState<{ from: string; to: string } | null>(null);
   
@@ -155,9 +171,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
   }, [refreshStudies]);
 
   const studentStudies = useMemo(() => {
+    if (previewMode && previewStudyId) {
+      const s = studies.find((x) => x.id === previewStudyId);
+      return s ? [s] : [];
+    }
     if (!studentId) return studies;
     return studies.filter(s => s.memberIds.some(id => String(id) === String(studentId)));
-  }, [studies, studentId]);
+  }, [studies, studentId, previewMode, previewStudyId]);
 
   const myStudies = useMemo(
     () => studentStudies.filter(
@@ -216,15 +236,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
   }, [studentId, studentName, myStudies.length]);
 
   useEffect(() => {
+    if (previewMode) return;
     if (selectedStudyId && studentStudies.length > 0 && !studentStudies.find(s => s.id === selectedStudyId)) {
       setSelectedStudyId(studentStudies[0].id);
       setSelectedChapterIndex(0);
     }
-  }, [studentStudies, selectedStudyId]);
+  }, [previewMode, studentStudies, selectedStudyId]);
 
   useEffect(() => {
+    if (previewMode) return;
     saveStudySelection(studentId, selectedStudyId, selectedChapterIndex);
-  }, [studentId, selectedStudyId, selectedChapterIndex]);
+  }, [previewMode, studentId, selectedStudyId, selectedChapterIndex]);
 
   const selectedStudy = useMemo(() => studentStudies.find(s => s.id === selectedStudyId) ?? null, [studentStudies, selectedStudyId]);
   const selectedChapter = useMemo(() => {
@@ -237,6 +259,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
     legacyChapter,
     syncState,
     jumpToMoveIndex,
+    jumpToVariation,
     makeMove,
     sticky,
     setSticky,
@@ -263,7 +286,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
     const rootFen = syncState.tree.nodes[syncState.tree.rootId]?.fen ?? DEFAULT_FEN;
     const fromTree = mainlineSansFromTree(syncState.tree, rootFen);
     const legacy = effectiveChapter?.moves ?? [];
-    return fromTree.length >= legacy.length ? fromTree : legacy;
+    return mergeMainlineMoves(legacy, fromTree);
   }, [vsComputer, syncState, effectiveChapter?.moves, effectiveChapter?.id]);
 
   const moveListChapter = useMemo(() => {
@@ -336,12 +359,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
   }, [selectedStudy, students, coaches]);
 
   const canManageMembers = useMemo(() => {
+    if (previewMode) return false;
     if (!selectedStudy || !studentId) return false;
     return (
       selectedStudy.studentCreated === true &&
       String(selectedStudy.createdByStudentId ?? '') === String(studentId)
     );
-  }, [selectedStudy, studentId]);
+  }, [selectedStudy, studentId, previewMode]);
 
   const currentStudent = useMemo(
     () => students.find((s) => String(s.id) === String(studentId)),
@@ -438,7 +462,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
     if (!q) return selectedStudy.chapters.map((ch, idx) => ({ ch, idx }));
     return selectedStudy.chapters
       .map((ch, idx) => ({ ch, idx }))
-      .filter(({ ch }) => (ch.title || '').toLowerCase().includes(q));
+      .filter(({ ch }) => chapterListLabelMatches(ch, q, selectedStudy.chapters));
   }, [selectedStudy, chapterSearch]);
 
   useEffect(() => {
@@ -492,20 +516,15 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
     setEngineHoverMove(null);
   }, [hideEngineForStudentPuzzle, effectiveChapter?.id, currentMoveIndex]);
 
-  const studentPlaysColor = selectedStudy?.studentPlaysColor ?? 'white';
+  const studentPlaysColor = normalizeStudentPlaysColor(selectedStudy?.studentPlaysColor);
+  const studentMoveEnabled = studentCanMovePieces(studentPlaysColor);
   const chapterOrientation = effectiveChapter?.orientation ?? 'white';
   const [studentBoardOrientation, setStudentBoardOrientation] = useState<'white' | 'black'>(chapterOrientation);
 
   useEffect(() => { setStudentBoardOrientation(chapterOrientation); }, [effectiveChapter?.id, chapterOrientation]);
 
-  useEffect(() => {
-    const onDown = (e: KeyboardEvent) => {
-      if (!isBoardFlipShortcutKey(e) || !keyboardTargetAllowsBoardShortcut(e)) return;
-      e.preventDefault();
-      setStudentBoardOrientation((o) => (o === 'white' ? 'black' : 'white'));
-    };
-    window.addEventListener('keydown', onDown);
-    return () => window.removeEventListener('keydown', onDown);
+  const flipStudentBoard = useCallback(() => {
+    setStudentBoardOrientation((o) => (o === 'white' ? 'black' : 'white'));
   }, []);
 
   const [freePlayFen, setFreePlayFen] = useState<string | null>(null);
@@ -549,15 +568,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
 
   const progressKey = effectiveChapter ? `${selectedStudy?.id}_${effectiveChapter.id}` : null;
   const recordProgress = useCallback((key: string, idx: number) => {
+    if (previewMode) return;
     setProgress(prev => {
       const next = { ...prev, [key]: Math.max(prev[key] ?? 0, idx) };
       saveProgress(next);
       return next;
     });
-  }, []);
+  }, [previewMode]);
 
   useEffect(() => {
     setSquareMarks({}); setBoardArrows([]); setCircleMarks({}); setMarkBrush('off'); setHoverPly(null); setFeedback(null); setFeedbackText(null);
+    setCurrentVariation(null);
     setLiveAnalysisNote(null);
     setLaMoveQuality(null);
     setLaHint(null);
@@ -572,7 +593,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
   const boardGameOutcome = useMemo(() => describeGameOutcomeFromFen(studyBoardFen), [studyBoardFen]);
 
   /** Bulmacada gizli; bilgisayara karşı ve normal çalışmada tahta yanında avantaj çubuğu */
-  const showEvalBar = !hideEngineForStudentPuzzle;
+  const showEvalBar = !hideEngineForStudentPuzzle && boardSettings.showEvalBar;
+  const engineEnabled = boardSettings.showEngineAnalysis;
 
   const matedKingHighlight = useMemo(() => {
     const sq = matedKingSquareFromFen(studyBoardFen);
@@ -592,8 +614,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
       ...optionSquares,
       ...squareMarksToStyles(circleMarks as any),
       ...matedKingHighlight,
+      ...(boardSettings.showThreats ? computeThreatOverlay(studyBoardFen).squareStyles : {}),
     };
-  }, [lastMoveSquares, optionSquares, circleMarks, matedKingHighlight]);
+  }, [lastMoveSquares, optionSquares, circleMarks, matedKingHighlight, boardSettings.showThreats, studyBoardFen]);
+
+  const studentThreatArrows = useMemo(
+    () => (boardSettings.showThreats ? computeThreatOverlay(studyBoardFen).arrows : []),
+    [boardSettings.showThreats, studyBoardFen],
+  );
 
   const formatDuration = useCallback((ms: number) => {
     const totalSec = Math.max(0, Math.round(ms / 1000));
@@ -904,12 +932,23 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
   const handlePieceDrop = useCallback(({ sourceSquare, targetSquare, piece }: { piece?: any; sourceSquare: string; targetSquare: string | null }) => {
     if (!sourceSquare || !targetSquare) return false;
     if (!effectiveChapter) return false;
+    if (!studentMoveEnabled) {
+      showFeedback('wrong', 'Taş oynatma kapalı');
+      return false;
+    }
     setBoardArrows([]);
     setCircleMarks({});
     setOptionSquares({});
 
     // ── LIVE ANALYSIS ────────────────────────────────────────────────────────
     if (isLiveAnalysis) {
+      if (effectiveStudentTurnCode != null) {
+        const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
+        if (turnCode !== effectiveStudentTurnCode) {
+          showFeedback('wrong', 'Sıra sende değil');
+          return false;
+        }
+      }
       const beforeFen = studyBoardFen;
       const now = Date.now();
       const thinkMs = Math.max(0, now - lastActionMs);
@@ -1065,6 +1104,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
     }
 
     // ── DIRECT / SANDBOX / TAMAMLANMIŞ ──────────────────────────────────────────
+    if (effectiveStudentTurnCode != null) {
+      const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
+      if (turnCode !== effectiveStudentTurnCode) {
+        showFeedback('wrong', 'Sıra sende değil');
+        return false;
+      }
+    }
     try {
       const game = makeBuilderGame(studyBoardFen);
       const result = game.move({ from: sourceSquare as any, to: targetSquare as any, promotion: 'q' });
@@ -1075,7 +1121,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, appendLiveMoveToChapter, syncState, jumpToMoveIndex, progressKey, makeMove]);
+  }, [selectedStudy, effectiveChapter, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, appendLiveMoveToChapter, syncState, jumpToMoveIndex, progressKey, makeMove, studentMoveEnabled]);
 
   useEffect(() => () => {
     if (autoReplyTimer.current) clearTimeout(autoReplyTimer.current);
@@ -1131,6 +1177,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
       setFreePlayFen(null);
     }
     const nextIdx = Math.max(0, Math.min(totalMoves, target));
+    setCurrentVariation(null);
     setCurrentMoveIndex(nextIdx);
     void jumpToMoveIndex(nextIdx);
     setFeedback(null);
@@ -1139,34 +1186,76 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
 
   const navMaxPly = vsComputer ? vcHistory.length : totalMoves;
 
-  const wheelPrev = useCallback(() => goToMove(currentMoveIndex - 1), [goToMove, currentMoveIndex]);
-  const wheelNext = useCallback(() => goToMove(currentMoveIndex + 1), [goToMove, currentMoveIndex]);
+  const chapterForNav = moveListChapter ?? effectiveChapter;
+
+  const goStudyPrev = useCallback(() => {
+    if (currentVariation && chapterForNav) {
+      const [mainLinePos, varGroupIdx, varMoveIdx] = currentVariation;
+      if (varMoveIdx > 0) {
+        setCurrentVariation([mainLinePos, varGroupIdx, varMoveIdx - 1]);
+        void jumpToVariation(mainLinePos, varGroupIdx, varMoveIdx - 1);
+      } else {
+        setCurrentVariation(null);
+        goToMove(mainLinePos);
+      }
+      return;
+    }
+    goToMove(currentMoveIndex - 1);
+  }, [currentVariation, chapterForNav, jumpToVariation, goToMove, currentMoveIndex]);
+
+  const goStudyNext = useCallback(() => {
+    if (currentVariation && chapterForNav) {
+      const [mainLinePos, varGroupIdx, varMoveIdx] = currentVariation;
+      const line = chapterForNav.variations?.[mainLinePos]?.[varGroupIdx] ?? [];
+      if (varMoveIdx < line.length - 1) {
+        setCurrentVariation([mainLinePos, varGroupIdx, varMoveIdx + 1]);
+        void jumpToVariation(mainLinePos, varGroupIdx, varMoveIdx + 1);
+      } else {
+        setCurrentVariation(null);
+        goToMove(Math.min(totalMoves, mainLinePos + 1));
+      }
+      return;
+    }
+    goToMove(currentMoveIndex + 1);
+  }, [currentVariation, chapterForNav, jumpToVariation, goToMove, totalMoves, currentMoveIndex]);
+
+  const wheelPrev = useCallback(() => goStudyPrev(), [goStudyPrev]);
+  const wheelNext = useCallback(() => goStudyNext(), [goStudyNext]);
   const studyBoardWheelRef = useChessWheelNavigation(wheelPrev, wheelNext, vsComputer || totalMoves > 0);
 
   const goStudyStart = useCallback(() => goToMove(0), [goToMove]);
   const goStudyEnd = useCallback(() => goToMove(navMaxPly), [goToMove, navMaxPly]);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (!selectedStudyId || !selectedStudy) return;
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
-      if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        wheelPrev();
-      } else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'j') {
-        e.preventDefault();
-        wheelNext();
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        goStudyEnd();
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        goStudyStart();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [selectedStudyId, selectedStudy, wheelPrev, wheelNext, goStudyStart, goStudyEnd]);
+  const canPlayBestMove = !!engineTopMove && studentMoveEnabled && !vsComputer && !hideEngineForStudentPuzzle;
+
+  const playBestMove = useCallback(() => {
+    if (!engineTopMove || !canPlayBestMove) return;
+    handlePieceDrop({
+      sourceSquare: engineTopMove.from,
+      targetSquare: engineTopMove.to,
+      piece: '',
+    });
+  }, [engineTopMove, canPlayBestMove, handlePieceDrop]);
+
+  useStudyKeyboardShortcuts({
+    enabled: !!selectedStudyId && !!selectedStudy && !vsComputer,
+    goPrev: goStudyPrev,
+    goNext: goStudyNext,
+    goStart: goStudyStart,
+    goEnd: goStudyEnd,
+    flipBoard: flipStudentBoard,
+    toggleEngine: () => toggleBoardSetting('showEngineAnalysis'),
+    toggleBestMoveArrows: () => toggleBoardSetting('showBestMoveArrows'),
+    toggleVariationArrows: () => toggleBoardSetting('showVariationArrows'),
+    toggleEvalBar: () => toggleBoardSetting('showEvalBar'),
+    toggleThreats: () => toggleBoardSetting('showThreats'),
+    toggleInlineNotation: () => toggleBoardSetting('inlineNotation'),
+    toggleSettingsPanel: () => setShowStudySettings((v) => !v),
+    openHelp: () => setShowStudyHelp(true),
+    playBestMove,
+    canPlayBestMove,
+  });
+
   const handleCopyText = useCallback((text: string) => {
     if (!text) return;
     navigator.clipboard.writeText(text).catch(() => {});
@@ -1380,41 +1469,39 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
     } catch { return false; }
   }, [vcFen, vcHistory, vcThinking, vcManualGameOver, doComputerMove, updatePresencePayload]);
 
-  const handleBoardSquareClick3D = useCallback((square: string) => {
-    if (moveFrom === square) {
-      setMoveFrom(null);
-      setOptionSquares({});
-      return;
-    }
-    if (moveFrom) {
-      const args = { sourceSquare: moveFrom, targetSquare: square, piece: undefined };
-      const ok = vsComputer ? handleVcDrop(args) : handlePieceDrop(args);
-      if (ok) {
-        setMoveFrom(null);
-        setOptionSquares({});
-      }
-      return;
-    }
-    try {
-      const g = makeBuilderGame(studyBoardFen);
-      const piece = g.get(square as Square);
-      if (!piece) return;
-      const moves = g.moves({ square: square as Square, verbose: true });
-      if (moves.length === 0) return;
-      setMoveFrom(square);
-      const styles: Record<string, React.CSSProperties> = {};
-      for (const m of moves) {
-        styles[m.to] = {
-          background: 'radial-gradient(circle, rgba(99,102,241,0.45) 22%, transparent 22%)',
-        };
-      }
-      setOptionSquares(styles);
-    } catch {
-      /* ignore invalid square */
-    }
-  }, [moveFrom, studyBoardFen, vsComputer, handleVcDrop, handlePieceDrop]);
+  const canDragStudentPiece = useCallback(({ piece }: { piece?: { pieceType?: string } | string }) => {
+    if (vsComputer) return true;
+    const pieceType = typeof piece === 'string' ? piece : piece?.pieceType ?? '';
+    const colorChar = typeof pieceType === 'string' ? pieceType.charAt(0) : '';
+    if (!colorChar) return studentMoveEnabled;
+    return canStudentDragPieceOnFen(studentPlaysColor, studyBoardFen, colorChar);
+  }, [vsComputer, studentPlaysColor, studyBoardFen, studentMoveEnabled]);
 
   if (!selectedStudyId || !selectedStudy) {
+    if (previewMode && previewStudyId) {
+      return (
+        <div className="flex flex-col h-full items-center justify-center bg-[#0d0f12] gap-4 p-6">
+          {studies.length === 0 ? (
+            <>
+              <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
+              <p className="text-sm text-slate-400">Çalışma yükleniyor…</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-slate-400">Çalışma bulunamadı.</p>
+              <button
+                type="button"
+                onClick={() => onExitPreview?.()}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-sm font-bold text-white"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Geri dön
+              </button>
+            </>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col h-full bg-[#0d0f12] p-4 sm:p-6 lg:p-8 overflow-y-auto overflow-x-hidden">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
@@ -1468,12 +1555,34 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
 
   return (
     <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0d0f12] text-slate-200 overflow-hidden font-sans">
+      {previewMode && (
+        <div className="shrink-0 flex items-center justify-between gap-3 px-3 sm:px-4 py-2 border-b border-indigo-500/30 bg-indigo-500/10">
+          <div className="flex items-center gap-2 min-w-0">
+            <Eye className="w-4 h-4 text-indigo-300 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-[10px] font-black text-indigo-300 uppercase tracking-widest leading-none">Öğrenci önizlemesi</p>
+              <p className="text-xs text-slate-300 truncate">{selectedStudy.title}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onExitPreview?.()}
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-bold text-white transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Düzenlemeye dön
+          </button>
+        </div>
+      )}
       <div className="flex flex-col lg:flex-row gap-0 lg:gap-4 flex-1 min-h-0 min-w-0 p-2 sm:p-4 pb-16 lg:pb-4">
         
         {/* ── LEFT: CHAPTERS / MEMBERS + CHAT ── */}
         <div className="hidden lg:flex w-72 shrink-0 flex-col min-h-0 rounded-sm bg-[#0f172a] border border-[rgba(255,255,255,0.05)] overflow-hidden">
-          <button onClick={() => setSelectedStudyId(null)} className="flex items-center gap-2 p-3 text-xs font-bold text-[#999] hover:text-[#bababa] border-b border-[rgba(255,255,255,0.05)] uppercase tracking-wider bg-[#1e293b]">
-            <ArrowLeft className="w-4 h-4" /> Tüm Çalışmalar
+          <button
+            onClick={() => (previewMode ? onExitPreview?.() : setSelectedStudyId(null))}
+            className="flex items-center gap-2 p-3 text-xs font-bold text-[#999] hover:text-[#bababa] border-b border-[rgba(255,255,255,0.05)] uppercase tracking-wider bg-[#1e293b]"
+          >
+            <ArrowLeft className="w-4 h-4" /> {previewMode ? 'Düzenlemeye dön' : 'Tüm Çalışmalar'}
           </button>
           <div className="px-2 py-2 border-b border-[rgba(255,255,255,0.05)] bg-[#0f172a] flex items-center gap-2">
             <button
@@ -1513,19 +1622,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
           <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-2 space-y-0.5 bg-[#0f172a]">
             {leftTab === 'chapters' ? (
               filteredChapters.map(({ ch, idx }) => {
-                const rawTitle = String(
-                  (effectiveChapter && effectiveChapter.id === ch.id ? effectiveChapter.title : ch.title) || ''
-                ).trim();
-                const modeLabel = chapterModeBadge(ch).label;
-                const sameMeta = (c: StudyChapter) =>
-                  (c.title || '').trim() === (rawTitle || 'Adsız') &&
-                  (c.lessonMode ?? 'direct') === (ch.lessonMode ?? 'direct') &&
-                  (c.interactiveType ?? 'puzzle') === (ch.interactiveType ?? 'puzzle');
-                const dupCount = selectedStudy.chapters.filter(sameMeta).length;
-                const disambig = dupCount > 1 ? ` (${ch.id.slice(0, 6)})` : '';
-                const line = rawTitle
-                  ? `${rawTitle} · ${modeLabel}${disambig}`
-                  : `${modeLabel}${disambig}`;
+                const titleOverride =
+                  effectiveChapter && effectiveChapter.id === ch.id ? effectiveChapter.title : undefined;
+                const line = formatChapterListLabel(ch, {
+                  titleOverride,
+                  allChapters: selectedStudy.chapters,
+                });
                 return (
                 <button
                   key={ch.id}
@@ -1761,53 +1863,44 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
                  Geride: {behind}
                </button>
              )}
+             {studentPlaysColor !== 'both' && (
+               <span
+                 className={`shrink-0 text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full border ${
+                   studentMoveEnabled
+                     ? 'text-indigo-200 bg-indigo-500/10 border-indigo-500/25'
+                     : 'text-slate-400 bg-white/5 border-white/10'
+                 }`}
+                 title="Antrenörün belirlediği taş oynatma izni"
+               >
+                 {studentPlaysColorLabel(studentPlaysColor)}
+               </span>
+             )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-3 sm:p-6 lg:p-8 flex flex-col items-center justify-start gap-4 sm:gap-6 custom-scrollbar overflow-x-hidden">
              <div className="w-full max-w-full sm:max-w-[min(66vh,66vw)] relative">
-                <div className="flex justify-end mb-1.5">
-                  <BoardViewToggle mode={boardViewMode} onChange={setBoardViewMode} />
+                <div className="flex justify-end items-center gap-1.5 mb-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowStudyHelp(true)}
+                    className="p-2 rounded-lg text-slate-500 hover:text-indigo-300 hover:bg-white/5 border border-transparent hover:border-white/10 transition-all"
+                    title="Klavye kısayolları (?)"
+                  >
+                    <Keyboard className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowStudySettings((v) => !v)}
+                    className={`p-2 rounded-lg border transition-all ${
+                      showStudySettings
+                        ? 'text-indigo-300 bg-indigo-500/15 border-indigo-500/30'
+                        : 'text-slate-500 hover:text-indigo-300 hover:bg-white/5 border-transparent hover:border-white/10'
+                    }`}
+                    title="Tahta ayarları (h)"
+                  >
+                    <Settings2 className="w-4 h-4" />
+                  </button>
                 </div>
-                {boardViewMode === '3d' ? (
-                  <div className="aspect-square w-full relative rounded-sm overflow-hidden ring-1 ring-[rgba(255,255,255,0.05)] shadow-lg">
-                    <Suspense fallback={
-                      <div className="w-full h-full flex items-center justify-center bg-[#0f172a] text-slate-500 text-sm">
-                        <Loader2 className="w-5 h-5 animate-spin mr-2" /> 3D tahta yükleniyor…
-                      </div>
-                    }>
-                      <Chessboard3D
-                        fen={studyBoardFen}
-                        orientation={studentBoardOrientation}
-                        squareStyles={studentMainMergedSquareStyles}
-                        onSquareClick={handleBoardSquareClick3D}
-                      />
-                    </Suspense>
-                    {boardGameOutcome && (!vsComputer || isVcGameOver || !vcThinking) && (
-                      <div className="pointer-events-none absolute inset-x-0 bottom-8 z-20 px-2 pb-2 pt-10 bg-gradient-to-t from-black/80 via-black/35 to-transparent rounded-sm">
-                        <div
-                          className={`rounded-xl border px-3 py-2.5 shadow-lg ${
-                            boardGameOutcome.kind === 'checkmate'
-                              ? 'bg-rose-950/92 border-rose-400/45 text-rose-50'
-                              : boardGameOutcome.kind === 'stalemate'
-                                ? 'bg-amber-950/88 border-amber-400/40 text-amber-50'
-                                : 'bg-slate-900/92 border-slate-500/40 text-slate-100'
-                          }`}
-                        >
-                          <p className="text-sm font-black tracking-wide">{boardGameOutcome.title}</p>
-                          <p className="text-[11px] font-medium opacity-95 mt-0.5 leading-snug">{boardGameOutcome.subtitle}</p>
-                        </div>
-                      </div>
-                    )}
-                    {vsComputer && vcThinking && (
-                      <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/10 backdrop-blur-[2px] rounded-sm animate-in fade-in duration-300">
-                        <div className="bg-[#1e293b]/90 border border-white/10 px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3">
-                          <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                          <span className="text-xs font-bold text-white uppercase tracking-widest">Bilgisayar Düşünüyor...</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
                 <ChessBoardFrame
                   boardOrientation={studentBoardOrientation}
                   boardClassName="rounded-sm overflow-hidden ring-1 ring-[rgba(255,255,255,0.05)]"
@@ -1828,7 +1921,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
                         lightSquareStyle: { backgroundColor: '#c1c9d2' },
                         ...CHESSBOARD_ANIMATION,
                         ...CHESSBOARD_NO_NOTATION,
-                        allowDragging: true,
+                        allowDragging: studentMoveEnabled,
+                        canDragPiece: canDragStudentPiece,
                         onPieceDrop: ({ sourceSquare, targetSquare, piece }) => {
                           if (!sourceSquare || !targetSquare) return false;
                           const args = { sourceSquare, targetSquare, piece };
@@ -1853,18 +1947,30 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
                           }
 
                           if (!vsComputer || isVcGameOver) {
-                            if (!hideEngineForStudentPuzzle && engineHoverMove) {
+                            if (!hideEngineForStudentPuzzle && boardSettings.showVariationArrows && engineHoverMove) {
                               const k = `${engineHoverMove.from.toLowerCase()}-${engineHoverMove.to.toLowerCase()}`;
                               if (!seen.has(k)) {
                                 seen.add(k);
                                 merged.push({ startSquare: engineHoverMove.from.toLowerCase(), endSquare: engineHoverMove.to.toLowerCase(), color: 'rgba(99,102,241,0.85)' });
                               }
-                            } else if (engineEnabled && engineTopMove && !hideEngineForStudentPuzzle) {
+                            } else if (
+                              !hideEngineForStudentPuzzle
+                              && boardSettings.showBestMoveArrows
+                              && engineEnabled
+                              && engineTopMove
+                            ) {
                               const k = `${engineTopMove.from.toLowerCase()}-${engineTopMove.to.toLowerCase()}`;
                               if (!seen.has(k)) {
                                 seen.add(k);
                                 merged.push({ startSquare: engineTopMove.from.toLowerCase(), endSquare: engineTopMove.to.toLowerCase(), color: 'rgba(99,102,241,0.4)' });
                               }
+                            }
+                          }
+                          for (const a of studentThreatArrows) {
+                            const k = `${a.startSquare}-${a.endSquare}`;
+                            if (!seen.has(k)) {
+                              seen.add(k);
+                              merged.push(a);
                             }
                           }
                           return merged;
@@ -1880,7 +1986,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
                             if (!a.startSquare || !a.endSquare) continue;
                             const k = `${a.startSquare.toLowerCase()}-${a.endSquare.toLowerCase()}`;
                             if (seen.has(k)) continue;
-                            if (a.color === 'rgba(99,102,241,0.85)' || a.color === 'rgba(99,102,241,0.4)') continue;
+                            if (a.color === 'rgba(99,102,241,0.85)' || a.color === 'rgba(99,102,241,0.4)' || a.color === 'rgba(239,68,68,0.72)') continue;
                             seen.add(k);
                             filtered.push({
                               ...a,
@@ -1918,7 +2024,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
                     )}
                 </div>
                 </ChessBoardFrame>
-                )}
              </div>
 
              <div className="w-full flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 bg-[#0f172a] p-2 rounded-sm border border-[rgba(255,255,255,0.05)]">
@@ -1966,16 +2071,26 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
 
         {/* ── RIGHT ── */}
         <div className="hidden lg:flex w-80 shrink-0 flex-col min-h-0 rounded-sm bg-[#0f172a] border border-[rgba(255,255,255,0.05)] overflow-hidden">
-          {showEvalBar && (!vsComputer || isVcGameOver) && (
+          {!hideEngineForStudentPuzzle && (!vsComputer || isVcGameOver) && (
+            (boardSettings.showEngineAnalysis
+              || boardSettings.showEvalBar
+              || boardSettings.showBestMoveArrows
+              || boardSettings.showVariationArrows) && (
             <EngineAnalysis
               fen={studyBoardFen}
-              enabled={engineEnabled}
-              onToggle={() => setEngineEnabled(v => !v)}
+              enabled={
+                engineEnabled
+                || boardSettings.showEvalBar
+                || boardSettings.showBestMoveArrows
+                || boardSettings.showVariationArrows
+              }
+              onToggle={() => toggleBoardSetting('showEngineAnalysis')}
               onHoverMove={setEngineHoverMove}
               onTopMoveUpdate={setEngineTopMove}
               onEvalScoreChange={setEvalScore}
+              onOpenBoardPrefs={() => setShowStudySettings(true)}
             />
-          )}
+          ))}
 
           <div className="flex-1 overflow-y-auto bg-[#1e293b] border-t border-[rgba(255,255,255,0.05)]">
             {!vsComputer ? (
@@ -1990,13 +2105,44 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
                 <StudyMoveTree
                   chapter={moveListChapter ?? effectiveChapter ?? selectedChapter}
                   currentMoveIndex={currentMoveIndex}
-                  currentVariation={null}
-                  onSelectMove={(idx) => {
-                    goToMove(idx);
+                  currentVariation={currentVariation}
+                  inlineNotation={boardSettings.inlineNotation}
+                  showMoveAnnotations={boardSettings.showMoveAnnotations}
+                  onSelectMove={(idx, varData) => {
+                    if (varData) {
+                      setCurrentVariation(varData);
+                      setCurrentMoveIndex(varData[0]);
+                      void jumpToVariation(varData[0], varData[1], varData[2]);
+                    } else {
+                      setCurrentVariation(null);
+                      goToMove(idx);
+                    }
                   }}
-                  onHoverMove={(idx) => {
-                    if (idx !== null) setHoverPly(idx);
-                    else setHoverPly(null);
+                  onHoverMove={(idx, varInfo) => {
+                    if (varInfo && moveListChapter) {
+                      setHoverPly(null);
+                      const previewFen = liveLessonFenAt(
+                        moveListChapter.fen || DEFAULT_FEN,
+                        moveListChapter.moves ?? [],
+                        moveListChapter.variations ?? {},
+                        varInfo[0],
+                        varInfo,
+                      );
+                      if (isComplete) setHoverPly(varInfo[2]);
+                      else setFreePlayFen(previewFen);
+                    } else if (idx !== null) {
+                      setHoverPly(idx);
+                      if (!isComplete && (totalMoves === 0 || isLiveAnalysis)) {
+                        const ch = moveListChapter ?? effectiveChapter;
+                        if (ch) setFreePlayFen(fenToCurrentFen(ch, idx));
+                      }
+                    } else {
+                      setHoverPly(null);
+                      if (!isComplete && (totalMoves === 0 || isLiveAnalysis)) {
+                        const ch = moveListChapter ?? effectiveChapter;
+                        if (ch) setFreePlayFen(fenToCurrentFen(ch, totalMoves));
+                      }
+                    }
                   }}
                 />
               )
@@ -2223,6 +2369,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({ studentId, studentN
           </div>
         </div>
       </div>
+
+      <StudyKeyboardHelpModal open={showStudyHelp} onClose={() => setShowStudyHelp(false)} />
+      <StudyBoardSettingsPanel
+        open={showStudySettings}
+        onClose={() => setShowStudySettings(false)}
+        settings={boardSettings}
+        onToggle={toggleBoardSetting}
+      />
     </div>
   );
 };

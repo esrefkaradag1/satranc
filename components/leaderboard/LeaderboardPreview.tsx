@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronRight, Loader2, Medal, Trophy } from 'lucide-react';
 import type { HomeworkPuzzleAttempt, Student } from '../../types';
-import type { LeaderboardEntry } from '../../lib/leaderboardUtils';
-import { clubDisplayName, getClubPeerStudents } from '../../lib/leaderboardUtils';
+import type { LeaderboardEntry, LeaderboardRankMode } from '../../lib/leaderboardUtils';
+import { clubDisplayName, getClubPeerStudents, leaderboardModeLabel } from '../../lib/leaderboardUtils';
 import { buildClubLeaderboard } from '../../services/leaderboardService';
 
 const PREVIEW_LIMIT = 5;
@@ -24,6 +24,7 @@ export const LeaderboardPreview: React.FC<Props> = ({
 }) => {
   const [entries, setEntries] = useState([] as LeaderboardEntry[]);
   const [loading, setLoading] = useState(true);
+  const [previewMode] = useState<LeaderboardRankMode>('rapid');
 
   const peers = useMemo(
     () => getClubPeerStudents(allStudents, anchorStudent),
@@ -40,17 +41,24 @@ export const LeaderboardPreview: React.FC<Props> = ({
     }
     setLoading(true);
     try {
-      const result = await buildClubLeaderboard(peers, homeworkAttempts, 'week');
+      const result = await buildClubLeaderboard(peers, homeworkAttempts, 'week', previewMode);
       setEntries(result);
     } catch {
       setEntries([]);
     } finally {
       setLoading(false);
     }
-  }, [peers, homeworkAttempts]);
+  }, [peers, homeworkAttempts, previewMode]);
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (!cancelled) void load();
+    }, 800);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [load]);
 
   const top = entries.slice(0, PREVIEW_LIMIT);
@@ -73,7 +81,9 @@ export const LeaderboardPreview: React.FC<Props> = ({
             <Trophy className="w-4 h-4 text-amber-400" />
             Haftalık Lider Tablosu
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">{clubName} · bulmaca + maç</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {clubName} · {leaderboardModeLabel(previewMode)} + aktivite
+          </p>
         </div>
         <button
           type="button"
@@ -114,9 +124,17 @@ export const LeaderboardPreview: React.FC<Props> = ({
                     <span className="ml-2 text-[9px] font-bold text-indigo-400 uppercase">Sen</span>
                   )}
                 </p>
-                <p className="text-[10px] text-slate-500">{e.puzzles} bulmaca · {e.games} maç</p>
+                <p className="text-[10px] text-slate-500">
+                  {e.platform.rapid?.rating ? `${leaderboardModeLabel('rapid')}: ${e.platform.rapid.rating}` : `${e.puzzles} bulmaca`}
+                  {' · '}
+                  {e.games} maç
+                </p>
               </div>
-              <span className="text-sm font-black text-white tabular-nums">{e.score}</span>
+              <span className="text-sm font-black text-white tabular-nums">
+                {previewMode === 'rapid' && e.platform.rapid?.rating
+                  ? e.platform.rapid.rating
+                  : e.rankMetric || e.score}
+              </span>
             </div>
           ))}
           {showMyRankBelow && myEntry && (

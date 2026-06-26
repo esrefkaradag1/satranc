@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import type { HomeworkAssignment, Student } from '../../types';
 import type { PlatformStudentStat } from '../../lib/homeworkStatsBuilders';
@@ -28,17 +28,15 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
     setGoalActivity(data);
   }, []);
 
+  useEffect(() => {
+    setGoalActivity(null);
+  }, [stat.studentId, viewDate]);
+
   const games = goalActivity?.games ?? platformStats?.games ?? stat.todayGames ?? 0;
-  const gameTarget = Math.max(
-    stat.dailyGameTarget ?? 0,
-    homework.dailyGameTarget ?? 0,
-    platformStats?.games ?? 0,
-  );
-  const puzzleTarget = Math.max(
-    stat.dailyPuzzleTarget ?? 0,
-    homework.dailyPuzzleTarget ?? 0,
-    (platformStats?.puzzlePassed ?? 0) + (platformStats?.puzzleFailed ?? 0),
-  );
+  const gameTarget = Math.max(0, stat.dailyGameTarget ?? homework.dailyGameTarget ?? 0);
+  const puzzleTarget = Math.max(0, stat.dailyPuzzleTarget ?? homework.dailyPuzzleTarget ?? 0);
+  const puzzleCorrect = platformStats?.puzzlePassed ?? stat.correct;
+  const puzzleWrong = platformStats?.puzzleFailed ?? stat.wrong;
   const dateLabel = new Date(`${viewDate}T12:00:00`).toLocaleDateString('tr-TR', {
     weekday: 'long',
     day: '2-digit',
@@ -83,8 +81,8 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
                 value: gameTarget > 0 ? `${Math.min(games, gameTarget)}/${gameTarget}` : games || '—',
                 color: 'text-sky-300',
               },
-              { label: 'Bulmaca doğru', value: stat.correct, color: 'text-emerald-400' },
-              { label: 'Bulmaca yanlış', value: stat.wrong, color: 'text-rose-400' },
+              { label: 'Bulmaca doğru', value: puzzleCorrect, color: 'text-emerald-400' },
+              { label: 'Bulmaca yanlış', value: puzzleWrong, color: 'text-rose-400' },
               {
                 label: 'Platform süresi',
                 value: stat.timeSeconds > 0 ? formatHomeworkDuration(stat.timeSeconds) : '—',
@@ -104,6 +102,7 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
 
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 custom-scrollbar">
           <PlatformDailyPuzzlesSection
+            key={`${student.id}-${viewDate}`}
             student={student}
             viewDate={viewDate}
             platformStats={platformStats}

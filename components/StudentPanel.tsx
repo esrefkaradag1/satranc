@@ -57,10 +57,12 @@ import { StudentHomeworkPanel } from './student/StudentHomeworkPanel';
 import { StudentAnalysesPanel } from './student/StudentAnalysesPanel';
 import LichessGameViewerModal from './LichessGameViewerModal';
 import ChessComGameViewerModal from './ChessComGameViewerModal';
+import StudentMessagesPanel from './StudentMessagesPanel';
 import PlatformViewTabs, { type PlatformViewTab } from './PlatformViewTabs';
 import Sidebar from './Sidebar';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { STUDENT_NAV_CATEGORIES } from '../constants';
+import { filterNavByPermissions } from '../lib/rolePermissions';
 import { isServerMode } from '../apiConfig';
 import { apiHomeworksForStudent, apiScheduleForStudent } from '../services/backendApi';
 import { getServiceSupabase, isSupabaseBackend } from '../services/supabase';
@@ -90,7 +92,9 @@ import ChessComGamesSection from './ChessComGamesSection';
 import ChessComPuzzlesSection from './ChessComPuzzlesSection';
 import LichessStatsSection from './LichessStatsSection';
 import LichessPuzzlesSection from './LichessPuzzlesSection';
-import { fetchFidePlayer, federationLabel, type FidePlayer } from '../services/fideService';
+import LichessOpeningsSection from './LichessOpeningsSection';
+import { fetchFidePlayer, federationLabel, resolveFideProfileForStudent, type FidePlayer } from '../services/fideService';
+import { fetchUkdFromTsf } from '../services/ukdService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
 import { formatMidnightCountdown, todayDayKey } from '../lib/homeworkDayUtils';
 import { fetchStudentPlatformDayStats, platformSyncSummary } from '../lib/homeworkPlatformUtils';
@@ -138,7 +142,7 @@ function ageFromBirthDate(iso?: string): number | null {
   return age;
 }
 
-type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'ukd' | 'lichess' | 'chesscom';
+type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'ukd' | 'lichess' | 'chesscom' | 'messages';
 
 /** Veli panelinde gizlenecek eğitim sekmeleri */
 const PARENT_HIDDEN_TAB_IDS = new Set<PanelTab>([
@@ -169,6 +173,7 @@ const PANEL_TAB_TO_SLUG: Record<PanelTab, string> = {
   ukd: 'ukd',
   lichess: 'lichess',
   chesscom: 'chesscom',
+  messages: 'mesajlar',
 };
 const PANEL_SLUG_TO_TAB: Record<string, PanelTab> = Object.fromEntries(
   Object.entries(PANEL_TAB_TO_SLUG).map(([tab, slug]) => [slug, tab as PanelTab])
@@ -269,7 +274,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, getAuthPermissions } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(() =>
@@ -330,7 +335,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const chessComNextBeforeEndTimeRef = useRef<number | null>(null);
   const chessComHasMoreRef = useRef(false);
   const [fideProfile, setFideProfile] = useState<FidePlayer | null>(null);
+  const [resolvedFideId, setResolvedFideId] = useState<string | null>(null);
   const [loadingFide, setLoadingFide] = useState(false);
+  const [tsfUkdLive, setTsfUkdLive] = useState<number | null>(null);
+  const [loadingTsfUkd, setLoadingTsfUkd] = useState(false);
+  const [tsfUkdError, setTsfUkdError] = useState<string | null>(null);
   const [photoUploading, setPhotoUploading] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -360,8 +369,10 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, []);
 
   const student = useMemo<Student | null>(() => {
+    const fromList = students.find((s) => s.id === studentId) ?? null;
+    if (fromList) return fromList;
     if (isServerMode() && apiStudent?.id === studentId) return apiStudent;
-    return students.find((s) => s.id === studentId) ?? null;
+    return null;
   }, [students, studentId, apiStudent]);
 
   const refreshTodayExternalStats = useCallback(async () => {
@@ -553,18 +564,20 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       .sort((a, b) => b.points - a.points || b.wins - a.wins || a.id.localeCompare(b.id));
   }, [selectedTournament]);
 
+  const panelPermissions = getAuthPermissions();
+
   const navCategoriesForView = useMemo(() => {
-    if (viewAs === 'parent') {
-      return STUDENT_NAV_CATEGORIES.map((cat) => ({
-        ...cat,
-        items: cat.items.filter((i) => !PARENT_HIDDEN_TAB_IDS.has(i.id as PanelTab)),
-      })).filter((cat) => cat.items.length > 0);
+    let filtered = filterNavByPermissions(STUDENT_NAV_CATEGORIES, panelPermissions);
+    if (viewAs === 'student') {
+      filtered = filtered
+        .map((cat) => ({
+          ...cat,
+          items: cat.items.filter((i) => i.id !== 'payments' && i.id !== 'dues'),
+        }))
+        .filter((cat) => cat.items.length > 0);
     }
-    return STUDENT_NAV_CATEGORIES.map((cat) => ({
-      ...cat,
-      items: cat.items.filter((i) => i.id !== 'payments' && i.id !== 'dues'),
-    })).filter((cat) => cat.items.length > 0);
-  }, [viewAs]);
+    return filtered;
+  }, [viewAs, panelPermissions]);
 
   const lichessPracticePuzzles = useMemo(
     () => puzzles.filter((p) => p.source === 'lichess').slice(0, 24),
@@ -603,9 +616,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, []);
 
   useEffect(() => {
-    if (viewAs === 'student' && (activeTab === 'payments' || activeTab === 'dues')) setActiveTab('summary');
-    if (viewAs === 'parent' && PARENT_HIDDEN_TAB_IDS.has(activeTab)) setActiveTab('summary');
-  }, [viewAs, activeTab, setActiveTab]);
+    if (!panelPermissions.has(activeTab)) setActiveTab('summary');
+  }, [viewAs, activeTab, panelPermissions, setActiveTab]);
 
   useEffect(() => {
     if (activeTab !== 'lichess') return;
@@ -775,23 +787,53 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [activeTab, student?.chessComUsername, loadChessCom]);
 
   const loadFide = useCallback(async () => {
-    const id = student?.fideId?.trim().replace(/\D/g, '');
-    if (!id) {
+    if (!student) {
       setFideProfile(null);
+      setResolvedFideId(null);
       return;
     }
     setLoadingFide(true);
     try {
-      const profile = await fetchFidePlayer(id);
+      const { profile, resolvedId } = await resolveFideProfileForStudent(student);
       setFideProfile(profile ?? null);
+      setResolvedFideId(resolvedId ?? student.fideId?.trim().replace(/\D/g, '') ?? null);
     } finally {
       setLoadingFide(false);
     }
-  }, [student?.fideId]);
+  }, [student]);
+
+  const loadTsfUkdSnapshot = useCallback(async () => {
+    if (!student?.tcNo?.trim()) {
+      setTsfUkdLive(null);
+      setTsfUkdError(null);
+      return;
+    }
+    setLoadingTsfUkd(true);
+    try {
+      const tc = student.tcNo.replace(/\D/g, '');
+      const soyad = (student.name || '').trim().split(/\s+/).slice(-1)[0] || undefined;
+      const res = await fetchUkdFromTsf({ tc, soyad });
+      if (res && 'ok' in res && res.ok && res.ukd != null && res.ukd > 0) {
+        setTsfUkdLive(res.ukd);
+        setTsfUkdError(null);
+      } else {
+        setTsfUkdLive(null);
+        setTsfUkdError(res && 'error' in res ? res.error : 'TSF sorgusu başarısız');
+      }
+    } catch {
+      setTsfUkdLive(null);
+      setTsfUkdError('TSF sorgusu yapılamadı');
+    } finally {
+      setLoadingTsfUkd(false);
+    }
+  }, [student?.tcNo, student?.name]);
 
   useEffect(() => {
-    if (activeTab === 'ukd' && student?.fideId) loadFide();
-  }, [activeTab, student?.fideId, loadFide]);
+    if (activeTab === 'ukd' && student) {
+      void loadFide();
+      void loadTsfUkdSnapshot();
+    }
+  }, [activeTab, student?.id, student?.fideId, student?.tcNo, loadFide, loadTsfUkdSnapshot]);
 
   useEffect(() => {
     if (isServerMode() && studentId && student?.group != null) {
@@ -1360,7 +1402,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           </div>
         )}
 
-        {/* Medya & Galeri — sadece herkese açık ve bu öğrenciye özel görseller */}
         {activeTab === 'gallery' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-5">
@@ -1430,6 +1471,18 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           </div>
         )}
 
+        {activeTab === 'messages' && student && (
+          <div className="animate-in fade-in duration-300">
+            <StudentMessagesPanel
+              studentId={student.id}
+              studentName={student.name}
+              parentName={student.parentName}
+              groupName={student.group}
+              viewAs={viewAs}
+            />
+          </div>
+        )}
+
         {activeTab === 'analyses' && student && (
           <div className="animate-in fade-in duration-300">
             <StudentAnalysesPanel
@@ -1472,8 +1525,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                   <span className="text-sm font-black text-white">UKD & FIDE Bilgileri</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button type="button" onClick={loadFide} disabled={loadingFide} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 text-xs font-bold disabled:opacity-50">
-                    {loadingFide ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Yenile
+                  <button type="button" onClick={() => { void loadFide(); void loadTsfUkdSnapshot(); }} disabled={loadingFide || loadingTsfUkd} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 text-xs font-bold disabled:opacity-50">
+                    {(loadingFide || loadingTsfUkd) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Yenile
                   </button>
                   <a href="https://ukd.tsf.org.tr/ukdsorgulama.php" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">
                     <ExternalLink className="w-4 h-4" /> TSF UKD Sorgula
@@ -1504,6 +1557,17 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                   <div className="pt-2 border-t border-slate-700/60 flex flex-wrap items-center gap-3">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Kayıtlı UKD puanı:</span>
                     <span className="text-lg font-black text-white">{student.ukd != null && student.ukd > 0 ? student.ukd : '—'}</span>
+                    {loadingTsfUkd ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> TSF kontrol ediliyor…
+                      </span>
+                    ) : tsfUkdLive != null ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs font-bold">
+                        TSF güncel: {tsfUkdLive}
+                      </span>
+                    ) : tsfUkdError && student.tcNo ? (
+                      <span className="text-[10px] text-slate-500" title={tsfUkdError}>TSF canlı sorgu kullanılamadı</span>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1512,16 +1576,19 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                   <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">FIDE (ratings.fide.com)</div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white font-mono text-sm">
-                      {student.fideId || '—'}
+                      {student.fideId || resolvedFideId || '—'}
                     </span>
-                    {student.fideId ? (
-                      <a href={`https://ratings.fide.com/profile/${student.fideId}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm font-medium hover:bg-amber-500/20 transition-colors">
+                    {(student.fideId || resolvedFideId) ? (
+                      <a href={`https://ratings.fide.com/profile/${student.fideId || resolvedFideId}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm font-medium hover:bg-amber-500/20 transition-colors">
                         <ExternalLink className="w-3.5 h-3.5" /> ratings.fide.com Profil
                       </a>
                     ) : null}
                   </div>
+                  {!student.fideId && resolvedFideId && (
+                    <p className="text-[10px] text-slate-500 mt-1.5 italic">FIDE ID ad ve doğum yılıyla otomatik eşleştirildi (kayıtlı profil).</p>
+                  )}
                 </div>
-                {student.fideId ? (
+                {(student.fideId || resolvedFideId || loadingFide) ? (
                   loadingFide && !fideProfile ? (
                     <div className="flex items-center gap-2 py-8 text-slate-400">
                       <Loader2 className="w-5 h-5 animate-spin" /> FIDE verileri çekiliyor...
@@ -1557,9 +1624,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                         </div>
                       </div>
                       <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/5 px-5 py-4">
-                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">UKD Puanı (senkron)</div>
-                        <div className="text-2xl font-black text-indigo-400 mt-1">{student.elo ?? fideProfile.standard ?? '—'}</div>
-                        <div className="text-xs text-slate-400 mt-1">FIDE Standard ile güncellenir</div>
+                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">UKD Puanı (TSF)</div>
+                        <div className="text-2xl font-black text-indigo-400 mt-1">{student.ukd != null && student.ukd > 0 ? student.ukd : '—'}</div>
+                        <div className="text-xs text-slate-400 mt-1">TSF UKD sorgusu ile güncellenir (FIDE ELO değildir)</div>
                       </div>
                     </div>
                   ) : (
@@ -1658,10 +1725,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                           gamesCount={lichessGames.length}
                           puzzlesCount={lichessPuzzlesCount}
                           accent="sky"
-                          statsContent={<LichessStatsSection profile={lichessProfile} />}
+                          statsContent={<LichessStatsSection profile={lichessProfile} activities={lichessActivities} />}
                           puzzlesContent={
                             <LichessPuzzlesSection
                               username={student.lichessUsername}
+                              studentId={student.id}
                               dailyPuzzle={dailyLichessPuzzle}
                               practicePuzzles={lichessPracticePuzzles}
                               loadingDaily={loadingDailyLichessPuzzle}
@@ -1670,6 +1738,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                           }
                           gamesContent={
                             <>
+                        {lichessGames.length > 0 && student.lichessUsername?.trim() ? (
+                          <LichessOpeningsSection games={lichessGames} username={student.lichessUsername} />
+                        ) : null}
                         {loadingLichessGames && (
                           <div className="rounded-lg bg-slate-800/50 border border-sky-500/20 px-4 py-3 text-sm text-sky-300 flex items-center gap-2">
                             <Loader2 className="w-4 h-4 animate-spin shrink-0" />
@@ -1971,9 +2042,14 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           </div>
         )}
 
-        {/* Profil sekmesi — profil foto, öğrenci/veli bilgileri, giriş bilgileri (gerçek veriler) */}
+        {/* Profil sekmesi — öğrenci/veli bilgileri, giriş ayarları */}
         {activeTab === 'profile' && (
           <div className="space-y-6 animate-in fade-in duration-300">
+            {viewAs === 'parent' && (
+              <div className="rounded-xl bg-indigo-500/10 border border-indigo-500/30 px-4 py-3 text-sm text-indigo-200">
+                <strong className="font-bold">Veli profili</strong> — Öğrencinize ait bilgileri görüntüleyebilir ve giriş bilgilerini güncelleyebilirsiniz.
+              </div>
+            )}
             {/* Profil fotoğrafı */}
             <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-5">
               <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">

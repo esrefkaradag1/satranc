@@ -16,8 +16,26 @@ import {
 import { CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
 
 type GamePick =
-  | { source: 'lichess'; id: string; label: string }
-  | { source: 'chesscom'; pgn: string; label: string };
+  | { source: 'lichess'; id: string; label: string; playerColor?: 'w' | 'b' }
+  | { source: 'chesscom'; pgn: string; label: string; playerColor?: 'w' | 'b' };
+
+function lichessPlayerColor(game: LichessGame, username: string): 'w' | 'b' | undefined {
+  const u = username.trim().toLowerCase();
+  const w = (game.players?.white?.user?.name ?? game.players?.white?.user?.id ?? '').toLowerCase();
+  const b = (game.players?.black?.user?.name ?? game.players?.black?.user?.id ?? '').toLowerCase();
+  if (w === u) return 'w';
+  if (b === u) return 'b';
+  return undefined;
+}
+
+function chessComPlayerColor(game: ChessComGame, username: string): 'w' | 'b' | undefined {
+  const u = username.trim().toLowerCase();
+  const w = game.white?.username?.toLowerCase() ?? '';
+  const b = game.black?.username?.toLowerCase() ?? '';
+  if (w === u) return 'w';
+  if (b === u) return 'b';
+  return undefined;
+}
 
 interface GameMistakeReviewProps {
   studentName: string;
@@ -61,6 +79,7 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
         source: 'lichess',
         id: g.id,
         label: `Lichess · ${opening || 'Oyun'} · ${date}`,
+        playerColor: lUser ? lichessPlayerColor(g, lUser) : undefined,
       });
     }
 
@@ -71,6 +90,7 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
         source: 'chesscom',
         pgn: g.pgn,
         label: `Chess.com · ${g.time_class || 'oyun'} · ${date}`,
+        playerColor: chessComPlayerColor(g, cUser),
       });
     }
 
@@ -110,19 +130,34 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
       const lUser = lichessUsername?.trim();
       const cUser = chessComUsername?.trim();
       const color =
-        (lUser && inferPlayerColorFromPgn(pgn, lUser)) ||
-        (cUser && inferPlayerColorFromPgn(pgn, cUser)) ||
-        'w';
+        selectedGame.playerColor ??
+        (lUser ? inferPlayerColorFromPgn(pgn, lUser) : null) ??
+        (cUser ? inferPlayerColorFromPgn(pgn, cUser) : null);
+
+      if (!color) {
+        setError('Öğrencinin bu oyundaki rengi belirlenemedi. Profildeki kullanıcı adının platformla aynı olduğundan emin olun.');
+        return;
+      }
 
       setProgress('Hamleler analiz ediliyor…');
-      const found = await reviewPlayerMovesInPgn(pgn, color, {
-        maxPlies: 120,
-        engineLevel: 6,
+      const result = await reviewPlayerMovesInPgn(pgn, color, {
+        maxPlies: 160,
+        engineLevel: 12,
+        evalMovetimeMs: 600,
         onProgress: (done, total) => setProgress(`Stockfish: ${done}/${total} hamle`),
       });
 
-      setMistakes(found);
-      if (!found.length) {
+      if (!result.ok) {
+        setError(
+          result.reason === 'parse'
+            ? 'Oyun PGN formatı okunamadı. Chess.com saat notları temizlense de hamle listesi çıkarılamadı.'
+            : 'PGN içinde analiz edilecek hamle bulunamadı.',
+        );
+        return;
+      }
+
+      setMistakes(result.mistakes);
+      if (!result.mistakes.length) {
         setError('Bu oyunda belirgin hata (≥60cp kayıp) bulunamadı veya oyun çok kısa.');
       }
     } catch (e) {

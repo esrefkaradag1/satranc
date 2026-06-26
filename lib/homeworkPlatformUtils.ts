@@ -10,9 +10,11 @@ import {
   fetchChessComGamesForDay,
   fetchChessComPuzzlesBundle,
   fetchLichessDayStats,
+  fetchLichessGamesCountForDay,
   fetchLichessGamesForDay,
   type LichessGame,
 } from '../services/chessPlatformService';
+import { fetchLichessOAuthDayPuzzleStats, isStudentLichessOAuthConnected } from '../services/lichessOAuthClient';
 import { timestampMatchesDay } from './homeworkDayUtils';
 import { weekdayKeyFromIso } from './homeworkDayUtils';
 
@@ -48,8 +50,27 @@ export async function fetchStudentPlatformDayStats(
 
   if (lichessUsername) {
     try {
-      lichessDay = await fetchLichessDayStats(lichessUsername, dayIso);
-      if (lichessDay.activityRateLimited) lichessError = true;
+      let oauthUsed = false;
+      if (student.id?.trim() && isStudentLichessOAuthConnected(student)) {
+        const oauth = await fetchLichessOAuthDayPuzzleStats(student.id, dayIso);
+        if (oauth.connected) {
+          oauthUsed = true;
+          lichessDay = {
+            games: 0,
+            puzzles: { count: oauth.count, passed: oauth.passed, failed: oauth.failed },
+            activityRateLimited: false,
+          };
+          try {
+            lichessDay.games = await fetchLichessGamesCountForDay(lichessUsername, dayIso);
+          } catch {
+            lichessError = true;
+          }
+        }
+      }
+      if (!oauthUsed) {
+        lichessDay = await fetchLichessDayStats(lichessUsername, dayIso);
+        if (lichessDay.activityRateLimited) lichessError = true;
+      }
     } catch {
       lichessError = true;
     }
@@ -270,6 +291,34 @@ export function capDailyPuzzleDisplay(
   const remainingSlots = Math.max(0, puzzleTarget - cappedCorrect);
   const cappedWrong = Math.min(wrong, remainingSlots);
   return { correct: cappedCorrect, wrong: cappedWrong };
+}
+
+/** Rate limit veya geçici hata sonrası daha düşük sayıların iyi verinin üzerine yazılmasını önler. */
+export function mergePlatformDayStats(
+  prev: PlatformDayStats | undefined,
+  next: PlatformDayStats,
+): PlatformDayStats {
+  if (!prev) return next;
+  const lichessKept = Math.max(prev.lichessGames, next.lichessGames) > 0
+    || Math.max(prev.lichessPuzzles, next.lichessPuzzles) > 0;
+  const chessKept = Math.max(prev.chessComGames, next.chessComGames) > 0
+    || Math.max(prev.chessComPuzzles, next.chessComPuzzles) > 0;
+  return {
+    games: Math.max(prev.games, next.games),
+    puzzleSolved: Math.max(prev.puzzleSolved, next.puzzleSolved),
+    puzzlePassed: Math.max(prev.puzzlePassed, next.puzzlePassed),
+    puzzleFailed: Math.max(prev.puzzleFailed, next.puzzleFailed),
+    lichessGames: Math.max(prev.lichessGames, next.lichessGames),
+    lichessPuzzles: Math.max(prev.lichessPuzzles, next.lichessPuzzles),
+    lichessPuzzlePassed: Math.max(prev.lichessPuzzlePassed, next.lichessPuzzlePassed),
+    lichessPuzzleFailed: Math.max(prev.lichessPuzzleFailed, next.lichessPuzzleFailed),
+    chessComGames: Math.max(prev.chessComGames, next.chessComGames),
+    chessComPuzzles: Math.max(prev.chessComPuzzles, next.chessComPuzzles),
+    chessComPuzzlePassed: Math.max(prev.chessComPuzzlePassed, next.chessComPuzzlePassed),
+    chessComPuzzleFailed: Math.max(prev.chessComPuzzleFailed, next.chessComPuzzleFailed),
+    lichessError: next.lichessError && !lichessKept ? true : (prev.lichessError && !lichessKept ? true : undefined),
+    chessComError: next.chessComError && !chessKept ? true : (prev.chessComError && !chessKept ? true : undefined),
+  };
 }
 
 export function platformSyncSummary(stats: PlatformDayStats | undefined, student: Student): string | null {

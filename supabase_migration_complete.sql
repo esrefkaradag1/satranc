@@ -73,6 +73,8 @@ ALTER TABLE public.students ADD COLUMN IF NOT EXISTS mother_job text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS address text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS health_info text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS lichess_username text;
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS lichess_access_token text;
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS lichess_oauth_connected_at timestamptz;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS chess_com_username text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS photo_url text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS tc_no text;
@@ -487,3 +489,45 @@ CREATE POLICY "Authenticated update student photos" ON storage.objects
   FOR UPDATE USING (bucket_id = 'student-photos');
 
 -- Not: Service role key RLS'i bypass eder (admin yazma). Veli imza API de service role kullanır.
+
+-- ── 14. Site içi mesajlaşma ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.site_messages (
+  id text PRIMARY KEY,
+  conversation_id text NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('parent', 'group', 'student')),
+  target_student_id text,
+  target_group text,
+  sender_role text NOT NULL CHECK (sender_role IN ('admin', 'coach', 'parent', 'student')),
+  sender_name text NOT NULL DEFAULT 'Kullanıcı',
+  text text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_site_messages_conversation ON public.site_messages (conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_site_messages_created ON public.site_messages (created_at DESC);
+
+ALTER TABLE public.site_messages ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public read site messages" ON public.site_messages;
+CREATE POLICY "Public read site messages" ON public.site_messages
+  FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Authenticated insert site messages" ON public.site_messages;
+CREATE POLICY "Authenticated insert site messages" ON public.site_messages
+  FOR INSERT WITH CHECK (true);
+
+GRANT SELECT, INSERT ON public.site_messages TO anon, authenticated;
+
+-- Mevcut kurulumlar: kind sütununa 'student' ekle
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_schema = 'public' AND table_name = 'site_messages'
+      AND constraint_name LIKE '%kind%'
+  ) THEN
+    ALTER TABLE public.site_messages DROP CONSTRAINT IF EXISTS site_messages_kind_check;
+    ALTER TABLE public.site_messages ADD CONSTRAINT site_messages_kind_check
+      CHECK (kind IN ('parent', 'group', 'student'));
+  END IF;
+END $$;

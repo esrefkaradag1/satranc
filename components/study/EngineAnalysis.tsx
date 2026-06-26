@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Chessboard } from 'react-chessboard';
-import { Settings2, ChevronDown, Plus, FlipHorizontal, BarChart2, Info, Menu, Share2, Download, Highlighter } from 'lucide-react';
+import { Settings2, ChevronDown, Plus, FlipHorizontal, BarChart2, Info, Menu, Share2, Download, Highlighter, Hand } from 'lucide-react';
 import { Chess } from 'chess.js';
 import { useStockfish, type PvLine } from '../../hooks/useStockfish';
 import { CHESSBOARD_NO_NOTATION, pvLineToEvalBarPawns } from '../../lib/chessBoardUi';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
+import type { StudentPlaysColor } from '../../lib/studyTypes';
+import { studentPlaysColorLabel } from '../../lib/studyUtils';
 
 const ENGINE_LINE_PREVIEW_SIZE = 176;
 const ENGINE_LINE_PREVIEW_OFFSET = 14;
@@ -64,7 +66,11 @@ interface EngineAnalysisProps {
     onOpenShare: () => void;
     onDownloadPgn: () => void;
     canDownloadPgn?: boolean;
+    studentPlaysColor?: StudentPlaysColor;
+    onStudentPlaysColorChange?: (value: StudentPlaysColor) => void;
   };
+  /** Tahta tercihleri paneli (StudyBoardSettingsPanel) */
+  onOpenBoardPrefs?: () => void;
 }
 
 function uciToSan(fen: string, uciMoves: string[]): string[] {
@@ -111,6 +117,7 @@ function formatScore(line: PvLine, turn: 'w' | 'b'): string {
   const flip = turn === 'b' ? -1 : 1;
   if (line.mate !== null) {
     const m = line.mate * flip;
+    if (m === 0) return '#';
     return m > 0 ? `M${m}` : `-M${Math.abs(m)}`;
   }
   const s = line.score * flip;
@@ -123,6 +130,47 @@ function scoreColorClass(line: PvLine, turn: 'w' | 'b'): string {
   if (s > 0.5) return 'text-white';
   if (s < -0.5) return 'text-slate-400';
   return 'text-slate-300';
+}
+
+/** Boş PV satırı için durum metni — mat / zorunlu hatta "analiz ediliyor" takılmasın */
+function emptyPvLineLabel(
+  lineIndex: number,
+  pvLines: (PvLine | null)[],
+  depth: number,
+  ready: boolean,
+  loading: boolean,
+  error: string | null,
+): string {
+  if (error) return error;
+  if (loading) return 'Motor başlatılıyor...';
+  if (!ready) return 'bekleniyor...';
+
+  const main = pvLines[0];
+  if (!main) return 'analiz ediliyor...';
+
+  if (lineIndex === 0) return 'analiz ediliyor...';
+
+  const mainDepth = main.depth || depth;
+  if (main.mate !== null && mainDepth >= 4) {
+    return 'zorunlu mat hattı';
+  }
+  if (mainDepth >= 10 || depth >= 10) {
+    return 'alternatif yok';
+  }
+
+  return 'analiz ediliyor...';
+}
+
+function anchorPopupStyle(anchor: DOMRect, width = 320): React.CSSProperties {
+  const w = Math.min(width, window.innerWidth - 16);
+  const left = Math.max(8, Math.min(anchor.right - w, window.innerWidth - w - 8));
+  return {
+    position: 'fixed',
+    top: anchor.bottom + 6,
+    left,
+    width: w,
+    zIndex: 250,
+  };
 }
 
 function InteractiveMoveList({
@@ -208,8 +256,10 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({
   ];
 
   return (
-    <div className="absolute top-full right-0 mt-1 w-80 max-h-[min(70vh,520px)] overflow-y-auto bg-[#2b2926] border border-[rgba(255,255,255,0.05)] rounded-lg shadow-2xl z-50"
-         onClick={e => e.stopPropagation()}>
+    <div
+      className="w-[min(20rem,calc(100vw-1rem))] max-h-[min(70vh,520px)] overflow-y-auto bg-[#2b2926] border border-[rgba(255,255,255,0.05)] rounded-lg shadow-2xl"
+      onClick={e => e.stopPropagation()}
+    >
       <div className="p-3 border-b border-[rgba(255,255,255,0.05)]">
         <label className="text-xs text-[#999] mb-1.5 block">Engine:</label>
         <div className="bg-[#1e1d1b] border border-[#444] rounded-md overflow-hidden">
@@ -287,6 +337,8 @@ const BoardSettingsPopup: React.FC<{
   onOpenShare: () => void;
   onDownloadPgn: () => void;
   canDownloadPgn?: boolean;
+  studentPlaysColor?: StudentPlaysColor;
+  onStudentPlaysColorChange?: (value: StudentPlaysColor) => void;
 }> = ({
   showEvalBar,
   onToggleEvalBar,
@@ -302,10 +354,13 @@ const BoardSettingsPopup: React.FC<{
   onOpenShare,
   onDownloadPgn,
   canDownloadPgn = true,
+  studentPlaysColor,
+  onStudentPlaysColorChange,
 }) => {
+  const studentMoveOptions: StudentPlaysColor[] = ['both', 'white', 'black', 'none'];
   return (
     <div
-      className="absolute top-full right-0 mt-1 w-72 max-h-[min(70vh,540px)] overflow-y-auto glass-card rounded-2xl border border-white/10 shadow-2xl z-50 p-3 space-y-3"
+      className="w-[min(18rem,calc(100vw-1rem))] max-h-[min(70vh,540px)] overflow-y-auto glass-card rounded-2xl border border-white/10 shadow-2xl p-3 space-y-3"
       onClick={(e) => e.stopPropagation()}
     >
       <div className="space-y-1">
@@ -339,6 +394,37 @@ const BoardSettingsPopup: React.FC<{
           Tahta Tasarlayıcı
         </button>
       </div>
+
+      {onStudentPlaysColorChange && (
+        <div className="space-y-1">
+          <p className="text-[9px] font-black text-slate-600 uppercase tracking-[0.22em] px-1">Öğrenci</p>
+          <div className="px-1 pb-1">
+            <p className="text-[10px] text-slate-500 font-bold mb-2 flex items-center gap-1.5">
+              <Hand className="w-3.5 h-3.5" />
+              Taş oynatma hakkı
+            </p>
+            <div className="grid grid-cols-2 gap-1.5">
+              {studentMoveOptions.map((opt) => {
+                const active = (studentPlaysColor ?? 'both') === opt;
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => onStudentPlaysColorChange(opt)}
+                    className={`px-2 py-2 rounded-xl text-[10px] font-black uppercase tracking-tight transition-all border ${
+                      active
+                        ? 'text-indigo-100 bg-indigo-500/20 border-indigo-400/40'
+                        : 'text-slate-400 bg-white/5 border-white/10 hover:bg-white/10'
+                    }`}
+                  >
+                    {studentPlaysColorLabel(opt)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-1">
         <p className="text-[9px] font-black text-slate-600 uppercase tracking-[0.22em] px-1">Araçlar</p>
@@ -375,21 +461,25 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   onTopMoveUpdate,
   onEvalScoreChange,
   boardSettings,
+  onOpenBoardPrefs,
 }) => {
   const [linePreview, setLinePreview] = useState<{ fen: string; x: number; y: number } | null>(null);
   const [hoveredPvMove, setHoveredPvMove] = useState<{ lineIndex: number; plyIndex: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showBoardSettings, setShowBoardSettings] = useState(false);
+  const [engineSettingsAnchor, setEngineSettingsAnchor] = useState<DOMRect | null>(null);
+  const [boardSettingsAnchor, setBoardSettingsAnchor] = useState<DOMRect | null>(null);
   const [engine, setEngine] = useState<'lite'>('lite');
   const [numPv, setNumPv] = useState(3);
   const [threads, setThreads] = useState(1);
   const [hash, setHash] = useState(16);
-  const settingsRef = useRef<HTMLDivElement>(null);
-  const boardSettingsRef = useRef<HTMLDivElement>(null);
+  const engineSettingsBtnRef = useRef<HTMLButtonElement>(null);
+  const boardSettingsBtnRef = useRef<HTMLButtonElement>(null);
   const prevFenRef = useRef('');
+  const readyOnceRef = useRef(false);
   const [evalHistory, setEvalHistory] = useState<number[]>([]);
 
-  const { ready, loading, error, pvLines, depth, analyseFen, stop } = useStockfish({
+  const { ready, loading, error, pvLines, depth, analyseFen } = useStockfish({
     numPv,
     enabled,
     threads,
@@ -402,22 +492,23 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   // doğal olarak yeni analiz başlar ve eskisi durur.
   useEffect(() => {
     if (!enabled) return;
+    const fenChanged = fen !== prevFenRef.current;
+    const becameReady = ready && !readyOnceRef.current;
+    if (!fenChanged && !becameReady) return;
     prevFenRef.current = fen;
+    if (ready) readyOnceRef.current = true;
     analyseFen(fen);
   }, [fen, enabled, ready, analyseFen]);
 
-  // Motor kapatıldığında durdur
+  // Motor kapatıldığında yalnızca hover/önizlemeyi temizle (paylaşılan worker abonelikle yönetilir)
   useEffect(() => {
     if (!enabled) {
-      stop();
       setLinePreview(null);
       setHoveredPvMove(null);
       onHoverPreviewFen?.(null);
       onHoverMove?.(null);
     }
-  }, [enabled, stop, onHoverPreviewFen, onHoverMove]);
-
-  useEffect(() => () => { stop(); }, [stop]);
+  }, [enabled, onHoverPreviewFen, onHoverMove]);
 
   const handlePvHover = (lineIndex: number, plyIndex: number | null, clientX: number, clientY: number) => {
     if (plyIndex === null) {
@@ -452,40 +543,46 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   };
 
   useEffect(() => {
-    if (!showSettings) return;
+    if (!showSettings && !showBoardSettings) return;
     const handler = (e: MouseEvent) => {
-      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
-        setShowSettings(false);
-      }
+      const t = e.target as Node;
+      if (engineSettingsBtnRef.current?.contains(t)) return;
+      if (boardSettingsBtnRef.current?.contains(t)) return;
+      setShowSettings(false);
+      setShowBoardSettings(false);
+      setEngineSettingsAnchor(null);
+      setBoardSettingsAnchor(null);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [showSettings]);
+  }, [showSettings, showBoardSettings]);
 
-  useEffect(() => {
-    if (!showBoardSettings) return;
-    const handler = (e: MouseEvent) => {
-      if (boardSettingsRef.current && !boardSettingsRef.current.contains(e.target as Node)) {
-        setShowBoardSettings(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showBoardSettings]);
+  const openEngineSettings = () => {
+    setShowBoardSettings(false);
+    setBoardSettingsAnchor(null);
+    setShowSettings((v) => {
+      const next = !v;
+      setEngineSettingsAnchor(next ? (engineSettingsBtnRef.current?.getBoundingClientRect() ?? null) : null);
+      return next;
+    });
+  };
+
+  const openLegacyBoardSettings = () => {
+    setShowSettings(false);
+    setEngineSettingsAnchor(null);
+    setShowBoardSettings((v) => {
+      const next = !v;
+      setBoardSettingsAnchor(next ? (boardSettingsBtnRef.current?.getBoundingClientRect() ?? null) : null);
+      return next;
+    });
+  };
 
   const turn = (fen.split(' ')[1] ?? 'w') as 'w' | 'b';
   const mainLine = pvLines[0] ?? null;
   const mainScore = mainLine ? formatScore(mainLine, turn) : '0.0';
 
-  const statusText = error
-    ? error
-    : loading
-    ? 'Motor başlatılıyor...'
-    : ready
-    ? 'analiz ediliyor...'
-    : 'bekleniyor...';
-  
   const hasFreshLines = !!mainLine && depth > 0;
+  const filledPvCount = pvLines.filter((l): l is PvLine => l !== null).length;
 
   useEffect(() => {
     if (!ready || !hasFreshLines || !mainLine?.pv || mainLine.pv.length === 0) {
@@ -519,120 +616,132 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
     <div className="shrink-0 border-b border-white/5 bg-[#0f172a]">
       <div className="h-[3px] bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.5)]" />
 
-      {/* Header — sabit yükseklik; sparkline alanı her zaman rezerve */}
-      <div className="flex items-center gap-2 px-2.5 h-[52px] bg-[#0f172a]">
-        {/* Toggle */}
-        <button type="button" onClick={onToggle} className="shrink-0" title={enabled ? 'Motor açık' : 'Motor kapalı'}>
-          <div className={`w-9 h-5 rounded-full relative transition-all duration-300 ${
-            enabled
-              ? (ready ? 'bg-indigo-600 shadow-lg shadow-indigo-500/20' : error ? 'bg-rose-600' : 'bg-amber-600')
-              : 'bg-white/10'
-          }`}>
-            <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full flex items-center justify-center shadow-md transition-all duration-300 ${
-              enabled ? 'right-0.5' : 'left-0.5'
+      {/* Header — ayar butonları dar panelde her zaman görünür */}
+      <div className="flex items-center gap-1.5 px-2 py-2 min-h-[52px] bg-[#0f172a]">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <button type="button" onClick={onToggle} className="shrink-0" title={enabled ? 'Motor açık' : 'Motor kapalı'}>
+            <div className={`w-9 h-5 rounded-full relative transition-all duration-300 ${
+              enabled
+                ? (ready ? 'bg-indigo-600 shadow-lg shadow-indigo-500/20' : error ? 'bg-rose-600' : 'bg-amber-600')
+                : 'bg-white/10'
             }`}>
-              {enabled && ready ? (
-                <svg viewBox="0 0 16 16" className="w-2.5 h-2.5 text-indigo-600">
-                  <path fill="currentColor" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
-                </svg>
-              ) : enabled && loading ? (
-                <div className="w-2 h-2 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
-              ) : null}
+              <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full flex items-center justify-center shadow-md transition-all duration-300 ${
+                enabled ? 'right-0.5' : 'left-0.5'
+              }`}>
+                {enabled && ready ? (
+                  <svg viewBox="0 0 16 16" className="w-2.5 h-2.5 text-indigo-600">
+                    <path fill="currentColor" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+                  </svg>
+                ) : enabled && loading ? (
+                  <div className="w-2 h-2 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
+                ) : null}
+              </div>
+            </div>
+          </button>
+
+          <span className="text-lg font-bold text-white tracking-tight tabular-nums shrink-0">
+            {enabled ? mainScore : '—'}
+          </span>
+
+          <div className="flex flex-col min-w-0">
+            <span className="text-[10px] text-indigo-400 font-extrabold uppercase tracking-tighter leading-tight truncate">
+              SF 18 · LITE <span className="text-white opacity-40">NNUE</span>
+            </span>
+            <div className="flex items-center gap-1 min-w-0">
+              <Plus className="w-2.5 h-2.5 text-[#3b82f6] shrink-0" />
+              <span className="text-[10px] text-slate-500 font-bold font-mono leading-tight truncate">
+                {enabled ? `D ${depth}` : 'KAPALI'}
+              </span>
+              {enabled && depth > 0 && (
+                <span className="text-[8px] bg-indigo-500 text-white px-1 py-0.5 rounded font-extrabold leading-none shrink-0">
+                  {filledPvCount}/{numPv}
+                </span>
+              )}
             </div>
           </div>
-        </button>
 
-        <span className="text-xl font-bold text-white tracking-tight tabular-nums min-w-[3.25rem] text-right">
-          {enabled ? mainScore : '—'}
-        </span>
-
-        <div className="flex flex-col ml-1">
-          <span className="text-[11px] text-indigo-400 font-extrabold uppercase tracking-tighter leading-tight">
-            SF 18 · LITE <span className="text-white opacity-40">NNUE</span>
-          </span>
-          <div className="flex items-center gap-1">
-            <Plus className="w-2.5 h-2.5 text-[#3b82f6]" />
-            <span className="text-[11px] text-slate-500 font-bold font-mono leading-tight">
-              {enabled ? `DERİNLİK ${depth}` : 'MOTOR KAPALI'}
-            </span>
-            {enabled && depth > 0 && (
-              <span className="text-[9px] bg-indigo-500 text-white px-1.5 py-0.5 rounded font-extrabold leading-none uppercase tracking-tighter shadow-sm">
-                CLOUD
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="w-[108px] h-[22px] shrink-0 flex items-center justify-end gap-1">
           {enabled && evalHistory.length >= 2 ? (
-            <>
+            <div className="hidden sm:flex items-center gap-1 shrink-0 max-w-[72px] overflow-hidden">
               <BarChart2 className="w-3 h-3 text-indigo-400/70 shrink-0" />
               <EvalSparkline scores={evalHistory} />
-            </>
+            </div>
           ) : null}
         </div>
 
-        <div className="flex-1" />
-
-        <div className="flex items-center gap-0.5 relative" ref={boardSettingsRef}>
-          {boardSettings && (
+        <div className="flex items-center gap-0.5 shrink-0">
+          {onOpenBoardPrefs && (
             <button
               type="button"
-              onClick={() => { setShowBoardSettings(v => !v); setShowSettings(false); }}
-              className={`p-1 transition-colors rounded ${showBoardSettings ? 'text-white bg-[#555]' : 'text-[#999] hover:text-white'}`}
-              title="Ayarlar"
+              onClick={onOpenBoardPrefs}
+              className="p-1.5 text-[#999] hover:text-white hover:bg-white/10 transition-colors rounded"
+              title="Tahta ayarları (h)"
             >
-              <Settings2 className="w-4 h-4" />
+              <Menu className="w-4 h-4" />
             </button>
           )}
-          {boardSettings && showBoardSettings && (
-            <BoardSettingsPopup
-              showEvalBar={boardSettings.showEvalBar}
-              onToggleEvalBar={() => { boardSettings.onToggleEvalBar(); }}
-              showEngineHint={boardSettings.showEngineHint}
-              onToggleEngineHint={() => { boardSettings.onToggleEngineHint(); }}
-              practiceMode={boardSettings.practiceMode}
-              onTogglePracticeMode={() => { boardSettings.onTogglePracticeMode(); }}
-              onFlipBoard={() => { boardSettings.onFlipBoard(); setShowBoardSettings(false); }}
-              onOpenBoardBuilder={() => { boardSettings.onOpenBoardBuilder(); setShowBoardSettings(false); }}
-              drawingEnabled={boardSettings.drawingEnabled}
-              onToggleDrawing={() => { boardSettings.onToggleDrawing(); }}
-              onOpenMultiboard={() => { boardSettings.onOpenMultiboard(); setShowBoardSettings(false); }}
-              onOpenShare={() => { boardSettings.onOpenShare(); setShowBoardSettings(false); }}
-              onDownloadPgn={() => { boardSettings.onDownloadPgn(); setShowBoardSettings(false); }}
-              canDownloadPgn={boardSettings.canDownloadPgn ?? true}
-            />
+          {boardSettings && (
+            <button
+              ref={boardSettingsBtnRef}
+              type="button"
+              onClick={openLegacyBoardSettings}
+              className={`p-1.5 transition-colors rounded ${showBoardSettings ? 'text-white bg-[#555]' : 'text-[#999] hover:text-white hover:bg-white/10'}`}
+              title="Tahta araçları"
+            >
+              <Highlighter className="w-4 h-4" />
+            </button>
           )}
-        </div>
-
-        <div className="flex items-center gap-0.5 relative" ref={settingsRef}>
-          <button type="button" className="p-1 text-[#999] hover:text-white transition-colors rounded">
-            <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}>
-              <circle cx="12" cy="12" r="3" />
-              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-            </svg>
-          </button>
           <button
+            ref={engineSettingsBtnRef}
             type="button"
-            onClick={() => { setShowSettings(v => !v); setShowBoardSettings(false); }}
-            className={`p-1 transition-colors rounded ${showSettings ? 'text-white bg-[#555]' : 'text-[#999] hover:text-white'}`}
+            onClick={openEngineSettings}
+            className={`p-1.5 transition-colors rounded ${showSettings ? 'text-white bg-indigo-600/80' : 'text-[#999] hover:text-white hover:bg-white/10'}`}
+            title="Motor ayarları"
+            aria-label="Motor ayarları"
           >
             <Settings2 className="w-4 h-4" />
           </button>
-          {showSettings && (
-            <SettingsPopup
-              engine={engine}
-              onEngineChange={setEngine}
-              numPv={numPv}
-              onNumPvChange={setNumPv}
-              threads={threads}
-              onThreadsChange={setThreads}
-              hash={hash}
-              onHashChange={setHash}
-            />
-          )}
         </div>
       </div>
+
+      {showSettings && engineSettingsAnchor && typeof document !== 'undefined' && createPortal(
+        <div style={anchorPopupStyle(engineSettingsAnchor, 320)}>
+          <SettingsPopup
+            engine={engine}
+            onEngineChange={setEngine}
+            numPv={numPv}
+            onNumPvChange={setNumPv}
+            threads={threads}
+            onThreadsChange={setThreads}
+            hash={hash}
+            onHashChange={setHash}
+          />
+        </div>,
+        document.body,
+      )}
+
+      {showBoardSettings && boardSettingsAnchor && boardSettings && typeof document !== 'undefined' && createPortal(
+        <div style={anchorPopupStyle(boardSettingsAnchor, 288)}>
+          <BoardSettingsPopup
+            showEvalBar={boardSettings.showEvalBar}
+            onToggleEvalBar={() => { boardSettings.onToggleEvalBar(); }}
+            showEngineHint={boardSettings.showEngineHint}
+            onToggleEngineHint={() => { boardSettings.onToggleEngineHint(); }}
+            practiceMode={boardSettings.practiceMode}
+            onTogglePracticeMode={() => { boardSettings.onTogglePracticeMode(); }}
+            onFlipBoard={() => { boardSettings.onFlipBoard(); setShowBoardSettings(false); setBoardSettingsAnchor(null); }}
+            onOpenBoardBuilder={() => { boardSettings.onOpenBoardBuilder(); setShowBoardSettings(false); setBoardSettingsAnchor(null); }}
+            drawingEnabled={boardSettings.drawingEnabled}
+            onToggleDrawing={() => { boardSettings.onToggleDrawing(); }}
+            onOpenMultiboard={() => { boardSettings.onOpenMultiboard(); setShowBoardSettings(false); setBoardSettingsAnchor(null); }}
+            onOpenShare={() => { boardSettings.onOpenShare(); setShowBoardSettings(false); setBoardSettingsAnchor(null); }}
+            onDownloadPgn={() => { boardSettings.onDownloadPgn(); setShowBoardSettings(false); setBoardSettingsAnchor(null); }}
+            canDownloadPgn={boardSettings.canDownloadPgn ?? true}
+            studentPlaysColor={boardSettings.studentPlaysColor}
+            onStudentPlaysColorChange={boardSettings.onStudentPlaysColorChange}
+          />
+        </div>,
+        document.body,
+      )}
 
       {/* PV Lines — sabit yükseklik; içerik kayar, alttaki hamle listesi oynamaz */}
       {enabled && (
@@ -648,7 +757,9 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
                   <div className="w-12 shrink-0">
                     <span className="text-[11px] text-[#555] font-mono">···</span>
                   </div>
-                  <span className="text-[11px] text-[#555] italic truncate">{statusText}</span>
+                  <span className="text-[11px] text-[#555] italic truncate">
+                    {emptyPvLineLabel(i, pvLines, depth, ready, loading, error)}
+                  </span>
                 </div>
               );
             }
@@ -664,14 +775,20 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
                 </div>
                 <div className="flex-1 min-w-0 overflow-hidden">
                   <span className="text-[12px] leading-8 whitespace-nowrap font-mono inline-flex items-center max-w-full overflow-hidden text-ellipsis">
-                    <InteractiveMoveList
-                      fen={fen}
-                      pvMoves={line.pv}
-                      lineIndex={i}
-                      hovered={hoveredPvMove}
-                      onHoverPly={handlePvHover}
-                      onClickPly={handlePvClick}
-                    />
+                    {line.pv.length > 0 ? (
+                      <InteractiveMoveList
+                        fen={fen}
+                        pvMoves={line.pv}
+                        lineIndex={i}
+                        hovered={hoveredPvMove}
+                        onHoverPly={handlePvHover}
+                        onClickPly={handlePvClick}
+                      />
+                    ) : (
+                      <span className="text-[#999] italic text-[11px]">
+                        {line.mate !== null ? 'Oyun bitti' : 'Hamle yok'}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <ChevronDown className="w-3.5 h-3.5 text-[#666] group-hover:text-[#999] shrink-0 ml-1 transition-colors opacity-60" />

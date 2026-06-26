@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import StudentList from './components/StudentList';
@@ -22,14 +22,19 @@ import Security from './components/Security';
 import Inventory from './components/Inventory';
 import StudyPage from './components/StudyPage';
 import Tournaments from './components/Tournaments';
-import { Menu, Search, Bell, HelpCircle } from 'lucide-react';
+import { Menu, Search, Bell } from 'lucide-react';
 import { AppProvider, useApp } from './AppContext';
-import { COACH_NAV_CATEGORIES, NAV_CATEGORIES } from './constants';
+import { COACH_NAV_CATEGORIES, NAV_CATEGORIES, type NavCategory } from './constants';
 import ClubPanel from './components/ClubPanel';
 import ApplicationForm from './components/ApplicationForm';
 import ParentConsentForm from './components/ParentConsentForm';
 import ApplicationsAdmin from './components/ApplicationsAdmin';
 import LeaderboardPage from './components/leaderboard/LeaderboardPage';
+import CoachProfilePage from './components/profile/CoachProfilePage';
+import AdminProfilePage from './components/profile/AdminProfilePage';
+import RoleManagement from './components/roles/RoleManagement';
+import { getSessionDisplay } from './lib/sessionDisplayName';
+import { filterNavByPermissions } from './lib/rolePermissions';
 
 // ─── Türkçe slug haritası ────────────────────────────────────────────────────
 const TAB_TO_SLUG: Record<string, string> = {
@@ -55,13 +60,16 @@ const TAB_TO_SLUG: Record<string, string> = {
   gallery: 'galeri',
   lessons: 'canli-ders',
   curriculum: 'ders-programi',
-  messages: 'whatsapp',
+  messages: 'mesajlar',
   security: 'kullanici-guvenlik',
+  roles: 'rol-yonetimi',
+  profile: 'profil',
 };
 
-const SLUG_TO_TAB: Record<string, string> = Object.fromEntries(
-  Object.entries(TAB_TO_SLUG).map(([tab, slug]) => [slug, tab])
-);
+const SLUG_TO_TAB: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(TAB_TO_SLUG).map(([tab, slug]) => [slug, tab])),
+  whatsapp: 'messages',
+};
 
 /** Tahta / çalışma gibi tam genişlik modüller — mobilde yan padding taşmayı önler */
 const FULL_BLEED_TABS = new Set(['study', 'lessons']);
@@ -103,7 +111,26 @@ function writeHash(tab: string, studentId?: string | null) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-const COACH_TAB_IDS = new Set(COACH_NAV_CATEGORIES.flatMap((cat) => cat.items.map((item) => item.id)));
+function collectNavTabIds(categories: NavCategory[]): Set<string> {
+  return new Set(
+    categories.flatMap((cat) =>
+      cat.items.flatMap((item) => (item.subItems ? item.subItems.map((s) => s.id) : [item.id])),
+    ),
+  );
+}
+
+const ADMIN_TAB_IDS = collectNavTabIds(NAV_CATEGORIES);
+const ADMIN_EXTRA_TAB_IDS = new Set(['student-detail', 'students', 'qr-attendance']);
+
+function isAdminAllowedTab(tab: string): boolean {
+  return ADMIN_TAB_IDS.has(tab) || ADMIN_EXTRA_TAB_IDS.has(tab);
+}
+const COACH_TAB_IDS = collectNavTabIds(COACH_NAV_CATEGORIES);
+const COACH_EXTRA_TAB_IDS = new Set(['student-detail']);
+
+function isCoachAllowedTab(tab: string): boolean {
+  return COACH_TAB_IDS.has(tab) || COACH_EXTRA_TAB_IDS.has(tab);
+}
 
 /** Giriş yapılmamışsa Login; role'e göre Veli/Öğrenci paneli, Antrenör, Kulüp veya Admin */
 const AppRoot: React.FC = () => {
@@ -129,13 +156,26 @@ const AppRoot: React.FC = () => {
   if (auth.role === 'parent') return <StudentPanel studentId={auth.studentId} onLogout={logout} viewAs="parent" />;
   if (auth.role === 'student') return <StudentPanel studentId={auth.studentId} onLogout={logout} viewAs="student" />;
   if (auth.role === 'coach') return <CoachLayout onLogout={logout} />;
-  if (auth.role === 'club') return <ClubPanel branch={auth.branch} onLogout={logout} />;
+  if (auth.role === 'club') return <ClubPanel branch={auth.branch} clubId={auth.clubId} onLogout={logout} />;
   return <AdminLayout onLogout={logout} />;
 };
 
 const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
+  const { auth, students, coaches, clubs, getAuthPermissions } = useApp();
+  const [profileTick, setProfileTick] = useState(0);
+  useEffect(() => {
+    const onProfile = () => setProfileTick((n) => n + 1);
+    window.addEventListener('admin-profile-updated', onProfile);
+    return () => window.removeEventListener('admin-profile-updated', onProfile);
+  }, []);
+  const session = useMemo(
+    () => getSessionDisplay(auth, { students, coaches, clubs }),
+    [auth, students, coaches, clubs, profileTick],
+  );
   const initial = readHash();
-  const [activeTab, setActiveTabRaw] = useState(initial.tab);
+  const defaultAdminTab = 'dashboard';
+  const safeInitialTab = isAdminAllowedTab(initial.tab) ? initial.tab : defaultAdminTab;
+  const [activeTab, setActiveTabRaw] = useState(safeInitialTab);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initial.studentId);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarDesktopExpanded, setSidebarDesktopExpanded] = useState(true);
@@ -150,13 +190,14 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   useEffect(() => {
     const onHash = () => {
       const { tab, studentId } = readHash();
-      setActiveTabRaw(tab);
+      const safe = isAdminAllowedTab(tab) ? tab : defaultAdminTab;
+      setActiveTabRaw(safe);
       if (studentId !== null) setSelectedStudentId(studentId);
     };
     window.addEventListener('hashchange', onHash);
-    if (!window.location.hash) writeHash(initial.tab, initial.studentId);
+    if (!window.location.hash) writeHash(safeInitialTab, initial.studentId);
     return () => window.removeEventListener('hashchange', onHash);
-  }, [initial.tab, initial.studentId]);
+  }, [safeInitialTab, initial.studentId]);
 
   const handleSidebarTab = useCallback((tab: string) => {
     setActiveTabRaw(tab);
@@ -170,12 +211,8 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Dashboard />;
       case 'corporate':
         return <CorporateStructure />;
-      case 'groups':
-        return <BranchGroupManagement />;
-      case 'applications':
-        return <ApplicationsAdmin />;
-      case 'students':
       case 'student-list':
+      case 'students':
       case 'bulk-actions':
         return (
           <StudentList
@@ -199,20 +236,18 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
           <StudentDetail
             studentId={selectedStudentId}
             onBack={() => setActiveTab('student-list', null)}
-            onNavigate={(tab) => setActiveTab(tab, null)}
+            onNavigate={(tab) => setActiveTab(isAdminAllowedTab(tab) ? tab : defaultAdminTab, null)}
           />
         );
       case 'attendance':
       case 'qr-attendance':
         return <Attendance />;
-      case 'puzzles':
-        return <ChessBoard />;
-      case 'study':
-        return <StudyPage />;
+      case 'groups':
+        return <BranchGroupManagement />;
+      case 'applications':
+        return <ApplicationsAdmin />;
       case 'tournaments':
         return <Tournaments role="admin" />;
-      case 'homework':
-        return <Homework />;
       case 'leaderboard':
         return <LeaderboardPage />;
       case 'analysis':
@@ -223,31 +258,36 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Inventory />;
       case 'gallery':
         return <Gallery />;
-      case 'lessons':
-        return <LiveLesson />;
-      case 'curriculum':
-        return <Curriculum />;
       case 'messages':
         return <Messages />;
       case 'security':
         return <Security />;
+      case 'roles':
+        return <RoleManagement />;
+      case 'profile':
+        return <AdminProfilePage />;
       default:
-        return (
-          <div className="flex flex-col items-center justify-center h-full text-slate-400 py-20">
-            <HelpCircle className="w-16 h-16 mb-4 opacity-20" />
-            <h2 className="text-xl font-semibold">Bu modül yakında eklenecek</h2>
-            <p className="text-sm">Geliştirme süreci devam etmektedir.</p>
-          </div>
-        );
+        return <Dashboard />;
     }
   };
+
+  const sidebarTab = ADMIN_TAB_IDS.has(activeTab)
+    ? activeTab
+    : activeTab === 'student-detail'
+      ? 'student-list'
+      : defaultAdminTab;
+
+  const adminNavCategories = useMemo(
+    () => filterNavByPermissions(NAV_CATEGORIES, getAuthPermissions()),
+    [getAuthPermissions],
+  );
 
   return (
     <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
         <Sidebar
-          activeTab={activeTab}
+          activeTab={sidebarTab}
           setActiveTab={handleSidebarTab}
-          navCategories={NAV_CATEGORIES}
+          navCategories={adminNavCategories}
           onLogout={onLogout}
           mobileOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
@@ -281,11 +321,11 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
               <div className="h-6 sm:h-8 w-px bg-white/5 hidden sm:block" />
               <div className="flex items-center gap-2 sm:gap-4 group cursor-pointer">
                 <div className="text-right hidden sm:block">
-                  <p className="text-sm font-bold tracking-tight text-slate-200 truncate max-w-[120px] lg:max-w-none">Çağrı Çankaya</p>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Baş Antrenör</p>
+                  <p className="text-sm font-bold tracking-tight text-slate-200 truncate max-w-[120px] lg:max-w-none">{session.fullName}</p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{session.roleLabel}</p>
                 </div>
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg border-2 border-white/10 shadow-2xl overflow-hidden group-hover:scale-105 transition-transform shrink-0">
-                  <img src="https://picsum.photos/seed/user123/100/100" alt="Avatar" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg border-2 border-white/10 shadow-2xl overflow-hidden group-hover:scale-105 transition-transform shrink-0 bg-indigo-600/30 flex items-center justify-center text-indigo-200 font-black text-sm">
+                  {session.firstName.charAt(0).toUpperCase()}
                 </div>
               </div>
             </div>
@@ -305,11 +345,33 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   );
 };
 
-/** Antrenör paneli: kısıtlı menü (öğrenci listesi, yoklama, bulmaca, ödev, müfredat, analiz) */
+/** Antrenör paneli: öğrenci işleri, eğitim & içerik, medya, raporlama */
 const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
+  const { auth, students, scopedStudents, coaches, clubs, getAuthPermissions } = useApp();
+  const [profileTick, setProfileTick] = useState(0);
+  useEffect(() => {
+    const onProfile = () => setProfileTick((n) => n + 1);
+    window.addEventListener('admin-profile-updated', onProfile);
+    return () => window.removeEventListener('admin-profile-updated', onProfile);
+  }, []);
+  const session = useMemo(
+    () => getSessionDisplay(auth, { students, coaches, clubs }),
+    [auth, students, coaches, clubs, profileTick],
+  );
+  const coachPermissions = getAuthPermissions();
+  const isCoachTabAllowed = useCallback(
+    (tab: string) => (COACH_TAB_IDS.has(tab) || COACH_EXTRA_TAB_IDS.has(tab)) && coachPermissions.has(tab),
+    [coachPermissions],
+  );
+
+  const coachNavCategories = useMemo(
+    () => filterNavByPermissions(COACH_NAV_CATEGORIES, coachPermissions),
+    [coachPermissions],
+  );
+
   const initial = readHash();
-  const defaultCoachTab = 'student-list';
-  const safeTab = COACH_TAB_IDS.has(initial.tab) ? initial.tab : defaultCoachTab;
+  const defaultCoachTab = coachPermissions.has('dashboard') ? 'dashboard' : [...coachPermissions][0] || 'dashboard';
+  const safeTab = isCoachTabAllowed(initial.tab) ? initial.tab : defaultCoachTab;
   const [activeTab, setActiveTabRaw] = useState(safeTab);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initial.studentId);
 
@@ -322,14 +384,21 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   useEffect(() => {
     const onHash = () => {
       const { tab, studentId } = readHash();
-      const safe = COACH_TAB_IDS.has(tab) ? tab : defaultCoachTab;
+      const safe = isCoachTabAllowed(tab) ? tab : defaultCoachTab;
       setActiveTabRaw(safe);
       if (studentId !== null) setSelectedStudentId(studentId);
     };
     window.addEventListener('hashchange', onHash);
     if (!window.location.hash) writeHash(defaultCoachTab, initial.studentId);
     return () => window.removeEventListener('hashchange', onHash);
-  }, [safeTab, initial.studentId]);
+  }, [defaultCoachTab, initial.studentId, isCoachTabAllowed]);
+
+  useEffect(() => {
+    if (!isCoachTabAllowed(activeTab)) {
+      setActiveTabRaw(defaultCoachTab);
+      writeHash(defaultCoachTab, null);
+    }
+  }, [coachPermissions, activeTab, defaultCoachTab, isCoachTabAllowed]);
 
   const handleSidebarTab = useCallback((tab: string) => {
     setActiveTabRaw(tab);
@@ -352,16 +421,35 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
             }}
           />
         );
-      case 'student-detail':
+      case 'student-detail': {
+        const canView =
+          !selectedStudentId || scopedStudents.some((s) => s.id === selectedStudentId);
+        if (!canView) {
+          return (
+            <div className="p-8 text-center text-slate-400">
+              <p className="font-medium">Bu öğrenciye erişim yetkiniz yok.</p>
+              <button
+                type="button"
+                onClick={() => setActiveTab('student-list', null)}
+                className="mt-4 px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-bold"
+              >
+                Listeye dön
+              </button>
+            </div>
+          );
+        }
         return (
           <StudentDetail
             studentId={selectedStudentId}
             onBack={() => { setActiveTab('student-list', null); }}
-            onNavigate={(tab) => setActiveTab(COACH_TAB_IDS.has(tab) ? tab : defaultCoachTab, null)}
+            onNavigate={(tab) => setActiveTab(isCoachTabAllowed(tab) ? tab : defaultCoachTab, null)}
           />
         );
+      }
       case 'attendance':
         return <Attendance />;
+      case 'groups':
+        return <BranchGroupManagement />;
       case 'lessons':
         return <LiveLesson />;
       case 'puzzles':
@@ -376,6 +464,12 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Curriculum />;
       case 'analysis':
         return <Analysis />;
+      case 'gallery':
+        return <Gallery />;
+      case 'messages':
+        return <Messages />;
+      case 'profile':
+        return <CoachProfilePage />;
       default:
         return <Dashboard />;
     }
@@ -391,7 +485,7 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       <Sidebar
         activeTab={sidebarTab}
         setActiveTab={handleSidebarTab}
-        navCategories={COACH_NAV_CATEGORIES}
+        navCategories={coachNavCategories}
         onLogout={onLogout}
         mobileOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -409,8 +503,13 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            <p className="text-xs sm:text-sm font-bold text-amber-400/90 truncate max-w-[100px] sm:max-w-none">Antrenör Paneli</p>
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 font-black shrink-0">A</div>
+            <div className="text-right hidden sm:block">
+              <p className="text-xs sm:text-sm font-bold text-amber-400/90 truncate max-w-[140px] lg:max-w-none">{session.fullName}</p>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{session.roleLabel}</p>
+            </div>
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 font-black shrink-0 text-sm">
+              {session.firstName.charAt(0).toUpperCase()}
+            </div>
           </div>
         </header>
         <div

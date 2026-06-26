@@ -5,6 +5,7 @@ import {
   ChevronRight, ArrowRight, Settings, UserPlus, CheckCircle2
 } from 'lucide-react';
 import { useApp } from '../AppContext';
+import { filterStudentsByClub } from '../lib/clubScope';
 import type { Tournament, TournamentPairing, TournamentStanding, Student } from '../types';
 
 interface TournamentsProps {
@@ -39,7 +40,7 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
   );
 
   const selectableStudents = useMemo(() => {
-    const base = branch ? students.filter((s) => (s.branch || 'Merkez') === branch) : students;
+    const base = branch ? filterStudentsByClub(students, branch) : students;
     return base.filter((s) => s.status !== 'inactive');
   }, [students, branch]);
 

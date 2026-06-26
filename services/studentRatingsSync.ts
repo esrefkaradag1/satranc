@@ -70,7 +70,6 @@ export async function syncStudentRatingsFromExternal(
         if (fideId !== student.fideId) patch.fideId = fideId;
         if (profile.standard != null && profile.standard > 0) {
           patch.elo = profile.standard;
-          if (!patch.ukd) patch.ukd = profile.standard;
         }
         fideSynced = true;
       }

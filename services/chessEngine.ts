@@ -191,7 +191,8 @@ function uciToSan(chess: Chess, uci: string): string | null {
  */
 export async function getBestMoveAsync(
   chess: Chess,
-  level: EngineLevel = 5
+  level: EngineLevel = 5,
+  opts?: { strictFallback?: boolean },
 ): Promise<string | null> {
   if (!chess || chess.isGameOver()) return null;
   const moves = chess.moves({ verbose: true });
@@ -210,20 +211,20 @@ export async function getBestMoveAsync(
       if (san) return san;
     }
   }
-  return getBestMove(chess, level);
+  return getBestMove(chess, opts?.strictFallback ? 10 : level);
 }
 
 /**
  * Pozisyon değerlendirmesi (piyon birimi) — Stockfish hazırsa onu kullanır.
  */
-export async function getEvaluationPawnsAsync(chess: Chess): Promise<number> {
+export async function getEvaluationPawnsAsync(chess: Chess, movetimeMs?: number): Promise<number> {
   if (!chess) return 0;
   if (!stockfishInitStarted) {
     stockfishInitStarted = true;
     await initStockfish();
   }
   if (isStockfishReady()) {
-    const v = await getEvalFromStockfish(chess.fen());
+    const v = await getEvalFromStockfish(chess.fen(), movetimeMs ?? 500);
     return v;
   }
   return getEvaluationPawns(chess);

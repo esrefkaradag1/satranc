@@ -77,6 +77,7 @@ import ChessComGamesSection from './ChessComGamesSection';
 import ChessComPuzzlesSection from './ChessComPuzzlesSection';
 import LichessStatsSection from './LichessStatsSection';
 import LichessPuzzlesSection from './LichessPuzzlesSection';
+import LichessOpeningsSection from './LichessOpeningsSection';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
 import type { Puzzle } from '../types';
 import { ResponsiveTable } from './ui/ResponsiveTable';
@@ -523,6 +524,7 @@ const LichessChessCard: React.FC<{
                     puzzlesContent={
                       <LichessPuzzlesSection
                         username={student.lichessUsername}
+                        studentId={student.id}
                         dailyPuzzle={dailyLichessPuzzle}
                         practicePuzzles={lichessPracticePuzzles}
                         loadingDaily={loadingDailyLichessPuzzle}
@@ -531,6 +533,9 @@ const LichessChessCard: React.FC<{
                     }
                     gamesContent={
                       <>
+                  {lichessGames.length > 0 && student.lichessUsername?.trim() ? (
+                    <LichessOpeningsSection games={lichessGames} username={student.lichessUsername} />
+                  ) : null}
                   {loadingLichessGames && (
                     <div className="rounded-lg bg-slate-800/50 border border-sky-500/20 px-4 py-3 text-sm text-sky-300 flex items-center gap-2">
                       <Loader2 className="w-4 h-4 animate-spin shrink-0" />
@@ -949,7 +954,6 @@ const StudentDetail: React.FC<{
         
         if (profile.standard != null && profile.standard > 0 && profile.standard !== student.elo) {
           patch.elo = profile.standard;
-          patch.ukd = profile.standard;
           needsUpdate = true;
         }
 
@@ -1439,9 +1443,9 @@ const StudentDetail: React.FC<{
          </div>
        </div>
        <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/5 px-5 py-4">
-         <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">UKD Puanı (senkron)</div>
-         <div className="text-2xl font-black text-indigo-400 mt-1">{student.elo ?? fideProfile.standard ?? '—'}</div>
-         <div className="text-xs text-slate-400 mt-1">FIDE Standard ile güncellenir</div>
+         <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">UKD Puanı (TSF)</div>
+         <div className="text-2xl font-black text-indigo-400 mt-1">{student.ukd != null && student.ukd > 0 ? student.ukd : '—'}</div>
+         <div className="text-xs text-slate-400 mt-1">TSF UKD sorgusu ile güncellenir (FIDE ELO değildir)</div>
        </div>
      </div>
    ) : (

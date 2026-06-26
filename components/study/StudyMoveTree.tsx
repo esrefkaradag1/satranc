@@ -12,6 +12,8 @@ interface StudyMoveTreeProps {
   onDeleteFromHere?: (idx: number) => void | Promise<void>;
   onPromoteVariation?: (mainLinePos: number, varGroupIdx: number) => void;
   compact?: boolean;
+  inlineNotation?: boolean;
+  showMoveAnnotations?: boolean;
 }
 
 /** Varyasyon satırındaki hamle numarası ve nokta (1. / 1...) */
@@ -28,6 +30,8 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   onDeleteFromHere,
   onPromoteVariation,
   compact = false,
+  inlineNotation = false,
+  showMoveAnnotations = true,
 }) => {
   const activeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -106,7 +110,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
         }`}
       >
         {san}
-        {annotation != null && parseMoveGlyphs(annotation).length > 0 && (
+        {showMoveAnnotations && annotation != null && parseMoveGlyphs(annotation).length > 0 && (
           <span className="text-amber-500 font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
         )}
       </button>
@@ -214,6 +218,165 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
       </div>,
     );
     currentMoveNumber++;
+  }
+
+  if (inlineNotation) {
+    const inlineNodes: React.ReactNode[] = [];
+    let inlinePly = 0;
+    let inlineMoveNumber = startMoveNumber;
+
+    const pushMainMove = (san: string, plyIndex: number, annotation?: string | string[]) => {
+      const isActive = currentMoveIndex === plyIndex + 1 && !isInVariation;
+      const isWhiteTurn = isBlackToMove ? plyIndex % 2 !== 0 : plyIndex % 2 === 0;
+      if (plyIndex === 0 && isBlackToMove) {
+        inlineNodes.push(
+          <span key={`n-${plyIndex}`} className="text-slate-500 font-bold mr-0.5 tabular-nums">
+            {inlineMoveNumber}...
+          </span>,
+        );
+      } else if (isWhiteTurn) {
+        inlineNodes.push(
+          <span key={`n-${plyIndex}`} className="text-slate-500 font-bold mr-0.5 tabular-nums">
+            {inlineMoveNumber}.
+          </span>,
+        );
+        if (!isBlackToMove || plyIndex > 0) inlineMoveNumber++;
+      }
+      inlineNodes.push(renderMoveButton(san, plyIndex, isActive, annotation));
+      const varGroups = variations[plyIndex];
+      if (varGroups?.length) {
+        varGroups.forEach((line, gi) => {
+          if (!line?.length) return;
+          inlineNodes.push(
+            <span key={`paren-${plyIndex}-${gi}`} className="text-slate-500 mx-0.5">
+              (
+            </span>,
+          );
+          line.forEach((vSan, vi) => {
+            const varTuple: [number, number, number] = [plyIndex, gi, vi];
+            const isActive =
+              currentVariation !== null &&
+              currentVariation[0] === plyIndex &&
+              currentVariation[1] === gi &&
+              currentVariation[2] === vi;
+            const varStartFenTurn = isBlackToMove
+              ? ((plyIndex + 1) % 2 === 0 ? 'w' : 'b')
+              : (plyIndex % 2 === 0 ? 'b' : 'w');
+            const isWhiteVarTurn = varStartFenTurn === 'w' ? vi % 2 === 0 : vi % 2 !== 0;
+            let mn: number;
+            if (isBlackToMove) {
+              mn = startMoveNumber + Math.floor((plyIndex + 1) / 2);
+            } else {
+              mn = startMoveNumber + Math.floor(plyIndex / 2);
+            }
+            if (varStartFenTurn === 'w') mn += Math.floor(vi / 2);
+            else mn += Math.floor((vi + 1) / 2);
+            if (vi === 0 || isWhiteVarTurn) {
+              inlineNodes.push(
+                <span key={`vn-${plyIndex}-${gi}-${vi}`} className="text-slate-500 font-bold mr-0.5 tabular-nums">
+                  {moveNumberLabel(mn, isWhiteVarTurn)}
+                </span>,
+              );
+            }
+            inlineNodes.push(renderMoveButton(vSan, plyIndex, isActive, undefined, varTuple));
+          });
+          inlineNodes.push(
+            <span key={`paren-end-${plyIndex}-${gi}`} className="text-slate-500 mx-0.5">
+              )
+            </span>,
+          );
+        });
+      }
+    };
+
+    if (isBlackToMove && moves.length > 0) {
+      pushMainMove(moves[0], 0, chapter.moveAnnotations?.[0]);
+      inlinePly = 1;
+      inlineMoveNumber++;
+    }
+    for (let i = inlinePly; i < moves.length; i++) {
+      pushMainMove(moves[i], i, chapter.moveAnnotations?.[i]);
+    }
+
+    return (
+      <div
+        ref={containerRef}
+        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
+        onMouseLeave={() => onHoverMove?.(null)}
+      >
+        {moves.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full py-20 opacity-40 grayscale pointer-events-none">
+            <div className="w-16 h-16 rounded-3xl bg-white/5 flex items-center justify-center mb-4 ring-1 ring-white/10">
+              <MousePointer2 className="w-8 h-8 text-slate-400" />
+            </div>
+            <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Bu bölümde hamle yok</p>
+            <p className="text-[9px] text-slate-600 mt-1">Tahta üzerinde hamle yaparak başlayın</p>
+          </div>
+        ) : (
+          <div className={`${textSize} font-sans text-slate-300 select-none leading-relaxed`}>
+            <div className="flex flex-wrap items-baseline gap-x-0.5 gap-y-1">
+              {inlineNodes}
+            </div>
+          </div>
+        )}
+        {contextMenu && (
+          <div
+            ref={contextMenuRef}
+            className="absolute z-50 glass-card rounded-xl border border-white/10 shadow-2xl py-1 min-w-[200px] overflow-hidden animate-in zoom-in-95"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {onDeleteFromHere && !contextMenu.varInfo && (
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteFromHere(contextMenu.moveIdx);
+                  setContextMenu(null);
+                }}
+                className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Buradan itibaren sil
+              </button>
+            )}
+            {onPromoteVariation && contextMenu.varInfo && (
+              <button
+                type="button"
+                onClick={() => {
+                  onPromoteVariation(contextMenu.varInfo![0], contextMenu.varInfo![1]);
+                  setContextMenu(null);
+                }}
+                className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all"
+              >
+                <ArrowUpRight className="w-3.5 h-3.5" />
+                Ana hat yap
+              </button>
+            )}
+            {onDeleteFromHere && contextMenu.varInfo && (
+              <button
+                type="button"
+                onClick={() => {
+                  const [mlp, vgi] = contextMenu.varInfo!;
+                  onDeleteFromHere(-(mlp * 1000 + vgi + 1));
+                  setContextMenu(null);
+                }}
+                className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-rose-400 hover:bg-rose-600 hover:text-white transition-all"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Varyasyonu sil
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setContextMenu(null)}
+              className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-slate-500 hover:bg-white/5 transition-all"
+            >
+              İptal
+            </button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (

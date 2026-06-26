@@ -6,7 +6,7 @@
  */
 import type { Study } from './lib/studyTypes';
 import { getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
-import { migrateChapter } from './lib/studyUtils';
+import { migrateChapter, normalizeStudentPlaysColor } from './lib/studyUtils';
 
 const TABLE = 'chess_studies';
 const LOCAL_STUDIES_CACHE_KEY = 'netchess_studies_cache_v1';
@@ -68,7 +68,7 @@ function rowToStudy(row: any): Study {
     liked:            row.liked ?? false,
     likes:            row.likes ?? 0,
     studentPlaysColor:
-      row.student_plays_color === 'white' || row.student_plays_color === 'black' ? row.student_plays_color : 'both',
+      normalizeStudentPlaysColor(row.student_plays_color),
     studentCreated:   row.student_created ?? false,
     createdByStudentId: row.created_by_student_id ?? null,
     practiceLogs:     row.practice_logs && typeof row.practice_logs === 'object' ? row.practice_logs : {},
@@ -129,7 +129,7 @@ function studyToRow(s: Study) {
     topic_tags:        s.topicTags ?? [],
     liked:             s.liked ?? false,
     likes:             s.likes ?? 0,
-    student_plays_color: s.studentPlaysColor === 'white' || s.studentPlaysColor === 'black' ? s.studentPlaysColor : 'both',
+    student_plays_color: normalizeStudentPlaysColor(s.studentPlaysColor),
     student_created:   s.studentCreated ?? false,
     created_by_student_id: s.createdByStudentId ?? null,
     created_at:        s.createdAt,

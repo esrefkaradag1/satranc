@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import {
-  CheckCircle2, Clock, ExternalLink, Loader2, XCircle, Swords,
+  CheckCircle2, Clock, ExternalLink, Loader2, Play, XCircle, Swords,
 } from 'lucide-react';
 import type { Student } from '../../types';
 import type { ChessComPuzzleAttempt, ChessComPuzzleTab } from '../../lib/chesscomPuzzleParse';
@@ -17,6 +17,7 @@ import {
   capDailyPuzzleDisplay,
   type PlatformChessComPuzzleRow,
 } from '../../lib/homeworkPlatformUtils';
+import { fetchLichessPuzzlesForDay, isStudentLichessOAuthConnected, type PlatformLichessPuzzleRow } from '../../services/lichessOAuthClient';
 import { selectHomeworkGoalPuzzles } from '../../lib/chesscomPuzzleParse';
 import {
   chessComPuzzleAnalysisUrl,
@@ -35,6 +36,9 @@ import { ChessBoardFrame } from '../chess/ChessBoardFrame';
 import ChessComPuzzleViewerModal from '../ChessComPuzzleViewerModal';
 import ChessComGameViewerModal from '../ChessComGameViewerModal';
 import LichessGameViewerModal from '../LichessGameViewerModal';
+import StudentPuzzlePlayModal from '../StudentPuzzlePlayModal';
+import { fetchPuzzleById } from '../../services/lichessService';
+import type { Puzzle } from '../../types';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -319,6 +323,125 @@ const ChessComPuzzleCard: React.FC<ChessComCardProps> = ({ row, username, onOpen
   );
 };
 
+const LichessPuzzleCard: React.FC<{
+  row: PlatformLichessPuzzleRow;
+  username: string;
+}> = ({ row, username }) => {
+  const { attempt } = row;
+  const [playing, setPlaying] = useState<Puzzle | null>(null);
+  const [loadingPlay, setLoadingPlay] = useState(false);
+  const boardFen = attempt.fen?.trim() || START_FEN;
+  const resultMeta = attempt.win
+    ? { label: 'Doğru', icon: CheckCircle2, badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', border: 'border-emerald-500/35' }
+    : { label: 'Yanlış', icon: XCircle, badge: 'bg-rose-500/20 text-rose-300 border-rose-500/30', border: 'border-rose-500/35' };
+  const StatusIcon = resultMeta.icon;
+
+  const handlePlay = async () => {
+    setLoadingPlay(true);
+    try {
+      const puzzle = await fetchPuzzleById(attempt.puzzleId);
+      if (puzzle) setPlaying(puzzle);
+    } finally {
+      setLoadingPlay(false);
+    }
+  };
+
+  return (
+    <>
+    <div className={`rounded-xl border bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ${resultMeta.border} ring-white/5`}>
+      <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2 bg-white/[0.02]">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="shrink-0 px-2 py-0.5 rounded-md text-[9px] font-black uppercase bg-[#262421] text-[#81b64c] border border-[#81b64c]/30">
+            Lichess
+          </span>
+          <span className="text-[10px] font-bold text-slate-400 uppercase truncate">Bulmaca</span>
+        </div>
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${resultMeta.badge}`}>
+          <StatusIcon className="w-3 h-3" />
+          {resultMeta.label}
+        </span>
+      </div>
+
+      <div className="p-3 bg-black/25">
+        <a
+          href={`https://lichess.org/training/${encodeURIComponent(attempt.puzzleId)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block w-full max-w-[240px] mx-auto text-left rounded-lg overflow-hidden border border-white/10 shadow-inner hover:border-[#81b64c]/40 transition-colors"
+        >
+          <ChessBoardFrame boardOrientation="white" hideCoordinates className="w-full" boardClassName="relative">
+            <div className="absolute inset-0 w-full h-full">
+              <Chessboard
+                options={{
+                  id: `platform-lichess-puzzle-${attempt.id}`,
+                  position: boardFen,
+                  allowDragging: false,
+                  boardOrientation: 'white',
+                  darkSquareStyle: { backgroundColor: '#779952' },
+                  lightSquareStyle: { backgroundColor: '#edeed1' },
+                  ...CHESSBOARD_ANIMATION,
+                  ...CHESSBOARD_NO_NOTATION,
+                }}
+              />
+            </div>
+          </ChessBoardFrame>
+        </a>
+        <p className="mt-2 text-center text-xs font-semibold text-slate-400">
+          Bulmaca #{attempt.puzzleId}
+        </p>
+      </div>
+
+      <div className="px-4 py-3 border-t border-white/[0.06] space-y-2 text-sm">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-slate-500">Kullanıcı</span>
+          <span className="font-semibold text-slate-200">@{username}</span>
+        </div>
+        {attempt.rating != null ? (
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-slate-500">Rating</span>
+            <span className="font-semibold text-slate-200">{attempt.rating}</span>
+          </div>
+        ) : null}
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-slate-500">Tarih</span>
+          <span className="font-semibold text-slate-300">
+            {formatLichessGameTime(attempt.date)}
+          </span>
+        </div>
+        {attempt.themes ? (
+          <p className="text-[10px] text-slate-500 leading-relaxed pt-1 border-t border-white/[0.06]">
+            {attempt.themes.split(' ').slice(0, 4).join(' · ')}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          <button
+            type="button"
+            onClick={() => void handlePlay()}
+            disabled={loadingPlay}
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold text-sky-300 hover:text-sky-200 disabled:opacity-50"
+          >
+            {loadingPlay ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            Site içinde oyna
+          </button>
+          <a
+            href={`https://lichess.org/training/${encodeURIComponent(attempt.puzzleId)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#81b64c] hover:text-[#a5d46f]"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            Lichess&apos;te aç
+          </a>
+        </div>
+      </div>
+    </div>
+    {playing ? (
+      <StudentPuzzlePlayModal puzzle={playing} onClose={() => setPlaying(null)} />
+    ) : null}
+    </>
+  );
+};
+
 function sanitizeChessComGamePgn(raw: string): string {
   return raw
     .replace(/\{\[%clk[^\]]*\]\}/gi, '')
@@ -543,12 +666,14 @@ type ChessComMatchGoalCardsProps = {
   username: string;
   viewDate: string;
   gameTarget: number;
+  summaryGameCount?: number;
 };
 
 const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
   username,
   viewDate,
   gameTarget,
+  summaryGameCount = 0,
 }) => {
   const [loading, setLoading] = useState(true);
   const [games, setGames] = useState<ChessComGame[]>([]);
@@ -565,6 +690,11 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
         if (cancelled) return;
         const picks = fetched.slice(0, Math.max(1, gameTarget));
         if (picks.length === 0) {
+          if (summaryGameCount > 0) {
+            setGames([]);
+            setLoadError(null);
+            return;
+          }
           setLoadError('Bugünkü maç bulunamadı');
           return;
         }
@@ -578,7 +708,7 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
       });
 
     return () => { cancelled = true; };
-  }, [username, viewDate, gameTarget]);
+  }, [username, viewDate, gameTarget, summaryGameCount]);
 
   if (loading) {
     return (
@@ -592,6 +722,19 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
   }
 
   if (games.length === 0) {
+    if (summaryGameCount > 0) {
+      return (
+        <div className="rounded-xl border border-emerald-500/30 bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ring-emerald-500/10 p-4">
+          <p className="text-xs text-slate-400">
+            @{username} — Chess.com bugün <span className="text-white font-bold">{summaryGameCount}</span> maç kaydı var;
+            detay listesi şu an alınamadı.
+          </p>
+          <p className="text-xs text-slate-500 mt-2 tabular-nums">
+            Hedef: {Math.min(summaryGameCount, gameTarget || summaryGameCount)}/{gameTarget || summaryGameCount} maç
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="rounded-xl border border-slate-600/40 bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ring-white/5">
         <p className="text-center text-xs text-amber-400/90 py-8">{loadError ?? 'Maç yok'}</p>
@@ -818,13 +961,59 @@ type LichessMatchCardProps = {
   viewDate: string;
   gameTarget: number;
   gameGoalMet: boolean;
+  /** Aktivite özetinden bilinen maç sayısı — liste API boş dönerse yedek kart */
+  summaryGameCount?: number;
 };
+
+const LichessMatchSummaryCard: React.FC<{
+  username: string;
+  gameCount: number;
+  gameTarget: number;
+  gameGoalMet: boolean;
+}> = ({ username, gameCount, gameTarget, gameGoalMet }) => (
+  <div className={`rounded-xl border bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ${gameGoalMet ? 'border-sky-500/35 ring-sky-500/10' : 'border-slate-600/40 ring-slate-500/10'}`}>
+    <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2 bg-white/[0.02]">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 px-2 py-0.5 rounded-md text-[9px] font-black uppercase bg-[#262421] text-[#81b64c] border border-[#81b64c]/30">
+          Lichess
+        </span>
+        <span className="text-[10px] font-bold text-slate-400 uppercase">Günlük özet</span>
+      </div>
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${gameGoalMet ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}`}>
+        {gameGoalMet ? <CheckCircle2 className="w-3 h-3" /> : <Swords className="w-3 h-3" />}
+        {gameGoalMet ? 'Tamam' : 'Kayıtlı'}
+      </span>
+    </div>
+    <div className="px-4 py-5 space-y-2 text-sm">
+      <p className="text-xs text-slate-400">
+        @{username} — Lichess aktivite API&apos;si bugün <span className="text-white font-bold">{gameCount}</span> maç kaydetti.
+        Tek tek maç listesi şu an alınamadı (limit veya gecikme).
+      </p>
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-slate-500">Toplam maç</span>
+        <span className="font-bold text-white tabular-nums">
+          {Math.min(gameCount, gameTarget || gameCount)}/{gameTarget || gameCount}
+        </span>
+      </div>
+      <a
+        href={`https://lichess.org/@/${encodeURIComponent(username)}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#81b64c] hover:text-[#a5d46f] mt-1"
+      >
+        <ExternalLink className="w-3.5 h-3.5" />
+        Lichess profilinde aç
+      </a>
+    </div>
+  </div>
+);
 
 const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
   username,
   viewDate,
   gameTarget,
   gameGoalMet,
+  summaryGameCount = 0,
 }) => {
   const [loading, setLoading] = useState(true);
   const [games, setGames] = useState<LichessGame[]>([]);
@@ -844,6 +1033,11 @@ const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
           .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
           .slice(0, limit);
         if (picks.length === 0) {
+          if (summaryGameCount > 0) {
+            setGames([]);
+            setLoadError(null);
+            return;
+          }
           setLoadError('Bugünkü maç bulunamadı');
           return;
         }
@@ -857,7 +1051,7 @@ const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
       });
 
     return () => { cancelled = true; };
-  }, [username, viewDate, gameTarget]);
+  }, [username, viewDate, gameTarget, summaryGameCount]);
 
   if (loading) {
     return (
@@ -871,6 +1065,16 @@ const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
   }
 
   if (games.length === 0) {
+    if (summaryGameCount > 0) {
+      return (
+        <LichessMatchSummaryCard
+          username={username}
+          gameCount={summaryGameCount}
+          gameTarget={gameTarget}
+          gameGoalMet={gameGoalMet}
+        />
+      );
+    }
     return (
       <div className="rounded-xl border border-slate-600/40 bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ring-white/5">
         <p className="text-center text-xs text-amber-400/90 py-8">{loadError ?? 'Maç yok'}</p>
@@ -910,8 +1114,11 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
   onGoalActivityChange,
 }) => {
   const [loading, setLoading] = useState(false);
+  const [lichessLoading, setLichessLoading] = useState(false);
   const [chessComRows, setChessComRows] = useState<PlatformChessComPuzzleRow[]>([]);
+  const [lichessRows, setLichessRows] = useState<PlatformLichessPuzzleRow[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [lichessLoadError, setLichessLoadError] = useState<string | null>(null);
   const [viewerAttempt, setViewerAttempt] = useState<ChessComPuzzleAttempt | null>(null);
 
   const lichessUsername = student.lichessUsername?.trim() || '';
@@ -975,26 +1182,58 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
       );
   }, [chessComRows, effectivePuzzleTarget]);
 
-  const showLichessPuzzleSummary = lichessUsername && lichessPuzzles > 0 && goalPuzzleRows.length === 0;
+  const loadLichess = useCallback(async () => {
+    if (!isStudentLichessOAuthConnected(student)) {
+      setLichessRows([]);
+      setLichessLoadError(null);
+      return;
+    }
+    setLichessLoading(true);
+    setLichessLoadError(null);
+    try {
+      const rows = await fetchLichessPuzzlesForDay(
+        student.id,
+        viewDate,
+        effectivePuzzleTarget > 0 ? effectivePuzzleTarget : undefined,
+        student,
+      );
+      setLichessRows(rows);
+    } catch {
+      setLichessRows([]);
+      setLichessLoadError('Lichess bulmacaları yüklenemedi');
+    } finally {
+      setLichessLoading(false);
+    }
+  }, [student, viewDate, effectivePuzzleTarget]);
+
+  useEffect(() => {
+    void loadLichess();
+  }, [loadLichess]);
+
+  const showLichessPuzzleSummary = lichessUsername && lichessPuzzles > 0 && lichessRows.length === 0 && goalPuzzleRows.length === 0;
   const gameGoalMet = effectiveGameTarget > 0 && totalGames >= effectiveGameTarget;
   const hasPlatformActivity = totalGames > 0 || totalPuzzlesSolved > 0;
   const hasContent = hasPlatformActivity
     || showLichessPuzzleSummary
     || goalPuzzleRows.length > 0
+    || lichessRows.length > 0
     || effectiveGameTarget > 0
     || effectivePuzzleTarget > 0
-    || loading;
+    || loading
+    || lichessLoading;
 
   useEffect(() => {
     if (!onGoalActivityChange) return;
-    const puzzleCorrect = goalPuzzleRows.filter((r) => r.attempt.passed).length;
-    const puzzleWrong = goalPuzzleRows.filter((r) => !r.attempt.passed).length;
+    const ccCorrect = goalPuzzleRows.filter((r) => r.attempt.passed).length;
+    const ccWrong = goalPuzzleRows.filter((r) => !r.attempt.passed).length;
+    const lichessCorrect = lichessRows.filter((r) => r.attempt.win).length;
+    const lichessWrong = lichessRows.filter((r) => !r.attempt.win).length;
     onGoalActivityChange({
-      puzzleCorrect,
-      puzzleWrong,
+      puzzleCorrect: ccCorrect + lichessCorrect,
+      puzzleWrong: ccWrong + lichessWrong,
       games: totalGames,
     });
-  }, [goalPuzzleRows, totalGames, onGoalActivityChange]);
+  }, [goalPuzzleRows, lichessRows, totalGames, onGoalActivityChange]);
 
   if (!lichessUsername && !chessComUsername) {
     return (
@@ -1038,8 +1277,8 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
         </div>
         <button
           type="button"
-          onClick={() => void load()}
-          disabled={loading}
+          onClick={() => { void load(); void loadLichess(); }}
+          disabled={loading || lichessLoading}
           className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
         >
           Yenile
@@ -1055,7 +1294,9 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               </span>
               <p className="mt-2 text-sm font-semibold text-white">@{lichessUsername}</p>
               <p className="text-xs text-slate-400 mt-1">
-                Lichess API yalnızca günlük özet verir; tek tek hamle listesi bu platformda mevcut değil.
+                {lichessRows.length > 0
+                  ? 'OAuth ile bağlı hesaptan bulmaca geçmişi listeleniyor.'
+                  : 'OAuth bağlantısı yok — yalnızca günlük özet görünür. Öğrenci panelinden Lichess hesabını bağlatın.'}
               </p>
             </div>
             <div className="text-right text-xs space-y-1">
@@ -1082,18 +1323,18 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
         </div>
       ) : null}
 
-      {loading && goalPuzzleRows.length === 0 && !hasPlatformActivity ? (
+      {loading && goalPuzzleRows.length === 0 && lichessRows.length === 0 && !hasPlatformActivity ? (
         <div className="flex items-center justify-center gap-2 py-10 text-slate-400 text-sm">
           <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
-          Chess.com bulmacaları yükleniyor…
+          Platform bulmacaları yükleniyor…
         </div>
       ) : null}
 
-      {loadError ? (
-        <p className="text-sm text-rose-400/90 text-center">{loadError}</p>
+      {(loadError || lichessLoadError) ? (
+        <p className="text-sm text-rose-400/90 text-center">{loadError || lichessLoadError}</p>
       ) : null}
 
-      {goalPuzzleRows.length > 0 || lichessGames > 0 || chessComGames > 0 || effectiveGameTarget > 0 ? (
+      {goalPuzzleRows.length > 0 || lichessRows.length > 0 || lichessGames > 0 || chessComGames > 0 || effectiveGameTarget > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           {lichessUsername && lichessGames > 0 ? (
             <LichessMatchGoalCards
@@ -1101,6 +1342,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               viewDate={viewDate}
               gameTarget={Math.max(effectiveGameTarget, lichessGames)}
               gameGoalMet={gameGoalMet}
+              summaryGameCount={lichessGames}
             />
           ) : null}
           {chessComUsername && chessComGames > 0 ? (
@@ -1108,6 +1350,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               username={chessComUsername}
               viewDate={viewDate}
               gameTarget={Math.max(effectiveGameTarget, chessComGames)}
+              summaryGameCount={chessComGames}
             />
           ) : null}
           {lichessUsername && lichessGames === 0 && chessComGames === 0 && effectiveGameTarget > 0 ? (
@@ -1144,6 +1387,13 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               row={row}
               username={chessComUsername}
               onOpenViewer={setViewerAttempt}
+            />
+          ))}
+          {lichessRows.map((row) => (
+            <LichessPuzzleCard
+              key={row.attempt.id}
+              row={row}
+              username={lichessUsername}
             />
           ))}
         </div>

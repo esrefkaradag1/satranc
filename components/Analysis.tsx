@@ -14,28 +14,47 @@ import { SendCoachReportBar } from './analysis/SendCoachReportBar';
 import {
   fetchLichessUser,
   fetchLichessGamesPage,
+  fetchLichessActivity,
   fetchChessComPlayer,
   fetchChessComStats,
   fetchChessComGamesPage,
+  fetchChessComMemberStats,
   type LichessUserProfile,
   type LichessGame,
+  type LichessActivity,
   type ChessComPlayer,
   type ChessComStats,
   type ChessComGame,
+  type ChessComMemberStats,
 } from '../services/chessPlatformService';
+import {
+  analyzePlatformSkills,
+  buildPlatformContextLines,
+  mergeSkillScores,
+  type SkillKey,
+} from '../lib/platformSkillAnalysis';
+import { buildPlatformRatingHistory } from '../lib/analysisDashboardUtils';
+import {
+  AnalysisActionBar,
+  AnalysisKpiStrip,
+  InteractiveSkillPanel,
+  PlatformAnalysisCard,
+  useRecentGames,
+} from './analysis/AnalysisDashboardPanels';
+import { lichessProfileUrl, chessComProfileUrl } from '../lib/analysisDashboardUtils';
 
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 
-type SkillKey = 'endgame' | 'tactics' | 'opening' | 'strategy';
+type SkillKeyLocal = SkillKey;
 
-const SKILL_LABELS: Record<SkillKey, string> = {
+const SKILL_LABELS: Record<SkillKeyLocal, string> = {
   endgame: 'Oyun Sonu',
   tactics: 'Taktik',
   opening: 'Açılış',
   strategy: 'Strateji',
 };
 
-const SKILL_COLORS: Record<SkillKey, string> = {
+const SKILL_COLORS: Record<SkillKeyLocal, string> = {
   endgame: 'bg-rose-500',
   tactics: 'bg-emerald-500',
   opening: 'bg-indigo-500',
@@ -44,7 +63,7 @@ const SKILL_COLORS: Record<SkillKey, string> = {
 
 const PLATFORM_SAMPLE_LIMIT = 100;
 
-function mapCategoryToSkill(cat: string, theme?: string): SkillKey | null {
+function mapCategoryToSkill(cat: string, theme?: string): SkillKeyLocal | null {
   const c = (cat || '').toLowerCase();
   const t = (theme || '').toLowerCase();
   const combined = `${c} ${t}`;
@@ -93,14 +112,14 @@ function getEloChartDataStudent(student: Student): { name: string; elo: number }
   return data;
 }
 
-function getSkillDistributionAcademy(puzzles: { category: string; theme?: string }[], students: { level: string }[]): Record<SkillKey, number> {
-  const counts: Record<SkillKey, number> = { endgame: 0, tactics: 0, opening: 0, strategy: 0 };
+function getSkillDistributionAcademy(puzzles: { category: string; theme?: string }[], students: { level: string }[]): Record<SkillKeyLocal, number> {
+  const counts: Record<SkillKeyLocal, number> = { endgame: 0, tactics: 0, opening: 0, strategy: 0 };
   for (const p of puzzles) {
     const key = mapCategoryToSkill(p.category, p.theme);
     if (key) counts[key]++;
   }
   const total = puzzles.length || 1;
-  const pct = (key: SkillKey) => Math.round((counts[key] / total) * 100);
+  const pct = (key: SkillKeyLocal) => Math.round((counts[key] / total) * 100);
   const advancedCount = students.filter(s => s.level === 'İleri').length;
   const intermediateCount = students.filter(s => s.level === 'Orta').length;
   const levelBonus = total > 0 ? Math.min(15, advancedCount * 2 + intermediateCount) : 0;
@@ -115,9 +134,9 @@ function getSkillDistributionAcademy(puzzles: { category: string; theme?: string
 function getSkillDistributionStudent(
   attempts: HomeworkPuzzleAttempt[],
   puzzlesById: Map<string, Puzzle>
-): Record<SkillKey, number> {
-  const correctBySkill: Record<SkillKey, number> = { endgame: 0, tactics: 0, opening: 0, strategy: 0 };
-  const totalBySkill: Record<SkillKey, number> = { endgame: 0, tactics: 0, opening: 0, strategy: 0 };
+): Record<SkillKeyLocal, number> {
+  const correctBySkill: Record<SkillKeyLocal, number> = { endgame: 0, tactics: 0, opening: 0, strategy: 0 };
+  const totalBySkill: Record<SkillKeyLocal, number> = { endgame: 0, tactics: 0, opening: 0, strategy: 0 };
   for (const a of attempts) {
     const puzzle = puzzlesById.get(a.puzzleId);
     const key = puzzle ? mapCategoryToSkill(puzzle.category, puzzle.theme) : null;
@@ -126,16 +145,16 @@ function getSkillDistributionStudent(
       if (a.correct) correctBySkill[key]++;
     }
   }
-  const result: Record<SkillKey, number> = { endgame: 35, tactics: 40, opening: 40, strategy: 45 };
-  for (const k of Object.keys(result) as SkillKey[]) {
+  const result: Record<SkillKeyLocal, number> = { endgame: 35, tactics: 40, opening: 40, strategy: 45 };
+  for (const k of Object.keys(result) as SkillKeyLocal[]) {
     const tot = totalBySkill[k];
     if (tot > 0) result[k] = Math.min(95, Math.round((correctBySkill[k] / tot) * 100));
   }
   return result;
 }
 
-function getAiSuggestion(skills: Record<SkillKey, number>, studentName?: string): { text: string; focus: string } {
-  const entries = (Object.entries(skills) as [SkillKey, number][]).sort((a, b) => a[1] - b[1]);
+function getAiSuggestion(skills: Record<SkillKeyLocal, number>, studentName?: string): { text: string; focus: string } {
+  const entries = (Object.entries(skills) as [SkillKeyLocal, number][]).sort((a, b) => a[1] - b[1]);
   const [weakestKey, value] = entries[0];
   const label = SKILL_LABELS[weakestKey];
   const focus =
@@ -176,7 +195,7 @@ interface AnalysisProps {
 }
 
 const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = null }) => {
-  const { students, puzzles, homeworkAttempts } = useApp();
+  const { scopedStudents: students, puzzles, homeworkAttempts } = useApp();
   const [showDetailReport, setShowDetailReport] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(studentId ?? null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -186,9 +205,14 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
   const [platformLoading, setPlatformLoading] = useState(false);
   const [lichessProfile, setLichessProfile] = useState<LichessUserProfile | null>(null);
   const [lichessGames, setLichessGames] = useState<LichessGame[]>([]);
+  const [lichessActivity, setLichessActivity] = useState<LichessActivity[]>([]);
   const [chessComProfile, setChessComProfile] = useState<ChessComPlayer | null>(null);
   const [chessComStats, setChessComStats] = useState<ChessComStats | null>(null);
+  const [chessComMemberStats, setChessComMemberStats] = useState<ChessComMemberStats | null>(null);
   const [chessComGames, setChessComGames] = useState<ChessComGame[]>([]);
+  const [compareAcademy, setCompareAcademy] = useState(false);
+  const [focusSkill, setFocusSkill] = useState<SkillKeyLocal | null>(null);
+  const [eloPeriod, setEloPeriod] = useState<3 | 6 | 12>(6);
 
   const selectedStudent = useMemo(
     () => (selectedStudentId ? students.find((s) => s.id === selectedStudentId) ?? null : null),
@@ -202,17 +226,64 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
   }, [puzzles]);
 
   const eloData = useMemo(() => {
-    if (selectedStudent) return getEloChartDataStudent(selectedStudent);
+    if (selectedStudent) {
+      const fromPlatform = buildPlatformRatingHistory(
+        lichessGames,
+        chessComGames,
+        selectedStudent.lichessUsername,
+        selectedStudent.chessComUsername,
+        eloPeriod,
+      );
+      if (fromPlatform.length >= 2) return fromPlatform;
+      return getEloChartDataStudent(selectedStudent);
+    }
     return getEloChartDataAcademy(students);
-  }, [students, selectedStudent]);
+  }, [students, selectedStudent, lichessGames, chessComGames, eloPeriod]);
 
-  const skillDistribution = useMemo(() => {
+  const academySkillDistribution = useMemo(
+    () => getSkillDistributionAcademy(puzzles, students),
+    [puzzles, students],
+  );
+
+  const homeworkSkillDistribution = useMemo(() => {
     if (selectedStudentId) {
       const attempts = homeworkAttempts.filter((a) => a.studentId === selectedStudentId);
       return getSkillDistributionStudent(attempts, puzzlesById);
     }
     return getSkillDistributionAcademy(puzzles, students);
   }, [puzzles, students, selectedStudentId, homeworkAttempts, puzzlesById]);
+
+  const platformAnalysis = useMemo(() => {
+    if (!selectedStudent) return null;
+    return analyzePlatformSkills({
+      lichessUsername: selectedStudent.lichessUsername,
+      chessComUsername: selectedStudent.chessComUsername,
+      lichessProfile,
+      lichessGames,
+      lichessActivity,
+      chessComStats,
+      chessComGames,
+      chessComMemberStats,
+      homeworkSkills: homeworkSkillDistribution,
+    });
+  }, [
+    selectedStudent,
+    lichessProfile,
+    lichessGames,
+    lichessActivity,
+    chessComStats,
+    chessComGames,
+    chessComMemberStats,
+    homeworkSkillDistribution,
+  ]);
+
+  const skillDistribution = useMemo(() => {
+    if (!selectedStudent || !platformAnalysis?.hasPlatformData) {
+      return homeworkSkillDistribution;
+    }
+    const weight = platformAnalysis.totalGames >= 20 ? 0.75 : platformAnalysis.totalGames >= 8 ? 0.65 : 0.5;
+    return mergeSkillScores(homeworkSkillDistribution, platformAnalysis.skills, weight);
+  }, [selectedStudent, platformAnalysis, homeworkSkillDistribution]);
 
   const suggestion = useMemo(
     () => getAiSuggestion(skillDistribution, selectedStudent?.name),
@@ -252,6 +323,31 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
     [selectedStudentId, homeworkAttempts]
   );
 
+  const recentGames = useRecentGames(
+    lichessGames,
+    chessComGames,
+    selectedStudent?.lichessUsername,
+    selectedStudent?.chessComUsername,
+  );
+
+  const platformRatingFromGames = useMemo(
+    () =>
+      selectedStudent
+        ? buildPlatformRatingHistory(
+            lichessGames,
+            chessComGames,
+            selectedStudent.lichessUsername,
+            selectedStudent.chessComUsername,
+            eloPeriod,
+          ).length >= 2
+        : false,
+    [selectedStudent, lichessGames, chessComGames, eloPeriod],
+  );
+
+  const goToHomework = useCallback(() => {
+    window.location.hash = '#/odev-yonetimi';
+  }, []);
+
   const homeworkSummary = useMemo(() => {
     if (!selectedStudent) return null;
     const attempts = selectedStudentAttempts;
@@ -280,8 +376,10 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
     if (!selectedStudent) {
       setLichessProfile(null);
       setLichessGames([]);
+      setLichessActivity([]);
       setChessComProfile(null);
       setChessComStats(null);
+      setChessComMemberStats(null);
       setChessComGames([]);
       return;
     }
@@ -289,10 +387,12 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
     try {
       const lUser = selectedStudent.lichessUsername?.trim();
       const cUser = selectedStudent.chessComUsername?.trim();
-      const [lp, cp, cs] = await Promise.all([
+      const [lp, cp, cs, la, cms] = await Promise.all([
         lUser ? fetchLichessUser(lUser) : Promise.resolve(null),
         cUser ? fetchChessComPlayer(cUser) : Promise.resolve(null),
         cUser ? fetchChessComStats(cUser) : Promise.resolve(null),
+        lUser ? fetchLichessActivity(lUser) : Promise.resolve([]),
+        cUser ? fetchChessComMemberStats(cUser) : Promise.resolve(null),
       ]);
       let lg: LichessGame[] = [];
       if (lUser) {
@@ -318,8 +418,10 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
       }
       setLichessProfile(lp);
       setLichessGames(lg.slice(0, PLATFORM_SAMPLE_LIMIT));
+      setLichessActivity(la);
       setChessComProfile(cp);
       setChessComStats(cs);
+      setChessComMemberStats(cms);
       setChessComGames(cg.slice(0, PLATFORM_SAMPLE_LIMIT));
     } finally {
       setPlatformLoading(false);
@@ -330,6 +432,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
     loadPlatforms();
     setAiInsight(null);
     setAiError(null);
+    setFocusSkill(null);
   }, [loadPlatforms]);
 
   const lichessWinRate = useMemo(() => {
@@ -470,12 +573,26 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
     };
   }, [selectedStudent, lichessGames, chessComGames]);
 
-  const generateAiInsight = useCallback(async () => {
+  const generateAiInsight = useCallback(async (prioritySkill?: SkillKeyLocal) => {
     if (!selectedStudent) return;
     if (!openRouterReady) {
       setAiError('OpenRouter API anahtarı tanımlı değil. .env dosyasına VITE_OPENROUTER_API_KEY ekleyin.');
       return;
     }
+    if (platformLoading) {
+      setAiError('Lichess ve Chess.com verileri yükleniyor. Birkaç saniye bekleyip tekrar deneyin.');
+      return;
+    }
+    const hasUsernames =
+      !!selectedStudent.lichessUsername?.trim() || !!selectedStudent.chessComUsername?.trim();
+    if (hasUsernames && !platformAnalysis?.hasPlatformData) {
+      setAiError(
+        'Platform verisi alınamadı. Öğrenci kartındaki Lichess/Chess.com kullanıcı adlarını kontrol edin.',
+      );
+      return;
+    }
+    const activeFocus = prioritySkill ?? focusSkill;
+    if (prioritySkill) setFocusSkill(prioritySkill);
     setAiLoading(true);
     setAiError(null);
     try {
@@ -486,7 +603,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
         solutionMoves: a.solutionMoves ?? [],
       }));
 
-      const skillLines = (Object.entries(skillDistribution) as [SkillKey, number][])
+      const skillLines = (Object.entries(skillDistribution) as [SkillKeyLocal, number][])
         .map(([k, v]) => `- ${SKILL_LABELS[k]}: %${v}`)
         .join('\n');
 
@@ -494,42 +611,26 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
         ? `Toplam ${homeworkSummary.total} deneme, doğruluk %${homeworkSummary.accuracy}. Son 7 gün trendi: ${homeworkSummary.trend.map((t) => `${t.day} %${t.acc}`).join(', ') || 'veri yok'}.`
         : 'Ödev denemesi kaydı yok.';
 
-      const platformParts: string[] = [];
-      if (lichessProfile) {
-        platformParts.push(
-          `Lichess rapid ${lichessProfile.perfs?.rapid?.rating ?? '—'}, son ${lichessGames.length} oyun, win rate %${lichessWinRate ?? '—'}.`
-        );
-      }
-      if (chessComStats) {
-        platformParts.push(
-          `Chess.com rapid ${chessComStats.chess_rapid?.last?.rating ?? '—'}, son ${chessComGames.length} oyun, win rate %${chessComWinRate ?? '—'}.`
-        );
-      }
-      if (combinedPerformance) {
-        platformParts.push(
-          `Birleşik: ${combinedPerformance.totalGames} oyun, win %${combinedPerformance.winRate}, draw %${combinedPerformance.drawRate}, en çok tempo: ${combinedPerformance.topSpeed}.`
-        );
-      }
-      const platformLine = platformParts.length
-        ? platformParts.join(' ')
-        : 'Lichess/Chess.com kullanıcı adı yok veya veri çekilemedi.';
+      const contextLines = platformAnalysis
+        ? buildPlatformContextLines(platformAnalysis)
+        : {
+            platformLine: 'Lichess/Chess.com kullanıcı adı yok veya veri çekilemedi.',
+            detailedStatsLine: skillLines,
+            recentOpeningsLine: 'Açılış verisi yok.',
+            activityLine: 'Tempo verisi yok.',
+          };
 
-      const openingCounts: Record<string, number> = {};
-      lichessGames.forEach((g) => {
-        const name = g.opening?.name?.trim();
-        if (name) openingCounts[name] = (openingCounts[name] || 0) + 1;
-      });
-      const recentOpeningsLine = Object.entries(openingCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
-        .map(([name, count]) => `- ${name} (${count}x)`)
-        .join('\n') || 'Açılış verisi yok.';
+      const focusHint = activeFocus
+        ? `Öncelikli çalışma alanı: ${SKILL_LABELS[activeFocus]} (%${skillDistribution[activeFocus]}).`
+        : '';
 
       const res = await analyzeStudentComprehensive(selectedStudent.name, attemptsPayload, {
-        skillLines,
+        skillLines: focusHint ? `${focusHint}\n${skillLines}` : skillLines,
         homeworkLine,
-        platformLine,
-        recentOpeningsLine,
+        platformLine: contextLines.platformLine,
+        recentOpeningsLine: contextLines.recentOpeningsLine,
+        detailedStatsLine: contextLines.detailedStatsLine,
+        activityLine: contextLines.activityLine,
       });
       setAiInsight(res);
     } catch (e) {
@@ -543,15 +644,11 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
     selectedStudentAttempts,
     puzzlesById,
     openRouterReady,
+    platformLoading,
+    platformAnalysis,
     skillDistribution,
     homeworkSummary,
-    lichessProfile,
-    lichessGames,
-    lichessWinRate,
-    chessComStats,
-    chessComGames,
-    chessComWinRate,
-    combinedPerformance,
+    focusSkill,
   ]);
 
   useEffect(() => {
@@ -653,6 +750,8 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
                           {s.elo} ELO
                         </span>
                         {s.level && <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-black uppercase tracking-tighter ${selectedStudentId === s.id ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-500'}`}>{s.level}</span>}
+                        {s.lichessUsername && <span className="text-[7px] px-1 py-0.5 rounded bg-sky-500/20 text-sky-400 font-black">L</span>}
+                        {s.chessComUsername && <span className="text-[7px] px-1 py-0.5 rounded bg-[#81b64c]/20 text-[#81b64c] font-black">C</span>}
                       </div>
                     </div>
                     <ChevronRight className={`w-4 h-4 transition-transform ${selectedStudentId === s.id ? 'translate-x-1 opacity-100' : 'opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5'}`} />
@@ -699,14 +798,53 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
              </div>
           </header>
 
+          {selectedStudent && (
+            <div className="space-y-3">
+              <AnalysisActionBar
+                student={selectedStudent}
+                platformLoading={platformLoading}
+                onRefresh={() => void loadPlatforms()}
+                compareAcademy={compareAcademy}
+                onToggleCompare={() => setCompareAcademy((v) => !v)}
+                onAssignHomework={goToHomework}
+              />
+              <AnalysisKpiStrip
+                totalGames={combinedPerformance?.totalGames ?? 0}
+                winRate={platformAnalysis?.overallWinRate ?? combinedPerformance?.winRate ?? null}
+                homeworkAccuracy={homeworkSummary?.accuracy ?? 0}
+                platformGames={platformAnalysis?.totalGames ?? lichessGames.length + chessComGames.length}
+                hasPlatformData={!!platformAnalysis?.hasPlatformData}
+              />
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 lg:gap-8 min-w-0">
             {/* ELO Gelişim Grafiği */}
             <div className="bg-[#1e293b]/50 backdrop-blur-2xl p-4 sm:p-6 lg:p-8 rounded-2xl sm:rounded-[2.5rem] border border-white/10 shadow-2xl space-y-4 sm:space-y-6 min-w-0">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
                 <h3 className="font-black text-white text-xs uppercase tracking-[0.2em] flex items-center gap-3">
                   <TrendingUp className="w-5 h-5 text-indigo-400" />
                   ELO Gelişim Grafiği
+                  {platformRatingFromGames && (
+                    <span className="text-[9px] font-bold text-teal-400 normal-case tracking-normal">platform verisi</span>
+                  )}
                 </h3>
+                {selectedStudent && (
+                  <div className="flex gap-1 p-1 rounded-lg bg-black/30 border border-white/10">
+                    {([3, 6, 12] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setEloPeriod(m)}
+                        className={`px-2.5 py-1 rounded-md text-[10px] font-black ${
+                          eloPeriod === m ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {m} ay
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="h-[220px] sm:h-[280px] lg:h-[300px] w-full min-w-0 bg-black/20 rounded-2xl sm:rounded-3xl p-2 sm:p-4 border border-white/5 shadow-inner">
                 {eloData.length > 0 ? (
@@ -764,105 +902,82 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
             </div>
 
             {/* Yetenek Dağılımı */}
-            <div className="bg-[#1e293b]/50 backdrop-blur-2xl p-4 sm:p-6 lg:p-8 rounded-2xl sm:rounded-[2.5rem] border border-white/10 shadow-2xl space-y-5 sm:space-y-8 min-w-0">
+            <div className="bg-[#1e293b]/50 backdrop-blur-2xl p-4 sm:p-6 lg:p-8 rounded-2xl sm:rounded-[2.5rem] border border-white/10 shadow-2xl space-y-5 sm:space-y-6 min-w-0">
               <h3 className="font-black text-white text-xs uppercase tracking-[0.2em] flex items-center gap-3">
                 <Target className="w-5 h-5 text-rose-400 shrink-0" />
                 Yetenek Dağılımı
+                {selectedStudent && platformAnalysis?.hasPlatformData && (
+                  <span className="text-[9px] font-bold text-teal-400/90 normal-case tracking-normal">
+                    (platform + ödev)
+                  </span>
+                )}
               </h3>
-              <div className="space-y-6">
-                {(Object.entries(SKILL_LABELS) as [SkillKey, string][]).map(([skillKey, label], idx) => (
-                  <div key={skillKey} className="space-y-2">
-                    <div className="flex justify-between items-end">
-                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</span>
-                       <span className="text-xs font-black text-white">%{skillDistribution[skillKey]}</span>
+              {selectedStudent ? (
+                <InteractiveSkillPanel
+                  skills={skillDistribution}
+                  academySkills={academySkillDistribution}
+                  compareAcademy={compareAcademy}
+                  platformAnalysis={platformAnalysis}
+                  focusSkill={focusSkill}
+                  onFocusSkill={setFocusSkill}
+                  onGenerateForSkill={(key) => void generateAiInsight(key)}
+                  aiLoading={aiLoading}
+                />
+              ) : (
+                <div className="space-y-6">
+                  {(Object.entries(SKILL_LABELS) as [SkillKeyLocal, string][]).map(([skillKey, label], idx) => (
+                    <div key={skillKey} className="space-y-2">
+                      <div className="flex justify-between items-end">
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</span>
+                        <span className="text-xs font-black text-white">%{skillDistribution[skillKey]}</span>
+                      </div>
+                      <div className="h-2 w-full bg-black/30 rounded-full overflow-hidden border border-white/5 shadow-inner">
+                        <div
+                          className={`h-full ${SKILL_COLORS[skillKey]} transition-all duration-1000`}
+                          style={{ width: `${skillDistribution[skillKey]}%`, transitionDelay: `${idx * 150}ms` }}
+                        />
+                      </div>
                     </div>
-                    <div className="h-2 w-full bg-black/30 rounded-full overflow-hidden border border-white/5 shadow-inner">
-                       <div 
-                         className={`h-full ${SKILL_COLORS[skillKey]} transition-all duration-1000 shadow-[0_0_15px_rgba(0,0,0,0.3)] shadow-inner`}
-                         style={{ width: `${skillDistribution[skillKey]}%`, transitionDelay: `${idx * 150}ms` }}
-                       />
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Platform Analizleri (Chess.com & Lichess) */}
             {selectedStudent && (
-              <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-8">
-                 <div className="bg-sky-500/5 backdrop-blur-xl p-8 rounded-[2.5rem] border border-sky-500/10 shadow-2xl space-y-6 group hover:bg-sky-500/10 transition-all">
-                    <div className="flex items-center justify-between">
-                       <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-sky-500/20 flex items-center justify-center text-sky-400 border border-sky-500/20"><Users className="w-5 h-5" /></div>
-                          <div>
-                             <h4 className="text-xs font-black text-white uppercase tracking-widest">Lichess Analizi</h4>
-                             <p className="text-[10px] text-sky-500 font-bold tracking-tighter uppercase">{selectedStudent.lichessUsername || 'Tanımsız'}</p>
-                          </div>
-                       </div>
+              <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <PlatformAnalysisCard
+                  platform="lichess"
+                  username={selectedStudent.lichessUsername}
+                  profileUrl={selectedStudent.lichessUsername ? lichessProfileUrl(selectedStudent.lichessUsername) : undefined}
+                  rapidRating={lichessProfile?.perfs?.rapid?.rating ?? '—'}
+                  winRate={lichessWinRate}
+                  games={recentGames}
+                  loading={platformLoading}
+                  accentClass="bg-sky-500/5"
+                  borderClass="border-sky-500/10"
+                  icon={
+                    <div className="w-10 h-10 rounded-xl bg-sky-500/20 flex items-center justify-center text-sky-400 border border-sky-500/20">
+                      <Users className="w-5 h-5" />
                     </div>
-                    {platformLoading ? (
-                       <div className="py-12 flex justify-center"><Loader2 className="w-8 h-8 text-sky-400 animate-spin" /></div>
-                    ) : lichessProfile ? (
-                       <div className="grid grid-cols-2 gap-4">
-                          <div className="p-4 rounded-2xl bg-black/20 border border-white/5">
-                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Rapid Rating</p>
-                             <p className="text-2xl font-black text-white tracking-tighter">{lichessProfile.perfs?.rapid?.rating ?? '—'}</p>
-                          </div>
-                          <div className="p-4 rounded-2xl bg-black/20 border border-white/5">
-                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Galibiyet Oranı</p>
-                             <p className="text-2xl font-black text-sky-400 tracking-tighter">%{lichessWinRate ?? '—'}</p>
-                          </div>
-                          <div className="p-4 rounded-2xl bg-black/20 border border-white/5 col-span-2 flex items-center justify-between">
-                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Son Maçlar ({lichessGames.length})</p>
-                             <div className="flex gap-1">
-                                {lichessGames.slice(0, 5).map((g, i) => {
-                                   const isWhite = (g.players?.white?.user?.id || '').toLowerCase().includes((selectedStudent.lichessUsername || '').toLowerCase());
-                                   const won = (isWhite && g.winner === 'white') || (!isWhite && g.winner === 'black');
-                                   const draw = !g.winner;
-                                   return <div key={i} className={`w-3 h-3 rounded-md shadow-sm ${won ? 'bg-emerald-500' : draw ? 'bg-slate-500' : 'bg-rose-500'}`} />;
-                                })}
-                             </div>
-                          </div>
-                       </div>
-                    ) : <p className="text-[10px] text-slate-600 font-bold uppercase py-10 text-center tracking-widest">Kayıtlı Profil Bulunamadı</p>}
-                 </div>
-
-                 <div className="bg-[#81b64c]/5 backdrop-blur-xl p-8 rounded-[2.5rem] border border-[#81b64c]/10 shadow-2xl space-y-6 group hover:bg-[#81b64c]/10 transition-all">
-                    <div className="flex items-center justify-between">
-                       <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-[#81b64c]/20 flex items-center justify-center text-[#81b64c] border border-[#81b64c]/20"><Target className="w-5 h-5" /></div>
-                          <div>
-                             <h4 className="text-xs font-black text-white uppercase tracking-widest">Chess.com Analizi</h4>
-                             <p className="text-[10px] text-[#81b64c] font-bold tracking-tighter uppercase">{selectedStudent.chessComUsername || 'Tanımsız'}</p>
-                          </div>
-                       </div>
+                  }
+                />
+                <PlatformAnalysisCard
+                  platform="chesscom"
+                  username={selectedStudent.chessComUsername}
+                  profileUrl={selectedStudent.chessComUsername ? chessComProfileUrl(selectedStudent.chessComUsername) : undefined}
+                  rapidRating={chessComStats?.chess_rapid?.last?.rating ?? '—'}
+                  winRate={chessComWinRate}
+                  games={recentGames}
+                  loading={platformLoading}
+                  accentClass="bg-[#81b64c]/5"
+                  borderClass="border-[#81b64c]/10"
+                  icon={
+                    <div className="w-10 h-10 rounded-xl bg-[#81b64c]/20 flex items-center justify-center text-[#81b64c] border border-[#81b64c]/20">
+                      <Target className="w-5 h-5" />
                     </div>
-                    {platformLoading ? (
-                       <div className="py-12 flex justify-center"><Loader2 className="w-8 h-8 text-[#81b64c] animate-spin" /></div>
-                    ) : chessComStats ? (
-                       <div className="grid grid-cols-2 gap-4">
-                          <div className="p-4 rounded-2xl bg-black/20 border border-white/5">
-                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Rapid Rating</p>
-                             <p className="text-2xl font-black text-white tracking-tighter">{chessComStats.chess_rapid?.last?.rating ?? '—'}</p>
-                          </div>
-                          <div className="p-4 rounded-2xl bg-black/20 border border-white/5">
-                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Galibiyet Oranı</p>
-                             <p className="text-2xl font-black text-[#81b64c] tracking-tighter">%{chessComWinRate ?? '—'}</p>
-                          </div>
-                          <div className="p-4 rounded-2xl bg-black/20 border border-white/5 col-span-2 flex items-center justify-between">
-                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Son Maçlar ({chessComGames.length})</p>
-                             <div className="flex gap-1">
-                                {chessComGames.slice(0, 5).map((g, i) => {
-                                   const isWhite = (g.white?.username || '').toLowerCase().includes((selectedStudent.chessComUsername || '').toLowerCase());
-                                   const won = (isWhite && g.white?.result === 'win') || (!isWhite && g.black?.result === 'win');
-                                   const draw = g.white?.result === 'draw' || g.black?.result === 'draw';
-                                   return <div key={i} className={`w-3 h-3 rounded-md shadow-sm ${won ? 'bg-emerald-500' : draw ? 'bg-slate-500' : 'bg-rose-500'}`} />;
-                                })}
-                             </div>
-                          </div>
-                       </div>
-                    ) : <p className="text-[10px] text-slate-600 font-bold uppercase py-10 text-center tracking-widest">Kayıtlı Profil Bulunamadı</p>}
-                 </div>
+                  }
+                />
               </div>
             )}
 
@@ -989,11 +1104,11 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
                       <button
                         type="button"
                         onClick={() => void generateAiInsight()}
-                        disabled={aiLoading || !openRouterReady}
-                        className={`px-5 py-3 rounded-2xl premium-gradient text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${aiLoading || !openRouterReady ? 'opacity-50 cursor-not-allowed' : 'hover:brightness-110'}`}
+                        disabled={aiLoading || platformLoading || !openRouterReady}
+                        className={`px-5 py-3 rounded-2xl premium-gradient text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${aiLoading || platformLoading || !openRouterReady ? 'opacity-50 cursor-not-allowed' : 'hover:brightness-110'}`}
                       >
-                        {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                        {aiLoading ? 'Analiz hazırlanıyor…' : 'Kapsamlı analiz üret'}
+                        {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : platformLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                        {aiLoading ? 'Analiz hazırlanıyor…' : platformLoading ? 'Platform verisi yükleniyor…' : 'Kapsamlı analiz üret'}
                       </button>
                       <button
                         type="button"
@@ -1010,6 +1125,13 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
                   <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.07] px-5 py-4 text-left">
                     <p className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest mb-2">
                       Hızlı özet
+                      {platformAnalysis?.hasPlatformData ? (
+                        <span className="ml-2 text-teal-300/90 normal-case">
+                          · Lichess + Chess.com ({platformAnalysis.totalGames} oyun)
+                        </span>
+                      ) : platformLoading ? (
+                        <span className="ml-2 text-slate-400 normal-case">· platform verisi yükleniyor…</span>
+                      ) : null}
                     </p>
                     <p className="text-sm md:text-[15px] text-slate-100 leading-relaxed">
                       {suggestion.text}
@@ -1022,7 +1144,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
                       labels={SKILL_LABELS}
                       focusLabel={suggestion.focus}
                       focusPercent={
-                        (Object.entries(skillDistribution) as [SkillKey, number][]).sort(
+                        (Object.entries(skillDistribution) as [SkillKeyLocal, number][]).sort(
                           (a, b) => a[1] - b[1]
                         )[0]?.[1] ?? 0
                       }
@@ -1044,7 +1166,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
                     <div className="rounded-2xl border border-white/10 bg-black/20 py-14 flex flex-col items-center gap-3">
                       <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
                       <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                        Platform + ödev verisi işleniyor…
+                        Lichess, Chess.com ve ödev verisi işleniyor…
                       </p>
                     </div>
                   ) : aiInsight && selectedStudent ? (

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Calendar, Clock, Crosshair, Puzzle, Timer, Zap } from 'lucide-react';
+import { Calendar, Clock, Crosshair, Puzzle, Timer, TrendingDown, TrendingUp, Zap } from 'lucide-react';
 import PlatformStatsSidebar, { type PlatformStatsNavItem } from './PlatformStatsSidebar';
 import { lichessPerfLabel, type LichessActivity, type LichessUserProfile } from '../services/chessPlatformService';
+import { lichessRatingTrends } from '../lib/lichessInsights';
 
 const GAME_PERFS = ['rapid', 'blitz', 'bullet', 'correspondence', 'classical'] as const;
 
@@ -58,11 +59,33 @@ const LichessStatsSection: React.FC<LichessStatsSectionProps> = ({ profile, acti
   }
 
   const puzzlePerf = profile.perfs?.puzzle;
+  const ratingTrends = useMemo(() => lichessRatingTrends(profile), [profile]);
 
   return (
     <div className="flex flex-col lg:flex-row gap-4">
       <PlatformStatsSidebar items={navItems} active={active} onChange={setActive} accent="sky" />
       <div className="flex-1 min-w-0 space-y-4">
+        {ratingTrends.length > 0 ? (
+          <div className="rounded-xl bg-slate-800/50 border border-slate-700/60 p-4">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-3">Rating özeti</div>
+            <div className="flex flex-wrap gap-2">
+              {ratingTrends.map((row) => (
+                <div key={row.perf} className="rounded-lg bg-slate-900/50 border border-slate-700/50 px-3 py-2 min-w-[110px]">
+                  <div className="text-[10px] text-slate-500 font-bold uppercase">{row.label}</div>
+                  <div className="text-lg font-black text-white tabular-nums">{row.rating}</div>
+                  {row.prog != null && row.prog !== 0 ? (
+                    <div className={`text-[11px] font-bold flex items-center gap-0.5 ${row.prog > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {row.prog > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                      {row.prog > 0 ? '+' : ''}{row.prog}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-slate-600">{row.games.toLocaleString('tr-TR')} oyun</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {active === 'puzzle' && puzzlePerf ? (
           <div className="rounded-xl bg-slate-800/60 border border-slate-700/60 p-4 md:p-5">
             <div className="flex items-center gap-2 mb-4">

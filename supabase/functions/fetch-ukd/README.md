@@ -24,4 +24,4 @@ Uygulama içinde öğrenci detay → UKD/FIDE sekmesinde **"UKD çek"** butonu, 
 
 ## Not
 
-TSF sayfasındaki form alan adları değişirse (`tc`, `soyad`) `index.ts` içindeki `form.set(...)` değerleri güncellenmelidir.
+TSF sayfası form alanları: `t=ukdbilgigoster`, TC için `tckimlikno`, soyad için `soyad`. Değişirse `index.ts` içindeki `form.set(...)` güncellenmelidir.
