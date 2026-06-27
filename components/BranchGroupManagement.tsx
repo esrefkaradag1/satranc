@@ -71,18 +71,15 @@ const BranchGroupManagement: React.FC = () => {
 
   const officeOptions = useMemo(() => {
     const clubId = isClubUser ? resolveClubIdFromAuth(auth, clubs) : undefined;
-    const fromRecords = branchOfficeRecords
+    return branchOfficeRecords
       .filter((r) => {
         if (!isClubUser) return true;
         return !r.clubId || r.clubId === clubId;
       })
       .map((r) => r.name.trim())
-      .filter(Boolean);
-    if (isClubUser && clubBranch.trim()) {
-      fromRecords.unshift(clubBranch.trim());
-    }
-    return [...new Set(fromRecords)].sort((a, b) => a.localeCompare(b, 'tr'));
-  }, [branchOfficeRecords, isClubUser, auth, clubs, clubBranch]);
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [branchOfficeRecords, isClubUser, auth, clubs]);
 
   /** Kurumsal Yapı'daki kulüpler — henüz branch_offices tablosunda şube olarak tanımlı değil */
   const clubsPendingAsOffice = useMemo(() => {
@@ -141,10 +138,16 @@ const BranchGroupManagement: React.FC = () => {
   };
 
   const openAddBranch = () => {
+    if (officeOptions.length === 0) {
+      alert(isClubUser
+        ? 'Ana şube kaydı oluşturuluyor. Sayfayı yenileyip tekrar deneyin.'
+        : 'Önce şube ekleyin veya kulübü + ile şube olarak tanımlayın.');
+      return;
+    }
     setEditingBranch(null);
     setBranchForm({
       name: '',
-      branchOffice: isClubUser ? (clubBranch || officeOptions[0] || '') : (officeOptions[0] || ''),
+      branchOffice: officeOptions[0] || '',
       monthlyFee: '',
     });
     setShowBranchModal(true);
@@ -361,16 +364,20 @@ const BranchGroupManagement: React.FC = () => {
             </h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
               {isClubUser
-                ? 'Kulübünüze bağlı şubeler. Ana şube kulüp adınızdır; alt şubeler ekleyebilirsiniz.'
-                : 'Branş ve grup tanımında kullanılacak şubeler. Kulüp adlarını şube olarak ekleyebilir veya yeni şube oluşturabilirsiniz.'}
+                ? 'Kulübünüze bağlı şubeler. Ana şube otomatik oluşturulur; alt şubeler ekleyebilirsiniz.'
+                : 'Branş tanımında kullanılacak şubeler. Kulübü + ile şube olarak ekleyin veya yeni şube adı yazın.'}
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {officeOptions.map((office) => {
             const inUse =
-              disciplineBranches.some((b) => b.branchOffice === office) ||
-              trainingGroups.some((g) => g.branchOffice === office);
+              disciplineBranches.some(
+                (b) => normalizeClubKey(b.branchOffice) === normalizeClubKey(office),
+              ) ||
+              trainingGroups.some(
+                (g) => normalizeClubKey(g.branchOffice) === normalizeClubKey(office),
+              );
             const isMainClubOffice = isClubUser && normalizeClubKey(office) === normalizeClubKey(clubBranch);
             return (
               <span
@@ -486,7 +493,9 @@ const BranchGroupManagement: React.FC = () => {
           </div>
           {sortedBranches.map((branch, idx) => {
             const branchGroups = trainingGroups.filter(
-              (g) => g.discipline === branch.name && g.branchOffice === branch.branchOffice
+              (g) =>
+                g.discipline === branch.name &&
+                normalizeClubKey(g.branchOffice) === normalizeClubKey(branch.branchOffice),
             );
             const isOpen = expanded[branch.id] !== false;
             return (

@@ -16,7 +16,9 @@ import {
   dbToDisciplineBranch,
   dbToTrainingGroup,
   disciplineBranchToDb,
+  findRegisteredBranchOffice,
   resolveBranchOfficeNames,
+  syncOrgStructureWithOffices,
   trainingGroupToDb,
   clubIdForOrgRecord,
   resolveClubIdFromAuth,
@@ -1480,8 +1482,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const activeClubBranch = useMemo(() => resolveClubBranch(auth), [auth]);
 
   const branchOffices = useMemo(
-    () => resolveBranchOfficeNames(branchOfficeRecords, clubs.map((c) => c.name), auth, clubs),
-    [branchOfficeRecords, clubs, auth],
+    () => resolveBranchOfficeNames(branchOfficeRecords, [], auth, clubs),
+    [branchOfficeRecords, auth, clubs],
   );
 
   const [stockfishReady, setStockfishReady] = useState(false);
@@ -1942,30 +1944,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (coachRes.data) setCoaches((coachRes.data as Record<string, unknown>[]).map(dbToCoach));
         if (perfRes.data) setPerformanceAnalyses((perfRes.data as Record<string, unknown>[]).map(dbToPerformanceAnalysis));
         if (tourRes.data) setTournaments((tourRes.data as Record<string, unknown>[]).map(dbToTournament));
-        if (clubsRes.data) setClubs((clubsRes.data as Record<string, unknown>[]).map(dbToClub));
+        const loadedClubs = clubsRes.data
+          ? (clubsRes.data as Record<string, unknown>[]).map(dbToClub)
+          : [];
+        if (clubsRes.data) setClubs(loadedClubs);
 
         const officeRows = officesRes.error
           ? []
           : ((officesRes.data as Record<string, unknown>[] | null) ?? []).map(dbToBranchOffice);
-        if (officeRows.length > 0) {
-          setBranchOfficeRecords(officeRows);
-        } else if (!officesRes.error) {
-          setBranchOfficeRecords([]);
-        }
 
-        if (!discBranchesRes.error && discBranchesRes.data) {
-          const branches = (discBranchesRes.data as Record<string, unknown>[]).map(dbToDisciplineBranch);
-          setDisciplineBranches(branches);
-        }
+        const rawBranches = !discBranchesRes.error && discBranchesRes.data
+          ? (discBranchesRes.data as Record<string, unknown>[]).map(dbToDisciplineBranch)
+          : [];
 
-        const groupsFromDb = !trainGroupsRes.error && trainGroupsRes.data
+        const rawGroups = !trainGroupsRes.error && trainGroupsRes.data
           ? (trainGroupsRes.data as Record<string, unknown>[]).map(dbToTrainingGroup)
           : [];
 
-        if (groupsFromDb.length > 0) {
-          setTrainingGroups(groupsFromDb);
-        } else if (!trainGroupsRes.error) {
-          setTrainingGroups([]);
+        const synced = syncOrgStructureWithOffices(
+          officeRows,
+          rawBranches,
+          rawGroups,
+          loadedClubs,
+          genId,
+        );
+
+        setBranchOfficeRecords(synced.offices);
+        setDisciplineBranches(synced.branches);
+        setTrainingGroups(synced.groups);
+
+        const sbWrite = getServiceSupabase();
+        if (sbWrite && (
+          synced.officesToUpsert.length > 0 ||
+          synced.branchesToUpsert.length > 0 ||
+          synced.groupsToUpsert.length > 0
+        )) {
+          for (const o of synced.officesToUpsert) {
+            void sbWrite.from('branch_offices').upsert(branchOfficeToDb(o));
+          }
+          for (const b of synced.branchesToUpsert) {
+            void sbWrite.from('discipline_branches').upsert(
+              disciplineBranchToDb(b, b.clubId ?? clubIdForOrgRecord(b.branchOffice, null, loadedClubs)),
+            );
+          }
+          for (const g of synced.groupsToUpsert) {
+            void sbWrite.from('training_groups').upsert(
+              trainingGroupToDb(g, g.clubId ?? clubIdForOrgRecord(g.branchOffice, null, loadedClubs)),
+            );
+          }
         }
 
         try {
@@ -3174,7 +3200,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addBranchOffice = useCallback((name: string, options?: { clubId?: string }) => {
     const trimmed = name.trim();
-    if (!trimmed || branchOffices.some((o) => normalizeClubKey(o) === normalizeClubKey(trimmed))) return;
+    if (!trimmed || branchOfficeRecords.some((o) => normalizeClubKey(o.name) === normalizeClubKey(trimmed))) return;
     const clubId =
       options?.clubId ??
       (auth?.role === 'club' ? resolveClubIdFromAuth(auth, clubs) : undefined);
@@ -3191,13 +3217,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (error) console.error('Supabase branch_offices insert error:', error);
       });
     }
-  }, [branchOffices, auth, clubs, addActivityLog]);
+  }, [branchOfficeRecords, auth, clubs, addActivityLog]);
+
+  /** Kulüp girişinde ana şube kaydı yoksa branch_offices'e ekle (branş/grup seed etmez) */
+  useEffect(() => {
+    if (!initialDataLoaded || auth?.role !== 'club') return;
+    const clubId = resolveClubIdFromAuth(auth, clubs);
+    const club = clubs.find((c) => c.id === clubId);
+    const clubName = (club?.name || auth.branch || '').trim();
+    if (!clubId || !clubName) return;
+    const hasOffice = branchOfficeRecords.some(
+      (r) => r.clubId === clubId || normalizeClubKey(r.name) === normalizeClubKey(clubName),
+    );
+    if (hasOffice) return;
+    addBranchOffice(clubName, { clubId });
+  }, [initialDataLoaded, auth, clubs, branchOfficeRecords, addBranchOffice]);
+
   const removeBranchOffice = useCallback((name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
     const clubId = auth?.role === 'club' ? resolveClubIdFromAuth(auth, clubs) : undefined;
     const target = branchOfficeRecords.find((r) => {
-      if (r.name !== trimmed) return false;
+      if (normalizeClubKey(r.name) !== normalizeClubKey(trimmed)) return false;
       if (auth?.role === 'club') return r.clubId === clubId;
       return true;
     });
@@ -3218,8 +3259,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const inUse =
-      disciplineBranches.some((b) => b.branchOffice === trimmed) ||
-      trainingGroups.some((g) => g.branchOffice === trimmed);
+      disciplineBranches.some((b) => normalizeClubKey(b.branchOffice) === normalizeClubKey(trimmed)) ||
+      trainingGroups.some((g) => normalizeClubKey(g.branchOffice) === normalizeClubKey(trimmed));
     if (inUse) {
       showToast(`"${trimmed}" şubesinde branş veya grup tanımı var. Önce onları silin.`, 'warning');
       return;
@@ -3325,19 +3366,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addDisciplineBranch = useCallback((branch: Omit<DisciplineBranch, 'id'>) => {
     const name = branch.name.trim();
-    const office = branch.branchOffice.trim();
-    if (!name || !office) return;
-    const clubId = clubIdForOrgRecord(office, auth, clubs) ?? undefined;
+    const officeInput = branch.branchOffice.trim();
+    if (!name || !officeInput) return;
+    const clubId = clubIdForOrgRecord(officeInput, auth, clubs) ?? undefined;
+    const registered = findRegisteredBranchOffice(branchOfficeRecords, officeInput, clubId);
+    if (!registered) {
+      showToast('Önce şubeyi tanımlayın. Kulüpler için + ile şube olarak ekleyin.', 'warning');
+      return;
+    }
+    const office = registered.name;
     const full: DisciplineBranch = {
       ...branch,
       id: genId(),
       name,
       branchOffice: office,
       monthlyFee: Math.max(0, branch.monthlyFee || 0),
-      clubId,
+      clubId: registered.clubId ?? clubId,
     };
     setDisciplineBranches((prev) => {
-      if (prev.some((b) => b.name === name && b.branchOffice === office)) return prev;
+      if (prev.some((b) => b.name === name && normalizeClubKey(b.branchOffice) === normalizeClubKey(office))) {
+        return prev;
+      }
       const next = [...prev, full];
       syncDisciplineNames(next);
       return next;
@@ -3345,28 +3394,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addActivityLog({ user: CURRENT_USER, action: 'Branş Tanımı Eklendi', target: `${name} (${office})`, type: 'info' });
     const sb = getServiceSupabase();
     if (sb) {
-      const clubId = clubIdForOrgRecord(office, auth, clubs);
       void sb.from('discipline_branches').upsert(disciplineBranchToDb(full, full.clubId ?? clubId)).then(({ error }) => {
         if (error) console.error('Supabase discipline_branches insert error:', error);
       });
     }
-  }, [addActivityLog, syncDisciplineNames, auth, clubs]);
+  }, [addActivityLog, syncDisciplineNames, auth, clubs, branchOfficeRecords, showToast]);
 
   const updateDisciplineBranch = useCallback((id: string, branch: Partial<DisciplineBranch>) => {
+    let cascade = false;
+    let oldName = '';
+    let oldOffice = '';
+    let newName = '';
+    let newOffice = '';
+
+    const existing = disciplineBranches.find((b) => b.id === id);
+    if (!existing) return;
+
+    const officeInput = (branch.branchOffice ?? existing.branchOffice).trim();
+    const clubId = clubIdForOrgRecord(officeInput, auth, clubs) ?? existing.clubId;
+    const registered = findRegisteredBranchOffice(branchOfficeRecords, officeInput, clubId ?? undefined);
+    if (!registered) {
+      showToast('Seçilen şube kayıtlı değil. Önce şubeyi tanımlayın.', 'warning');
+      return;
+    }
+
     setDisciplineBranches((prev) => {
-      const next = prev.map((b) => (b.id === id ? { ...b, ...branch } : b));
+      const row = prev.find((b) => b.id === id);
+      if (!row) return prev;
+      oldName = row.name;
+      oldOffice = row.branchOffice;
+      newName = (branch.name ?? row.name).trim();
+      newOffice = registered.name;
+      cascade =
+        newName !== oldName ||
+        normalizeClubKey(newOffice) !== normalizeClubKey(oldOffice);
+      const next = prev.map((b) =>
+        b.id === id
+          ? { ...b, ...branch, name: newName, branchOffice: newOffice, clubId: registered.clubId ?? clubId ?? b.clubId }
+          : b,
+      );
       syncDisciplineNames(next);
       const updated = next.find((b) => b.id === id);
       const sb = getServiceSupabase();
       if (sb && updated) {
-        const clubId = clubIdForOrgRecord(updated.branchOffice, auth, clubs);
         void sb.from('discipline_branches').upsert(disciplineBranchToDb(updated, updated.clubId ?? clubId)).then(({ error }) => {
           if (error) console.error('Supabase discipline_branches update error:', error);
         });
       }
       return next;
     });
-  }, [syncDisciplineNames, auth, clubs]);
+
+    if (!cascade) return;
+
+    setTrainingGroups((prev) => {
+      const updatedGroups: TrainingGroup[] = [];
+      const next = prev.map((g) => {
+        if (
+          g.discipline !== oldName ||
+          normalizeClubKey(g.branchOffice) !== normalizeClubKey(oldOffice)
+        ) {
+          return g;
+        }
+        const ng = { ...g, discipline: newName, branchOffice: newOffice };
+        updatedGroups.push(ng);
+        return ng;
+      });
+      if (updatedGroups.length === 0) return prev;
+      syncGroupNames(next);
+      const sb = getServiceSupabase();
+      if (sb) {
+        for (const g of updatedGroups) {
+          void sb.from('training_groups').upsert(trainingGroupToDb(g, g.clubId ?? clubId)).then(({ error }) => {
+            if (error) console.error('Supabase training_groups cascade update error:', error);
+          });
+        }
+      }
+      return next;
+    });
+
+    setStudents((prev) => {
+      const toUpdate: { id: string; branch: string; branchOffice: string }[] = [];
+      const next = prev.map((s) => {
+        const office = (s.branchOffice ?? '').trim();
+        if (
+          s.branch !== oldName ||
+          normalizeClubKey(office) !== normalizeClubKey(oldOffice)
+        ) {
+          return s;
+        }
+        toUpdate.push({ id: s.id, branch: newName, branchOffice: newOffice });
+        return { ...s, branch: newName, branchOffice: newOffice };
+      });
+      if (toUpdate.length === 0) return prev;
+      const sb = getServiceSupabase();
+      if (sb) {
+        for (const u of toUpdate) {
+          void studentUpdateWithRetry(sb, u.id, { branch: u.branch, branchOffice: u.branchOffice });
+        }
+      }
+      return next;
+    });
+  }, [disciplineBranches, branchOfficeRecords, syncDisciplineNames, syncGroupNames, auth, clubs, showToast]);
 
   const removeDisciplineBranch = useCallback((id: string) => {
     setDisciplineBranches((prev) => {

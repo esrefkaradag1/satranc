@@ -1,4 +1,5 @@
 import { normalizeClubKey } from './clubScope';
+import type { DisciplineBranch, TrainingGroup } from '../types';
 
 export type BranchOfficeRecord = {
   id: string;
@@ -90,7 +91,7 @@ export function resolveClubIdFromAuth(
 
 export function resolveBranchOfficeNames(
   records: BranchOfficeRecord[],
-  clubNames: string[],
+  _clubNames: string[],
   auth?: { role: string; branch?: string; clubId?: string } | null,
   clubs?: { id: string; name: string }[],
 ): string[] {
@@ -98,18 +99,19 @@ export function resolveBranchOfficeNames(
 
   if (!auth || auth.role === 'admin') {
     for (const r of records) if (r.name) names.add(r.name);
-    for (const c of clubNames) if (c.trim()) names.add(c.trim());
     return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
   }
 
   if (auth.role === 'club') {
-    const branch = (auth.branch || '').trim();
     const clubId = resolveClubIdFromAuth(auth, clubs);
-    if (branch) names.add(branch);
     for (const r of records) {
       if (!r.name) continue;
       if (clubId && r.clubId === clubId) names.add(r.name);
+      else if (!r.clubId && auth.branch && normalizeClubKey(r.name) === normalizeClubKey(auth.branch)) {
+        names.add(r.name);
+      }
     }
+    if (names.size === 0 && auth.branch?.trim()) names.add(auth.branch.trim());
     return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
   }
 
@@ -117,6 +119,103 @@ export function resolveBranchOfficeNames(
     if (r.name && !r.clubId) names.add(r.name);
   }
   return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
+}
+
+/** Kulüp adından veya club_id'den kayıtlı şube adını döndürür */
+export function canonicalBranchOfficeName(
+  officeName: string,
+  clubs: { id: string; name: string }[],
+  clubId?: string,
+): string {
+  const trimmed = officeName.trim();
+  if (!trimmed) return '';
+  if (clubId) {
+    const byId = clubs.find((c) => c.id === clubId);
+    if (byId?.name.trim()) return byId.name.trim();
+  }
+  const byName = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(trimmed));
+  return byName?.name.trim() || trimmed;
+}
+
+export function findRegisteredBranchOffice(
+  records: BranchOfficeRecord[],
+  officeName: string,
+  clubId?: string,
+): BranchOfficeRecord | undefined {
+  const key = normalizeClubKey(officeName);
+  return records.find((r) => {
+    if (normalizeClubKey(r.name) !== key) return false;
+    if (clubId && r.clubId && r.clubId !== clubId) return false;
+    return true;
+  });
+}
+
+export type OrgStructureSyncResult = {
+  offices: BranchOfficeRecord[];
+  branches: DisciplineBranch[];
+  groups: TrainingGroup[];
+  officesToUpsert: BranchOfficeRecord[];
+  branchesToUpsert: DisciplineBranch[];
+  groupsToUpsert: TrainingGroup[];
+};
+
+/** Branş/grupta geçen şubeleri branch_offices ile eşleştirir; eksik kayıtları oluşturur */
+export function syncOrgStructureWithOffices(
+  offices: BranchOfficeRecord[],
+  branches: DisciplineBranch[],
+  groups: TrainingGroup[],
+  clubs: { id: string; name: string }[],
+  newId: () => string,
+): OrgStructureSyncResult {
+  const officeKeys = new Set(offices.map((o) => normalizeClubKey(o.name)));
+  const nextOffices = [...offices];
+  const officesToUpsert: BranchOfficeRecord[] = [];
+
+  const ensureOffice = (rawName: string, clubId?: string): string => {
+    const canonical = canonicalBranchOfficeName(rawName, clubs, clubId);
+    if (!canonical) return rawName.trim();
+    const key = normalizeClubKey(canonical);
+    if (!officeKeys.has(key)) {
+      const record: BranchOfficeRecord = {
+        id: newId(),
+        name: canonical,
+        clubId: clubId ?? clubs.find((c) => normalizeClubKey(c.name) === key)?.id,
+      };
+      nextOffices.push(record);
+      officesToUpsert.push(record);
+      officeKeys.add(key);
+    }
+    return nextOffices.find((o) => normalizeClubKey(o.name) === key)!.name;
+  };
+
+  const nextBranches: DisciplineBranch[] = [];
+  const branchesToUpsert: DisciplineBranch[] = [];
+  for (const b of branches) {
+    const registered = ensureOffice(b.branchOffice, b.clubId);
+    const updated =
+      registered !== b.branchOffice.trim() ? { ...b, branchOffice: registered } : b;
+    nextBranches.push(updated);
+    if (updated !== b) branchesToUpsert.push(updated);
+  }
+
+  const nextGroups: TrainingGroup[] = [];
+  const groupsToUpsert: TrainingGroup[] = [];
+  for (const g of groups) {
+    const registered = ensureOffice(g.branchOffice, g.clubId);
+    const updated =
+      registered !== g.branchOffice.trim() ? { ...g, branchOffice: registered } : g;
+    nextGroups.push(updated);
+    if (updated !== g) groupsToUpsert.push(updated);
+  }
+
+  return {
+    offices: nextOffices,
+    branches: nextBranches,
+    groups: nextGroups,
+    officesToUpsert,
+    branchesToUpsert,
+    groupsToUpsert,
+  };
 }
 
 /** Kulübe bağlı şube adları (ana kulüp adı + club_id kayıtları) */
