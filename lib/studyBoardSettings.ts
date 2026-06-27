@@ -4,6 +4,8 @@ export type StudyBoardSettings = {
   showBestMoveArrows: boolean;
   showVariationArrows: boolean;
   showMoveAnnotations: boolean;
+  /** Hamle listesinde N→♘, R→♖ figür sembolleri */
+  figurineNotation: boolean;
   inlineNotation: boolean;
   showThreats: boolean;
 };
@@ -14,6 +16,7 @@ export const DEFAULT_STUDY_BOARD_SETTINGS: StudyBoardSettings = {
   showBestMoveArrows: true,
   showVariationArrows: true,
   showMoveAnnotations: true,
+  figurineNotation: true,
   inlineNotation: false,
   showThreats: false,
 };

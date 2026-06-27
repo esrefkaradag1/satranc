@@ -44,6 +44,7 @@ import { appendStudyAction } from '../services/studyActions';
 import { loadStudyPresence, subscribeStudyPresence, upsertPresence } from '../services/studyActions';
 import { serializePath } from '../lib/studySync/types';
 import { mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, promoteVariationLines, mergeMainlineMoves, mergeVariationRecords, findVariationNodeAtMoveIndex } from '../lib/studySync/moveList';
+import { exportLegacyFromTree } from '../lib/studySync/treeModel';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
@@ -67,6 +68,7 @@ import { createGlyphSquareRenderer } from './chess/ChessBoardGlyphOverlay';
 import { imageToFenMultiple, formatOpenRouterError, type ImageBoardResult } from '../services/geminiService';
 import { pdfAllPagesToDataUrls } from '../services/pdfToImage';
 import StudentStudyView from './StudentStudyView';
+import { readPanelHash, writeStudyEditorHash } from '../lib/panelRouting';
 
 type AppView = StudyView;
 
@@ -145,7 +147,18 @@ const StudyPage: React.FC = () => {
     return { color, type: t as 'p' | 'n' | 'b' | 'r' | 'q' | 'k' };
   };
 
-  const initialSelection = useMemo(() => loadEditorSelection(), []);
+  const initialSelection = useMemo(() => {
+    const saved = loadEditorSelection();
+    const hash = readPanelHash();
+    if (hash.studyId) {
+      return {
+        studyId: hash.studyId,
+        chapterIndex: hash.chapterIndex ?? saved.chapterIndex,
+        moveIndex: saved.moveIndex ?? 0,
+      };
+    }
+    return saved;
+  }, []);
   const { scopedStudents: students, coaches, auth, showToast } = useApp();
   const currentUserName = useMemo(() => {
     if (auth?.role === 'admin') return 'Admin';
@@ -156,7 +169,7 @@ const StudyPage: React.FC = () => {
     }
     return 'Misafir';
   }, [auth, students]);
-  const [view, setView] = useState<AppView>('list');
+  const [view, setView] = useState<AppView>(() => (readPanelHash().studyId ? 'editor' : 'list'));
   const [studentPreviewStudyId, setStudentPreviewStudyId] = useState<string | null>(null);
   const [listSidebar, setListSidebar] = useState<StudyListSidebar>({ type: 'all' });
   const [studyCategories, setStudyCategories] = useState<StudyCategoryMeta[]>([]);
@@ -424,8 +437,17 @@ const StudyPage: React.FC = () => {
   }, [studyCategories]);
 
   useEffect(() => {
-    if (studies.length > 0 && !selectedStudyId) setSelectedStudyId(studies[0].id);
-  }, [studies.length, selectedStudyId]);
+    if (studies.length === 0) return;
+    if (selectedStudyId && studies.some((s) => s.id === selectedStudyId)) return;
+
+    const hash = readPanelHash();
+    if (hash.studyId && studies.some((s) => s.id === hash.studyId)) {
+      setSelectedStudyId(hash.studyId);
+      if (hash.chapterIndex != null) setSelectedChapterIndex(hash.chapterIndex);
+      return;
+    }
+    if (!selectedStudyId) setSelectedStudyId(studies[0].id);
+  }, [studies, selectedStudyId]);
 
   useEffect(() => {
     if (selectedStudyId && studies.length > 0 && !studies.find(s => s.id === selectedStudyId)) {
@@ -436,7 +458,10 @@ const StudyPage: React.FC = () => {
 
   useEffect(() => {
     saveEditorSelection(selectedStudyId, selectedChapterIndex, currentMoveIndex);
-  }, [selectedStudyId, selectedChapterIndex, currentMoveIndex]);
+    if (selectedStudyId && view === 'editor') {
+      writeStudyEditorHash(selectedStudyId, selectedChapterIndex);
+    }
+  }, [selectedStudyId, selectedChapterIndex, currentMoveIndex, view]);
 
   // ── Derived state ─────────────────────────────────────────────────────────────
   const selectedStudy = useMemo(
@@ -487,12 +512,14 @@ const StudyPage: React.FC = () => {
     jumpToNodePath,
     jumpToMoveIndex,
     promoteVariation,
+    promoteBranchNodeId,
     alignMainlineToMoves,
     navigationState,
     makeMove,
     setNodeGlyphs,
     undoMove,
     truncateMainlineFromMoveIndex,
+    truncateFromNodeId,
     truncateVariationFromMove,
     clearChapter,
     parsePath,
@@ -511,6 +538,26 @@ const StudyPage: React.FC = () => {
     const raw = selectedChapterRaw;
     if (!raw) return treeCh;
     if (!treeCh || treeCh.id !== raw.id) return raw;
+
+    const syncTreeActive =
+      !!syncState && syncState.chapterId === raw.id && (syncState.tree?.mainline?.length ?? 0) > 1;
+    if (syncTreeActive) {
+      return {
+        ...raw,
+        ...treeCh,
+        moves: treeCh.moves ?? [],
+        variations: treeCh.variations ?? {},
+        moveComments: {
+          ...(raw.moveComments ?? {}),
+          ...(treeCh.moveComments ?? {}),
+        },
+        moveAnnotations: {
+          ...(raw.moveAnnotations ?? {}),
+          ...(treeCh.moveAnnotations ?? {}),
+        },
+      };
+    }
+
     const rawMoves = raw.moves ?? [];
     const treeMoves = treeCh.moves ?? [];
     const mergedVars = mergeVariationRecords(raw.variations ?? {}, treeCh?.variations ?? {});
@@ -527,7 +574,29 @@ const StudyPage: React.FC = () => {
         ...(treeCh.moveAnnotations ?? {}),
       },
     };
-  }, [legacyChapter, selectedChapterRaw]);
+  }, [legacyChapter, selectedChapterRaw, syncState?.chapterId, syncState?.tree?.mainline?.length]);
+
+  /** Sync yüklenmeden önce seedTree ile anında ağaç notasyonu */
+  const effectiveStudyTree = useMemo(() => {
+    if (
+      !!syncState &&
+      syncState.chapterId === selectedChapterRaw?.id &&
+      (syncState.tree?.mainline?.length ?? 0) > 1
+    ) {
+      return syncState.tree;
+    }
+    const seed = selectedChapterRaw?.seedTree;
+    if (seed?.rootId && (seed.mainline?.length ?? 0) > 1) return seed;
+    return null;
+  }, [syncState, selectedChapterRaw?.id, selectedChapterRaw?.seedTree]);
+
+  const effectiveStudyPath = useMemo(() => {
+    if (!!syncState && syncState.chapterId === selectedChapterRaw?.id && syncState.currentPath?.length) {
+      return syncState.currentPath;
+    }
+    if (effectiveStudyTree?.mainline?.length) return effectiveStudyTree.mainline.slice();
+    return undefined;
+  }, [syncState, selectedChapterRaw?.id, effectiveStudyTree]);
 
   const isInteractivePuzzleChapter = useMemo(
     () =>
@@ -546,23 +615,35 @@ const StudyPage: React.FC = () => {
     if (isInteractivePuzzleChapter && puzzlePlayNorm) return puzzlePlayNorm.studentMoves;
     if (practiceMode && !recording) return selectedChapter?.moves ?? [];
     const legacy = selectedChapterRaw?.moves ?? [];
-    if (!syncState?.tree?.mainline || syncState.tree.mainline.length <= 1) {
+    const tree =
+      !!syncState &&
+      syncState.chapterId === selectedChapterRaw?.id &&
+      (syncState.tree?.mainline?.length ?? 0) > 1
+        ? syncState.tree
+        : effectiveStudyTree;
+    if (!tree?.mainline || tree.mainline.length <= 1) {
       return selectedChapter?.moves ?? legacy;
     }
-    if (syncState.chapterId !== selectedChapterRaw?.id) return selectedChapter?.moves ?? legacy;
-    const rootFen = syncState.tree.nodes[syncState.tree.rootId]?.fen ?? DEFAULT_FEN;
-    const fromTree = mainlineSansFromTree(syncState.tree, rootFen);
+    const rootFen = tree.nodes[tree.rootId]?.fen ?? selectedChapterRaw?.fen ?? DEFAULT_FEN;
+    const fromTree = mainlineSansFromTree(tree, rootFen);
     return mergeMainlineMoves(legacy, fromTree);
-  }, [isInteractivePuzzleChapter, puzzlePlayNorm, practiceMode, recording, syncState, selectedChapter?.moves, selectedChapterRaw?.moves, selectedChapterRaw?.id]);
+  }, [isInteractivePuzzleChapter, puzzlePlayNorm, practiceMode, recording, syncState, effectiveStudyTree, selectedChapter?.moves, selectedChapterRaw?.moves, selectedChapterRaw?.id, selectedChapterRaw?.fen]);
 
   const moveListChapter = useMemo(() => {
     if (!selectedChapter) return null;
     const fen = isInteractivePuzzleChapter && puzzlePlayNorm
       ? puzzlePlayNorm.startFen
       : selectedChapter.fen;
-    const vars = sanitizeChapterVariations({ ...selectedChapter, fen, moves: chapterMovesForUi }, chapterMovesForUi);
-    return { ...selectedChapter, fen, moves: chapterMovesForUi, variations: vars };
-  }, [selectedChapter, chapterMovesForUi, isInteractivePuzzleChapter, puzzlePlayNorm]);
+    let moves = chapterMovesForUi;
+    let variations = selectedChapter.variations ?? {};
+    if (effectiveStudyTree) {
+      const exported = exportLegacyFromTree(effectiveStudyTree, fen);
+      moves = exported.moves.length ? exported.moves : moves;
+      variations = exported.variations ?? variations;
+    }
+    const vars = sanitizeChapterVariations({ ...selectedChapter, fen, moves }, moves);
+    return { ...selectedChapter, fen, moves, variations: vars };
+  }, [selectedChapter, chapterMovesForUi, isInteractivePuzzleChapter, puzzlePlayNorm, effectiveStudyTree]);
 
   useEffect(() => {
     setWrite(recording);
@@ -710,7 +791,7 @@ const StudyPage: React.FC = () => {
   }, [bottomTab, selectedChapter?.id, refreshStudyEvents]);
 
   const syncPathFen = useMemo(() => {
-    if (syncState?.chapterId !== selectedChapterRaw?.id) return null;
+    if (!syncState || syncState.chapterId !== selectedChapterRaw?.id) return null;
     return fenAtSyncPath(syncState);
   }, [syncState, selectedChapterRaw?.id]);
 
@@ -1206,6 +1287,26 @@ const StudyPage: React.FC = () => {
       chapters: s.chapters.map((c, i) => i === idx ? { ...c, ...patch } : c),
     }));
   }, [selectedStudy, updateAndSaveStudy]);
+
+  const applyTreeExportToChapter = useCallback(
+    (
+      pack: {
+        exported: { moves: string[]; variations?: Record<number, string[][]> };
+        tree: import('../lib/studySync/types').StudyTree;
+      } | null,
+      extras?: { moveComments?: Record<number, string>; moveAnnotations?: Record<number, string | string[]> },
+    ) => {
+      if (!pack || !selectedStudy) return;
+      updateChapterAtIndex(selectedChapterIndex, {
+        moves: pack.exported.moves,
+        variations: pack.exported.variations ?? {},
+        seedTree: pack.tree,
+        ...(extras?.moveComments ? { moveComments: extras.moveComments } : {}),
+        ...(extras?.moveAnnotations ? { moveAnnotations: extras.moveAnnotations } : {}),
+      });
+    },
+    [selectedStudy, selectedChapterIndex, updateChapterAtIndex],
+  );
 
   // ── Members ───────────────────────────────────────────────────────────────────
   const addMember = useCallback((memberId: string) => {
@@ -4137,9 +4238,10 @@ const StudyPage: React.FC = () => {
                   currentMoveIndex={viewingStudentId && viewingStudentPresence?.vsComputer ? viewingStudentVcHistory.length : currentMoveIndex}
                   currentVariation={viewingStudentId ? null : currentVariation}
                   inlineNotation={boardSettings.inlineNotation}
+                  figurineNotation={boardSettings.figurineNotation}
                   showMoveAnnotations={boardSettings.showMoveAnnotations}
-                  tree={viewingStudentId ? null : syncState?.tree}
-                  currentPath={viewingStudentId ? undefined : syncState?.currentPath}
+                  tree={viewingStudentId ? null : effectiveStudyTree}
+                  currentPath={viewingStudentId ? undefined : effectiveStudyPath}
                   onSelectPath={viewingStudentId ? undefined : (path) => { void jumpToNodePath(path); }}
                   onSelectMove={(idx, varData) => {
                     if (varData) {
@@ -4164,13 +4266,8 @@ const StudyPage: React.FC = () => {
 
                     if (varInfo) {
                       const [mlp, vgi, vmi] = varInfo;
-                      const exported = await truncateVariationFromMove(mlp, vgi, vmi);
-                      if (exported) {
-                        updateChapterAtIndex(selectedChapterIndex, {
-                          moves: exported.moves,
-                          variations: exported.variations,
-                        });
-                      }
+                      const pack = await truncateVariationFromMove(mlp, vgi, vmi);
+                      applyTreeExportToChapter(pack);
                       if (
                         currentVariation &&
                         currentVariation[0] === mlp &&
@@ -4183,35 +4280,52 @@ const StudyPage: React.FC = () => {
                     }
 
                     const baseMoves = chapterMovesForUi;
-                    const newMoves = baseMoves.slice(0, idx);
                     const newComments = { ...selectedChapter.moveComments };
                     const newAnnotations = { ...selectedChapter.moveAnnotations };
-                    const newVars = { ...(selectedChapter.variations ?? {}) };
                     for (let k = idx; k < baseMoves.length; k++) {
                       delete newComments[k];
                       delete newAnnotations[k];
-                      delete newVars[k];
                     }
 
                     const newMoveIndex = Math.min(currentMoveIndex, idx);
 
-                    const tree = syncState?.tree?.mainline;
-                    let exported = null as { moves: string[]; variations: Record<number, string[][]> } | null;
+                    const tree = effectiveStudyTree?.mainline;
+                    let pack = null as Awaited<ReturnType<typeof truncateMainlineFromMoveIndex>>;
                     if (tree && tree.length > idx + 1) {
-                      exported = await truncateMainlineFromMoveIndex(idx);
+                      pack = await truncateMainlineFromMoveIndex(idx);
                     }
 
-                    updateChapterAtIndex(selectedChapterIndex, {
-                      moves: exported?.moves ?? newMoves,
-                      moveComments: newComments,
-                      moveAnnotations: newAnnotations,
-                      variations: exported?.variations ?? newVars,
-                    });
+                    if (pack) {
+                      applyTreeExportToChapter(pack, {
+                        moveComments: newComments,
+                        moveAnnotations: newAnnotations,
+                      });
+                    } else {
+                      const newMoves = baseMoves.slice(0, idx);
+                      const newVars = { ...(selectedChapter.variations ?? {}) };
+                      for (let k = idx; k < baseMoves.length; k++) delete newVars[k];
+                      updateChapterAtIndex(selectedChapterIndex, {
+                        moves: newMoves,
+                        moveComments: newComments,
+                        moveAnnotations: newAnnotations,
+                        variations: newVars,
+                      });
+                    }
 
                     setCurrentVariation(null);
                     setCurrentMoveIndex(newMoveIndex);
                     setSelectedAnnotationPly(Math.max(0, newMoveIndex - 1));
-                    void jumpToMoveIndex(newMoveIndex, exported?.moves ?? newMoves);
+                    void jumpToMoveIndex(newMoveIndex, pack?.exported.moves ?? baseMoves.slice(0, idx));
+                  }}
+                  onDeleteFromNode={async (nodeId) => {
+                    if (!selectedStudy || !selectedChapter) return;
+                    const pack = await truncateFromNodeId(nodeId);
+                    applyTreeExportToChapter(pack);
+                  }}
+                  onPromoteBranch={async (branchNodeId) => {
+                    if (!selectedStudy || !selectedChapter) return;
+                    const pack = await promoteBranchNodeId(branchNodeId);
+                    applyTreeExportToChapter(pack);
                   }}
                   onPromoteVariation={async (mlp, vgi) => {
                     if (!selectedStudy || !selectedChapter) return;

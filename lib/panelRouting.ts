@@ -35,21 +35,84 @@ export const SLUG_TO_TAB: Record<string, string> = {
   whatsapp: 'messages',
 };
 
-export function readPanelHash(): { tab: string; studentId: string | null } {
-  const raw = window.location.hash.replace(/^#\/?/, '');
-  if (!raw) return { tab: 'dashboard', studentId: null };
-  const [slug, extra] = raw.split('/');
-  const tab = SLUG_TO_TAB[slug] ?? 'dashboard';
-  return { tab, studentId: tab === 'student-detail' && extra ? extra : null };
+const LAST_PANEL_HASH_KEY = 'netchess_last_panel_hash';
+
+export type PanelHashState = {
+  tab: string;
+  studentId: string | null;
+  studyId: string | null;
+  chapterIndex: number | null;
+};
+
+function parseChapterIndex(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-export function writePanelHash(tab: string, studentId?: string | null) {
+export function readPanelHash(): PanelHashState {
+  const raw = window.location.hash.replace(/^#\/?/, '');
+  if (!raw) {
+    try {
+      const saved = localStorage.getItem(LAST_PANEL_HASH_KEY);
+      if (saved) return readPanelHashFromPath(saved);
+    } catch { /* ignore */ }
+    return { tab: 'dashboard', studentId: null, studyId: null, chapterIndex: null };
+  }
+  return readPanelHashFromPath(raw);
+}
+
+function readPanelHashFromPath(raw: string): PanelHashState {
+  const [slug, p1, p2] = raw.split('/');
+  const tab = SLUG_TO_TAB[slug] ?? 'dashboard';
+  if (tab === 'student-detail' && p1) {
+    return { tab, studentId: decodeURIComponent(p1), studyId: null, chapterIndex: null };
+  }
+  if (tab === 'study' && p1) {
+    return {
+      tab,
+      studentId: null,
+      studyId: decodeURIComponent(p1),
+      chapterIndex: parseChapterIndex(p2),
+    };
+  }
+  return { tab, studentId: null, studyId: null, chapterIndex: null };
+}
+
+export function writePanelHash(
+  tab: string,
+  studentId?: string | null,
+  studyRoute?: { studyId?: string | null; chapterIndex?: number | null },
+) {
   const slug = TAB_TO_SLUG[tab] ?? 'anasayfa';
-  const next =
-    tab === 'student-detail' && studentId
-      ? `#/${slug}/${studentId}`
-      : `#/${slug}`;
+  let next: string;
+  if (tab === 'student-detail' && studentId) {
+    next = `#/${slug}/${encodeURIComponent(studentId)}`;
+  } else if (tab === 'study' && studyRoute?.studyId) {
+    const sid = encodeURIComponent(studyRoute.studyId);
+    next =
+      studyRoute.chapterIndex != null && studyRoute.chapterIndex >= 0
+        ? `#/${slug}/${sid}/${studyRoute.chapterIndex}`
+        : `#/${slug}/${sid}`;
+  } else {
+    next = `#/${slug}`;
+  }
   if (window.location.hash !== next) {
     window.location.hash = next;
   }
+  try {
+    localStorage.setItem(LAST_PANEL_HASH_KEY, next.replace(/^#\/?/, ''));
+  } catch { /* ignore */ }
+}
+
+/** Çalışma editöründe seçili bölümü URL'ye yazar (panel sekmesi değişmez). */
+export function writeStudyEditorHash(studyId: string | null, chapterIndex?: number | null) {
+  if (!studyId) {
+    writePanelHash('study');
+    return;
+  }
+  writePanelHash('study', null, {
+    studyId,
+    chapterIndex: chapterIndex ?? null,
+  });
 }

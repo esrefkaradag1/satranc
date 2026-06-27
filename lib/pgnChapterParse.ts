@@ -157,6 +157,27 @@ function addMoveNode(tree: StudyTree, parentId: NodeId, san: string, glyphs: str
   return { tree: { ...tree, nodes: nextNodes }, nodeId: childId };
 }
 
+/** Parantez varyasyonunun hangi düğümden dallanacağını belirler (Lichess uyumlu). */
+function resolveVariationParentId(
+  tree: StudyTree,
+  lastNodeId: NodeId,
+  tokens: PgnToken[],
+  pos: { i: number },
+): NodeId {
+  let peek = pos.i;
+  while (peek < tokens.length && (tokens[peek].type === 'comment' || tokens[peek].type === 'nag')) peek++;
+  const mn = tokens[peek];
+  if (mn?.type === 'moveNumber') {
+    const raw = mn.value;
+    const num = parseInt(raw.split(/[.\s]/)[0] ?? '1', 10) || 1;
+    const isBlackOnly = raw.includes('...');
+    if (num === 1 && !isBlackOnly) return tree.rootId;
+    if (num === 1 && isBlackOnly) return tree.nodes[lastNodeId]?.parentId ?? tree.rootId;
+    return lastNodeId;
+  }
+  return tree.nodes[lastNodeId]?.parentId ?? tree.rootId;
+}
+
 function parseSequence(
   tree: StudyTree,
   parentId: NodeId,
@@ -189,8 +210,8 @@ function parseSequence(
 
     if (tok.type === 'lparen') {
       if (!lastNodeId) { pos.i++; continue; }
-      const branchParentId = tree.nodes[lastNodeId]?.parentId ?? tree.rootId;
       pos.i++;
+      const branchParentId = resolveVariationParentId(tree, lastNodeId, tokens, pos);
       const nested = parseSequence(tree, branchParentId, tokens, pos, 'rparen');
       tree = nested.tree;
       if (tokens[pos.i]?.type === 'rparen') pos.i++;

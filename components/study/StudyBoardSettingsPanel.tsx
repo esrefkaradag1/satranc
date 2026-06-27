@@ -108,6 +108,12 @@ export const StudyBoardSettingsPanel: React.FC<Props> = ({
               Hamle listesi
             </h3>
             <ToggleRow
+              label="Figür notasyonu"
+              hint="Nf3 → ♘f3, Re1 → ♖e1 (Lichess tarzı)"
+              checked={settings.figurineNotation}
+              onChange={() => onToggle('figurineNotation')}
+            />
+            <ToggleRow
               label="Satır içi notasyon"
               hint="Tek satırda PGN — klavye: Shift + I"
               checked={settings.inlineNotation}

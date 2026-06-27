@@ -76,6 +76,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     setRolePermissions,
     showToast,
     authPermissions,
+    rolesLoaded,
     scopedStudents: branchStudents,
     scopedCoaches: branchCoaches,
     scopedTransactions: branchTx,
@@ -96,17 +97,9 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     [authPermissions],
   );
 
-  const initialHash = useMemo(() => readPanelHash(), []);
-  const safeInitialTab = isClubPanelTabAllowed(authPermissions, initialHash.tab)
-    ? initialHash.tab
-    : defaultClubTab;
-
-  const [activeTab, setActiveTabRaw] = useState(safeInitialTab);
-  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(
-    initialHash.studentId && isClubPanelTabAllowed(authPermissions, 'student-detail')
-      ? initialHash.studentId
-      : null,
-  );
+  const initialHash = readPanelHash();
+  const [activeTab, setActiveTabRaw] = useState(() => initialHash.tab);
+  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initialHash.studentId);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const setActiveTab = useCallback(
@@ -127,21 +120,37 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   useEffect(() => {
     const onHash = () => {
       const { tab, studentId } = readPanelHash();
+      if (!rolesLoaded) {
+        setActiveTabRaw(tab);
+        if (studentId !== null) setSelectedStudentId(studentId);
+        else if (tab !== 'student-detail') setSelectedStudentId(null);
+        return;
+      }
       const safe = isClubTabAllowed(tab) ? tab : defaultClubTab;
       setActiveTabRaw(safe);
       if (studentId !== null) setSelectedStudentId(studentId);
       else if (safe !== 'student-detail') setSelectedStudentId(null);
     };
     window.addEventListener('hashchange', onHash);
-    if (!window.location.hash) writePanelHash(safeInitialTab);
+    if (!window.location.hash.replace(/^#\/?/, '')) {
+      const stored = readPanelHash();
+      const safe = rolesLoaded && !isClubTabAllowed(stored.tab) ? defaultClubTab : stored.tab;
+      writePanelHash(safe, stored.studentId);
+    }
     return () => window.removeEventListener('hashchange', onHash);
-  }, [defaultClubTab, isClubTabAllowed, safeInitialTab]);
+  }, [defaultClubTab, isClubTabAllowed, rolesLoaded]);
 
   useEffect(() => {
+    if (!rolesLoaded) return;
+    const { tab } = readPanelHash();
+    if (isClubTabAllowed(tab)) {
+      setActiveTabRaw(tab);
+      return;
+    }
     if (!isClubTabAllowed(activeTab)) {
       setActiveTab(defaultClubTab);
     }
-  }, [authPermissions, activeTab, defaultClubTab, isClubTabAllowed, setActiveTab]);
+  }, [rolesLoaded, authPermissions, activeTab, defaultClubTab, isClubTabAllowed, setActiveTab]);
 
   const club = useMemo(
     () => clubs.find((c) => c.id === clubId) ?? clubs.find((c) => (c.name || '').trim() === branch.trim()),

@@ -2101,6 +2101,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   currentMoveIndex={currentMoveIndex}
                   currentVariation={currentVariation}
                   inlineNotation={boardSettings.inlineNotation}
+                  figurineNotation={boardSettings.figurineNotation}
                   showMoveAnnotations={boardSettings.showMoveAnnotations}
                   tree={syncState?.tree}
                   currentPath={syncState?.currentPath}

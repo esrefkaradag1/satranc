@@ -276,7 +276,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, getAuthPermissions, trainingGroups } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, getAuthPermissions, rolesLoaded, trainingGroups } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(() =>
@@ -623,8 +623,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, []);
 
   useEffect(() => {
+    if (!rolesLoaded) return;
     if (!panelPermissions.has(activeTab)) setActiveTab('summary');
-  }, [viewAs, activeTab, panelPermissions, setActiveTab]);
+  }, [viewAs, activeTab, panelPermissions, rolesLoaded, setActiveTab]);
 
   useEffect(() => {
     if (activeTab !== 'lichess') return;

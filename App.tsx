@@ -126,9 +126,11 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   );
   const initial = readHash();
   const defaultAdminTab = 'dashboard';
-  const safeInitialTab = isAdminAllowedTab(initial.tab) ? initial.tab : defaultAdminTab;
-  const [activeTab, setActiveTabRaw] = useState(safeInitialTab);
-  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initial.studentId);
+  const [activeTab, setActiveTabRaw] = useState(() => {
+    const { tab } = readHash();
+    return isAdminAllowedTab(tab) ? tab : defaultAdminTab;
+  });
+  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(() => readHash().studentId);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarDesktopExpanded, setSidebarDesktopExpanded] = useState(true);
   const sidebarIconOnlyDefault = activeTab === 'lessons';
@@ -147,9 +149,15 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       if (studentId !== null) setSelectedStudentId(studentId);
     };
     window.addEventListener('hashchange', onHash);
-    if (!window.location.hash) writeHash(safeInitialTab, initial.studentId);
+    if (!window.location.hash.replace(/^#\/?/, '')) {
+      const stored = readHash();
+      const safe = isAdminAllowedTab(stored.tab) ? stored.tab : defaultAdminTab;
+      writeHash(safe, stored.studentId);
+      setActiveTabRaw(safe);
+      if (stored.studentId) setSelectedStudentId(stored.studentId);
+    }
     return () => window.removeEventListener('hashchange', onHash);
-  }, [safeInitialTab, initial.studentId]);
+  }, []);
 
   const handleSidebarTab = useCallback((tab: string) => {
     setActiveTabRaw(tab);
@@ -198,6 +206,16 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <BranchGroupManagement />;
       case 'applications':
         return <ApplicationsAdmin />;
+      case 'lessons':
+        return <LiveLesson />;
+      case 'puzzles':
+        return <ChessBoard />;
+      case 'study':
+        return <StudyPage />;
+      case 'homework':
+        return <Homework />;
+      case 'curriculum':
+        return <Curriculum />;
       case 'tournaments':
         return <Tournaments role="admin" />;
       case 'leaderboard':
@@ -299,7 +317,7 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
 
 /** Antrenör paneli: öğrenci işleri, eğitim & içerik, medya, raporlama */
 const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
-  const { auth, students, scopedStudents, coaches, clubs, getAuthPermissions } = useApp();
+  const { auth, students, scopedStudents, coaches, clubs, getAuthPermissions, rolesLoaded } = useApp();
   const [profileTick, setProfileTick] = useState(0);
   useEffect(() => {
     const onProfile = () => setProfileTick((n) => n + 1);
@@ -323,8 +341,7 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
 
   const initial = readHash();
   const defaultCoachTab = coachPermissions.has('dashboard') ? 'dashboard' : [...coachPermissions][0] || 'dashboard';
-  const safeTab = isCoachTabAllowed(initial.tab) ? initial.tab : defaultCoachTab;
-  const [activeTab, setActiveTabRaw] = useState(safeTab);
+  const [activeTab, setActiveTabRaw] = useState(() => initial.tab);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initial.studentId);
 
   const setActiveTab = useCallback((tab: string, studentId?: string | null) => {
@@ -336,21 +353,36 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   useEffect(() => {
     const onHash = () => {
       const { tab, studentId } = readHash();
+      if (!rolesLoaded) {
+        setActiveTabRaw(tab);
+        if (studentId !== null) setSelectedStudentId(studentId);
+        return;
+      }
       const safe = isCoachTabAllowed(tab) ? tab : defaultCoachTab;
       setActiveTabRaw(safe);
       if (studentId !== null) setSelectedStudentId(studentId);
     };
     window.addEventListener('hashchange', onHash);
-    if (!window.location.hash) writeHash(defaultCoachTab, initial.studentId);
+    if (!window.location.hash.replace(/^#\/?/, '')) {
+      const stored = readHash();
+      const safe = rolesLoaded && !isCoachTabAllowed(stored.tab) ? defaultCoachTab : stored.tab;
+      writeHash(safe, stored.studentId);
+    }
     return () => window.removeEventListener('hashchange', onHash);
-  }, [defaultCoachTab, initial.studentId, isCoachTabAllowed]);
+  }, [defaultCoachTab, isCoachTabAllowed, rolesLoaded]);
 
   useEffect(() => {
+    if (!rolesLoaded) return;
+    const { tab } = readHash();
+    if (isCoachTabAllowed(tab)) {
+      setActiveTabRaw(tab);
+      return;
+    }
     if (!isCoachTabAllowed(activeTab)) {
       setActiveTabRaw(defaultCoachTab);
       writeHash(defaultCoachTab, null);
     }
-  }, [coachPermissions, activeTab, defaultCoachTab, isCoachTabAllowed]);
+  }, [rolesLoaded, coachPermissions, activeTab, defaultCoachTab, isCoachTabAllowed]);
 
   const handleSidebarTab = useCallback((tab: string) => {
     setActiveTabRaw(tab);

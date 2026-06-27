@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import type { Study, StudyChapter } from '../lib/studyTypes';
 import { DEFAULT_FEN } from '../lib/studyUtils';
-import type { StudyChapterState, StudyActionEnvelope, NodeId } from '../lib/studySync/types';
+import type { StudyChapterState, StudyActionEnvelope, NodeId, StudyTree } from '../lib/studySync/types';
 import { parsePath, serializePath } from '../lib/studySync/types';
 import { initialChapterState, applyAction, applyActions } from '../lib/studySync/reducer';
-import { genNodeId, deleteSubtree, alignTreeMainlineToSans } from '../lib/studySync/apply';
+import { genNodeId, deleteSubtree, alignTreeMainlineToSans, pathToNode } from '../lib/studySync/apply';
 import {
   buildLegacyVariationsFromTree,
   findVariationBranchNodeId,
@@ -13,6 +13,28 @@ import {
 } from '../lib/studySync/moveList';
 import { exportLegacyFromTree, buildTreeFromLegacy } from '../lib/studySync/treeModel';
 import { loadStudyActions, loadStudySnapshot, subscribeStudyActions, appendStudyAction, upsertPresence, upsertStudySnapshot } from '../services/studyActions';
+
+function treeMainlinePlyCount(tree: StudyTree | null | undefined): number {
+  return Math.max(0, (tree?.mainline?.length ?? 0) - 1);
+}
+
+function pathFromTree(tree: StudyTree): NodeId[] {
+  return tree.mainline?.length ? tree.mainline.slice() : [tree.rootId];
+}
+
+/** syncState ile chapter.seedTree uyumsuzsa (PGN içe aktarım) seedTree'yi kullan */
+function reconcileTreeState(
+  state: StudyChapterState,
+  chapter: StudyChapter | null | undefined,
+): StudyChapterState {
+  const seed = chapter?.seedTree;
+  if (!seed?.rootId || !seed.nodes) return state;
+  const syncPlies = treeMainlinePlyCount(state.tree);
+  const seedPlies = treeMainlinePlyCount(seed);
+  if (seedPlies <= syncPlies && state.tree.nodes[seed.rootId]) return state;
+  const path = pathFromTree(seed);
+  return { ...state, tree: seed, currentPath: path, serverPath: path, lastSeq: 0 };
+}
 
 function pathsEqual(a: string[], b: string[]) {
   if (a === b) return true;
@@ -142,44 +164,70 @@ export function useStudyChapterSync(args: {
     base.vm.write = !!args.initialWrite && canWrite;
 
     const snapshot = await loadStudySnapshot(studyId, chapterId);
-    if (snapshot?.tree?.rootId && snapshot?.tree?.nodes) {
-      const snapMeta = (snapshot.tree as any)?.meta && typeof (snapshot.tree as any).meta === 'object'
-        ? (snapshot.tree as any).meta
-        : {};
+    const seedTree = args.chapter?.seedTree;
+    const snapTree =
+      snapshot?.tree?.rootId && snapshot?.tree?.nodes ? (snapshot.tree as StudyTree) : null;
+    const snapPlies = treeMainlinePlyCount(snapTree);
+    const seedPlies = treeMainlinePlyCount(seedTree);
+    const chapterMoveCount = args.chapter?.moves?.length ?? 0;
+
+    // Eski/boş snapshot PGN içe aktarımından gelen seedTree'yi ezmesin
+    const snapshotStale =
+      !!seedTree?.rootId &&
+      seedPlies > 0 &&
+      (!snapTree || snapPlies < seedPlies || (snapPlies === 0 && chapterMoveCount > 0));
+
+    if (snapshotStale && seedTree) {
+      const path = pathFromTree(seedTree);
       base = {
         ...base,
-        tree: snapshot.tree,
-        meta: { ...(base.meta ?? {}), ...(snapMeta ?? {}) },
-        lastSeq: snapshot.lastSeq ?? 0,
-      };
-      const rp = [snapshot.tree.rootId];
-      base.currentPath = rp;
-      base.serverPath = rp;
-    } else if (args.chapter?.seedTree?.rootId && args.chapter.seedTree.nodes) {
-      const seeded = args.chapter.seedTree;
-      base = {
-        ...base,
-        tree: seeded,
-        currentPath: seeded.mainline.slice(),
-        serverPath: seeded.mainline.slice(),
+        tree: seedTree,
+        currentPath: path,
+        serverPath: path,
         lastSeq: 0,
       };
-    } else if (args.chapter?.moves?.length && Object.keys(args.chapter.variations ?? {}).length > 0) {
+    } else if (snapTree) {
+      const snapMeta =
+        (snapTree as any)?.meta && typeof (snapTree as any).meta === 'object'
+          ? (snapTree as any).meta
+          : {};
+      const path = pathFromTree(snapTree);
+      base = {
+        ...base,
+        tree: snapTree,
+        meta: { ...(base.meta ?? {}), ...(snapMeta ?? {}) },
+        lastSeq: snapshot?.lastSeq ?? 0,
+        currentPath: path,
+        serverPath: path,
+      };
+    } else if (seedTree?.rootId && seedTree.nodes) {
+      const path = pathFromTree(seedTree);
+      base = {
+        ...base,
+        tree: seedTree,
+        currentPath: path,
+        serverPath: path,
+        lastSeq: 0,
+      };
+    } else if (args.chapter?.moves?.length) {
       const built = buildTreeFromLegacy({
         fen: startFen,
         moves: args.chapter.moves,
         variations: args.chapter.variations ?? {},
       });
+      const path = pathFromTree(built);
       base = {
         ...base,
         tree: built,
-        currentPath: built.mainline.slice(),
-        serverPath: built.mainline.slice(),
+        currentPath: path,
+        serverPath: path,
         lastSeq: 0,
       };
     }
 
-    const actions = await loadStudyActions(studyId, chapterId, base.lastSeq);
+    const actions = snapshotStale
+      ? []
+      : await loadStudyActions(studyId, chapterId, base.lastSeq);
     let hydrated = applyActions(base, actions);
     lastSeqRef.current = hydrated.lastSeq;
 
@@ -211,6 +259,16 @@ export function useStudyChapterSync(args: {
 
     lastSeqRef.current = hydrated.lastSeq;
     setSyncState(hydrated);
+
+    if (snapshotStale && seedTree && studyId && chapterId) {
+      void upsertStudySnapshot({
+        studyId,
+        chapterId,
+        lastSeq: hydrated.lastSeq,
+        tree: { ...(hydrated.tree as any), meta: hydrated.meta ?? {} },
+      });
+      lastSnapshotSeqRef.current = hydrated.lastSeq;
+    }
   }, [studyId, chapterId, args.chapter?.fen, args.chapter?.moves?.length, args.chapter?.seedTree, args.chapter?.variations, args.initialSticky, args.initialWrite, canWrite]);
 
   // Periodically persist snapshot (tree + meta) for fast, deterministic reload.
@@ -600,7 +658,14 @@ export function useStudyChapterSync(args: {
     [studyId, chapterId, canWrite, deleteMove],
   );
 
-  /** Varyasyonda tıklanan hamleden itibaren (dahil) sonrasını siler — Lichess "Bu hamleden sonrasını sil". */
+  const exportTreeChapter = useCallback(
+    (tree: StudyChapterState['tree']) => ({
+      exported: exportLegacyFromTree(tree, args.chapter?.fen),
+      tree,
+    }),
+    [args.chapter?.fen],
+  );
+
   const truncateVariationFromMove = useCallback(
     async (mainLinePos: number, varGroupIdx: number, varMoveIdx: number) => {
       if (!syncState) return null;
@@ -614,29 +679,58 @@ export function useStudyChapterSync(args: {
       if (!nodeId) return null;
       await removeTreeNode(nodeId);
 
-      let exported: ReturnType<typeof exportLegacyFromTree> | null = null;
+      let pack: ReturnType<typeof exportTreeChapter> | null = null;
       setSyncState((prev) => {
         if (!prev) return prev;
-        exported = exportLegacyFromTree(prev.tree, args.chapter?.fen);
+        pack = exportTreeChapter(prev.tree);
         return prev;
       });
 
-      const stillHasBranch = exported?.variations?.[mainLinePos]?.[varGroupIdx]?.length;
+      const stillHasBranch = pack?.exported.variations?.[mainLinePos]?.[varGroupIdx]?.length;
       if (stillHasBranch) {
         const nextIdx = Math.max(0, varMoveIdx - 1);
         await jumpToVariation(mainLinePos, varGroupIdx, nextIdx);
       } else {
         await jumpToMoveIndex(mainLinePos);
       }
-      return exported;
+      return pack;
     },
-    [syncState, args.chapter?.variations, args.chapter?.fen, removeTreeNode, jumpToVariation, jumpToMoveIndex],
+    [syncState, args.chapter?.variations, exportTreeChapter, removeTreeNode, jumpToVariation, jumpToMoveIndex],
+  );
+
+  /** Ağaç düğümünden itibaren (dahil) alt ağacı siler — PGN içe aktarım sonrası varyant/ana hat silme. */
+  const truncateFromNodeId = useCallback(
+    async (nodeId: NodeId) => {
+      if (!syncState) return null;
+      const reconciled = reconcileTreeState(syncState, args.chapter);
+      if (reconciled !== syncState) setSyncState(reconciled);
+      const state = reconciled;
+      if (nodeId === state.tree.rootId || !state.tree.nodes[nodeId]) return null;
+      const parentId = state.tree.nodes[nodeId]?.parentId ?? state.tree.rootId;
+      await removeTreeNode(nodeId);
+
+      let pack: ReturnType<typeof exportTreeChapter> | null = null;
+      setSyncState((prev) => {
+        if (!prev) return prev;
+        pack = exportTreeChapter(prev.tree);
+        return prev;
+      });
+
+      const safeParent = parentId && pack?.tree.nodes[parentId] ? parentId : pack?.tree.rootId;
+      if (safeParent) {
+        await jumpToNodePath(pathToNode(pack!.tree, safeParent));
+      }
+      return pack;
+    },
+    [syncState, args.chapter, removeTreeNode, exportTreeChapter, jumpToNodePath],
   );
 
   /** Ana hat üzerinde idx ve sonrasındaki tüm düğümleri siler (idx = silinecek ilk hamlenin 0-tabanlı indeksi). */
   const truncateMainlineFromMoveIndex = useCallback(
     async (firstMoveIdx: number) => {
-      if (!studyId || !chapterId || !canWrite) return;
+      if (!syncState) return null;
+      const reconciled = reconcileTreeState(syncState, args.chapter);
+      if (reconciled !== syncState) setSyncState(reconciled);
 
       let toDelete: string[] = [];
       setSyncState((prev) => {
@@ -648,21 +742,24 @@ export function useStudyChapterSync(args: {
         return prev;
       });
 
-      if (toDelete.length === 0) return;
+      if (toDelete.length === 0) return null;
 
       for (const nodeId of toDelete) {
         await removeTreeNode(nodeId);
       }
 
-      let exported: ReturnType<typeof exportLegacyFromTree> | null = null;
+      let pack: ReturnType<typeof exportTreeChapter> | null = null;
       setSyncState((prev) => {
         if (!prev) return prev;
-        exported = exportLegacyFromTree(prev.tree, args.chapter?.fen);
+        pack = exportTreeChapter(prev.tree);
         return prev;
       });
-      return exported;
+
+      const nextIdx = Math.max(0, firstMoveIdx);
+      await jumpToMoveIndex(nextIdx, pack?.exported.moves);
+      return pack;
     },
-    [studyId, chapterId, canWrite, removeTreeNode, args.chapter?.fen],
+    [syncState, args.chapter, removeTreeNode, exportTreeChapter, jumpToMoveIndex],
   );
 
   const promoteVariation = useCallback(async (mainLinePos: number, varGroupIdx: number) => {
@@ -722,6 +819,62 @@ export function useStudyChapterSync(args: {
 
     return true;
   }, [studyId, chapterId, syncState, canWrite, args.actorId, args.actorRole, broadcastPathIfSticky]);
+
+  /** Varyasyon dalının kök düğümünü ana hatta yükseltir (ağaç tabanlı UI). */
+  const promoteBranchNodeId = useCallback(
+    async (branchNodeId: NodeId) => {
+      if (!studyId || !chapterId || !syncState || branchNodeId === syncState.tree.rootId) return null;
+      if (!syncState.tree.nodes[branchNodeId]) return null;
+
+      const tempAction: StudyActionEnvelope = {
+        id: `tmp-promote-${Date.now()}`,
+        studyId,
+        chapterId,
+        seq: (lastSeqRef.current || syncState.lastSeq || 0) + 1,
+        actorId: args.actorId,
+        actorRole: args.actorRole,
+        type: 'promote',
+        payload: { nodeId: branchNodeId },
+        createdAt: new Date().toISOString(),
+      };
+
+      let nextPath: NodeId[] = [];
+      setSyncState((prev) => {
+        if (!prev) return prev;
+        const action: StudyActionEnvelope = { ...tempAction, seq: prev.lastSeq + 1 };
+        const next = applyAction(prev, action);
+        lastSeqRef.current = next.lastSeq;
+        nextPath = next.tree.mainline.slice();
+        return { ...next, currentPath: nextPath };
+      });
+
+      if (nextPath.length && syncState.vm.sticky) {
+        await broadcastPathIfSticky(serializePath(nextPath));
+      }
+
+      if (canWrite) {
+        await appendStudyAction({
+          studyId,
+          chapterId,
+          actorId: args.actorId,
+          actorRole: args.actorRole,
+          type: 'promote',
+          payload: { nodeId: branchNodeId },
+        });
+      }
+
+      let pack: ReturnType<typeof exportTreeChapter> | null = null;
+      setSyncState((prev) => {
+        if (!prev) return prev;
+        pack = exportTreeChapter(prev.tree);
+        return prev;
+      });
+
+      if (nextPath.length) await jumpToNodePath(nextPath);
+      return pack;
+    },
+    [studyId, chapterId, syncState, canWrite, args.actorId, args.actorRole, broadcastPathIfSticky, exportTreeChapter, jumpToNodePath],
+  );
 
   const alignMainlineToMoves = useCallback((moves: string[], moveIndex: number) => {
     setSyncState((prev) => {
@@ -836,11 +989,13 @@ export function useStudyChapterSync(args: {
     jumpToNodePath,
     jumpToMoveIndex,
     promoteVariation,
+    promoteBranchNodeId,
     alignMainlineToMoves,
     makeMove,
     setNodeGlyphs,
     undoMove,
     truncateMainlineFromMoveIndex,
+    truncateFromNodeId,
     truncateVariationFromMove,
     clearChapter,
     parsePath,

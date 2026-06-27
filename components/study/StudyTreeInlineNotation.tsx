@@ -1,15 +1,21 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Trash2, ArrowUpRight } from 'lucide-react';
 import type { StudyTree, NodeId } from '../../lib/studySync/types';
 import { pathToNode } from '../../lib/studySync/apply';
 import { sideToMove } from '../../lib/studyUtils';
 import { formatMoveGlyphs, parseMoveGlyphs } from '../../lib/studyAnnotations';
+import { FigurineSan } from '../chess/FigurineSan';
+import { variationBranchRootId } from './StudyTreeTableNotation';
 
 type Props = {
   tree: StudyTree;
   startFen: string;
   currentPath: NodeId[];
   onSelectPath: (path: NodeId[]) => void;
+  onDeleteFromNode?: (nodeId: NodeId) => void | Promise<void>;
+  onPromoteBranch?: (branchNodeId: NodeId) => void | Promise<void>;
   showMoveAnnotations?: boolean;
+  figurineNotation?: boolean;
   compact?: boolean;
   activeRef?: React.RefObject<HTMLButtonElement | null>;
 };
@@ -27,14 +33,45 @@ export const StudyTreeInlineNotation: React.FC<Props> = ({
   startFen,
   currentPath,
   onSelectPath,
+  onDeleteFromNode,
+  onPromoteBranch,
   showMoveAnnotations = true,
+  figurineNotation = true,
   compact = false,
   activeRef,
 }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: NodeId; branchId: NodeId | null } | null>(null);
+
   const activeNodeId = currentPath[currentPath.length - 1] ?? tree.rootId;
   const startMoveNumber = parseInt(startFen.split(' ')[5] ?? '1', 10) || 1;
   const isBlackToMove = startFen.split(' ')[1] === 'b';
   const textSize = compact ? 'text-[11px]' : 'text-[13px]';
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = (e: MouseEvent) => {
+      if (contextMenuRef.current?.contains(e.target as Node)) return;
+      setContextMenu(null);
+    };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [contextMenu]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, nodeId: NodeId) => {
+    if (nodeId === tree.rootId) return;
+    if (!onDeleteFromNode && !onPromoteBranch) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = containerRef.current?.getBoundingClientRect();
+    setContextMenu({
+      x: e.clientX - (rect?.left ?? 0),
+      y: e.clientY - (rect?.top ?? 0),
+      nodeId,
+      branchId: variationBranchRootId(tree, nodeId),
+    });
+  }, [onDeleteFromNode, onPromoteBranch, tree]);
 
   const renderMoveButton = (
     nodeId: NodeId,
@@ -47,6 +84,8 @@ export const StudyTreeInlineNotation: React.FC<Props> = ({
     const isActive = nodeId === activeNodeId;
     const annotation = node.glyphs?.length ? node.glyphs : undefined;
     const com = commentText(node);
+    const canDelete = !!onDeleteFromNode && nodeId !== tree.rootId;
+    const canMenu = nodeId !== tree.rootId && (!!onDeleteFromNode || !!onPromoteBranch);
 
     return (
       <React.Fragment key={`n-${nodeId}`}>
@@ -59,11 +98,12 @@ export const StudyTreeInlineNotation: React.FC<Props> = ({
           ref={isActive ? activeRef : undefined}
           type="button"
           onClick={() => onSelectPath(pathToNode(tree, nodeId))}
+          onContextMenu={canMenu ? (e) => handleContextMenu(e, nodeId) : undefined}
           className={`inline-flex items-center px-1.5 rounded font-bold transition-colors ${
             isActive ? 'bg-[#3692e7] text-white shadow-sm' : 'text-slate-200 hover:bg-white/10'
           }`}
         >
-          {node.san}
+          <FigurineSan san={node.san} figurine={figurineNotation} />
           {showMoveAnnotations && annotation != null && parseMoveGlyphs(annotation).length > 0 && (
             <span className="text-amber-500 font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
           )}
@@ -137,8 +177,53 @@ export const StudyTreeInlineNotation: React.FC<Props> = ({
   const nodes = mainStart ? renderBranch(mainStart, startFen, null) : [];
 
   return (
-    <div className={`${textSize} font-sans text-slate-300 select-none leading-relaxed`}>
+    <div
+      ref={containerRef}
+      className={`relative ${textSize} font-sans text-slate-300 select-none leading-relaxed`}
+    >
       <div className="flex flex-wrap items-baseline gap-x-0.5 gap-y-1">{nodes}</div>
+      {contextMenu ? (
+        <div
+          ref={contextMenuRef}
+          className="absolute z-50 glass-card rounded-xl border border-white/10 shadow-2xl py-1 min-w-[200px] overflow-hidden animate-in zoom-in-95"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {onPromoteBranch && contextMenu.branchId ? (
+            <button
+              type="button"
+              onClick={() => {
+                void onPromoteBranch(contextMenu.branchId!);
+                setContextMenu(null);
+              }}
+              className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all"
+            >
+              <ArrowUpRight className="w-3.5 h-3.5" />
+              Ana hat yap
+            </button>
+          ) : null}
+          {onDeleteFromNode ? (
+            <button
+              type="button"
+              onClick={() => {
+                void onDeleteFromNode(contextMenu.nodeId);
+                setContextMenu(null);
+              }}
+              className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Bu hamleden sonrasını sil
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setContextMenu(null)}
+            className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-slate-500 hover:bg-white/5 transition-all"
+          >
+            İptal
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 };
@@ -157,4 +242,4 @@ export function treeHasVariations(tree: StudyTree): boolean {
     }
   }
   return false;
-};
+}

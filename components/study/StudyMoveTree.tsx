@@ -3,7 +3,9 @@ import { Trash2, ArrowUpRight, MousePointer2 } from 'lucide-react';
 import type { StudyChapter } from '../../lib/studyTypes';
 import type { NodeId, StudyTree } from '../../lib/studySync/types';
 import { formatMoveGlyphs, parseMoveGlyphs } from '../../lib/studyAnnotations';
-import { StudyTreeInlineNotation, treeHasVariations } from './StudyTreeInlineNotation';
+import { FigurineSan } from '../chess/FigurineSan';
+import { StudyTreeInlineNotation } from './StudyTreeInlineNotation';
+import { StudyTreeTableNotation } from './StudyTreeTableNotation';
 
 interface StudyMoveTreeProps {
   chapter: StudyChapter | null;
@@ -12,10 +14,13 @@ interface StudyMoveTreeProps {
   onSelectMove: (idx: number, variation?: [number, number, number]) => void;
   onHoverMove?: (idx: number | null, variation?: [number, number, number]) => void;
   onDeleteFromHere?: (plyIndex: number, varInfo?: [number, number, number]) => void | Promise<void>;
+  onDeleteFromNode?: (nodeId: NodeId) => void | Promise<void>;
+  onPromoteBranch?: (branchNodeId: NodeId) => void | Promise<void>;
   onPromoteVariation?: (mainLinePos: number, varGroupIdx: number) => void;
   compact?: boolean;
   inlineNotation?: boolean;
   showMoveAnnotations?: boolean;
+  figurineNotation?: boolean;
   /** Tam ağaç notasyonu (iç içe varyantlar). */
   tree?: StudyTree | null;
   currentPath?: NodeId[];
@@ -34,10 +39,13 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   onSelectMove,
   onHoverMove,
   onDeleteFromHere,
+  onDeleteFromNode,
+  onPromoteBranch,
   onPromoteVariation,
   compact = false,
   inlineNotation = false,
   showMoveAnnotations = true,
+  figurineNotation = true,
   tree = null,
   currentPath,
   onSelectPath,
@@ -77,20 +85,53 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
 
   if (!chapter) return null;
 
-  const useTreeNotation = !!tree && tree.mainline.length > 1 && !!onSelectPath && !!currentPath?.length;
+  /** Satır içi ağaç notasyonu yalnızca kullanıcı açıkça seçerse. */
+  const useTreeInline =
+    inlineNotation && !!tree && tree.mainline.length > 1 && !!onSelectPath && !!currentPath?.length;
 
-  if (useTreeNotation && (inlineNotation || treeHasVariations(tree!)) && onSelectPath && currentPath) {
+  /** PGN / sync ağacı → Lichess tarzı tablo (varsayılan). */
+  const useTreeTable =
+    !inlineNotation && !!tree && tree.mainline.length > 1 && !!onSelectPath && !!currentPath?.length;
+
+  if (useTreeInline && onSelectPath && currentPath) {
     return (
       <div
         ref={containerRef}
         className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
+        onMouseLeave={() => onHoverMove?.(null)}
       >
         <StudyTreeInlineNotation
           tree={tree}
           startFen={chapter.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'}
           currentPath={currentPath}
           onSelectPath={onSelectPath}
+          onDeleteFromNode={onDeleteFromNode}
+          onPromoteBranch={onPromoteBranch}
           showMoveAnnotations={showMoveAnnotations}
+          figurineNotation={figurineNotation}
+          compact={compact}
+          activeRef={activeRef}
+        />
+      </div>
+    );
+  }
+
+  if (useTreeTable && onSelectPath && currentPath) {
+    return (
+      <div
+        ref={containerRef}
+        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
+        onMouseLeave={() => onHoverMove?.(null)}
+      >
+        <StudyTreeTableNotation
+          tree={tree}
+          startFen={chapter.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'}
+          currentPath={currentPath}
+          onSelectPath={onSelectPath}
+          onDeleteFromNode={onDeleteFromNode}
+          onPromoteBranch={onPromoteBranch}
+          showMoveAnnotations={showMoveAnnotations}
+          figurineNotation={figurineNotation}
           compact={compact}
           activeRef={activeRef}
         />
@@ -139,7 +180,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
             : 'text-slate-200 hover:bg-white/10'
         }`}
       >
-        {san}
+        <FigurineSan san={san} figurine={figurineNotation} />
         {showMoveAnnotations && annotation != null && parseMoveGlyphs(annotation).length > 0 && (
           <span className="text-amber-500 font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
         )}
@@ -147,7 +188,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
     );
   };
 
-  const renderVariationLines = (mainLineIdx: number) => {
+  const renderVariationLines = (mainLineIdx: number, seen: Set<string>) => {
     const varGroups = variations[mainLineIdx];
     if (!varGroups?.length) return null;
 
@@ -164,11 +205,14 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
 
     return varGroups.map((line, gi) => {
       if (!line?.length) return null;
+      const sig = line.join('\0');
+      if (seen.has(sig)) return null;
+      seen.add(sig);
 
       return (
         <div
           key={`var-${mainLineIdx}-${gi}`}
-          className={`w-full flex flex-wrap items-center gap-x-0.5 gap-y-0.5 pl-3 ml-1 border-l-2 border-slate-600/40 ${compact ? 'py-1 my-0.5' : 'py-1.5 my-1'} text-slate-400 ${textSize}`}
+          className={`w-full flex flex-wrap items-center gap-x-0.5 gap-y-0.5 px-2 rounded-md bg-slate-700/35 ring-1 ring-white/5 ${compact ? 'py-1 my-0.5' : 'py-1.5 my-1'} text-slate-300 ${textSize}`}
         >
           {line.map((vSan, vi) => {
             const isWhiteTurn = varStartFenTurn === 'w' ? vi % 2 === 0 : vi % 2 !== 0;
@@ -209,6 +253,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   if (isBlackToMove && moves.length > 0) {
     const bm = moves[0];
     const isActive = currentMoveIndex === 1 && !isInVariation;
+    const rowSeen = new Set<string>();
     rows.push(
       <div key="row-black-first" className="w-full">
         <div className={rowGrid}>
@@ -219,7 +264,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
             {renderMoveButton(bm, 0, isActive, chapter.moveAnnotations?.[0])}
           </div>
         </div>
-        {renderVariationLines(0)}
+        {renderVariationLines(0, rowSeen)}
       </div>,
     );
     currentPly = 1;
@@ -231,6 +276,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
     const bm = moves[i + 1];
     const wmActive = currentMoveIndex === i + 1 && !isInVariation;
     const bmActive = bm !== undefined && currentMoveIndex === i + 2 && !isInVariation;
+    const rowSeen = new Set<string>();
 
     rows.push(
       <div key={`row-${i}`} className="w-full">
@@ -243,8 +289,8 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
             {bm !== undefined && renderMoveButton(bm, i + 1, bmActive, chapter.moveAnnotations?.[i + 1])}
           </div>
         </div>
-        {renderVariationLines(i)}
-        {bm !== undefined && renderVariationLines(i + 1)}
+        {renderVariationLines(i, rowSeen)}
+        {bm !== undefined && renderVariationLines(i + 1, rowSeen)}
       </div>,
     );
     currentMoveNumber++;
