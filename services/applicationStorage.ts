@@ -83,6 +83,8 @@ function rowToApp(row: Record<string, unknown>): StudentApplication {
     studentId: data.studentId != null ? String(data.studentId) : undefined,
     source: data.source as StudentApplication['source'],
     inviteToken: data.inviteToken != null ? String(data.inviteToken) : undefined,
+    clubId: data.clubId != null ? String(data.clubId) : undefined,
+    clubSlug: data.clubSlug != null ? String(data.clubSlug) : undefined,
     createdAt: String(row.created_at ?? data.createdAt ?? ''),
     updatedAt: String(row.updated_at ?? data.updatedAt ?? ''),
   };
@@ -99,8 +101,10 @@ function appToRow(app: StudentApplication): Record<string, unknown> {
   };
 }
 
-export function getApplicationFormUrl(): string {
+export function getApplicationFormUrl(clubSlug?: string): string {
   const base = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
+  const slug = clubSlug?.trim().toLowerCase();
+  if (slug) return `${base}#/basvuru/${encodeURIComponent(slug)}`;
   return `${base}#/basvuru`;
 }
 

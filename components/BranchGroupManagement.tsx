@@ -10,6 +10,10 @@ import {
   mergeBranchOffices, studentsInTrainingGroup,
 } from '../lib/trainingGroupUtils';
 import { coachesForClub } from '../lib/orgScope';
+import { normalizeClubKey } from '../lib/clubScope';
+import { resolveClubIdFromAuth } from '../lib/orgStructureDb';
+import { DEFAULT_APPLICATION_GROUPS, DEFAULT_APPLICATION_OFFICES } from '../lib/applicationFormOptions';
+import { buildDefaultOrgStructure, buildClubDefaultOrgStructure } from '../lib/seedDefaultOrgStructure';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
 const BranchGroupManagement: React.FC = () => {
@@ -32,6 +36,7 @@ const BranchGroupManagement: React.FC = () => {
     updateStudent,
     auth,
     activeClubBranch,
+    clubs,
   } = useApp();
 
   const isClubUser = auth?.role === 'club';
@@ -64,9 +69,9 @@ const BranchGroupManagement: React.FC = () => {
   );
 
   const officeOptions = useMemo(() => {
-    if (isClubUser && clubBranch) return [clubBranch];
-    return mergeBranchOffices(branchOffices, allDisciplineBranches);
-  }, [branchOffices, allDisciplineBranches, isClubUser, clubBranch]);
+    const branchesForOffices = isClubUser ? disciplineBranches : allDisciplineBranches;
+    return mergeBranchOffices(branchOffices, branchesForOffices);
+  }, [branchOffices, allDisciplineBranches, disciplineBranches, isClubUser]);
 
   const countStudentsInGroup = (group: TrainingGroup) => studentsInTrainingGroup(students, group).length;
 
@@ -118,7 +123,7 @@ const BranchGroupManagement: React.FC = () => {
     setEditingBranch(null);
     setBranchForm({
       name: '',
-      branchOffice: officeOptions[0] || '',
+      branchOffice: isClubUser ? (clubBranch || officeOptions[0] || '') : (officeOptions[0] || ''),
       monthlyFee: '',
     });
     setShowBranchModal(true);
@@ -231,6 +236,77 @@ const BranchGroupManagement: React.FC = () => {
     });
   };
 
+  const importApplicationDefaults = () => {
+    if (isClubUser) {
+      if (!clubBranch.trim()) return;
+      if (
+        !confirm(
+          `"${clubBranch}" kulübü için Satranç branşı ve varsayılan eğitim grupları oluşturulsun mu?`,
+        )
+      ) {
+        return;
+      }
+      const clubId = resolveClubIdFromAuth(auth, clubs);
+      const seeded = buildClubDefaultOrgStructure(clubBranch, clubId);
+      if (!branchOffices.some((o) => normalizeClubKey(o) === normalizeClubKey(clubBranch))) {
+        addBranchOffice(clubBranch);
+      }
+      if (!disciplineBranches.some((b) => b.name === 'Satranç' && b.branchOffice === clubBranch)) {
+        addDisciplineBranch({ name: 'Satranç', branchOffice: clubBranch, monthlyFee: 0 });
+      }
+      for (const group of seeded.groups) {
+        if (!trainingGroups.some((g) => g.name === group.name)) {
+          addTrainingGroup({
+            name: group.name,
+            branchOffice: clubBranch,
+            discipline: 'Satranç',
+            capacity: group.capacity,
+            lessonSlots: group.lessonSlots,
+          });
+        }
+      }
+      return;
+    }
+
+    if (
+      !confirm(
+        'Merkez, Çayyolu ve Ümitköy şubeleri ile Satranç branşı ve başvuru formundaki varsayılan gruplar oluşturulsun mu?',
+      )
+    ) {
+      return;
+    }
+    const primaryOffice = officeOptions[0] || DEFAULT_APPLICATION_OFFICES[0];
+    const seeded = buildDefaultOrgStructure(primaryOffice);
+    for (const office of DEFAULT_APPLICATION_OFFICES) {
+      if (!branchOffices.includes(office)) addBranchOffice(office);
+    }
+    if (!allDisciplineBranches.some((b) => b.name === 'Satranç' && b.branchOffice === primaryOffice)) {
+      addDisciplineBranch({ name: 'Satranç', branchOffice: primaryOffice, monthlyFee: 0 });
+    }
+    for (const group of seeded.groups) {
+      if (!allTrainingGroups.some((g) => g.name === group.name)) {
+        addTrainingGroup({
+          name: group.name,
+          branchOffice: group.branchOffice,
+          discipline: group.discipline,
+          capacity: group.capacity,
+          lessonSlots: group.lessonSlots,
+        });
+      }
+    }
+  };
+
+  const allGroupsSorted = useMemo(
+    () =>
+      [...trainingGroups].sort(
+        (a, b) =>
+          a.branchOffice.localeCompare(b.branchOffice) ||
+          a.discipline.localeCompare(b.discipline) ||
+          a.name.localeCompare(b.name, 'tr'),
+      ),
+    [trainingGroups],
+  );
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -240,15 +316,31 @@ const BranchGroupManagement: React.FC = () => {
           </h2>
           <p className="text-slate-400 text-sm mt-1 max-w-2xl">
             Branş ve grup tanımlarında aylık ücret ile ders günleri/saatleri belirlenir. Öğrenci gruba atanınca bu bilgiler otomatik gelir; profilde düzenlenebilir.
+            <span className="block mt-1 text-indigo-300/90">
+              {isClubUser
+                ? 'Bu kulübe ait şube, branş ve gruplar yalnızca sizin panelinizde görünür.'
+                : 'Başvuru formundaki şube ve grup listeleri buradan gelir (Supabase: branch_offices, training_groups).'}
+            </span>
           </p>
         </div>
-        <button
+        <div className="flex flex-wrap gap-2">
+          {allTrainingGroups.length === 0 ? (
+            <button
+              type="button"
+              onClick={importApplicationDefaults}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold"
+            >
+              <Plus className="w-4 h-4" /> {isClubUser ? 'Kulüp varsayılanlarını yükle' : 'Başvuru varsayılanlarını yükle'}
+            </button>
+          ) : null}
+          <button
           type="button"
           onClick={openAddBranch}
           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold"
         >
           <Plus className="w-4 h-4" /> Yeni Branş
-        </button>
+          </button>
+        </div>
       </div>
 
       <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 space-y-3">
@@ -258,13 +350,16 @@ const BranchGroupManagement: React.FC = () => {
               <Building2 className="w-4 h-4 text-violet-400" /> Şubeler
             </h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Öğrenci kaydı ve branş tanımında kullanılan şube listesi. Varsayılan: Merkez, Çayyolu, Ümitköy.
+              {isClubUser
+                ? 'Kulübünüze bağlı şubeler. Ana şube kulüp adınızdır; alt şubeler ekleyebilirsiniz.'
+                : 'Öğrenci kaydı ve branş tanımında kullanılan şube listesi. Varsayılan: Merkez, Çayyolu, Ümitköy.'}
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {officeOptions.map((office) => {
             const inUse = disciplineBranches.some((b) => b.branchOffice === office);
+            const isMainClubOffice = isClubUser && normalizeClubKey(office) === normalizeClubKey(clubBranch);
             return (
               <span
                 key={office}
@@ -273,10 +368,16 @@ const BranchGroupManagement: React.FC = () => {
                 {office}
                 <button
                   type="button"
-                  title={inUse ? 'Bu şubede branş tanımı var — önce branşları silin' : 'Şubeyi sil'}
-                  disabled={inUse}
+                  title={
+                    isMainClubOffice
+                      ? 'Ana kulüp şubesi silinemez'
+                      : inUse
+                        ? 'Bu şubede branş tanımı var — önce branşları silin'
+                        : 'Şubeyi sil'
+                  }
+                  disabled={inUse || isMainClubOffice}
                   onClick={() => {
-                    if (inUse) return;
+                    if (inUse || isMainClubOffice) return;
                     if (confirm(`"${office}" şubesini silmek istiyor musunuz?`)) removeBranchOffice(office);
                   }}
                   className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30 disabled:cursor-not-allowed"
@@ -318,10 +419,102 @@ const BranchGroupManagement: React.FC = () => {
         </div>
       </div>
 
+      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Users className="w-4 h-4 text-emerald-400" /> Eğitim Grupları
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {isClubUser
+                ? 'Kulübünüzün eğitim grupları — öğrenci kaydı ve başvurularda kullanılır.'
+                : 'Başvuru formu, öğrenci ekleme ve ödev atamada kullanılan grup listesi. Grup eklemek için önce branş tanımlayın veya varsayılanları yükleyin.'}
+            </p>
+          </div>
+          {allGroupsSorted.length === 0 ? (
+            <button
+              type="button"
+              onClick={importApplicationDefaults}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+            >
+              <Plus className="w-3.5 h-3.5" /> {isClubUser ? 'Kulüp varsayılanlarını yükle' : 'Varsayılan grupları yükle'}
+            </button>
+          ) : null}
+        </div>
+        {allGroupsSorted.length === 0 ? (
+          <p className="text-sm text-slate-500 py-4 text-center">Henüz eğitim grubu yok.</p>
+        ) : (
+          <ResponsiveTable minWidth={640}>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500 border-b border-white/5">
+                  <th className="text-left py-2 pr-3">Grup</th>
+                  <th className="text-left py-2 pr-3">Şube</th>
+                  <th className="text-left py-2 pr-3">Branş</th>
+                  <th className="text-right py-2">İşlem</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allGroupsSorted.map((group) => {
+                  const parentBranch = disciplineBranches.find(
+                    (b) => b.name === group.discipline && b.branchOffice === group.branchOffice,
+                  );
+                  return (
+                    <tr key={group.id} className="border-b border-white/5 text-slate-200">
+                      <td data-label="Grup" className="py-2.5 pr-3 font-semibold">{group.name}</td>
+                      <td data-label="Şube" className="py-2.5 pr-3 text-slate-400">{group.branchOffice}</td>
+                      <td data-label="Branş" className="py-2.5 pr-3 text-slate-400">{group.discipline}</td>
+                      <td data-label="İşlem" className="py-2.5 text-right">
+                        <div className="flex justify-end gap-1">
+                          {parentBranch ? (
+                            <button
+                              type="button"
+                              onClick={() => openEditGroup(group, parentBranch)}
+                              className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
+                              title="Düzenle"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`"${group.name}" grubunu silmek istiyor musunuz?`)) {
+                                removeTrainingGroup(group.id);
+                              }
+                            }}
+                            className="p-1.5 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
+                            title="Sil"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </ResponsiveTable>
+        )}
+      </div>
+
       {sortedBranches.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-white/10 bg-slate-900/40 p-10 text-center">
+        <div className="rounded-xl border border-dashed border-white/10 bg-slate-900/40 p-10 text-center space-y-4">
           <BookOpen className="w-10 h-10 mx-auto text-slate-500 mb-3" />
           <p className="text-slate-400 text-sm">Henüz branş tanımı yok. Şube, aylık ücret ve alt grupları ekleyerek başlayın.</p>
+          <p className="text-xs text-slate-500 max-w-md mx-auto">
+            {isClubUser
+              ? 'Kulübünüze özel şube, branş ve grupları buradan tanımlayın. Hızlı başlangıç için varsayılanları yükleyebilirsiniz.'
+              : 'Başvuru formunda görünen gruplar burada tanımlanan eğitim gruplarıdır. Hızlı başlangıç için varsayılanları yükleyebilirsiniz.'}
+          </p>
+          <button
+            type="button"
+            onClick={importApplicationDefaults}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold"
+          >
+            <Plus className="w-4 h-4" /> {isClubUser ? 'Kulüp varsayılanlarını yükle' : 'Başvuru varsayılanlarını yükle'}
+          </button>
         </div>
       ) : (
         <div className="space-y-4">

@@ -51,6 +51,16 @@ const StudentSignedFormsModal: React.FC<Props> = ({ student, onClose }) => {
     };
   }, [student.id]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (printApplication) setPrintApplication(null);
+      else onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [printApplication, onClose]);
+
   return (
     <>
       <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">

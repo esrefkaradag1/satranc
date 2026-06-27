@@ -43,6 +43,7 @@ import LiveLesson from './LiveLesson';
 import Curriculum from './Curriculum';
 import Inventory from './Inventory';
 import ApplicationsAdmin from './ApplicationsAdmin';
+import { getClubApplicationSlug } from '../lib/applicationClub';
 import { getCoachNamesForStudent } from '../lib/orgScope';
 import type { Coach, Student } from '../types';
 
@@ -152,13 +153,10 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   );
 
   const clubGroupOptions = useMemo(() => {
-    const fromTraining = trainingGroups
-      .filter((g) => (g.branchOffice || '').trim() === branch.trim())
-      .map((g) => g.name)
-      .filter(Boolean);
-    if (fromTraining.length > 0) return [...new Set(fromTraining)];
+    const fromTraining = [...new Set(trainingGroups.map((g) => g.name).filter(Boolean))];
+    if (fromTraining.length > 0) return fromTraining;
     return groups;
-  }, [trainingGroups, groups, branch]);
+  }, [trainingGroups, groups]);
 
   const paid = branchStudents.filter((s) => s.paymentStatus === 'Paid').length;
   const unpaid = branchStudents.filter((s) => s.paymentStatus === 'Unpaid').length;
@@ -582,7 +580,13 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
       case 'groups':
         return <BranchGroupManagement />;
       case 'applications':
-        return <ApplicationsAdmin />;
+        return (
+          <ApplicationsAdmin
+            clubId={club?.id}
+            clubName={club?.name ?? branch}
+            clubSlug={club ? getClubApplicationSlug(club) : undefined}
+          />
+        );
       case 'corporate':
         return <CorporateStructure />;
       case 'analysis':

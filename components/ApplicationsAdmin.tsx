@@ -16,6 +16,7 @@ import {
 } from '../services/applicationStorage';
 import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
 import { ResponsiveTable } from './ui/ResponsiveTable';
+import { filterApplicationsByClub, getClubApplicationSlug } from '../lib/applicationClub';
 
 const STATUS_LABEL: Record<ApplicationStatus, string> = {
   pending: 'Beklemede',
@@ -31,8 +32,15 @@ const STATUS_CLS: Record<ApplicationStatus, string> = {
   rejected: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
 };
 
-const ApplicationsAdmin: React.FC = () => {
-  const { addStudent, updateStudent, disciplines, students } = useApp();
+type ApplicationsAdminProps = {
+  /** Kulüp panelinde yalnızca bu kulübün başvuruları */
+  clubId?: string;
+  clubName?: string;
+  clubSlug?: string;
+};
+
+const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName, clubSlug }) => {
+  const { addStudent, updateStudent, disciplines, students, scopedStudents, clubs } = useApp();
   const [list, setList] = useState<StudentApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -44,22 +52,53 @@ const ApplicationsAdmin: React.FC = () => {
   const [whatsappPhoneError, setWhatsappPhoneError] = useState('');
   const [actionId, setActionId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [approvedCredentials, setApprovedCredentials] = useState<{
+    name: string;
+    applicationNo: string;
+    username: string;
+    password: string;
+  } | null>(null);
+  const [credsCopied, setCredsCopied] = useState(false);
 
-  const formUrl = getApplicationFormUrl();
+  const resolvedClubSlug = useMemo(() => {
+    if (clubSlug?.trim()) return clubSlug.trim().toLowerCase();
+    if (clubId) {
+      const club = clubs.find((c) => c.id === clubId);
+      if (club) return getClubApplicationSlug(club);
+    }
+    return undefined;
+  }, [clubSlug, clubId, clubs]);
+
+  const formUrl = getApplicationFormUrl(resolvedClubSlug);
+  const studentPool = clubId ? scopedStudents : students;
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const data = await loadApplicationsAsync();
-      setList(data);
+      const scoped =
+        clubId && clubName ? filterApplicationsByClub(data, clubId, clubName) : data;
+      setList(scoped);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clubId, clubName]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!detail && !shareOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (detail) setDetail(null);
+        else if (shareOpen) setShareOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [detail, shareOpen]);
 
   const stats = useMemo(() => ({
     total: list.length,
@@ -126,11 +165,15 @@ const ApplicationsAdmin: React.FC = () => {
 
   const handleApproveToStudent = async (app: StudentApplication) => {
     if (app.status === 'approved') return;
-    const dup = students.some((s) => (s.tcNo ?? '') === app.tcNo);
+    const dup = studentPool.some((s) => (s.tcNo ?? '') === app.tcNo);
     if (dup) {
       alert('Bu TC Kimlik No ile kayıtlı öğrenci zaten var.');
       return;
     }
+    const targetBranch =
+      clubName?.trim() ||
+      (app.clubId ? clubs.find((c) => c.id === app.clubId)?.name : undefined) ||
+      app.branchOffice;
     setActionId(app.id);
     try {
       const parentPhone = app.phones[0] || app.fatherPhone || app.motherPhone || '';
@@ -155,7 +198,7 @@ const ApplicationsAdmin: React.FC = () => {
         notes: app.notes || undefined,
         healthInfo: app.healthInfo || undefined,
         branch: disciplines[0] || 'Satranç',
-        branchOffice: app.branchOffice,
+        branchOffice: targetBranch,
         fatherName: app.fatherName || undefined,
         fatherPhone: app.fatherPhone?.replace(/\D/g, '') || undefined,
         fatherJob: app.fatherJob || undefined,
@@ -189,6 +232,14 @@ const ApplicationsAdmin: React.FC = () => {
       if (detail?.id === app.id) {
         setDetail({ ...app, studentId: newStudent.id, status: 'approved' });
       }
+      if (newStudent.username && newStudent.password) {
+        setApprovedCredentials({
+          name: newStudent.name,
+          applicationNo: app.applicationNo,
+          username: newStudent.username,
+          password: newStudent.password,
+        });
+      }
     } catch (err) {
       console.error('[Applications] approve failed:', err);
       alert('Öğrenci kaydı sırasında hata oluştu. Listede görünüyorsa Supabase şemasını güncelleyin (supabase_tables.sql).');
@@ -209,7 +260,9 @@ const ApplicationsAdmin: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black text-white tracking-tight">Başvurular</h1>
-          <p className="text-sm text-slate-400 mt-1">Online başvuru formlarını yönetin</p>
+          <p className="text-sm text-slate-400 mt-1">
+            {clubName ? `${clubName} — online başvuru formları` : 'Online başvuru formlarını yönetin'}
+          </p>
         </div>
         <button
           type="button"
@@ -538,6 +591,61 @@ const ApplicationsAdmin: React.FC = () => {
                   Formu Aç
                 </a>
               )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {approvedCredentials ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setApprovedCredentials(null)}>
+          <div className="w-full max-w-md rounded-2xl bg-[#1e293b] border border-emerald-500/30 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/80 bg-emerald-500/10">
+              <div>
+                <h3 className="text-base font-black text-white">Öğrenci Kaydı Oluşturuldu</h3>
+                <p className="text-xs text-slate-400 mt-0.5">{approvedCredentials.name} · {approvedCredentials.applicationNo}</p>
+              </div>
+              <button type="button" onClick={() => setApprovedCredentials(null)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-slate-300">
+                Başvuru onaylandı. Aşağıdaki giriş bilgilerini öğrenci/veli ile paylaşın.
+              </p>
+              <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-4 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase font-bold">Kullanıcı adı</span>
+                    <p className="font-mono text-white mt-0.5">{approvedCredentials.username}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase font-bold">Şifre</span>
+                    <p className="font-mono text-white mt-0.5">{approvedCredentials.password}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const text = `Kullanıcı adı: ${approvedCredentials.username}\nŞifre: ${approvedCredentials.password}`;
+                    void navigator.clipboard?.writeText(text).then(() => {
+                      setCredsCopied(true);
+                      setTimeout(() => setCredsCopied(false), 2000);
+                    });
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  {credsCopied ? 'Kopyalandı' : 'Giriş bilgilerini kopyala'}
+                </button>
+                <p className="text-[10px] text-slate-500">Şifre yalnızca bu ekranda gösterilir; kapatmadan önce kaydedin.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setApprovedCredentials(null)}
+                className="w-full py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold"
+              >
+                Kapat
+              </button>
             </div>
           </div>
         </div>

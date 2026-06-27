@@ -241,6 +241,7 @@ export const CLUB_NAV_CATEGORIES: NavCategory[] = [
     icon: <GraduationCap className="w-4 h-4" />,
     items: [
       { id: 'students', label: 'Öğrenci Listesi', icon: <Users className="w-5 h-5" />, iconColor: 'violet-pink' },
+      { id: 'groups', label: 'Branş & Grup', icon: <Building2 className="w-5 h-5" />, iconColor: 'violet' },
     ],
   },
   {

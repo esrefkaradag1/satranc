@@ -10,6 +10,10 @@ export interface StudentApplication {
   studentId?: string;
   source?: ApplicationSource;
   inviteToken?: string;
+  /** Başvurunun geldiği kulüp — diğer kulüpler göremez */
+  clubId?: string;
+  /** URL uzantısı: basvuru/afyonsatranc */
+  clubSlug?: string;
   branchOffice: string;
   group: string;
   tcNo: string;

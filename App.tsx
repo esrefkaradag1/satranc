@@ -43,11 +43,14 @@ import { readPanelHash as readHash, writePanelHash as writeHash } from './lib/pa
 /** Tahta / çalışma gibi tam genişlik modüller — mobilde yan padding taşmayı önler */
 const FULL_BLEED_TABS = new Set(['study', 'lessons']);
 
-function getPublicFormRoute(): 'basvuru' | 'veli-imza' | null {
+function getPublicFormRoute(): { route: 'basvuru'; clubSlug?: string } | { route: 'veli-imza' } | null {
   const parts = window.location.hash.replace(/^#\/?/, '').split('/');
   const head = parts[0];
-  if (head === 'basvuru') return 'basvuru';
-  if (head === 'veli-imza' && parts[1]) return 'veli-imza';
+  if (head === 'basvuru') {
+    const slug = parts[1] ? decodeURIComponent(parts[1]).trim().toLowerCase() : undefined;
+    return { route: 'basvuru', clubSlug: slug || undefined };
+  }
+  if (head === 'veli-imza' && parts[1]) return { route: 'veli-imza' };
   return null;
 }
 
@@ -96,8 +99,8 @@ const AppRoot: React.FC = () => {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  if (publicForm === 'basvuru') return <ApplicationForm />;
-  if (publicForm === 'veli-imza') {
+  if (publicForm?.route === 'basvuru') return <ApplicationForm clubSlug={publicForm.clubSlug} />;
+  if (publicForm?.route === 'veli-imza') {
     const token = getVeliImzaToken();
     if (token) return <ParentConsentForm token={token} />;
   }

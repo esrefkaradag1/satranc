@@ -8,6 +8,26 @@ import { looksLikeLichessPuzzleId } from './lib/puzzlePlayUtils';
 import { insertHomeworkAttemptSupabase, detectHomeworkAttemptPayloadStyle, setCachedHomeworkAttemptPayloadStyle } from './lib/homeworkAttemptDb.mjs';
 import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentAuth.ts';
 import { findClubForLogin } from './lib/clubLoginUtils';
+import { createStudentLoginCredentials } from './lib/studentCredentials';
+import {
+  type BranchOfficeRecord,
+  branchOfficeToDb,
+  dbToBranchOffice,
+  dbToDisciplineBranch,
+  dbToTrainingGroup,
+  disciplineBranchToDb,
+  resolveBranchOfficeNames,
+  trainingGroupToDb,
+  clubIdForOrgRecord,
+  resolveClubIdFromAuth,
+} from './lib/orgStructureDb';
+import { normalizeClubKey } from './lib/clubScope';
+import { buildDefaultOrgStructure, buildClubDefaultOrgStructure } from './lib/seedDefaultOrgStructure';
+import {
+  lessonsFromTrainingGroup,
+  mergeTrainingGroupLessons,
+  removeTrainingGroupLessonsFromList,
+} from './lib/syncGroupLessons';
 import { getPermissionsForAuth, hasPermission as checkPermission, defaultPermissionsForRole } from './lib/rolePermissions';
 import {
   loadRolesLocal,
@@ -1263,21 +1283,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const DEFAULT_DISCIPLINES = ['Satranç', 'Robotik', 'Kodlama'];
   const DEFAULT_GROUPS = ['Alt Yapı A', 'Alt Yapı B', 'Gelişim A', 'Gelişim B', 'Turnuva', 'Yetişkin'];
 
-  const [branchOffices, setBranchOffices] = useState<string[]>(() =>
-    loadJSON<string[]>('netchess_branch_offices', DEFAULT_BRANCH_OFFICES)
+  const loadBranchOfficeRecordsFromLocal = (): BranchOfficeRecord[] => {
+    try {
+      const raw = localStorage.getItem('netchess_branch_offices');
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (typeof parsed[0] === 'string') {
+            return (parsed as string[]).map((name) => ({ id: genId(), name }));
+          }
+          if (typeof parsed[0] === 'object' && parsed[0] && 'name' in (parsed[0] as object)) {
+            return parsed as BranchOfficeRecord[];
+          }
+        }
+      }
+    } catch { /* yerel yedek */ }
+    return DEFAULT_BRANCH_OFFICES.map((name) => ({ id: genId(), name }));
+  };
+
+  const [branchOfficeRecords, setBranchOfficeRecords] = useState<BranchOfficeRecord[]>(() =>
+    useSupabase ? [] : loadBranchOfficeRecordsFromLocal(),
   );
   const [disciplines, setDisciplines] = useState<string[]>(() =>
     useSupabase ? DEFAULT_DISCIPLINES : loadJSON<string[]>('netchess_disciplines', DEFAULT_DISCIPLINES)
   );
   const [groups, setGroups] = useState<string[]>(() =>
-    useSupabase ? DEFAULT_GROUPS : loadJSON<string[]>('netchess_groups', DEFAULT_GROUPS)
+    useSupabase ? [] : loadJSON<string[]>('netchess_groups', DEFAULT_GROUPS),
   );
 
   const [disciplineBranches, setDisciplineBranches] = useState<DisciplineBranch[]>(() =>
-    loadJSON<DisciplineBranch[]>('netchess_discipline_branches', [])
+    useSupabase ? [] : loadJSON<DisciplineBranch[]>('netchess_discipline_branches', []),
   );
   const [trainingGroups, setTrainingGroups] = useState<TrainingGroup[]>(() =>
-    loadJSON<TrainingGroup[]>('netchess_training_groups', [])
+    useSupabase ? [] : loadJSON<TrainingGroup[]>('netchess_training_groups', []),
   );
   const [groupLessonLogs, setGroupLessonLogs] = useState<Record<string, StudentLessonLogEntry[]>>(() =>
     loadGroupLessonLogsMap()
@@ -1354,8 +1392,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const scopedStudents = useMemo(
-    () => resolveScopedStudents(auth, students, trainingGroups, coaches),
-    [auth, students, trainingGroups, coaches],
+    () => resolveScopedStudents(auth, students, trainingGroups, coaches, branchOfficeRecords, clubs),
+    [auth, students, trainingGroups, coaches, branchOfficeRecords, clubs],
   );
 
   const scopedTransactions = useMemo(
@@ -1369,13 +1407,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const scopedTrainingGroups = useMemo(
-    () => resolveScopedTrainingGroups(auth, trainingGroups),
-    [auth, trainingGroups],
+    () => resolveScopedTrainingGroups(auth, trainingGroups, branchOfficeRecords, clubs),
+    [auth, trainingGroups, branchOfficeRecords, clubs],
   );
 
   const scopedDisciplineBranches = useMemo(
-    () => resolveScopedDisciplineBranches(auth, disciplineBranches),
-    [auth, disciplineBranches],
+    () => resolveScopedDisciplineBranches(auth, disciplineBranches, branchOfficeRecords, clubs),
+    [auth, disciplineBranches, branchOfficeRecords, clubs],
   );
 
   const scopedTournaments = useMemo(
@@ -1384,6 +1422,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const activeClubBranch = useMemo(() => resolveClubBranch(auth), [auth]);
+
+  const branchOffices = useMemo(
+    () => resolveBranchOfficeNames(branchOfficeRecords, clubs.map((c) => c.name), auth, clubs),
+    [branchOfficeRecords, clubs, auth],
+  );
 
   const [stockfishReady, setStockfishReady] = useState(false);
   const [stockfishLoading, setStockfishLoading] = useState(false);
@@ -1780,7 +1823,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           hwRes, attRes, subRes, puzRes,
           stuRes, transRes, lessRes, attenRes,
           invRes, galRes, actRes, schedRes, coachRes,
-          perfRes, tourRes, clubsRes
+          perfRes, tourRes, clubsRes,
+          officesRes, discBranchesRes, trainGroupsRes,
         ] = await Promise.all([
           sb.from('homeworks').select('*'),
           sb.from('homework_attempts').select('*'),
@@ -1797,7 +1841,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sb.from('coaches').select('*'),
           sb.from('performance_analyses').select('*'),
           sb.from('tournaments').select('*'),
-          sb.from('clubs').select('*')
+          sb.from('clubs').select('*'),
+          sb.from('branch_offices').select('*'),
+          sb.from('discipline_branches').select('*'),
+          sb.from('training_groups').select('*'),
         ]);
 
         if (hwRes.data) setHomeworks((hwRes.data as Record<string, unknown>[]).map(dbToHomework));
@@ -1840,6 +1887,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (perfRes.data) setPerformanceAnalyses((perfRes.data as Record<string, unknown>[]).map(dbToPerformanceAnalysis));
         if (tourRes.data) setTournaments((tourRes.data as Record<string, unknown>[]).map(dbToTournament));
         if (clubsRes.data) setClubs((clubsRes.data as Record<string, unknown>[]).map(dbToClub));
+
+        const officeRows = officesRes.error
+          ? []
+          : ((officesRes.data as Record<string, unknown>[] | null) ?? []).map(dbToBranchOffice);
+        if (officeRows.length > 0) {
+          setBranchOfficeRecords(officeRows);
+        } else if (!officesRes.error) {
+          const seeds = DEFAULT_BRANCH_OFFICES.map((name) => ({ id: genId(), name }));
+          setBranchOfficeRecords(seeds);
+          const sbWrite = getServiceSupabase();
+          if (sbWrite) {
+            void sbWrite.from('branch_offices').upsert(seeds.map(branchOfficeToDb));
+          }
+        }
+
+        if (!discBranchesRes.error && discBranchesRes.data) {
+          const branches = (discBranchesRes.data as Record<string, unknown>[]).map(dbToDisciplineBranch);
+          setDisciplineBranches(branches);
+        }
+
+        const groupsFromDb = !trainGroupsRes.error && trainGroupsRes.data
+          ? (trainGroupsRes.data as Record<string, unknown>[]).map(dbToTrainingGroup)
+          : [];
+
+        if (groupsFromDb.length > 0) {
+          setTrainingGroups(groupsFromDb);
+        } else if (!trainGroupsRes.error) {
+          const primaryOffice = officeRows[0]?.name ?? DEFAULT_BRANCH_OFFICES[0];
+          const branches =
+            !discBranchesRes.error && discBranchesRes.data
+              ? (discBranchesRes.data as Record<string, unknown>[]).map(dbToDisciplineBranch)
+              : [];
+          const seeded = buildDefaultOrgStructure(primaryOffice);
+          if (branches.length === 0) {
+            setDisciplineBranches(seeded.branches);
+          } else {
+            seeded.groups = seeded.groups.map((g) => ({
+              ...g,
+              branchOffice: branches[0].branchOffice,
+              discipline: branches[0].name,
+            }));
+          }
+          setTrainingGroups(seeded.groups);
+          const sbWrite = getServiceSupabase();
+          if (sbWrite) {
+            if (officeRows.length === 0) {
+              setBranchOfficeRecords(seeded.offices);
+              void sbWrite.from('branch_offices').upsert(seeded.offices.map(branchOfficeToDb));
+            }
+            if (branches.length === 0) {
+              void sbWrite
+                .from('discipline_branches')
+                .upsert(seeded.branches.map((b) => disciplineBranchToDb(b, null)));
+            }
+            void sbWrite
+              .from('training_groups')
+              .upsert(seeded.groups.map((g) => trainingGroupToDb(g, null)));
+          }
+        }
+
         try {
           const { data: coachReportData } = await sb.from('coach_ai_reports').select('*');
           if (coachReportData?.length) {
@@ -1869,7 +1976,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadFromSupabase();
   }, [useSupabase]);
 
-  /** Yerel branş–grup tanımlarını eski disciplines/groups listeleriyle senkron tut */
+  const clubOrgSeededRef = useRef<Set<string>>(new Set());
+
+  /** Eski kulüp oturumlarında clubId eksikse tamamla */
+  useEffect(() => {
+    if (auth?.role !== 'club' || auth.clubId || !auth.branch || clubs.length === 0) return;
+    const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(auth.branch));
+    if (club) setAuth({ ...auth, clubId: club.id });
+  }, [auth, clubs]);
+
+  /** Kulübün henüz şube/branş/grup tanımı yoksa admin ile aynı varsayılanları oluştur */
+  useEffect(() => {
+    if (!initialDataLoaded || auth?.role !== 'club') return;
+    const clubName = auth.branch?.trim();
+    const clubId = resolveClubIdFromAuth(auth, clubs);
+    if (!clubName || !clubId) return;
+    if (clubOrgSeededRef.current.has(clubId)) return;
+
+    const hasOrg =
+      disciplineBranches.some((b) => b.clubId === clubId) ||
+      trainingGroups.some((g) => g.clubId === clubId);
+    if (hasOrg) {
+      clubOrgSeededRef.current.add(clubId);
+      return;
+    }
+
+    clubOrgSeededRef.current.add(clubId);
+    const seeded = buildClubDefaultOrgStructure(clubName, clubId);
+
+    const hasMainOffice = branchOfficeRecords.some(
+      (r) => r.clubId === clubId && normalizeClubKey(r.name) === normalizeClubKey(clubName),
+    );
+    if (!hasMainOffice) {
+      const mainOffice: BranchOfficeRecord = { id: genId(), name: clubName, clubId };
+      setBranchOfficeRecords((prev) => [...prev, mainOffice]);
+      const sb = getServiceSupabase();
+      if (sb) void sb.from('branch_offices').upsert(branchOfficeToDb(mainOffice));
+    }
+
+    setDisciplineBranches((prev) => [...prev, ...seeded.branches]);
+    setTrainingGroups((prev) => [...prev, ...seeded.groups]);
+
+    const sb = getServiceSupabase();
+    if (sb) {
+      void sb.from('discipline_branches').upsert(seeded.branches.map((b) => disciplineBranchToDb(b, clubId)));
+      void sb.from('training_groups').upsert(seeded.groups.map((g) => trainingGroupToDb(g, clubId)));
+    }
+  }, [initialDataLoaded, auth, clubs, branchOfficeRecords, disciplineBranches, trainingGroups]);
+
+  /** Branş–grup tanımları değişince eski disciplines/groups listelerini güncelle */
   useEffect(() => {
     if (disciplineBranches.length > 0) {
       const names = [...new Set(disciplineBranches.map((b) => b.name.trim()).filter(Boolean))].sort((a, b) =>
@@ -1877,14 +2032,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       setDisciplines(names);
     }
-    if (trainingGroups.length > 0) {
-      const names = [...new Set(trainingGroups.map((g) => g.name.trim()).filter(Boolean))].sort((a, b) =>
-        a.localeCompare(b, 'tr'),
-      );
-      setGroups(names);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- yalnızca ilk yükleme
-  }, []);
+  }, [disciplineBranches]);
+
+  useEffect(() => {
+    const names = [...new Set(trainingGroups.map((g) => g.name.trim()).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b, 'tr'),
+    );
+    setGroups(names);
+  }, [trainingGroups]);
 
   const refreshStudentsFromSupabase = useCallback(async () => {
     if (!useSupabase) return;
@@ -1952,8 +2107,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (hydrated.current && !useSupabase) localStorage.setItem('netchess_gallery', JSON.stringify(gallery));
   }, [gallery, useSupabase]);
   useEffect(() => {
-    if (hydrated.current) localStorage.setItem('netchess_branch_offices', JSON.stringify(branchOffices));
-  }, [branchOffices]);
+    if (hydrated.current && !useSupabase) {
+      localStorage.setItem('netchess_branch_offices', JSON.stringify(branchOfficeRecords));
+    }
+  }, [branchOfficeRecords, useSupabase]);
   useEffect(() => {
     if (hydrated.current && !useSupabase) localStorage.setItem('netchess_clubs', JSON.stringify(clubs));
   }, [clubs, useSupabase]);
@@ -1964,11 +2121,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (hydrated.current && !useSupabase) localStorage.setItem('netchess_groups', JSON.stringify(groups));
   }, [groups, useSupabase]);
   useEffect(() => {
-    if (hydrated.current) localStorage.setItem('netchess_discipline_branches', JSON.stringify(disciplineBranches));
-  }, [disciplineBranches]);
+    if (hydrated.current && !useSupabase) {
+      localStorage.setItem('netchess_discipline_branches', JSON.stringify(disciplineBranches));
+    }
+  }, [disciplineBranches, useSupabase]);
   useEffect(() => {
-    if (hydrated.current) localStorage.setItem('netchess_training_groups', JSON.stringify(trainingGroups));
-  }, [trainingGroups]);
+    if (hydrated.current && !useSupabase) {
+      localStorage.setItem('netchess_training_groups', JSON.stringify(trainingGroups));
+    }
+  }, [trainingGroups, useSupabase]);
   useEffect(() => {
     if (hydrated.current) {
       try {
@@ -2082,7 +2243,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           hwRes, attRes, subRes, puzRes,
           stuRes, transRes, lessRes, attenRes,
           invRes, galRes, actRes, schedRes, coachRes,
-          perfRes, tourRes, clubsRes
+          perfRes, tourRes, clubsRes,
+          officesRes, discBranchesRes, trainGroupsRes,
         ] = await Promise.all([
           sb.from('homeworks').select('*'),
           sb.from('homework_attempts').select('*'),
@@ -2099,7 +2261,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sb.from('coaches').select('*'),
           sb.from('performance_analyses').select('*'),
           sb.from('tournaments').select('*'),
-          sb.from('clubs').select('*')
+          sb.from('clubs').select('*'),
+          sb.from('branch_offices').select('*'),
+          sb.from('discipline_branches').select('*'),
+          sb.from('training_groups').select('*'),
         ]);
         if (hwRes.data) setHomeworks((hwRes.data as Record<string, unknown>[]).map(dbToHomework));
         if (attRes.data) {
@@ -2134,6 +2299,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (perfRes.data) setPerformanceAnalyses((perfRes.data as Record<string, unknown>[]).map(dbToPerformanceAnalysis));
         if (tourRes.data) setTournaments((tourRes.data as Record<string, unknown>[]).map(dbToTournament));
         if (clubsRes.data) setClubs((clubsRes.data as Record<string, unknown>[]).map(dbToClub));
+        if (!officesRes.error && officesRes.data) {
+          setBranchOfficeRecords((officesRes.data as Record<string, unknown>[]).map(dbToBranchOffice));
+        }
+        if (!discBranchesRes.error && discBranchesRes.data) {
+          setDisciplineBranches((discBranchesRes.data as Record<string, unknown>[]).map(dbToDisciplineBranch));
+        }
+        if (!trainGroupsRes.error && trainGroupsRes.data) {
+          setTrainingGroups((trainGroupsRes.data as Record<string, unknown>[]).map(dbToTrainingGroup));
+        }
         try {
           const fromDb = await loadGroupLessonLogsFromSupabase(sb);
           setGroupLessonLogs(applyGroupLessonLogsMerge(fromDb));
@@ -2416,9 +2590,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addStudent = useCallback(async (student: Omit<Student, 'id'>): Promise<Student> => {
     const scoped = applyStudentScopeFromAuth(student, auth, coaches);
+    const existingUsernames = students.map((s) => s.username);
+    const generated = createStudentLoginCredentials(scoped.name, existingUsernames);
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
     const nextNo = 1 + Math.max(0, ...students.map((s) => s.studentNo).filter((n): n is number => typeof n === 'number'));
-    const newStudent = { ...scoped, id, studentNo: nextNo } as Student;
+    const newStudent = {
+      ...scoped,
+      id,
+      studentNo: nextNo,
+      username: scoped.username?.trim() ? scoped.username.trim().toLowerCase() : generated.username,
+      password: scoped.password?.trim() ? scoped.password.trim() : generated.password,
+    } as Student;
     setStudents(prev => [...prev, newStudent]);
     addActivityLog({ user: CURRENT_USER, action: 'Öğrenci Eklendi', target: student.name, type: 'success' });
     const sb = getServiceSupabase();
@@ -2610,6 +2792,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (error) console.error('Supabase lessons insert error:', error);
     } catch (err) { console.error('Supabase lessons throw error:', err); }
   }, []);
+
+  const persistTrainingGroupLessons = useCallback(async (group: TrainingGroup) => {
+    const prefix = `tg-${group.id}-`;
+    const synced = lessonsFromTrainingGroup(group);
+
+    setLessons((prev) => mergeTrainingGroupLessons(group, prev));
+
+    const sb = getServiceSupabase();
+    if (!sb) return;
+    try {
+      const { data: existing } = await sb.from('lessons').select('id');
+      const oldIds = ((existing as { id?: string }[] | null) ?? [])
+        .map((r) => String(r.id ?? ''))
+        .filter((id) => id.startsWith(prefix));
+      if (oldIds.length > 0) {
+        const { error } = await sb.from('lessons').delete().in('id', oldIds);
+        if (error) console.error('Supabase lessons delete (group sync) error:', error);
+      }
+      if (synced.length > 0) {
+        const { error } = await sb.from('lessons').upsert(synced.map((l) => lessonToDb(l)));
+        if (error) console.error('Supabase lessons upsert (group sync) error:', error);
+      }
+    } catch (err) {
+      console.error('persistTrainingGroupLessons failed:', err);
+    }
+  }, []);
+
+  const removeTrainingGroupLessons = useCallback(async (groupId: string) => {
+    const prefix = `tg-${groupId}-`;
+    let idsToDelete: string[] = [];
+    setLessons((prev) => {
+      idsToDelete = prev.filter((l) => l.id.startsWith(prefix)).map((l) => l.id);
+      return removeTrainingGroupLessonsFromList(groupId, prev);
+    });
+    const sb = getServiceSupabase();
+    if (sb && idsToDelete.length > 0) {
+      try {
+        const { error } = await sb.from('lessons').delete().in('id', idsToDelete);
+        if (error) console.error('Supabase lessons delete (group remove) error:', error);
+      } catch (err) {
+        console.error('removeTrainingGroupLessons failed:', err);
+      }
+    }
+  }, []);
+
+  const groupLessonsSyncedRef = useRef<Set<string>>(new Set());
+
+  /** Mevcut grupların ders slotlarını Ders Programı (lessons) tablosuna yansıt */
+  useEffect(() => {
+    if (!initialDataLoaded) return;
+    for (const group of trainingGroups) {
+      if (!group.lessonSlots?.length) continue;
+      const prefix = `tg-${group.id}-`;
+      const expected = lessonsFromTrainingGroup(group).length;
+      const existing = lessons.filter((l) => l.id.startsWith(prefix)).length;
+      if (groupLessonsSyncedRef.current.has(group.id) && existing >= expected) continue;
+      if (existing < expected) {
+        void persistTrainingGroupLessons(group);
+      }
+      groupLessonsSyncedRef.current.add(group.id);
+    }
+  }, [initialDataLoaded, trainingGroups, lessons, persistTrainingGroupLessons]);
 
   const addPuzzle = useCallback(async (puzzle: Omit<Puzzle, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
@@ -2949,14 +3193,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addBranchOffice = useCallback((name: string) => {
     const trimmed = name.trim();
-    if (!trimmed || branchOffices.includes(trimmed)) return;
-    setBranchOffices(prev => [...prev, trimmed].sort());
+    if (!trimmed || branchOffices.some((o) => normalizeClubKey(o) === normalizeClubKey(trimmed))) return;
+    const clubId =
+      auth?.role === 'club' ? resolveClubIdFromAuth(auth, clubs) : undefined;
+    const record: BranchOfficeRecord = {
+      id: genId(),
+      name: trimmed,
+      clubId,
+    };
+    setBranchOfficeRecords((prev) => [...prev, record]);
     addActivityLog({ user: CURRENT_USER, action: 'Şube Eklendi', target: trimmed, type: 'info' });
-  }, [branchOffices, addActivityLog]);
+    const sb = getServiceSupabase();
+    if (sb) {
+      void sb.from('branch_offices').upsert(branchOfficeToDb(record)).then(({ error }) => {
+        if (error) console.error('Supabase branch_offices insert error:', error);
+      });
+    }
+  }, [branchOffices, auth, clubs, addActivityLog]);
   const removeBranchOffice = useCallback((name: string) => {
-    setBranchOffices(prev => prev.filter(b => b !== name));
+    const clubId = auth?.role === 'club' ? resolveClubIdFromAuth(auth, clubs) : undefined;
+    setBranchOfficeRecords((prev) => {
+      const target = prev.find((r) => {
+        if (r.name !== name) return false;
+        if (auth?.role === 'club') return r.clubId === clubId;
+        return !r.clubId;
+      });
+      return target ? prev.filter((r) => r.id !== target.id) : prev;
+    });
     addActivityLog({ user: CURRENT_USER, action: 'Şube Silindi', target: name, type: 'warning' });
-  }, [addActivityLog]);
+    const sb = getServiceSupabase();
+    if (sb) {
+      let query = sb.from('branch_offices').delete().eq('name', name);
+      if (auth?.role === 'club' && clubId) {
+        query = query.eq('club_id', clubId);
+      } else {
+        query = query.is('club_id', null);
+      }
+      void query.then(({ error }) => {
+        if (error) console.error('Supabase branch_offices delete error:', error);
+      });
+    }
+  }, [auth, clubs, addActivityLog]);
 
   const addClub = useCallback((club: Omit<Club, 'id'>) => {
     const id = crypto.randomUUID?.() ?? `club-${Date.now()}`;
@@ -3045,22 +3322,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const name = branch.name.trim();
     const office = branch.branchOffice.trim();
     if (!name || !office) return;
+    const clubId = clubIdForOrgRecord(office, auth, clubs) ?? undefined;
+    const full: DisciplineBranch = {
+      ...branch,
+      id: genId(),
+      name,
+      branchOffice: office,
+      monthlyFee: Math.max(0, branch.monthlyFee || 0),
+      clubId,
+    };
     setDisciplineBranches((prev) => {
       if (prev.some((b) => b.name === name && b.branchOffice === office)) return prev;
-      const next = [...prev, { ...branch, id: genId(), name, branchOffice: office, monthlyFee: Math.max(0, branch.monthlyFee || 0) }];
+      const next = [...prev, full];
       syncDisciplineNames(next);
       return next;
     });
     addActivityLog({ user: CURRENT_USER, action: 'Branş Tanımı Eklendi', target: `${name} (${office})`, type: 'info' });
-  }, [addActivityLog, syncDisciplineNames]);
+    const sb = getServiceSupabase();
+    if (sb) {
+      const clubId = clubIdForOrgRecord(office, auth, clubs);
+      void sb.from('discipline_branches').upsert(disciplineBranchToDb(full, full.clubId ?? clubId)).then(({ error }) => {
+        if (error) console.error('Supabase discipline_branches insert error:', error);
+      });
+    }
+  }, [addActivityLog, syncDisciplineNames, auth, clubs]);
 
   const updateDisciplineBranch = useCallback((id: string, branch: Partial<DisciplineBranch>) => {
     setDisciplineBranches((prev) => {
       const next = prev.map((b) => (b.id === id ? { ...b, ...branch } : b));
       syncDisciplineNames(next);
+      const updated = next.find((b) => b.id === id);
+      const sb = getServiceSupabase();
+      if (sb && updated) {
+        const clubId = clubIdForOrgRecord(updated.branchOffice, auth, clubs);
+        void sb.from('discipline_branches').upsert(disciplineBranchToDb(updated, updated.clubId ?? clubId)).then(({ error }) => {
+          if (error) console.error('Supabase discipline_branches update error:', error);
+        });
+      }
       return next;
     });
-  }, [syncDisciplineNames]);
+  }, [syncDisciplineNames, auth, clubs]);
 
   const removeDisciplineBranch = useCallback((id: string) => {
     setDisciplineBranches((prev) => {
@@ -3069,6 +3370,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (found) {
         addActivityLog({ user: CURRENT_USER, action: 'Branş Tanımı Silindi', target: found.name, type: 'warning' });
         syncDisciplineNames(next);
+        const sb = getServiceSupabase();
+        if (sb) {
+          void sb.from('discipline_branches').delete().eq('id', id).then(({ error }) => {
+            if (error) console.error('Supabase discipline_branches delete error:', error);
+          });
+        }
       }
       return next;
     });
@@ -3079,35 +3386,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const office = group.branchOffice.trim();
     const discipline = group.discipline.trim();
     if (!name) return;
+    const clubId = clubIdForOrgRecord(office, auth, clubs) ?? undefined;
+    const full: TrainingGroup = {
+      ...group,
+      id: genId(),
+      name,
+      branchOffice: office,
+      discipline,
+      capacity: Math.max(0, group.capacity || 0),
+      lessonSlots: group.lessonSlots ?? [],
+      clubId,
+    };
     setTrainingGroups((prev) => {
       if (prev.some((g) => g.name === name && g.branchOffice === office && g.discipline === discipline)) {
         return prev;
       }
-      const next = [
-        ...prev,
-        {
-          ...group,
-          id: genId(),
-          name,
-          branchOffice: office,
-          discipline,
-          capacity: Math.max(0, group.capacity || 0),
-          lessonSlots: group.lessonSlots ?? [],
-        },
-      ];
+      const next = [...prev, full];
       syncGroupNames(next);
       return next;
     });
     addActivityLog({ user: CURRENT_USER, action: 'Grup Tanımı Eklendi', target: name, type: 'info' });
-  }, [addActivityLog, syncGroupNames]);
+    const sb = getServiceSupabase();
+    if (sb) {
+      const clubId = clubIdForOrgRecord(office, auth, clubs);
+      void sb.from('training_groups').upsert(trainingGroupToDb(full, full.clubId ?? clubId)).then(({ error }) => {
+        if (error) console.error('Supabase training_groups insert error:', error);
+      });
+    }
+    if (full.lessonSlots?.length) {
+      void persistTrainingGroupLessons(full);
+    }
+  }, [addActivityLog, syncGroupNames, auth, clubs, persistTrainingGroupLessons]);
 
   const updateTrainingGroup = useCallback((id: string, group: Partial<TrainingGroup>) => {
     setTrainingGroups((prev) => {
       const next = prev.map((g) => (g.id === id ? { ...g, ...group } : g));
       syncGroupNames(next);
+      const updated = next.find((g) => g.id === id);
+      const sb = getServiceSupabase();
+      if (sb && updated) {
+        const clubId = clubIdForOrgRecord(updated.branchOffice, auth, clubs);
+        void sb.from('training_groups').upsert(trainingGroupToDb(updated, updated.clubId ?? clubId)).then(({ error }) => {
+          if (error) console.error('Supabase training_groups update error:', error);
+        });
+        void persistTrainingGroupLessons(updated);
+      }
       return next;
     });
-  }, [syncGroupNames]);
+  }, [syncGroupNames, auth, clubs, persistTrainingGroupLessons]);
 
   const removeTrainingGroup = useCallback((id: string) => {
     setTrainingGroups((prev) => {
@@ -3116,10 +3442,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (found) {
         addActivityLog({ user: CURRENT_USER, action: 'Grup Tanımı Silindi', target: found.name, type: 'warning' });
         syncGroupNames(next);
+        void removeTrainingGroupLessons(id);
+        const sb = getServiceSupabase();
+        if (sb) {
+          void sb.from('training_groups').delete().eq('id', id).then(({ error }) => {
+            if (error) console.error('Supabase training_groups delete error:', error);
+          });
+        }
       }
       return next;
     });
-  }, [addActivityLog, syncGroupNames]);
+  }, [addActivityLog, syncGroupNames, removeTrainingGroupLessons]);
 
   const updateGroupLessonLog = useCallback(async (groupKey: string, entries: StudentLessonLogEntry[]) => {
     const key = groupKey.trim();

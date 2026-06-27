@@ -7,22 +7,38 @@ import { useApp } from '../AppContext';
 import { KVKK_TEXT } from '../lib/applicationTypes';
 import { validateTcNo, validateTrPhone, ageFromBirthDate } from '../lib/applicationValidation';
 import { createApplicationAsync, fetchClientIp } from '../services/applicationStorage';
+import { fetchApplicationFormOptions } from '../lib/applicationFormOptions';
+import {
+  fetchClubByApplicationSlug,
+  resolveClubFromApplicationSlug,
+  type ClubPublicInfo,
+} from '../lib/applicationClub';
 import SignaturePad from './SignaturePad';
 
 const inputCls =
   'w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400';
 
-const Section: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode }> = ({
+const Section: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; columns?: 2 | 3; noGrid?: boolean }> = ({
   title,
   icon,
   children,
+  columns = 2,
+  noGrid,
 }) => (
   <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
     <div className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
       {icon}
       <h2 className="text-sm font-black uppercase tracking-wide">{title}</h2>
     </div>
-    <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">{children}</div>
+    {noGrid ? (
+      <div className="p-5">{children}</div>
+    ) : (
+      <div
+        className={`p-5 grid grid-cols-1 gap-4 ${columns === 3 ? 'sm:grid-cols-3' : 'md:grid-cols-2'}`}
+      >
+        {children}
+      </div>
+    )}
   </section>
 );
 
@@ -45,8 +61,17 @@ const Field: React.FC<{
   </div>
 );
 
-const ApplicationForm: React.FC = () => {
-  const { branchOffices, groups } = useApp();
+type ApplicationFormProps = {
+  /** URL: #/basvuru/afyonsatranc */
+  clubSlug?: string;
+};
+
+const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
+  const { branchOffices: contextBranches, groups: contextGroups, clubs } = useApp();
+  const [formOptions, setFormOptions] = useState<{ branchOffices: string[]; groups: string[] } | null>(null);
+  const [clubInfo, setClubInfo] = useState<ClubPublicInfo | null>(null);
+  const [clubLoading, setClubLoading] = useState(Boolean(clubSlug));
+  const [clubError, setClubError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{ no: string } | null>(null);
   const [clientIp, setClientIp] = useState('');
@@ -82,6 +107,61 @@ const ApplicationForm: React.FC = () => {
   useEffect(() => {
     fetchClientIp().then(setClientIp);
   }, []);
+
+  useEffect(() => {
+    if (!clubSlug) {
+      setClubInfo(null);
+      setClubLoading(false);
+      setClubError('');
+      return;
+    }
+    let cancelled = false;
+    setClubLoading(true);
+    setClubError('');
+
+    const resolve = async () => {
+      const fromContext = resolveClubFromApplicationSlug(clubSlug, clubs);
+      const resolved = fromContext ?? (await fetchClubByApplicationSlug(clubSlug));
+      if (cancelled) return;
+      if (!resolved) {
+        setClubInfo(null);
+        setClubError('Kulüp bulunamadı. Bağlantıyı kontrol edin.');
+      } else {
+        setClubInfo(resolved);
+        setBranchOffice(resolved.name);
+      }
+      setClubLoading(false);
+    };
+
+    void resolve();
+    return () => {
+      cancelled = true;
+    };
+  }, [clubSlug, clubs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchApplicationFormOptions(clubInfo?.id).then((opts) => {
+      if (!cancelled) setFormOptions(opts);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [clubInfo?.id]);
+
+  const branchOffices = useMemo(() => {
+    const fromDb = formOptions?.branchOffices ?? [];
+    if (fromDb.length > 0) return fromDb;
+    if (contextBranches.length > 0) return contextBranches;
+    return [];
+  }, [formOptions, contextBranches]);
+
+  const groups = useMemo(() => {
+    const fromDb = formOptions?.groups ?? [];
+    if (fromDb.length > 0) return fromDb;
+    if (contextGroups.length > 0) return contextGroups;
+    return [];
+  }, [formOptions, contextGroups]);
 
   const maxBirthDate = useMemo(() => {
     const d = new Date();
@@ -129,8 +209,11 @@ const ApplicationForm: React.FC = () => {
       const phones = [phone1, phone2, phone3].map((p) => p.replace(/\D/g, '')).filter(Boolean);
       const now = new Date().toISOString();
       const app = await createApplicationAsync({
-        branchOffice: branchOffice.trim(),
+        branchOffice: (clubInfo?.name ?? branchOffice).trim(),
         group: group.trim(),
+        clubId: clubInfo?.id,
+        clubSlug: clubInfo?.slug ?? clubSlug?.trim().toLowerCase(),
+        source: 'public',
         tcNo: tcNo.replace(/\D/g, ''),
         name: name.trim(),
         birthDate,
@@ -165,6 +248,28 @@ const ApplicationForm: React.FC = () => {
     }
   };
 
+  if (clubSlug && clubLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-indigo-50 to-slate-100 flex items-center justify-center p-6">
+        <div className="flex items-center gap-2 text-slate-600 text-sm">
+          <Loader2 className="w-5 h-5 animate-spin text-indigo-500" /> Form yükleniyor...
+        </div>
+      </div>
+    );
+  }
+
+  if (clubSlug && clubError) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-indigo-50 to-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-md w-full rounded-2xl bg-white border border-rose-200 shadow-xl p-8 text-center">
+          <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+          <h1 className="text-xl font-black text-slate-900 mb-2">Geçersiz Başvuru Linki</h1>
+          <p className="text-slate-600 text-sm">{clubError}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (success) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-indigo-50 to-slate-100 flex items-center justify-center p-6">
@@ -182,23 +287,30 @@ const ApplicationForm: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-indigo-50 via-white to-slate-100 py-8 px-4">
-      <div className="max-w-3xl mx-auto space-y-6">
+      <div className="max-w-4xl mx-auto space-y-6">
         <header className="text-center space-y-2 pb-2">
           <h1 className="text-3xl font-black text-slate-900 tracking-tight">Başvuru Formu</h1>
+          {clubInfo ? (
+            <p className="text-indigo-600 text-sm font-bold">{clubInfo.name}</p>
+          ) : null}
           <p className="text-slate-500 text-sm">Geleceğin sporcuları için ilk adım</p>
         </header>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <Section title="Şube Bilgileri" icon={<Building2 className="w-4 h-4" />}>
             <Field label="Şube" required error={errors.branchOffice}>
-              <select value={branchOffice} onChange={(e) => setBranchOffice(e.target.value)} className={inputCls}>
-                <option value="">Şube Seçiniz</option>
-                {branchOffices.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
+              {clubInfo ? (
+                <input value={clubInfo.name} readOnly className={inputCls + ' bg-slate-50 text-slate-700'} />
+              ) : (
+                <select value={branchOffice} onChange={(e) => setBranchOffice(e.target.value)} className={inputCls}>
+                  <option value="">Şube Seçiniz</option>
+                  {branchOffices.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              )}
             </Field>
-            <Field label="Grup (opsiyonel)" hint="İsterseniz grup seçebilirsiniz">
+            <Field label="Grup (opsiyonel)" hint={groups.length === 0 ? 'Admin panelinden Branş & Grup bölümünde grup tanımlayın.' : 'İsterseniz grup seçebilirsiniz'}>
               <select value={group} onChange={(e) => setGroup(e.target.value)} className={inputCls}>
                 <option value="">Grup Seçiniz (Opsiyonel)</option>
                 {groups.map((g) => (
@@ -208,49 +320,61 @@ const ApplicationForm: React.FC = () => {
             </Field>
           </Section>
 
-          <Section title="Öğrenci Bilgileri" icon={<User className="w-4 h-4" />}>
-            <Field label="Fotoğraf" error={errors.photo} className="md:col-span-2">
-              <div className="flex flex-wrap items-center gap-4">
-                {photoDataUrl ? (
-                  <div className="relative">
-                    <img src={photoDataUrl} alt="" className="w-24 h-24 rounded-xl object-cover border" />
-                    <button type="button" onClick={() => setPhotoDataUrl(null)} className="absolute -top-2 -right-2 p-1 rounded-full bg-rose-500 text-white">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ) : (
-                  <label className="flex flex-col items-center justify-center w-32 h-32 rounded-xl border-2 border-dashed border-slate-300 cursor-pointer hover:border-indigo-400 bg-slate-50">
-                    <Upload className="w-6 h-6 text-slate-400 mb-1" />
-                    <span className="text-[10px] text-slate-500 text-center px-2">JPG/PNG max 5MB</span>
-                    <input type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0] ?? null)} />
-                  </label>
-                )}
+          <Section title="Öğrenci Bilgileri" icon={<User className="w-4 h-4" />} noGrid>
+            <div className="space-y-4">
+              <Field label="Fotoğraf" error={errors.photo}>
+                <div className="flex flex-wrap items-center gap-4">
+                  {photoDataUrl ? (
+                    <div className="relative">
+                      <img src={photoDataUrl} alt="" className="w-24 h-24 rounded-xl object-cover border" />
+                      <button type="button" onClick={() => setPhotoDataUrl(null)} className="absolute -top-2 -right-2 p-1 rounded-full bg-rose-500 text-white">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center w-32 h-32 rounded-xl border-2 border-dashed border-slate-300 cursor-pointer hover:border-indigo-400 bg-slate-50">
+                      <Upload className="w-6 h-6 text-slate-400 mb-1" />
+                      <span className="text-[10px] text-slate-500 text-center px-2">JPG/PNG max 5MB</span>
+                      <input type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0] ?? null)} />
+                    </label>
+                  )}
+                </div>
+              </Field>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <Field label="TC Kimlik No" required error={errors.tcNo} hint="UKD ve FIDE işlemleri için zorunludur">
+                  <input value={tcNo} onChange={(e) => setTcNo(e.target.value.replace(/\D/g, '').slice(0, 11))} placeholder="11 haneli kimlik no" className={inputCls} inputMode="numeric" />
+                </Field>
+                <Field label="Ad Soyad" required error={errors.name}>
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Öğrenci adı ve soyadı" className={inputCls} />
+                </Field>
+                <Field label="Doğum Tarihi" required error={errors.birthDate} hint="En az 4 yaş">
+                  <input type="date" max={maxBirthDate} value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className={inputCls} />
+                </Field>
               </div>
-            </Field>
-            <Field label="TC Kimlik No" required error={errors.tcNo} hint="UKD ve FIDE işlemleri için zorunludur">
-              <input value={tcNo} onChange={(e) => setTcNo(e.target.value.replace(/\D/g, '').slice(0, 11))} className={inputCls} inputMode="numeric" />
-            </Field>
-            <Field label="Ad Soyad" required error={errors.name}>
-              <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
-            </Field>
-            <Field label="Doğum Tarihi" required error={errors.birthDate} hint="En az 4 yaş">
-              <input type="date" max={maxBirthDate} value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className={inputCls} />
-            </Field>
-            <Field label="Lichess kullanıcı adı" hint="Opsiyonel, küçük harf">
-              <input value={lichessUsername} onChange={(e) => setLichessUsername(e.target.value)} className={inputCls} />
-            </Field>
-            <Field label="Chess.com kullanıcı adı" hint="Opsiyonel, küçük harf">
-              <input value={chessComUsername} onChange={(e) => setChessComUsername(e.target.value)} className={inputCls} />
-            </Field>
-            <Field label="Devam ettiği okul">
-              <input value={school} onChange={(e) => setSchool(e.target.value)} className={inputCls} />
-            </Field>
-            <Field label="Öğretmeni">
-              <input value={teacher} onChange={(e) => setTeacher(e.target.value)} className={inputCls} />
-            </Field>
-            <Field label="Açıklama" className="md:col-span-2">
-              <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={inputCls} />
-            </Field>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Lichess kullanıcı adı" hint="Opsiyonel, küçük harf">
+                  <input value={lichessUsername} onChange={(e) => setLichessUsername(e.target.value)} placeholder="Kullanıcı adı" className={inputCls} />
+                </Field>
+                <Field label="Chess.com kullanıcı adı" hint="Opsiyonel, küçük harf">
+                  <input value={chessComUsername} onChange={(e) => setChessComUsername(e.target.value)} placeholder="Kullanıcı adı" className={inputCls} />
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Devam ettiği okul">
+                  <input value={school} onChange={(e) => setSchool(e.target.value)} placeholder="Okul adı" className={inputCls} />
+                </Field>
+                <Field label="Öğretmeni">
+                  <input value={teacher} onChange={(e) => setTeacher(e.target.value)} placeholder="Öğretmen adı" className={inputCls} />
+                </Field>
+              </div>
+
+              <Field label="Açıklama">
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Öğrenci hakkında ek bilgiler..." className={inputCls + ' resize-y min-h-[4rem]'} />
+              </Field>
+            </div>
           </Section>
 
           <Section title="Sağlık Bilgileri" icon={<Heart className="w-4 h-4" />}>
@@ -259,13 +383,25 @@ const ApplicationForm: React.FC = () => {
             </Field>
           </Section>
 
-          <Section title="Veli Bilgileri" icon={<Users className="w-4 h-4" />}>
-            <Field label="Baba ad soyad"><input value={fatherName} onChange={(e) => setFatherName(e.target.value)} className={inputCls} /></Field>
-            <Field label="Baba telefon" hint="0 ile başlamalı"><input value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value)} className={inputCls} /></Field>
-            <Field label="Baba meslek"><input value={fatherJob} onChange={(e) => setFatherJob(e.target.value)} className={inputCls} /></Field>
-            <Field label="Anne ad soyad"><input value={motherName} onChange={(e) => setMotherName(e.target.value)} className={inputCls} /></Field>
-            <Field label="Anne telefon" hint="0 ile başlamalı"><input value={motherPhone} onChange={(e) => setMotherPhone(e.target.value)} className={inputCls} /></Field>
-            <Field label="Anne meslek"><input value={motherJob} onChange={(e) => setMotherJob(e.target.value)} className={inputCls} /></Field>
+          <Section title="Veli Bilgileri" icon={<Users className="w-4 h-4" />} columns={3}>
+            <Field label="Baba ad soyad">
+              <input value={fatherName} onChange={(e) => setFatherName(e.target.value)} placeholder="Adı ve soyadı" className={inputCls} />
+            </Field>
+            <Field label="Baba telefon" hint="0 ile başlamalı">
+              <input value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value)} placeholder="5xx xxx xx xx" inputMode="tel" className={inputCls} />
+            </Field>
+            <Field label="Baba meslek">
+              <input value={fatherJob} onChange={(e) => setFatherJob(e.target.value)} placeholder="Meslek" className={inputCls} />
+            </Field>
+            <Field label="Anne ad soyad">
+              <input value={motherName} onChange={(e) => setMotherName(e.target.value)} placeholder="Adı ve soyadı" className={inputCls} />
+            </Field>
+            <Field label="Anne telefon" hint="0 ile başlamalı">
+              <input value={motherPhone} onChange={(e) => setMotherPhone(e.target.value)} placeholder="5xx xxx xx xx" inputMode="tel" className={inputCls} />
+            </Field>
+            <Field label="Anne meslek">
+              <input value={motherJob} onChange={(e) => setMotherJob(e.target.value)} placeholder="Meslek" className={inputCls} />
+            </Field>
           </Section>
 
           <Section title="İletişim" icon={<Phone className="w-4 h-4" />}>

@@ -1,5 +1,6 @@
 import type { AuthUser, Coach, Student, TrainingGroup, Transaction, Tournament, DisciplineBranch } from '../types';
 import { filterCoachesByClub, filterStudentsByClub, filterTransactionsByClub, normalizeClubKey, studentBelongsToClub } from './clubScope';
+import { clubOfficeNamesForAuth, orgRecordBelongsToClub, type BranchOfficeRecord } from './orgStructureDb';
 import { findTrainingGroupById, findTrainingGroupByName } from './trainingGroupUtils';
 
 export function getStudentTrainingGroup(
@@ -74,6 +75,8 @@ export function resolveScopedStudents(
   students: Student[],
   trainingGroups: TrainingGroup[],
   coaches: Coach[] = [],
+  branchOfficeRecords: BranchOfficeRecord[] = [],
+  clubs: { id: string; name: string }[] = [],
 ): Student[] {
   if (!auth) return students;
   if (auth.role === 'admin') return students;
@@ -82,7 +85,10 @@ export function resolveScopedStudents(
     if (auth.branch) return filterStudentsByClub(students, auth.branch, coaches);
     return [];
   }
-  if (auth.role === 'club') return filterStudentsByClub(students, auth.branch, coaches);
+  if (auth.role === 'club') {
+    const offices = clubOfficeNamesForAuth(auth, branchOfficeRecords, clubs);
+    return filterStudentsByClub(students, auth.branch, coaches, offices);
+  }
   if (auth.role === 'student' || auth.role === 'parent') {
     return students.filter((s) => s.id === auth.studentId);
   }
@@ -140,8 +146,14 @@ export function resolveScopedCoaches(auth: AuthUser | null, coaches: Coach[]): C
 export function resolveScopedTrainingGroups(
   auth: AuthUser | null,
   trainingGroups: TrainingGroup[],
+  branchOfficeRecords: BranchOfficeRecord[] = [],
+  clubs: { id: string; name: string }[] = [],
 ): TrainingGroup[] {
   if (!auth || auth.role === 'admin') return trainingGroups;
+  if (auth.role === 'club') {
+    const offices = clubOfficeNamesForAuth(auth, branchOfficeRecords, clubs);
+    return trainingGroups.filter((g) => orgRecordBelongsToClub(g, auth, offices, clubs));
+  }
   const key = clubKeyForAuth(auth);
   if (!key) return trainingGroups;
   return trainingGroups.filter((g) => normalizeClubKey(g.branchOffice) === key);
@@ -150,8 +162,14 @@ export function resolveScopedTrainingGroups(
 export function resolveScopedDisciplineBranches(
   auth: AuthUser | null,
   branches: DisciplineBranch[],
+  branchOfficeRecords: BranchOfficeRecord[] = [],
+  clubs: { id: string; name: string }[] = [],
 ): DisciplineBranch[] {
   if (!auth || auth.role === 'admin') return branches;
+  if (auth.role === 'club') {
+    const offices = clubOfficeNamesForAuth(auth, branchOfficeRecords, clubs);
+    return branches.filter((b) => orgRecordBelongsToClub(b, auth, offices, clubs));
+  }
   const key = clubKeyForAuth(auth);
   if (!key) return branches;
   return branches.filter((b) => normalizeClubKey(b.branchOffice) === key);

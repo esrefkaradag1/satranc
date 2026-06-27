@@ -56,3 +56,14 @@ export function generateStudentPassword(length = 10): string {
   }
   return chars.join('');
 }
+
+/** Yeni öğrenci kaydı için benzersiz kullanıcı adı + otomatik şifre. */
+export function createStudentLoginCredentials(
+  name: string,
+  existingUsernames: Array<string | undefined | null>,
+): { username: string; password: string } {
+  return {
+    username: suggestStudentUsername(name, existingUsernames),
+    password: generateStudentPassword(),
+  };
+}

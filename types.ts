@@ -92,6 +92,8 @@ export interface DisciplineBranch {
   name: string;
   branchOffice: string;
   monthlyFee: number;
+  /** Kulübe özel kayıt — boşsa merkez/admin tanımı */
+  clubId?: string;
 }
 
 /** Eğitim grubu: branş altında kontenjan, ücret ve ders programı */
@@ -105,6 +107,8 @@ export interface TrainingGroup {
   lessonSlots: GroupLessonSlot[];
   capacity: number;
   coachIds?: string[];
+  /** Kulübe özel kayıt — boşsa merkez/admin tanımı */
+  clubId?: string;
 }
 
 /** Öğrenci ders günlüğü satırı (antrenör — öğrenci listesi işlemler) */

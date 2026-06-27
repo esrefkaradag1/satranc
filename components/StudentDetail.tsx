@@ -49,6 +49,7 @@ import {
   Plus,
 } from 'lucide-react';
 import { useApp, getDisplayStudentNo } from '../AppContext';
+import { createStudentLoginCredentials } from '../lib/studentCredentials';
 import { analyzeStudentHomework } from '../services/geminiService';
 import {
   fetchLichessUser,
@@ -127,6 +128,34 @@ const MONTHS_TR = [
  'KASIM',
  'ARALIK',
 ];
+
+function monthLabelTr(monthNum: number): string {
+  const raw = MONTHS_TR[monthNum - 1] || '';
+  return raw.charAt(0) + raw.slice(1).toLowerCase();
+}
+
+/** Ödenen ayları özetler: "Haziran-Temmuz ödendi" veya "Mart ödendi" */
+function formatPaidMonthsSummary(monthPayments: Record<number, number>): string {
+  const paid = Object.entries(monthPayments)
+    .filter(([, amount]) => amount > 0)
+    .map(([m]) => Number(m))
+    .sort((a, b) => a - b);
+  if (paid.length === 0) return 'Henüz ödeme yok';
+
+  const ranges: string[] = [];
+  let start = paid[0];
+  let end = paid[0];
+  for (let i = 1; i < paid.length; i++) {
+    if (paid[i] === end + 1) {
+      end = paid[i];
+    } else {
+      ranges.push(start === end ? monthLabelTr(start) : `${monthLabelTr(start)}-${monthLabelTr(end)}`);
+      start = end = paid[i];
+    }
+  }
+  ranges.push(start === end ? monthLabelTr(start) : `${monthLabelTr(start)}-${monthLabelTr(end)}`);
+  return `${ranges.join(', ')} ödendi`;
+}
 
 function initials(name: string) {
  return name
@@ -1065,11 +1094,20 @@ const StudentDetail: React.FC<{
 
     // Aidat durumu: bu yılki gerçek tahsilata göre (Aidat Takvimi ile aynı veri)
     const yearStr = String(calendarYearForDerived);
+    const monthPayments: Record<number, number> = {};
+    for (let m = 1; m <= 12; m++) monthPayments[m] = 0;
     let totalPaidThisYear = 0;
     studentTransactions.forEach((t) => {
       const d = t.date || '';
-      if (d.slice(0, 4) === yearStr) totalPaidThisYear += t.amount || 0;
+      if (d.slice(0, 4) === yearStr) {
+        totalPaidThisYear += t.amount || 0;
+        const monthNum = parseInt(d.slice(5, 7), 10);
+        if (monthNum >= 1 && monthNum <= 12) {
+          monthPayments[monthNum] = (monthPayments[monthNum] || 0) + (t.amount || 0);
+        }
+      }
     });
+    const paidMonthsSummary = formatPaidMonthsSummary(monthPayments);
     const expectedThisYear =
       student.registrationType === 'package'
         ? 0
@@ -1088,7 +1126,7 @@ const StudentDetail: React.FC<{
                 : 'unpaid';
     const duesDebt = expectedThisYear > 0 ? Math.max(0, expectedThisYear - totalPaidThisYear) : 0;
 
-    return { status, duesState, monthlyFee, year, totalAttendance, attendanceRate, totalPaidThisYear, expectedThisYear, duesDebt };
+    return { status, duesState, monthlyFee, year, totalAttendance, attendanceRate, totalPaidThisYear, expectedThisYear, duesDebt, paidMonthsSummary };
   }, [student, studentAttendances, studentTransactions, calendarYearForDerived, trainingGroups, disciplineBranches]);
 
   /** Takvimde gösterilen yıl (mevcut yıl); aidat takvimi bu yıla göre doldurulur */
@@ -1481,8 +1519,24 @@ const StudentDetail: React.FC<{
 <StatTile
  icon={<BadgeCheck className="w-5 h-5" />}
  title="Aidat Durumu"
- value={derived.duesState === 'scholarship' ? 'Burslu' : derived.duesState === 'paid' ? '₺0.00' : derived.duesState === 'partial' ? 'Kısmi' : derived.duesState === 'package' ? 'Paket' : (derived.duesDebt > 0 ? `₺${Number(derived.duesDebt).toLocaleString('tr-TR')}` : 'Borç')}
- subtitle={derived.duesState === 'scholarship' ? 'Aidat ödemesi yok' : derived.duesState === 'paid' ? 'Borç Yok' : derived.duesState === 'partial' && derived.duesDebt > 0 ? `Kalan ₺${Number(derived.duesDebt).toLocaleString('tr-TR')}` : derived.duesState === 'unpaid' && derived.expectedThisYear > 0 ? `Bu yıl ₺${Number(derived.expectedThisYear).toLocaleString('tr-TR')}` : undefined}
+ value={
+   derived.duesState === 'scholarship'
+     ? 'Burslu'
+     : derived.duesState === 'package'
+       ? 'Paket'
+       : `₺${Number(derived.totalPaidThisYear).toLocaleString('tr-TR')}`
+ }
+ subtitle={
+   derived.duesState === 'scholarship'
+     ? 'Aidat ödemesi yok'
+     : derived.duesState === 'package'
+       ? 'Paket kaydı'
+       : derived.totalPaidThisYear > 0
+         ? `${derived.paidMonthsSummary}${derived.duesDebt > 0 ? ` · Kalan ₺${Number(derived.duesDebt).toLocaleString('tr-TR')}` : ''}`
+         : derived.expectedThisYear > 0
+           ? `Beklenen: ₺${Number(derived.expectedThisYear).toLocaleString('tr-TR')}`
+           : 'Henüz ödeme yok'
+ }
  accent="emerald"
 />
  <StatTile icon={<Users className="w-5 h-5" />} title="Toplam Devam" value={derived.totalAttendance} accent="violet" />
@@ -2934,7 +2988,7 @@ const EditStudentModal: React.FC<{
   onSave: (updated: Partial<Student>) => void | Promise<void>;
   onClose: () => void;
 }> = ({ student, onSave, onClose }) => {
-  const { groups, branchOffices, disciplines, trainingGroups, disciplineBranches } = useApp();
+  const { groups, branchOffices, disciplines, trainingGroups, disciplineBranches, students } = useApp();
   // Use a single state object for all fields, initialized with student data
   const [fields, setFields] = useState<Partial<Student>>({ ...student });
   const [photo, setPhoto] = useState<File | null>(null);
@@ -2996,7 +3050,16 @@ const EditStudentModal: React.FC<{
           }
         }
       }
-      await onSave({ ...fields, photoUrl: finalPhotoUrl });
+      const payload: Partial<Student> = { ...fields, photoUrl: finalPhotoUrl };
+      const otherUsernames = students.filter((s) => s.id !== student.id).map((s) => s.username);
+      if (!payload.username?.trim() && payload.name?.trim()) {
+        const generated = createStudentLoginCredentials(payload.name, otherUsernames);
+        payload.username = generated.username;
+        if (!payload.password?.trim()) payload.password = generated.password;
+      } else if (!payload.password?.trim()) {
+        payload.password = createStudentLoginCredentials(payload.name || student.name, otherUsernames).password;
+      }
+      await onSave(payload);
       setToast({ type: 'success', message: 'Değişiklikler başarıyla kaydedildi!' });
       setTimeout(() => onClose(), 1500);
     } catch (err) {
@@ -3082,7 +3145,22 @@ const EditStudentModal: React.FC<{
                   <div>
                     <label className={labelCls}>Kullanıcı Adı</label>
                     <input type="text" value={fields.username || ''} onChange={e => setFields(f => ({ ...f, username: e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '') }))} placeholder="kullanici_adi" className={inputCls} />
-                    <div className="text-[9px] text-slate-500 mt-1">Giriş için kullanılacak</div>
+                    <div className="flex items-center justify-between gap-2 mt-1">
+                      <div className="text-[9px] text-slate-500">Giriş için kullanılacak</div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const creds = createStudentLoginCredentials(
+                            fields.name || student.name,
+                            students.filter((s) => s.id !== student.id).map((s) => s.username),
+                          );
+                          setFields((f) => ({ ...f, username: creds.username, password: creds.password }));
+                        }}
+                        className="text-[9px] font-bold text-indigo-400 hover:text-indigo-300 uppercase"
+                      >
+                        Otomatik oluştur
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <label className={labelCls}>Giriş Şifresi</label>
