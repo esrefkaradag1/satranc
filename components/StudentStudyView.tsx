@@ -4,7 +4,7 @@ import { Chess, Square } from 'chess.js';
 import {
   ChevronLeft, ChevronRight, SkipBack, SkipForward, Play,
   MessageCircle, Check, X, BookMarked, RefreshCw, Eye, Phone,
-  Cpu, Lightbulb, RotateCcw, Zap, FlipHorizontal,
+  Lightbulb, RotateCcw, Zap, FlipHorizontal,
   Search, ListChecks, Star, Globe, Lock, Clock, Heart, ArrowLeft, Video, Highlighter, Plus,
   MessageSquare, Send, Menu, Users, MousePointer2, Highlighter as HighlighterIcon, Loader2,
   UserPlus, Trash2, Keyboard, Settings2,
@@ -29,6 +29,7 @@ import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
   genId, migrateStudy, migrateChapter,
   normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
 } from '../lib/studyUtils';
+import { normalizeStudyChapterPuzzle } from '../lib/puzzlePlayUtils';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
@@ -260,6 +261,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     syncState,
     jumpToMoveIndex,
     jumpToVariation,
+    jumpToNodePath,
     makeMove,
     sticky,
     setSticky,
@@ -277,8 +279,22 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const effectiveChapter = legacyChapter;
 
+  const isInteractivePuzzle = useMemo(
+    () =>
+      !!effectiveChapter &&
+      effectiveChapter.lessonMode === 'interactive' &&
+      (effectiveChapter.interactiveType ?? 'puzzle') === 'puzzle',
+    [effectiveChapter?.id, effectiveChapter?.lessonMode, effectiveChapter?.interactiveType]
+  );
+
+  const puzzlePlayNorm = useMemo(() => {
+    if (!isInteractivePuzzle || !effectiveChapter) return null;
+    return normalizeStudyChapterPuzzle(effectiveChapter);
+  }, [isInteractivePuzzle, effectiveChapter?.fen, effectiveChapter?.moves, effectiveChapter?.id]);
+
   /** Tahta = sync ana hat; liste eski chapter.moves'ta kaldığında burada birleştirilir. */
   const chapterMovesForUi = useMemo(() => {
+    if (isInteractivePuzzle && puzzlePlayNorm) return puzzlePlayNorm.studentMoves;
     if (vsComputer) return effectiveChapter?.moves ?? [];
     if (!syncState?.tree?.mainline || syncState.tree.mainline.length <= 1) {
       return effectiveChapter?.moves ?? [];
@@ -287,13 +303,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     const fromTree = mainlineSansFromTree(syncState.tree, rootFen);
     const legacy = effectiveChapter?.moves ?? [];
     return mergeMainlineMoves(legacy, fromTree);
-  }, [vsComputer, syncState, effectiveChapter?.moves, effectiveChapter?.id]);
+  }, [isInteractivePuzzle, puzzlePlayNorm, vsComputer, syncState, effectiveChapter?.moves, effectiveChapter?.id]);
 
   const moveListChapter = useMemo(() => {
     if (!effectiveChapter) return null;
-    const vars = sanitizeChapterVariations(effectiveChapter, chapterMovesForUi);
-    return { ...effectiveChapter, moves: chapterMovesForUi, variations: vars };
-  }, [effectiveChapter, chapterMovesForUi]);
+    const fen = isInteractivePuzzle && puzzlePlayNorm
+      ? puzzlePlayNorm.startFen
+      : effectiveChapter.fen;
+    const vars = sanitizeChapterVariations({ ...effectiveChapter, fen, moves: chapterMovesForUi }, chapterMovesForUi);
+    return { ...effectiveChapter, fen, moves: chapterMovesForUi, variations: vars };
+  }, [effectiveChapter, chapterMovesForUi, isInteractivePuzzle, puzzlePlayNorm]);
 
   const isVcGameOver = useMemo(() => {
     if (vcManualGameOver) return true;
@@ -342,15 +361,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const isInteractive = useMemo(
     () => !!effectiveChapter && effectiveChapter.lessonMode === 'interactive',
     [effectiveChapter]
-  );
-
-  /** Bulmaca (Hamle Bul): öğretmen çözümü chapter.moves’ta saklar; motor analizi cevabı ifşa eder. */
-  const isInteractivePuzzle = useMemo(
-    () =>
-      !!effectiveChapter &&
-      effectiveChapter.lessonMode === 'interactive' &&
-      (effectiveChapter.interactiveType ?? 'puzzle') === 'puzzle',
-    [effectiveChapter?.id, effectiveChapter?.lessonMode, effectiveChapter?.interactiveType]
   );
 
   const memberStudents = useMemo(() => {
@@ -654,7 +664,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   useEffect(() => {
     if (!effectiveChapter || vsComputer || isComplete || totalMoves === 0) return;
-    if (isLiveAnalysis) return;
+    if (isLiveAnalysis || isInteractivePuzzle) return;
     if (effectiveStudentTurnCode == null) return;
     const fenAtIndex = fenToCurrentFen(effectiveChapter, currentMoveIndex);
     const turnCode = sideToMove(fenAtIndex) === 'white' ? 'w' : 'b';
@@ -667,7 +677,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     return () => {
       if (autoReplyTimer.current) clearTimeout(autoReplyTimer.current);
     };
-  }, [effectiveChapter, currentMoveIndex, totalMoves, effectiveStudentTurnCode, isComplete, vsComputer, isLiveAnalysis]);
+  }, [effectiveChapter, currentMoveIndex, totalMoves, effectiveStudentTurnCode, isComplete, vsComputer, isLiveAnalysis, isInteractivePuzzle]);
 
   const showFeedback = useCallback((f: Feedback, text?: string | null) => {
     setFeedback(f);
@@ -753,7 +763,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         highlightTo = (bestApplied as any)?.to ?? null;
         hintText = `İpucu: En iyi hamle (${bestSan})`;
       } else {
-        const expectedSan = effectiveChapter.moves?.[currentMoveIndex];
+        const expectedSan = chapterMovesForUi[currentMoveIndex];
         if (!expectedSan) {
           setLaHint('Beklenen hamle yok.');
           return;
@@ -792,7 +802,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const showSolution = useCallback(async () => {
     if (!effectiveChapter || isLiveAnalysis) return;
-    const expectedSan = effectiveChapter.moves?.[currentMoveIndex];
+    const expectedSan = chapterMovesForUi[currentMoveIndex];
     if (!expectedSan) return;
     setLaHint(`Çözüm: ${expectedSan}`);
     await requestHint();
@@ -989,15 +999,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     const isInteractivePuzzle = effectiveChapter.lessonMode === 'interactive' && (effectiveChapter.interactiveType ?? 'puzzle') === 'puzzle';
     
     if (isInteractivePuzzle && !isComplete && currentMoveIndex < totalMoves) {
-      if (effectiveStudentTurnCode != null) {
-        const turnCode = sideToMove(currentFen) === 'white' ? 'w' : 'b';
-        if (turnCode !== effectiveStudentTurnCode) {
-          showFeedback('wrong', 'Sıra sende değil');
-          return false;
-        }
-      }
       const game = makeBuilderGame(currentFen);
-      const expectedSan = effectiveChapter.moves[currentMoveIndex];
+      const expectedSan = chapterMovesForUi[currentMoveIndex];
       
       try {
         const result = game.move({ from: sourceSquare as any, to: targetSquare as any, promotion: 'q' });
@@ -1121,7 +1124,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, appendLiveMoveToChapter, syncState, jumpToMoveIndex, progressKey, makeMove, studentMoveEnabled]);
+  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, appendLiveMoveToChapter, syncState, jumpToMoveIndex, progressKey, makeMove, studentMoveEnabled]);
 
   useEffect(() => () => {
     if (autoReplyTimer.current) clearTimeout(autoReplyTimer.current);
@@ -1285,18 +1288,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {}
   }, [selectedStudy, effectiveChapter, hideEngineForStudentPuzzle, auth]);
 
-  const startVsComputer = useCallback((side: 'white' | 'black') => {
-    setVcFen(studyBoardFen); setVcOrientation(side); setVcHistory([]); setVsComputer(true);
-    setVcManualGameOver(false);
-
-    // Save initial progress
-    if (studentId && effectiveChapter) {
-      const all = loadVcProgress(studentId);
-      all[effectiveChapter.id] = { fen: studyBoardFen, history: [], gameOver: false };
-      saveVcProgress(studentId, all);
-    }
-  }, [studyBoardFen, studentId, effectiveChapter]);
-
   const handleStopVc = useCallback(() => {
     setVsComputer(false);
     setVcManualGameOver(false);
@@ -1363,9 +1354,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       }
     }
 
-    if (ch.difficulty != null) {
-      setVcLevel(Math.min(20, Number(ch.difficulty) * 2));
-    }
+    setVcLevel(20);
   }, [
     selectedChapter?.id,
     selectedChapter?.lessonMode,
@@ -2100,6 +2089,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   <p className="text-xs text-slate-400 leading-relaxed max-w-[260px]">
                     Bulmacada çözüm hamleleri gizlidir. Hamlenizi tahtada oynayın; ipucu ve çözüm için alttaki butonları kullanın.
                   </p>
+                  {puzzlePlayNorm?.setupMoveSan ? (
+                    <p className="text-xs text-sky-300/90 mt-3">
+                      Rakip hamle: <span className="font-mono font-bold">{puzzlePlayNorm.setupMoveSan}</span>
+                    </p>
+                  ) : null}
                 </div>
               ) : (
                 <StudyMoveTree
@@ -2108,6 +2102,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   currentVariation={currentVariation}
                   inlineNotation={boardSettings.inlineNotation}
                   showMoveAnnotations={boardSettings.showMoveAnnotations}
+                  tree={syncState?.tree}
+                  currentPath={syncState?.currentPath}
+                  onSelectPath={(path) => { void jumpToNodePath(path); }}
                   onSelectMove={(idx, varData) => {
                     if (varData) {
                       setCurrentVariation(varData);
@@ -2337,26 +2334,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
               )}
             </div>
           )}
-
-          <div className="p-3 border-t border-[rgba(255,255,255,0.05)] bg-[#0f172a] shrink-0">
-            <p className="text-[10px] font-bold text-[#999] uppercase mb-2">Motor Pratiği</p>
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <button onClick={() => startVsComputer('white')} className="py-2 rounded bg-[rgba(255,255,255,0.05)] hover:bg-[#4a4a4a] text-xs font-bold text-[#bababa] transition-colors">Beyaz</button>
-              <button onClick={() => startVsComputer('black')} className="py-2 rounded bg-[rgba(255,255,255,0.05)] hover:bg-[#4a4a4a] text-xs font-bold text-[#bababa] transition-colors">Siyah</button>
-            </div>
-            <div className="flex items-center gap-2">
-              <Cpu className="w-3 h-3 text-[#999]" />
-              <input
-                type="range"
-                min={1}
-                max={10}
-                value={vcLevel}
-                onChange={e => setVcLevel(+e.target.value)}
-                className="flex-1 h-1 bg-[rgba(255,255,255,0.05)] rounded-lg appearance-none cursor-pointer accent-[#6366f1]"
-              />
-              <span className="text-[10px] font-bold text-[#999]">S{vcLevel}</span>
-            </div>
-          </div>
 
           <div className="p-3 border-t border-[rgba(255,255,255,0.05)] bg-[#1e293b] shrink-0">
             <button

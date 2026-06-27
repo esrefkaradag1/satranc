@@ -66,8 +66,12 @@ const ScheduleWeeklyView: React.FC<ScheduleWeeklyViewProps> = ({
   }, [filteredLessons]);
 
   const uniqueGroups = useMemo(() => {
-    const set = new Set(groups.length > 0 ? groups : lessons.map((l) => l.group).filter(Boolean));
-    return ['Tüm Branşlar', ...Array.from(set).sort()];
+    const set = new Set(
+      groups.length > 0
+        ? groups
+        : lessons.map((l) => l.group).filter(Boolean),
+    );
+    return ['Tüm Branşlar', ...Array.from(set).sort((a, b) => a.localeCompare(b, 'tr'))];
   }, [groups, lessons]);
 
   return (
@@ -146,9 +150,14 @@ const ScheduleWeeklyView: React.FC<ScheduleWeeklyViewProps> = ({
                       <p className="text-sm font-bold text-white">
                         {lesson.startTime || '—'} – {lesson.endTime || '—'}
                       </p>
-                      <p className="text-xs text-slate-400 font-medium mt-0.5 uppercase tracking-wide">
-                        {(lesson.topic || 'Ders').toUpperCase()}
+                      <p className="text-xs text-slate-200 font-semibold mt-0.5 uppercase tracking-wide">
+                        {(lesson.group || lesson.topic || 'Ders').trim()}
                       </p>
+                      {lesson.topic &&
+                        lesson.group &&
+                        lesson.topic.trim().toLowerCase() !== lesson.group.trim().toLowerCase() && (
+                          <p className="text-[10px] text-slate-500 mt-0.5">{lesson.topic}</p>
+                        )}
                       {lesson.studentId && (
                         <p className="text-[10px] text-cyan-300 mt-1">
                           Ozel ders{getStudentLabel ? ` - ${getStudentLabel(lesson.studentId) ?? 'Ogrenci'}` : ''}

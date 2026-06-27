@@ -5,11 +5,17 @@ import {
 } from 'lucide-react';
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../../types';
 import { evaluatePlatformDailyGoals } from '../../lib/homeworkPlatformUtils';
+import { nextHomeworkPuzzle } from '../../lib/puzzlePlayUtils';
 import { LichessOAuthConnect } from './LichessOAuthConnect';
 
 type FilterKey = 'all' | 'todo' | 'progress' | 'done';
 
-type PlayPayload = { puzzle: Puzzle; homeworkId: string; openKey: string };
+export type HomeworkPlayPayload = {
+  puzzle: Puzzle;
+  homeworkId: string;
+  openKey: string;
+  nextPuzzle?: Puzzle | null;
+};
 
 type Props = {
   student: Student;
@@ -28,7 +34,7 @@ type Props = {
   onRefresh: () => void;
   onRefreshPlatform?: () => void;
   platformStatsFetched?: boolean;
-  onPlayPuzzle: (payload: PlayPayload) => void;
+  onPlayPuzzle: (payload: HomeworkPlayPayload) => void;
   onDailyGoalsComplete?: (homeworkId: string) => void;
 };
 
@@ -275,6 +281,13 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
   const activeList = filtered.filter((p) => p.status !== 'Tamamlandı');
   const completedList = filtered.filter((p) => p.status === 'Tamamlandı');
 
+  const makePlayPayload = (puzzle: Puzzle, hw: HomeworkAssignment): HomeworkPlayPayload => ({
+    puzzle,
+    homeworkId: hw.id,
+    openKey: `${hw.id}:${puzzle.id}:${Date.now()}`,
+    nextPuzzle: nextHomeworkPuzzle(hw, puzzle.id, puzzles),
+  });
+
   const renderCard = (item: HwProgress) => {
     const meta = STATUS_META[item.status];
     const StatusIcon = meta.icon;
@@ -418,11 +431,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
           {item.nextPuzzle && item.status !== 'Tamamlandı' && (
             <button
               type="button"
-              onClick={() => onPlayPuzzle({
-                puzzle: item.nextPuzzle!,
-                homeworkId: item.hw.id,
-                openKey: `${item.hw.id}:${item.nextPuzzle!.id}:${Date.now()}`,
-              })}
+              onClick={() => onPlayPuzzle(makePlayPayload(item.nextPuzzle!, item.hw))}
               className="mt-4 w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold shadow-lg shadow-indigo-900/30 transition-colors"
             >
               <Play className="w-4 h-4" />
@@ -449,11 +458,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
                   <button
                     key={puzzle.id}
                     type="button"
-                    onClick={() => onPlayPuzzle({
-                      puzzle,
-                      homeworkId: item.hw.id,
-                      openKey: `${item.hw.id}:${puzzle.id}:${Date.now()}`,
-                    })}
+                    onClick={() => onPlayPuzzle(makePlayPayload(puzzle, item.hw))}
                     className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left text-sm transition-all ${
                       state === 'done'
                         ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-200'

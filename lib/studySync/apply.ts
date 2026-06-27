@@ -175,6 +175,19 @@ export function promoteBranchToMainline(tree: StudyTree, branchNodeId: NodeId): 
   return { ...nextTree, mainline: rebuildMainlineFromTree(nextTree) };
 }
 
+/** Ana hattaki hamle sayısına kısaltır (0 = yalnızca kök). */
+export function truncateTreeMainlineToMoves(tree: StudyTree, moveCount: number): StudyTree {
+  const targetLen = Math.max(1, moveCount + 1);
+  let nextTree = tree;
+  while (nextTree.mainline.length > targetLen) {
+    const nodeToDelete = nextTree.mainline[nextTree.mainline.length - 1];
+    if (!nodeToDelete || nodeToDelete === nextTree.rootId) break;
+    nextTree = deleteSubtree(nextTree, nodeToDelete);
+  }
+  const mainline = nextTree.mainline.slice(0, Math.min(targetLen, nextTree.mainline.length));
+  return { ...nextTree, mainline: mainline.length ? mainline : [nextTree.rootId] };
+}
+
 /** Ana hat SAN listesine göre ağacı hizalar (legacy varyasyon yükseltme sonrası). */
 export function alignTreeMainlineToSans(tree: StudyTree, targetSans: string[]): StudyTree {
   let nextTree = tree;
@@ -224,6 +237,21 @@ export function alignTreeMainlineToSans(tree: StudyTree, targetSans: string[]): 
     parentId = childId;
   }
 
+  nextTree = truncateTreeMainlineToMoves(nextTree, targetSans.length);
   return { ...nextTree, mainline: rebuildMainlineFromTree(nextTree) };
+}
+
+/** Düğüm kimliğinden köke kadar path dizisi (Lichess currentPath). */
+export function pathToNode(tree: StudyTree, nodeId: NodeId): Path {
+  const path: Path = [];
+  let cur: NodeId | null = nodeId;
+  let guard = 0;
+  while (cur && guard++ < 512) {
+    path.unshift(cur);
+    const parentId = tree.nodes[cur]?.parentId ?? null;
+    if (!parentId) break;
+    cur = parentId;
+  }
+  return path.length ? path : [tree.rootId];
 }
 

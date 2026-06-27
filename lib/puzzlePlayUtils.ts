@@ -1,5 +1,5 @@
 import { Chess } from 'chess.js';
-import type { Puzzle } from '../types';
+import type { Puzzle, HomeworkAssignment } from '../types';
 
 const DEFAULT_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -83,8 +83,30 @@ export function normalizePuzzleForStudentPlay(
     const setupGame = new Chess(rawFen);
     const setup = applyPuzzleMove(setupGame, rawSolution[0]);
     if (setup) {
+      // Mat / oyun bitiren tek hamle — solution[0] öğrenci cevabıdır, rakip kurulumu değil.
+      if (setupGame.isGameOver()) {
+        const studentFirst = applyPuzzleMove(new Chess(rawFen), rawSolution[0]);
+        if (studentFirst && studentFirst.color === turnAtStart) {
+          return {
+            startFen: rawFen,
+            studentMoves: rawSolution,
+            studentColor: turnAtStart,
+          };
+        }
+      }
+
       const studentMoves = rawSolution.slice(1);
       const studentColor = setupGame.turn();
+
+      // Tek hamlelik bulmaca: sıradaki taraf hamleyi oynar, rakip kurulum yok.
+      if (rawSolution.length === 1 && setup.color === turnAtStart) {
+        return {
+          startFen: rawFen,
+          studentMoves: rawSolution,
+          studentColor: turnAtStart,
+        };
+      }
+
       const nextOk = studentMoves.length === 0
         || applyPuzzleMove(new Chess(setupGame.fen()), studentMoves[0]) != null;
       if (nextOk) {
@@ -92,7 +114,7 @@ export function normalizePuzzleForStudentPlay(
           startFen: setupGame.fen(),
           studentMoves,
           studentColor,
-          setupMoveSan: setup.san,
+          setupMoveSan: studentMoves.length > 0 ? setup.san : undefined,
         };
       }
     }
@@ -155,6 +177,17 @@ export function repairPuzzleForStudentPlay(puzzle: Puzzle): NormalizedPuzzlePlay
       prefix += 1;
     }
     if (prefix > 0) {
+      if (replay.isGameOver()) {
+        const turn = new Chess(rawFen).turn();
+        const first = resolveExpectedMoveSquares(rawFen, rawSolution[0]);
+        if (first && new Chess(rawFen).get(first.from as `${string}${number}`)?.color === turn) {
+          return {
+            startFen: rawFen,
+            studentMoves: rawSolution,
+            studentColor: turn,
+          };
+        }
+      }
       const studentMoves = rawSolution.slice(prefix);
       const studentColor = replay.turn();
       const ok = studentMoves.length === 0
@@ -231,4 +264,45 @@ export function formatHintMove(currentFen: string, moveStr: string): string {
   const san = expectedMoveSan(currentFen, moveStr);
   if (san) return san;
   return 'Bu pozisyonda beklenen hamle uygulanamıyor';
+}
+
+/** Ödevde sıradaki bulmacayı döndürür. */
+export function nextHomeworkPuzzle(
+  homework: Pick<HomeworkAssignment, 'puzzles'>,
+  currentPuzzleId: string,
+  puzzles: Puzzle[],
+): Puzzle | null {
+  const idx = homework.puzzles.indexOf(currentPuzzleId);
+  if (idx < 0 || idx >= homework.puzzles.length - 1) return null;
+  const nextId = homework.puzzles[idx + 1];
+  return puzzles.find((p) => p.id === nextId) ?? null;
+}
+
+/** Çalışma bölümü — Bulmaca (Hamle Bul) için öğrenci sorusu pozisyonu. */
+export function normalizeStudyChapterPuzzle(chapter: {
+  fen?: string;
+  moves?: string[];
+}): { startFen: string; studentMoves: string[]; setupMoveSan?: string } {
+  const normalized = normalizePuzzleForStudentPlay({
+    fen: chapter.fen ?? DEFAULT_FEN,
+    solution: chapter.moves ?? [],
+    source: 'custom',
+  });
+  const repaired = normalized.dataError
+    ? repairPuzzleForStudentPlay({
+        id: 'study',
+        title: '',
+        fen: chapter.fen ?? DEFAULT_FEN,
+        solution: chapter.moves ?? [],
+        source: 'custom',
+        points: 0,
+        difficulty: '',
+        theme: '',
+      } as Puzzle)
+    : normalized;
+  return {
+    startFen: repaired.startFen,
+    studentMoves: repaired.studentMoves,
+    setupMoveSan: repaired.setupMoveSan,
+  };
 }

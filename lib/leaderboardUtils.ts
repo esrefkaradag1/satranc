@@ -3,6 +3,22 @@ import type { LichessActivity } from '../services/chessPlatformService';
 import { studentInitials } from './homeworkPanelUtils';
 import type { LeaderboardPlatformSnapshot, LeaderboardRankMode } from './leaderboardPlatformUtils';
 import { leaderboardSortValue, type PlatformModeRating } from './leaderboardPlatformUtils';
+import {
+  type GameResultsByMode,
+  type LeaderboardPointSettings,
+  DEFAULT_LEADERBOARD_POINT_SETTINGS,
+  computeLeaderboardScoreFromBreakdown,
+  emptyGameResultsByMode,
+  normalizeScoringMode,
+} from './leaderboardPointSettings';
+
+export type { LeaderboardPointSettings, GameResultsByMode } from './leaderboardPointSettings';
+export {
+  DEFAULT_LEADERBOARD_POINT_SETTINGS,
+  formatLeaderboardPointsSummary,
+  normalizeLeaderboardPointSettings,
+  resolveClubLeaderboardPointSettings,
+} from './leaderboardPointSettings';
 
 export type { LeaderboardRankMode } from './leaderboardPlatformUtils';
 export { LEADERBOARD_RANK_MODES, leaderboardModeLabel, leaderboardModeProg, leaderboardModeRating } from './leaderboardPlatformUtils';
@@ -78,6 +94,19 @@ export function lichessActivityPuzzleCount(row: LichessActivity): number {
   return parseLichessActivityPuzzles(row).passed;
 }
 
+export function lichessActivityGameResultsByMode(row: LichessActivity): GameResultsByMode {
+  const out = emptyGameResultsByMode();
+  if (!row.games) return out;
+  for (const [mode, data] of Object.entries(row.games)) {
+    if (!data) continue;
+    const key = normalizeScoringMode(mode);
+    out[key].wins += data.win || 0;
+    out[key].draws += data.draw || 0;
+    out[key].losses += data.loss || 0;
+  }
+  return out;
+}
+
 export function lichessActivityGameResults(row: LichessActivity): { wins: number; draws: number; losses: number } {
   let wins = 0;
   let draws = 0;
@@ -134,23 +163,42 @@ export interface LeaderboardEntry {
   wins: number;
   draws: number;
   losses: number;
+  gameResultsByMode: GameResultsByMode;
   score: number;
   rank: number;
   platform: LeaderboardPlatformSnapshot;
   rankMetric: number;
 }
 
-/** Bulmaca 1p, galibiyet 10p, beraberlik 5p, mağlubiyet 1p */
-export function computeLeaderboardScore(puzzles: number, wins: number, draws: number, losses: number): number {
-  return puzzles * 1 + wins * 10 + draws * 5 + losses * 1;
+/** Mod bazlı puan ayarlarıyla aktivite puanı */
+export function computeLeaderboardScore(
+  puzzles: number,
+  byMode: GameResultsByMode,
+  settings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
+): number {
+  return computeLeaderboardScoreFromBreakdown(puzzles, byMode, settings);
+}
+
+/** @deprecated Toplam G/B/M ile hesap — geriye dönük; mod bilgisi yoksa tüm maçlar rapid sayılır */
+export function computeLeaderboardScoreLegacy(
+  puzzles: number,
+  wins: number,
+  draws: number,
+  losses: number,
+  settings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
+): number {
+  const byMode = emptyGameResultsByMode();
+  byMode.rapid = { wins, draws, losses };
+  return computeLeaderboardScoreFromBreakdown(puzzles, byMode, settings);
 }
 
 export function rankLeaderboardEntries(
   rows: Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>[],
   mode: LeaderboardRankMode = 'activity',
+  pointSettings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
 ): LeaderboardEntry[] {
   const activityScores = rows.map((r) =>
-    computeLeaderboardScore(r.puzzles, r.wins, r.draws, r.losses),
+    computeLeaderboardScore(r.puzzles, r.gameResultsByMode, pointSettings),
   );
   const withScore = rows.map((r, i) => {
     const score = activityScores[i]!;
@@ -183,6 +231,7 @@ export function entryForStudent(
   games: number,
   internalPuzzles: number,
   platform: LeaderboardPlatformSnapshot,
+  gameResultsByMode: GameResultsByMode,
   wins = 0,
   draws = 0,
   losses = 0,
@@ -198,6 +247,7 @@ export function entryForStudent(
     wins,
     draws,
     losses,
+    gameResultsByMode,
     platform,
   };
 }

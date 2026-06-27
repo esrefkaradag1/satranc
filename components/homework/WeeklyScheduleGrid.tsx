@@ -129,34 +129,48 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
     if (activeStudent) onDayChange(activeStudent.id, day, patch);
   };
 
+  const applyDefaultsToWeek = () => {
+    const dailyGameTarget = draft.dailyGameTarget ?? 0;
+    const dailyPuzzleTarget = draft.dailyPuzzleTarget ?? 0;
+    const minPuzzleAccuracyPct = draft.minPuzzleAccuracyPct ?? 60;
+    const dayPatch = {
+      dailyGameTarget: dailyGameTarget > 0 ? dailyGameTarget : undefined,
+      dailyPuzzleTarget: dailyPuzzleTarget > 0 ? dailyPuzzleTarget : undefined,
+      minPuzzleAccuracyPct,
+    };
+    const weeklySchedule = Object.fromEntries(
+      [1, 2, 3, 4, 5, 6, 7].map((day) => [day, { ...dayPatch }]),
+    ) as NonNullable<StudentDailyTarget['weeklySchedule']>;
+    applyDraft({ weeklySchedule });
+  };
+
   return (
-    <div className="bg-[#1e293b] rounded-2xl border border-white/5 overflow-hidden">
-      <div className="p-5 border-b border-white/5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Calendar className="w-5 h-5 text-violet-400" />
-          <div>
-            <h3 className="text-sm font-black text-white">{isAssign ? 'Haftalık Hedef' : 'Günlük Program'}</h3>
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              Pazartesi–Pazar · maç ve bulmaca hedefi
-              {homeworkTitle ? (
-                <>
-                  <span className="text-slate-600"> · </span>
-                  <span className="text-indigo-300/90">{homeworkTitle}</span>
-                  {autoSelectedHomework ? <span className="text-amber-400/90"> (otomatik seçildi)</span> : null}
-                </>
-              ) : null}
-              {isAssign ? (
-                <>
-                  <span className="text-slate-600"> · </span>
-                  <span className="text-slate-500">Ödev kaydedildiğinde öğrencilere uygulanır · Lichess / Chess.com ile takip</span>
-                </>
-              ) : (
+    <div className={`bg-[#1e293b] rounded-2xl border border-white/5 overflow-hidden ${isAssign ? 'text-[11px]' : ''}`}>
+      <div className={`border-b border-white/5 flex flex-wrap items-center justify-between gap-3 ${isAssign ? 'p-3' : 'p-5'}`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <Calendar className={`${isAssign ? 'w-4 h-4' : 'w-5 h-5'} text-violet-400 shrink-0`} />
+          <div className="min-w-0">
+            <h3 className={`font-black text-white ${isAssign ? 'text-xs' : 'text-sm'}`}>{isAssign ? 'Haftalık Hedef' : 'Günlük Program'}</h3>
+            {!isAssign ? (
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Pazartesi–Pazar · maç ve bulmaca hedefi
+                {homeworkTitle ? (
+                  <>
+                    <span className="text-slate-600"> · </span>
+                    <span className="text-indigo-300/90">{homeworkTitle}</span>
+                    {autoSelectedHomework ? <span className="text-amber-400/90"> (otomatik seçildi)</span> : null}
+                  </>
+                ) : null}
                 <>
                   <span className="text-slate-600"> · </span>
                   <span className="text-slate-500">Platform: butonla çekilir, 10 dk aralıkla güncellenir</span>
                 </>
-              )}
-            </p>
+              </p>
+            ) : (
+              <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+                Pazartesi–Pazar · ödev kaydında uygulanır
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -184,7 +198,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
         </div>
       </div>
 
-      <div className="p-5 space-y-4">
+      <div className={`space-y-3 ${isAssign ? 'p-3' : 'p-5 space-y-4'}`}>
         <div className="flex flex-wrap gap-2">
           {showBulkTab ? (
             <button
@@ -262,7 +276,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
               </div>
             ) : null}
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            <div className={`grid gap-2 ${isAssign ? 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-7' : 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3'}`}>
               {[1, 2, 3, 4, 5, 6, 7].map((day) => {
                 const dayData = draft.weeklySchedule?.[day] ?? {};
                 const isToday = (() => {
@@ -275,7 +289,9 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                 return (
                   <div
                     key={day}
-                    className={`rounded-xl p-3 space-y-2 border ${
+                    className={`rounded-xl space-y-1.5 border ${
+                      isAssign ? 'p-2' : 'p-3 space-y-2'
+                    } ${
                       isToday ? 'ring-1 ring-indigo-500/40' : ''
                     } ${isBulk ? 'border-violet-500/20 bg-violet-500/5' : completionStyles(completion)}`}
                   >
@@ -350,7 +366,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
               })}
             </div>
 
-            <div className="flex flex-wrap items-end gap-3 p-4 rounded-xl bg-black/20 border border-white/5">
+            <div className={`flex flex-wrap items-end gap-2 rounded-xl bg-black/20 border border-white/5 ${isAssign ? 'p-3' : 'gap-3 p-4'}`}>
               <p className="text-[10px] text-slate-500 font-bold uppercase w-full">
                 {isBulk ? 'Grup varsayılanı (tüm günler)' : 'Varsayılan (tüm günler)'}
               </p>
@@ -391,6 +407,13 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                   className="input-base w-24"
                 />
               </div>
+              <button
+                type="button"
+                onClick={applyDefaultsToWeek}
+                className="px-3 py-2 rounded-lg bg-violet-600/30 text-violet-300 text-xs font-bold hover:bg-violet-600/50"
+              >
+                Haftaya uygula
+              </button>
             </div>
           </>
         ) : (

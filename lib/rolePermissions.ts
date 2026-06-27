@@ -197,6 +197,44 @@ export function sanitizePermissionsForRole(panel: RolePanel, keys: string[]): st
   return keys.filter((k) => allowed.has(k));
 }
 
+/** Kulübün antrenörüne verebileceği menü izinleri (antrenör paneli). */
+export function coachGrantablePermissionDefs(): PermissionDef[] {
+  return mergePermissionDefs(permissionsForPanel('coach'), EXTRA_COACH);
+}
+
+export function groupedCoachGrantablePermissions(): [string, PermissionDef[]][] {
+  const byCat = new Map<string, PermissionDef[]>();
+  for (const p of coachGrantablePermissionDefs()) {
+    const list = byCat.get(p.category) ?? [];
+    list.push(p);
+    byCat.set(p.category, list);
+  }
+  return [...byCat.entries()];
+}
+
+export function sanitizeCoachGrantPermissions(keys: string[]): string[] {
+  const allowed = new Set(coachGrantablePermissionDefs().map((p) => p.key));
+  return keys.filter((k) => allowed.has(k));
+}
+
+export function permissionSetsEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b);
+  return a.every((k) => setB.has(k));
+}
+
+export function coachPermissionSummary(
+  roleId: string | undefined,
+  rolePermissionMap: Record<string, string[]>,
+  appRoles: AppRole[],
+): string {
+  if (!roleId || roleId === 'role-coach') return 'Varsayılan yetkiler';
+  const role = appRoles.find((r) => r.id === roleId);
+  const count = rolePermissionMap[roleId]?.length ?? 0;
+  if (role?.isSystem) return role.name;
+  return role ? `${role.name} · ${count} izin` : `${count} özel izin`;
+}
+
 export function defaultPermissionsForRole(slug: string): string[] {
   switch (slug) {
     case 'admin':
@@ -204,7 +242,8 @@ export function defaultPermissionsForRole(slug: string): string[] {
     case 'coach':
       return permissionsForPanel('coach').map((p) => p.key);
     case 'club':
-      return permissionsForPanel('club').map((p) => p.key);
+      // Kulüp paneli yönetim + antrenör menülerini birleştirir
+      return permissionKeysForRoleEditor('club');
     case 'student':
       return permissionsForPanel('student').map((p) => p.key);
     case 'parent':
@@ -341,6 +380,27 @@ export function resolveRoleIdForAuth(
   return undefined;
 }
 
+export function resolveCustomRoleIdForAuth(
+  auth: AuthUser,
+  ctx: { coaches: { id: string; branch?: string; roleId?: string }[]; clubs: { id: string; name?: string; roleId?: string }[] },
+): string | undefined {
+  if (auth.role === 'coach') {
+    if (auth.roleId) return auth.roleId;
+    const coach =
+      (auth.coachId ? ctx.coaches.find((c) => c.id === auth.coachId) : undefined) ??
+      ctx.coaches.find((c) => (c.branch || '').trim() === (auth.branch || '').trim());
+    return coach?.roleId;
+  }
+  if (auth.role === 'club') {
+    if (auth.roleId) return auth.roleId;
+    const club =
+      (auth.clubId ? ctx.clubs.find((c) => c.id === auth.clubId) : undefined) ??
+      ctx.clubs.find((c) => (c.name || '').trim() === (auth.branch || '').trim());
+    return club?.roleId;
+  }
+  return undefined;
+}
+
 export function systemRoleIdForAuth(auth: AuthUser): string {
   switch (auth.role) {
     case 'admin':
@@ -382,10 +442,18 @@ export function getPermissionsForAuth(
             : 'admin';
 
   const fallback = () => new Set(defaultPermissionsForRole(slug));
-  if (!rolesLoaded) return fallback();
-
   const systemRoleId = systemRoleIdForAuth(auth);
   const roleId = customRoleId || systemRoleId;
+
+  if (!rolesLoaded) {
+    const cached = rolePermissionMap[roleId];
+    if (cached?.length) return new Set(cached);
+    if (customRoleId && customRoleId !== systemRoleId) {
+      const systemCached = rolePermissionMap[systemRoleId];
+      if (systemCached?.length) return new Set(systemCached);
+    }
+    return fallback();
+  }
 
   if (roleId in rolePermissionMap) {
     const keys = rolePermissionMap[roleId];

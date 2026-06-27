@@ -31,7 +31,7 @@ import {
   type TargetFilter,
 } from '../lib/homeworkPanelUtils';
 import {
-  evaluateDayGoals,
+  evaluatePlatformDayGoalsFromStats,
   fetchStudentPlatformActivityTimeSeconds,
   fetchStudentPlatformDayStats,
   mergePlatformDayStats,
@@ -42,6 +42,9 @@ import {
 import {
   buildInternalHomeworkStats,
   buildPlatformHomeworkStats,
+  homeworkHasPlatformGoals,
+  isDailyProgramAssignment,
+  isPuzzleTrackingAssignment,
   resolveProgramDailyTarget,
   type PlatformStudentStat,
 } from '../lib/homeworkStatsBuilders';
@@ -98,7 +101,7 @@ const Homework: React.FC = () => {
   const {
     scopedStudents: students, homeworks, puzzles, homeworkAttempts, homeworkSubmissions,
     addHomework, updateHomework, deleteHomework, refreshFromStorage,
-    resetHomeworkAttemptsForStudent, removeHomeworkSubmission, addHomeworkSubmission,
+    resetHomeworkAttemptsForStudent, removeHomeworkSubmission,
     branchOffices, disciplineBranches, trainingGroups, showToast,
   } = useApp();
   const ALL_HOMEWORKS_ID = '__all__';
@@ -138,6 +141,8 @@ const Homework: React.FC = () => {
   const [assignPuzzleSearch, setAssignPuzzleSearch] = useState('');
   const [assignWeeklyEditId, setAssignWeeklyEditId] = useState<string | null>(null);
   const [assignGoalTab, setAssignGoalTab] = useState<'daily' | 'weekly'>('weekly');
+  const [assignFieldErrors, setAssignFieldErrors] = useState<{ title?: string; targets?: string; goals?: string; puzzles?: string }>({});
+  const [assignFormPurpose, setAssignFormPurpose] = useState<'puzzle' | 'program'>('puzzle');
   const [editingWeeklyStudentId, setEditingWeeklyStudentId] = useState<string | null>(null);
   const [panelTab, setPanelTab] = useState<HomeworkPanelTab>('odev');
   const [targetFilter, setTargetFilter] = useState<TargetFilter>(EMPTY_TARGET);
@@ -234,7 +239,9 @@ const Homework: React.FC = () => {
 
   const selectedHw = useMemo(() => {
     if (!selectedHwId || selectedHwId === ALL_HOMEWORKS_ID) return null;
-    return homeworks.find(h => h.id === selectedHwId) || null;
+    const hw = homeworks.find(h => h.id === selectedHwId) || null;
+    if (hw && !isPuzzleTrackingAssignment(hw)) return null;
+    return hw;
   }, [selectedHwId, homeworks]);
 
   const studentGroups = useMemo(
@@ -251,6 +258,16 @@ const Homework: React.FC = () => {
     return homeworks.filter((hw) => getAssignees(hw).some((s) => targetStudentIds.has(s.id)));
   }, [homeworks, targetStudents.length, targetStudentIds, getAssignees]);
 
+  const trackingHomeworks = useMemo(
+    () => filteredHomeworks.filter(isPuzzleTrackingAssignment),
+    [filteredHomeworks],
+  );
+
+  const programHomeworks = useMemo(
+    () => filteredHomeworks.filter(isDailyProgramAssignment),
+    [filteredHomeworks],
+  );
+
   const hwPuzzles = useMemo(() => {
     if (!selectedHw) return [];
     return puzzles.filter(p => selectedHw.puzzles.includes(p.id));
@@ -260,11 +277,11 @@ const Homework: React.FC = () => {
 
   const assignees = useMemo(() => selectedHw ? getAssignees(selectedHw) : [], [selectedHw, getAssignees]);
 
-  const programHomeworks = filteredHomeworks;
-
   const programSelectedHw = useMemo(() => {
     if (!programSelectedHwId) return null;
-    return homeworks.find((h) => h.id === programSelectedHwId) ?? null;
+    const hw = homeworks.find((h) => h.id === programSelectedHwId) ?? null;
+    if (hw && !homeworkHasPlatformGoals(hw)) return null;
+    return hw;
   }, [programSelectedHwId, homeworks]);
 
   const programHomework = useMemo(() => {
@@ -296,8 +313,8 @@ const Homework: React.FC = () => {
   }, [programHomework?.id, programAssigneeIdsKey, homeworks, getAssignees]);
 
   const refreshDailyPlatformStats = useCallback(async (opts?: { silent?: boolean }) => {
-    const hw = programSelectedHw;
-    if (!hw) {
+    const hw = programSelectedHw ?? programHomework;
+    if (!hw || !homeworkHasPlatformGoals(hw)) {
       setStudentDailyGameCounts({});
       setStudentDailyExternalPuzzleCounts({});
       setStudentDailyExternalPuzzlePassed({});
@@ -380,6 +397,13 @@ const Homework: React.FC = () => {
         ...prev,
         ...Object.fromEntries(rows.map(([sid, _gc, _pc, _pp, _pf, platformStats]) => [sid, platformStats])),
       }));
+      setStudentPlatformWeekStats((prev) => {
+        const next = { ...prev };
+        for (const [sid, _gc, _pc, _pp, _pf, platformStats] of rows) {
+          next[sid] = { ...(next[sid] ?? {}), [todayKey]: platformStats };
+        }
+        return next;
+      });
 
       const timeEntries: [string, number][] = [];
       for (const s of scopeAssignees) {
@@ -414,7 +438,7 @@ const Homework: React.FC = () => {
       setLoadingDailyPlatformStats(false);
       dailyPlatformRefreshInFlightRef.current = false;
     }
-  }, [programSelectedHw, getAssignees, targetStudentIds, viewDate, showToast]);
+  }, [programSelectedHw, programHomework, getAssignees, targetStudentIds, viewDate, showToast]);
 
   const isStudentDailyActive = useCallback((studentId: string) => {
     return (studentDailyGameCounts[studentId] ?? 0) > 0
@@ -488,9 +512,10 @@ const Homework: React.FC = () => {
 
   const allModeStats: StudentHwStat[] = useMemo(() => {
     if (selectedHw != null) return [];
-    if (homeworks.length === 0) return [];
+    const puzzleHomeworks = homeworks.filter(isPuzzleTrackingAssignment);
+    if (puzzleHomeworks.length === 0) return [];
     const byStudent = new Map<string, { student: Student; hwStats: StudentHwStat[] }>();
-    for (const hw of homeworks) {
+    for (const hw of puzzleHomeworks) {
       const perHw = buildInternalHomeworkStats(
         hw,
         getAssignees(hw),
@@ -609,6 +634,11 @@ const Homework: React.FC = () => {
     }
   }, [programStudents, showToast]);
 
+  const programPlatformForDay = useCallback((studentId: string, iso: string): PlatformDayStats | undefined => {
+    return studentPlatformWeekStats[studentId]?.[iso]
+      ?? (iso === viewDate ? studentPlatformDayStats[studentId] : undefined);
+  }, [studentPlatformWeekStats, studentPlatformDayStats, viewDate]);
+
   const programDayCompletion = useMemo((): Record<number, DayCompletionStatus> => {
     if (!programHomework) return {};
     if (programStudentId === PROGRAM_BULK_EDIT_ID) return {};
@@ -626,15 +656,16 @@ const Homework: React.FC = () => {
       }
       const iso = isoDateForWeekday(monday, day);
       const isFuture = iso > today;
-      const platform = studentPlatformWeekStats[studentId]?.[iso];
-      const { done } = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, []);
+      const platform = programPlatformForDay(studentId, iso);
+      const goalEval = evaluatePlatformDayGoalsFromStats(gameTarget, puzzleTarget, minAccuracy, platform);
+      const { done } = goalEval;
       if (isFuture) out[day] = 'pending';
       else if (done) out[day] = 'done';
       else if (iso === today) out[day] = 'pending';
       else out[day] = 'missed';
     }
     return out;
-  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, studentPlatformWeekStats]);
+  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, programPlatformForDay]);
 
   const programDayProgress = useMemo(() => {
     if (!programHomework) return {};
@@ -656,10 +687,10 @@ const Homework: React.FC = () => {
       const { gameTarget, puzzleTarget, minAccuracy } = resolveDayTargets(draft, programHomework, day);
       if (gameTarget <= 0 && puzzleTarget <= 0) continue;
       const iso = isoDateForWeekday(monday, day);
-      const platform = studentPlatformWeekStats[studentId]?.[iso];
-      const evalResult = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, []);
+      const platform = programPlatformForDay(studentId, iso);
+      const evalResult = evaluatePlatformDayGoalsFromStats(gameTarget, puzzleTarget, minAccuracy, platform);
       out[day] = {
-        games: platform?.games ?? 0,
+        games: evalResult.games,
         gameTarget,
         puzzles: evalResult.puzzleSolved,
         puzzleTarget,
@@ -667,31 +698,7 @@ const Homework: React.FC = () => {
       };
     }
     return out;
-  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, studentPlatformWeekStats]);
-
-  useEffect(() => {
-    if (!programHomework || panelTab !== 'program') return;
-    const today = todayDayKey();
-    const monday = mondayOfWeek();
-    const weekday = weekdayKeyFromIso(today);
-    const iso = isoDateForWeekday(monday, weekday);
-    for (const student of programStudents) {
-      const draft = dailyTargetDrafts[student.id] ?? programHomework.studentDailyTargets?.[student.id];
-      if (!draft) continue;
-      const { gameTarget, puzzleTarget, minAccuracy } = resolveDayTargets(draft, programHomework, weekday);
-      if (gameTarget <= 0 && puzzleTarget <= 0) continue;
-      const already = homeworkSubmissions.some((s) => s.studentId === student.id && s.homeworkId === programHomework.id);
-      if (already) continue;
-      const platform = studentPlatformWeekStats[student.id]?.[iso];
-      const { done } = evaluateDayGoals(gameTarget, puzzleTarget, minAccuracy, platform, []);
-      if (done) {
-        addHomeworkSubmission({ studentId: student.id, homeworkId: programHomework.id });
-      }
-    }
-  }, [
-    programHomework, panelTab, programStudents, dailyTargetDrafts,
-    homeworkSubmissions, studentPlatformWeekStats, addHomeworkSubmission,
-  ]);
+  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, programPlatformForDay]);
 
   const handleResetStudent = useCallback((studentId: string) => {
     if (!window.confirm('Bu öğrencinin ödev denemeleri sıfırlanacak. Emin misiniz?')) return;
@@ -847,10 +854,12 @@ const Homework: React.FC = () => {
 
   const toggleAssignGroup = useCallback((group: string) => {
     setAssignSelectedGroups((prev) => (prev.includes(group) ? prev.filter((x) => x !== group) : [...prev, group]));
+    setAssignFieldErrors((p) => (p.targets ? { ...p, targets: undefined } : p));
   }, []);
 
   const toggleAssignStudent = useCallback((studentId: string) => {
     setAssignSelectedStudents((prev) => (prev.includes(studentId) ? prev.filter((x) => x !== studentId) : [...prev, studentId]));
+    setAssignFieldErrors((p) => (p.targets ? { ...p, targets: undefined } : p));
   }, []);
 
   const resetAssignForm = useCallback(() => {
@@ -865,6 +874,8 @@ const Homework: React.FC = () => {
     setAssignDefaultTargets({ dailyGameTarget: 0, dailyPuzzleTarget: 0, minPuzzleAccuracyPct: 60 });
     setAssignWeeklyEditId(null);
     setAssignGoalTab('weekly');
+    setAssignFieldErrors({});
+    setAssignFormPurpose('puzzle');
   }, []);
 
   const applyAssignDefaultsToAll = useCallback(() => {
@@ -972,13 +983,46 @@ const Homework: React.FC = () => {
     });
   }, [assignDailyTargetDrafts, assignFormStudents]);
 
+  const assignFormHasPlatformGoals = useCallback((): boolean => {
+    return assignFormStudents.some((s) => {
+      const t = assignDailyTargetDrafts[s.id];
+      if (!t) return false;
+      if ((t.dailyGameTarget ?? 0) > 0 || (t.dailyPuzzleTarget ?? 0) > 0) return true;
+      return Object.values(t.weeklySchedule ?? {}).some(
+        (day) => (day.dailyGameTarget ?? 0) > 0 || (day.dailyPuzzleTarget ?? 0) > 0,
+      );
+    });
+  }, [assignFormStudents, assignDailyTargetDrafts]);
+
   const handleCreateAssignment = useCallback(() => {
-    if (!assignTitle.trim()) return;
+    const errors: { title?: string; targets?: string; goals?: string; puzzles?: string } = {};
+    if (!assignTitle.trim()) errors.title = 'Başlık zorunludur.';
     const selectedTargets =
       assignMode === 'groups'
         ? assignSelectedGroups.map((g) => `group:${g}`)
         : assignSelectedStudents;
-    if (selectedTargets.length === 0) return;
+    if (selectedTargets.length === 0) {
+      errors.targets = assignMode === 'groups'
+        ? 'En az bir grup seçin.'
+        : 'En az bir öğrenci seçin.';
+    }
+
+    const isProgramForm = assignFormPurpose === 'program';
+    if (isProgramForm && !assignFormHasPlatformGoals()) {
+      errors.goals = 'Günlük program için en az bir maç veya bulmaca hedefi girin.';
+    }
+    if (!isProgramForm && assignSelectedPuzzles.length === 0) {
+      errors.puzzles = 'Ödev takibi için en az bir bulmaca seçin.';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setAssignFieldErrors(errors);
+      const parts = [errors.title, errors.targets, errors.goals, errors.puzzles].filter(Boolean);
+      showToast(`Kaydedilemedi: ${parts.join(' ')}`, 'warning');
+      return;
+    }
+
+    setAssignFieldErrors({});
 
     const studentDailyTargets: Record<string, StudentDailyTarget> = {};
     for (const s of assignFormStudents) {
@@ -999,17 +1043,26 @@ const Homework: React.FC = () => {
 
     addHomework({
       title: assignTitle.trim(),
-      puzzles: assignSelectedPuzzles,
+      puzzles: isProgramForm ? [] : assignSelectedPuzzles,
       dueDate: assignDueDate.trim(),
       assignedTo: selectedTargets,
-      studentDailyTargets: Object.keys(studentDailyTargets).length > 0 ? studentDailyTargets : undefined,
+      studentDailyTargets: isProgramForm && Object.keys(studentDailyTargets).length > 0
+        ? studentDailyTargets
+        : undefined,
     });
     resetAssignForm();
     setShowAssignForm(false);
+    if (isProgramForm) {
+      setPanelTab('program');
+      setProgramAnalysisView('list');
+    }
+    showToast(isProgramForm ? 'Günlük program oluşturuldu.' : 'Ödev ataması oluşturuldu.', 'success');
   }, [
     addHomework,
     assignDailyTargetDrafts,
     assignDueDate,
+    assignFormHasPlatformGoals,
+    assignFormPurpose,
     assignFormStudents,
     assignMode,
     assignSelectedGroups,
@@ -1017,11 +1070,12 @@ const Homework: React.FC = () => {
     assignSelectedStudents,
     assignTitle,
     resetAssignForm,
+    showToast,
   ]);
 
   const saveStudentDailyTargets = useCallback(() => {
     if (!programSelectedHw) {
-      showToast('Günlük program için önce bir ödev seçin.', 'warning');
+      showToast('Kaydetmek için günlük program ataması seçin.', 'warning');
       return;
     }
     const merged: Record<string, StudentDailyTarget> = {
@@ -1082,11 +1136,11 @@ const Homework: React.FC = () => {
               </p>
             ) : (
               <p className="text-slate-400 text-sm mt-0.5">
-                {homeworks.length > 0 ? (
+                {trackingHomeworks.length > 0 ? (
                   <>
-                    <span className="text-slate-300">{homeworks.length} atama</span>
+                    <span className="text-slate-300">{trackingHomeworks.length} bulmaca ödevi</span>
                     <span className="text-slate-600 mx-1.5">·</span>
-                    <span>aktif atama listesi</span>
+                    <span>{programHomeworks.length} günlük program</span>
                     <span className="text-slate-600 mx-1.5">·</span>
                     <span className="text-slate-500">{loadedAttemptCount} deneme kaydı</span>
                   </>
@@ -1100,11 +1154,20 @@ const Homework: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
           <button
             type="button"
-            onClick={() => setShowAssignForm((v) => !v)}
+            onClick={() => {
+              if (!showAssignForm) {
+                setAssignFormPurpose(panelTab === 'program' ? 'program' : 'puzzle');
+              }
+              setShowAssignForm((v) => !v);
+            }}
             className="flex items-center gap-2 px-4 py-2.5 premium-gradient rounded-xl text-sm font-bold text-white shadow-lg shadow-indigo-500/25 transition-all hover:shadow-indigo-500/40"
           >
             <Plus className="w-4 h-4" />
-            {showAssignForm ? 'Formu Kapat' : 'Yeni Ödev Ata'}
+            {showAssignForm
+              ? 'Formu Kapat'
+              : panelTab === 'program'
+                ? 'Yeni Günlük Program'
+                : 'Yeni Ödev Ata'}
           </button>
           <button
             type="button"
@@ -1115,7 +1178,7 @@ const Homework: React.FC = () => {
             <RefreshCw className="w-4 h-4" />
             <span className="hidden sm:inline">Yenile</span>
           </button>
-          {homeworks.length > 0 && (
+          {trackingHomeworks.length > 0 && panelTab === 'odev' && (
           <div className="relative z-40 flex-1 sm:flex-none">
             <button onClick={() => setShowHwPicker(!showHwPicker)} className="flex items-center gap-2 w-full sm:w-auto px-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-xl text-sm font-semibold text-white hover:bg-white/[0.08] transition-all">
               <Filter className="w-4 h-4 text-indigo-400 shrink-0" />
@@ -1133,12 +1196,12 @@ const Homework: React.FC = () => {
                       <div className="w-2 h-2 rounded-full flex-shrink-0 bg-indigo-500" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-bold text-white truncate">Tüm Ödevler</p>
-                        <p className="text-[10px] text-slate-500 mt-0.5">{homeworks.length} atama · genel durum</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5">{trackingHomeworks.length} bulmaca ödevi</p>
                       </div>
                       {selectedHwId === ALL_HOMEWORKS_ID && <CheckSquare className="w-4 h-4 text-indigo-400 flex-shrink-0" />}
                     </div>
                   </button>
-                  {homeworks.map(hw => {
+                  {trackingHomeworks.map(hw => {
                     const active = selectedHwId === hw.id;
                     const hwAssignees = getAssignees(hw);
                     const overdue = !!hw.dueDate && new Date(hw.dueDate) < new Date();
@@ -1169,24 +1232,51 @@ const Homework: React.FC = () => {
       </div>
 
       {showAssignForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setShowAssignForm(false)}>
-        <div className="bg-[#1e293b] border border-white/10 rounded-2xl p-6 space-y-5 shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-black text-white tracking-wide">Yeni Ödev Ataması</h3>
-            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
-              {assignSelectedPuzzles.length} Bulmaca · {assignMode === 'groups' ? assignSelectedGroups.length : assignSelectedStudents.length} Hedef
-            </span>
+        <div
+          className="fixed inset-0 z-50 flex justify-center items-start sm:items-center p-2 sm:p-4 bg-black/70 backdrop-blur-sm overflow-y-auto"
+          onClick={() => setShowAssignForm(false)}
+        >
+        <div
+          className="bg-[#1e293b] border border-white/10 rounded-2xl shadow-2xl w-full max-w-5xl flex flex-col max-h-[calc(100dvh-0.5rem)] sm:max-h-[min(90dvh,860px)] my-1 sm:my-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 sm:py-4 border-b border-white/10 shrink-0">
+            <div className="min-w-0">
+              <h3 className="text-sm font-black text-white tracking-wide">
+                {assignFormPurpose === 'program' ? 'Yeni Günlük Program' : 'Yeni Ödev Ataması'}
+              </h3>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5 truncate">
+                {assignFormPurpose === 'program'
+                  ? `${assignMode === 'groups' ? assignSelectedGroups.length : assignSelectedStudents.length} Hedef · Platform`
+                  : `${assignSelectedPuzzles.length} Bulmaca · ${assignMode === 'groups' ? assignSelectedGroups.length : assignSelectedStudents.length} Hedef`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAssignForm(false)}
+              className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 shrink-0"
+              aria-label="Kapat"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 py-4 space-y-4 custom-scrollbar">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Ödev Başlığı</p>
               <input
                 value={assignTitle}
-                onChange={(e) => setAssignTitle(e.target.value)}
+                onChange={(e) => {
+                  setAssignTitle(e.target.value);
+                  if (assignFieldErrors.title) setAssignFieldErrors((p) => ({ ...p, title: undefined }));
+                }}
                 placeholder="Örn: Haftalık Taktik Ödevi"
-                className="input-base w-full"
+                className={`input-base w-full ${assignFieldErrors.title ? 'border-rose-500/60 ring-1 ring-rose-500/30' : ''}`}
               />
+              {assignFieldErrors.title ? (
+                <p className="text-[11px] text-rose-400 mt-1">{assignFieldErrors.title}</p>
+              ) : null}
             </div>
             <div>
               <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">
@@ -1218,10 +1308,13 @@ const Homework: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="bg-black/20 border border-white/10 rounded-lg p-4 space-y-2">
+          <div className={`grid grid-cols-1 ${assignFormPurpose === 'program' ? '' : 'lg:grid-cols-2'} gap-4`}>
+            <div className={`bg-black/20 border rounded-lg p-4 space-y-2 ${assignFieldErrors.targets ? 'border-rose-500/40' : 'border-white/10'}`}>
               <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Atanacaklar</p>
-              <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
+              {assignFieldErrors.targets ? (
+                <p className="text-[11px] text-rose-400">{assignFieldErrors.targets}</p>
+              ) : null}
+              <div className="max-h-40 sm:max-h-44 overflow-y-auto space-y-1 pr-1">
                 {assignMode === 'groups'
                   ? studentGroups.map((g) => (
                       <button
@@ -1251,17 +1344,21 @@ const Homework: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-black/20 border border-white/10 rounded-lg p-4 space-y-2">
+            {assignFormPurpose !== 'program' ? (
+            <div className={`bg-black/20 border rounded-lg p-4 space-y-2 ${assignFieldErrors.puzzles ? 'border-rose-500/40' : 'border-white/10'}`}>
               <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">
-                Bulmacalar <span className="text-slate-600 font-bold normal-case">(isteğe bağlı)</span>
+                Bulmacalar
               </p>
+              {assignFieldErrors.puzzles ? (
+                <p className="text-[11px] text-rose-400">{assignFieldErrors.puzzles}</p>
+              ) : null}
               <input
                 value={assignPuzzleSearch}
                 onChange={(e) => setAssignPuzzleSearch(e.target.value)}
                 placeholder="Bulmaca ara..."
                 className="input-base w-full"
               />
-              <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
+              <div className="max-h-40 sm:max-h-44 overflow-y-auto space-y-1 pr-1">
                 {assignFilteredPuzzles.map((p) => (
                   <button
                     key={p.id}
@@ -1277,12 +1374,17 @@ const Homework: React.FC = () => {
                 ))}
               </div>
             </div>
+            ) : null}
           </div>
 
-          {assignFormStudents.length > 0 ? (
+          {assignFormPurpose === 'program' && assignFieldErrors.goals ? (
+            <p className="text-[11px] text-rose-400">{assignFieldErrors.goals}</p>
+          ) : null}
+
+          {assignFormStudents.length > 0 && assignFormPurpose === 'program' ? (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h4 className="text-sm font-bold text-white">Platform Hedefleri</h4>
+                <h4 className="text-sm font-bold text-white">Haftalık / Günlük Hedefler</h4>
                 <div className="flex bg-black/30 p-1 rounded-lg">
                   <button
                     type="button"
@@ -1372,7 +1474,7 @@ const Homework: React.FC = () => {
                   onClick={applyAssignDefaultsToWeek}
                   className="px-3 py-2 rounded-lg bg-violet-600/30 text-violet-300 text-xs font-bold hover:bg-violet-600/50"
                 >
-                  Haftanın 7 gününe uygula
+                  Haftaya uygula
                 </button>
               </div>
               <div className="max-h-48 overflow-y-auto">
@@ -1470,8 +1572,10 @@ const Homework: React.FC = () => {
               )}
             </div>
           ) : null}
+          </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="shrink-0 border-t border-white/10 px-4 sm:px-5 py-3 sm:py-4 space-y-3 bg-[#1e293b] rounded-b-2xl">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
             <div className="bg-black/30 rounded-lg p-3 text-center border border-white/5">
               <p className="text-lg font-black text-indigo-400">{assignSelectedPuzzles.length}</p>
               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Bulmaca</p>
@@ -1494,8 +1598,11 @@ const Homework: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2">
-            <button type="button" onClick={resetAssignForm} className="px-4 py-2.5 rounded-lg text-xs bg-slate-800 text-slate-300 font-bold">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button type="button" onClick={() => setShowAssignForm(false)} className="px-4 py-2.5 rounded-lg text-xs bg-slate-800 text-slate-300 font-bold hover:bg-slate-700">
+              İptal
+            </button>
+            <button type="button" onClick={resetAssignForm} className="px-4 py-2.5 rounded-lg text-xs bg-slate-800 text-slate-300 font-bold hover:bg-slate-700">
               Temizle
             </button>
             <button
@@ -1505,6 +1612,7 @@ const Homework: React.FC = () => {
             >
               Ödevi Kaydet ve Ata
             </button>
+          </div>
           </div>
         </div>
         </div>
@@ -1552,7 +1660,7 @@ const Homework: React.FC = () => {
             <>
               {analysisView === 'list' ? (
                 <HomeworkAssignmentsList
-                  homeworks={filteredHomeworks}
+                  homeworks={trackingHomeworks}
                   students={students}
                   attempts={homeworkAttempts}
                   submissions={homeworkSubmissions}
@@ -1571,7 +1679,7 @@ const Homework: React.FC = () => {
                 />
               ) : (
                 <HomeworkAssignmentsList
-                  homeworks={filteredHomeworks}
+                  homeworks={trackingHomeworks}
                   students={students}
                   attempts={homeworkAttempts}
                   submissions={homeworkSubmissions}
@@ -1597,8 +1705,8 @@ const Homework: React.FC = () => {
                 ) : (
                   <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-12 text-center">
                     <Calendar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                    <p className="text-sm text-slate-400">Günlük program için atama bulunamadı</p>
-                    <p className="text-xs text-slate-500 mt-2">Sol panelden şube / grup seçin veya yeni ödev atayın</p>
+                    <p className="text-sm text-slate-400">Günlük program ataması bulunamadı</p>
+                    <p className="text-xs text-slate-500 mt-2">Yeni Günlük Program ile Lichess/Chess.com hedeflerini tanımlayın</p>
                   </div>
                 )
               ) : programSelectedHw && programAssigneesForStats.length > 0 ? (

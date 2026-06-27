@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { loadStudiesAsync, saveStudyAsync, deleteStudyAsync, subscribeToStudies } from '../studyStorage';
-import { loadStudyCategories, saveStudyCategories, type StudyCategoryMeta } from '../studyCategoriesStorage';
+import { loadStudyCategories, loadStudyCategoriesAsync, saveStudyCategoriesAsync, type StudyCategoryMeta } from '../studyCategoriesStorage';
 import { Chessboard } from 'react-chessboard';
 import { Chess, Square } from 'chess.js';
 import {
@@ -26,10 +26,12 @@ import Analysis from './Analysis';
 import { getBestMove, getBestMoveAsync, getEvaluationPawns, evaluatePosition } from '../services/chessEngine';
 import { 
   DEFAULT_FEN, genId, migrateChapter, migrateStudy, setFenTurn, makeBuilderGame, applyMove,
-  buildPgn, parsePgnMoveMeta, parsePgnBlockToMoves, engineLevelFromDifficulty, 
+  buildPgn, parsePgnBlockToMoves, engineLevelFromDifficulty, 
   cpLossThresholdForDifficulty, chapterModeBadge, formatChapterListLabel, chapterListLabelMatches,
   loadEditorSelection, saveEditorSelection, EMOJIS, LICHESS_PIECE
 } from '../lib/studyUtils';
+import { parsePgnBlockToChapter } from '../lib/pgnChapterParse';
+import { normalizeStudyChapterPuzzle } from '../lib/puzzlePlayUtils';
 import { loadStudyEvents, type StudyEvent } from '../studyEvents';
 import { useApp } from '../AppContext';
 import { resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
@@ -41,7 +43,7 @@ import { useStudyChapterSync } from '../hooks/useStudyChapterSync';
 import { appendStudyAction } from '../services/studyActions';
 import { loadStudyPresence, subscribeStudyPresence, upsertPresence } from '../services/studyActions';
 import { serializePath } from '../lib/studySync/types';
-import { mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, promoteVariationLines, mergeMainlineMoves, mergeVariationRecords } from '../lib/studySync/moveList';
+import { mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, promoteVariationLines, mergeMainlineMoves, mergeVariationRecords, findVariationNodeAtMoveIndex } from '../lib/studySync/moveList';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
@@ -148,6 +150,7 @@ const StudyPage: React.FC = () => {
   const currentUserName = useMemo(() => {
     if (auth?.role === 'admin') return 'Admin';
     if (auth?.role === 'coach') return 'Antrenör';
+    if (auth?.role === 'club') return auth.branch?.trim() || 'Kulüp';
     if (auth?.role === 'student' || auth?.role === 'parent') {
       return students.find(s => s.id === (auth as any).studentId)?.name ?? 'Öğrenci';
     }
@@ -156,7 +159,8 @@ const StudyPage: React.FC = () => {
   const [view, setView] = useState<AppView>('list');
   const [studentPreviewStudyId, setStudentPreviewStudyId] = useState<string | null>(null);
   const [listSidebar, setListSidebar] = useState<StudyListSidebar>({ type: 'all' });
-  const [studyCategories, setStudyCategories] = useState<StudyCategoryMeta[]>(() => loadStudyCategories());
+  const [studyCategories, setStudyCategories] = useState<StudyCategoryMeta[]>([]);
+  const studyCategoriesLoadedRef = useRef(false);
   const [categoryAddOpen, setCategoryAddOpen] = useState(false);
   const [categoryAddName, setCategoryAddName] = useState('');
   const [listSearch, setListSearch] = useState('');
@@ -403,7 +407,20 @@ const StudyPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    saveStudyCategories(studyCategories);
+    void loadStudyCategoriesAsync()
+      .then((cats) => {
+        setStudyCategories(cats);
+        studyCategoriesLoadedRef.current = true;
+      })
+      .catch(() => {
+        setStudyCategories(loadStudyCategories());
+        studyCategoriesLoadedRef.current = true;
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!studyCategoriesLoadedRef.current) return;
+    void saveStudyCategoriesAsync(studyCategories);
   }, [studyCategories]);
 
   useEffect(() => {
@@ -467,6 +484,7 @@ const StudyPage: React.FC = () => {
     behind,
     catchUp,
     jumpToVariation,
+    jumpToNodePath,
     jumpToMoveIndex,
     promoteVariation,
     alignMainlineToMoves,
@@ -475,6 +493,7 @@ const StudyPage: React.FC = () => {
     setNodeGlyphs,
     undoMove,
     truncateMainlineFromMoveIndex,
+    truncateVariationFromMove,
     clearChapter,
     parsePath,
     serializePath,
@@ -494,19 +513,37 @@ const StudyPage: React.FC = () => {
     if (!treeCh || treeCh.id !== raw.id) return raw;
     const rawMoves = raw.moves ?? [];
     const treeMoves = treeCh.moves ?? [];
-    const mergedVars = mergeVariationRecords(raw.variations ?? {}, treeCh.variations ?? {});
+    const mergedVars = mergeVariationRecords(raw.variations ?? {}, treeCh?.variations ?? {});
     return {
       ...raw,
       moves: mergeMainlineMoves(rawMoves, treeMoves),
       variations: mergedVars,
+      moveComments: {
+        ...(raw.moveComments ?? {}),
+        ...(treeCh.moveComments ?? {}),
+      },
       moveAnnotations: {
-        ...(treeCh.moveAnnotations ?? {}),
         ...(raw.moveAnnotations ?? {}),
+        ...(treeCh.moveAnnotations ?? {}),
       },
     };
   }, [legacyChapter, selectedChapterRaw]);
 
+  const isInteractivePuzzleChapter = useMemo(
+    () =>
+      !!selectedChapter &&
+      selectedChapter.lessonMode === 'interactive' &&
+      (selectedChapter.interactiveType ?? 'puzzle') === 'puzzle',
+    [selectedChapter?.id, selectedChapter?.lessonMode, selectedChapter?.interactiveType]
+  );
+
+  const puzzlePlayNorm = useMemo(() => {
+    if (!isInteractivePuzzleChapter || !selectedChapter) return null;
+    return normalizeStudyChapterPuzzle(selectedChapter);
+  }, [isInteractivePuzzleChapter, selectedChapter?.fen, selectedChapter?.moves, selectedChapter?.id]);
+
   const chapterMovesForUi = useMemo(() => {
+    if (isInteractivePuzzleChapter && puzzlePlayNorm) return puzzlePlayNorm.studentMoves;
     if (practiceMode && !recording) return selectedChapter?.moves ?? [];
     const legacy = selectedChapterRaw?.moves ?? [];
     if (!syncState?.tree?.mainline || syncState.tree.mainline.length <= 1) {
@@ -516,13 +553,16 @@ const StudyPage: React.FC = () => {
     const rootFen = syncState.tree.nodes[syncState.tree.rootId]?.fen ?? DEFAULT_FEN;
     const fromTree = mainlineSansFromTree(syncState.tree, rootFen);
     return mergeMainlineMoves(legacy, fromTree);
-  }, [practiceMode, recording, syncState, selectedChapter?.moves, selectedChapterRaw?.moves, selectedChapterRaw?.id]);
+  }, [isInteractivePuzzleChapter, puzzlePlayNorm, practiceMode, recording, syncState, selectedChapter?.moves, selectedChapterRaw?.moves, selectedChapterRaw?.id]);
 
   const moveListChapter = useMemo(() => {
     if (!selectedChapter) return null;
-    const vars = sanitizeChapterVariations(selectedChapter, chapterMovesForUi);
-    return { ...selectedChapter, moves: chapterMovesForUi, variations: vars };
-  }, [selectedChapter, chapterMovesForUi]);
+    const fen = isInteractivePuzzleChapter && puzzlePlayNorm
+      ? puzzlePlayNorm.startFen
+      : selectedChapter.fen;
+    const vars = sanitizeChapterVariations({ ...selectedChapter, fen, moves: chapterMovesForUi }, chapterMovesForUi);
+    return { ...selectedChapter, fen, moves: chapterMovesForUi, variations: vars };
+  }, [selectedChapter, chapterMovesForUi, isInteractivePuzzleChapter, puzzlePlayNorm]);
 
   useEffect(() => {
     setWrite(recording);
@@ -1304,20 +1344,15 @@ const StudyPage: React.FC = () => {
   const importPgn = useCallback(() => {
     if (!pgnImportText.trim()) return;
     try {
-      const fenMatch = pgnImportText.match(/\[FEN\s+"([^"]+)"\]/i);
-      const startFen = fenMatch ? fenMatch[1] : DEFAULT_FEN;
-      const g = new Chess();
-      if (startFen !== DEFAULT_FEN) { try { g.load(startFen); } catch {} }
-      try { g.loadPgn(pgnImportText.trim()); } catch {}
-      const moves = g.history();
-      const meta = parsePgnMoveMeta(pgnImportText.trim());
+      const parsed = parsePgnBlockToChapter(pgnImportText.trim());
       setChapterDraft(d => d ? {
         ...d,
-        moves,
-        fen: startFen,
-        variations: {},
-        moveAnnotations: meta.annotations,
-        moveComments: meta.comments,
+        moves: parsed.moves,
+        fen: parsed.startFen,
+        variations: parsed.variations,
+        moveAnnotations: parsed.moveAnnotations,
+        moveComments: parsed.moveComments,
+        seedTree: parsed.tree,
       } : d);
       setCurrentMoveIndex(0);
       setPgnImportText('');
@@ -1341,13 +1376,17 @@ const StudyPage: React.FC = () => {
     for (let i = 0; i < blocks.length; i++) {
        const block = blocks[i].trim();
        if (!block) continue;
-       const { startFen, moves } = parsePgnBlockToMoves(block);
+       const parsed = parsePgnBlockToChapter(block);
        titleIdx += 1;
        newChapters.push(migrateChapter({
          id: genId(),
-         title: `Bölüm ${titleIdx}`,
-         fen: startFen,
-         moves,
+         title: parsed.title || `Bölüm ${titleIdx}`,
+         fen: parsed.startFen,
+         moves: parsed.moves,
+         variations: parsed.variations,
+         moveComments: parsed.moveComments,
+         moveAnnotations: parsed.moveAnnotations,
+         seedTree: parsed.tree,
        }));
     }
     if (newChapters.length === 0) return 0;
@@ -1518,6 +1557,7 @@ const StudyPage: React.FC = () => {
     if (!practiceMode || recording || !selectedChapter || isInVariation) return;
     if (!practiceActiveFen) return;
     if (selectedChapter.interactiveType === 'liveAnalysis') return;
+    if (isInteractivePuzzleChapter) return;
 
     const userSide = selectedChapter.orientation === 'white' ? 'w' : 'b';
     const isInteractive = selectedChapter.lessonMode === 'interactive';
@@ -1545,8 +1585,9 @@ const StudyPage: React.FC = () => {
 
         // 2. Eğer bulmaca hamlesi yoksa ve motor pratiği isteniyorsa motordan hamle al
         if (!moveSan) {
-          const difficulty = selectedChapter.difficulty ?? 6;
-          const level = engineLevelFromDifficulty(difficulty);
+          const level = selectedChapter.interactiveType === 'vsComputer'
+            ? 20
+            : engineLevelFromDifficulty(selectedChapter.difficulty ?? 6);
           moveSan = await getBestMoveAsync(g, level);
         }
 
@@ -1570,7 +1611,7 @@ const StudyPage: React.FC = () => {
 
     void run();
     return () => { cancelled = true; };
-  }, [practiceMode, recording, selectedChapter, isInVariation, practiceActiveFen, currentMoveIndex]);
+  }, [practiceMode, recording, selectedChapter, isInVariation, practiceActiveFen, currentMoveIndex, isInteractivePuzzleChapter]);
 
   const isRecordedMoveStrongEnough = useCallback((fenBefore: string, san: string): boolean => {
     // If we're recording, always allow any move (educator may want to show errors)
@@ -1658,7 +1699,8 @@ const StudyPage: React.FC = () => {
   }, []);
 
   const isCoachOrAdmin = auth?.role === 'admin' || auth?.role === 'coach';
-  const canAnnotateMoves = isCoachOrAdmin && !!selectedChapter && !!selectedStudy;
+  const canEditStudy = isCoachOrAdmin || auth?.role === 'club';
+  const canAnnotateMoves = canEditStudy && !!selectedChapter && !!selectedStudy;
   const syncPathLen = syncState?.currentPath?.length ?? 0;
   /** Antrenör tahtası: motor pratiği hariç son hamleyi geri al (Ctrl+Z). REC kapalıyken hamleler yalnızca yerel silinir. */
   const canStudyUndo =
@@ -1936,7 +1978,7 @@ const StudyPage: React.FC = () => {
     console.log('[StudyPage] Practice drop:', sourceSquare, targetSquare);
     if (!sourceSquare || !targetSquare) return false;
     if (!selectedChapter || recording || !practiceMode || isInVariation) return false;
-    const expectedSan = selectedChapter.moves?.[currentMoveIndex];
+    const expectedSan = chapterMovesForUi[currentMoveIndex];
     const now = Date.now();
     const thinkMs = Math.max(0, now - lastMoveActionAtMs);
     try {
@@ -1980,14 +2022,14 @@ const StudyPage: React.FC = () => {
       if (isCorrect) {
         setPracticeFeedback('correct');
         // Eğer chapter.moves ile doğrulama yapıyorsak, index’i ilerlet; yoksa vs-computer modunda sadece ply takip ediliyor.
-        if (expectedSan) setCurrentMoveIndex(i => Math.min((selectedChapter.moves?.length ?? 0), i + 1));
+        if (expectedSan) setCurrentMoveIndex(i => Math.min(chapterMovesForUi.length, i + 1));
         return true;
       } else {
         setPracticeFeedback('wrong');
         return false;
       }
     } catch { setPracticeFeedback('wrong'); return false; }
-  }, [selectedChapter, recording, practiceMode, isInVariation, currentMoveIndex, effectiveFen, practiceActiveFen, practicePly, lastMoveActionAtMs, currentUserName, auth, selectedStudy, moveAnalysisEntries, updateStudy]);
+  }, [selectedChapter, chapterMovesForUi, recording, practiceMode, isInVariation, currentMoveIndex, effectiveFen, practiceActiveFen, practicePly, lastMoveActionAtMs, currentUserName, auth, selectedStudy, moveAnalysisEntries, updateStudy]);
 
   const flipBoard = useCallback(() => {
     if (!selectedChapter) return;
@@ -2246,18 +2288,31 @@ const StudyPage: React.FC = () => {
   }, [selectedChapter?.id]);
 
   useEffect(() => {
+    if (currentVariation) return;
     if (currentMoveIndex > 0) {
       setSelectedAnnotationPly(currentMoveIndex - 1);
     } else {
       setSelectedAnnotationPly(null);
     }
-  }, [currentMoveIndex]);
+  }, [currentMoveIndex, currentVariation]);
 
   /** 0-tabanlı hamle indeksi (moveAnnotations anahtarı) */
   const annotationPlyIndex = selectedAnnotationPly;
 
   const resolveAnnotationNodeId = useCallback((): string | null => {
     if (!syncState || annotationPlyIndex == null) return null;
+
+    if (currentVariation) {
+      const [mlp, vgi] = currentVariation;
+      return findVariationNodeAtMoveIndex(
+        syncState.tree,
+        mlp,
+        vgi,
+        annotationPlyIndex,
+        selectedChapterRaw?.variations ?? {},
+      );
+    }
+
     const ml = syncState.tree.mainline;
     const nodeAtPly = ml[annotationPlyIndex + 1];
     if (nodeAtPly) return nodeAtPly;
@@ -2267,7 +2322,7 @@ const StudyPage: React.FC = () => {
       return leaf;
     }
     return null;
-  }, [syncState, annotationPlyIndex]);
+  }, [syncState, annotationPlyIndex, currentVariation, selectedChapterRaw?.variations]);
 
   const addAnnotation = useCallback((sym: string) => {
     if (!selectedChapter || annotationPlyIndex == null || !canAnnotateMoves) return;
@@ -2453,7 +2508,10 @@ const StudyPage: React.FC = () => {
   const openChapterEdit = useCallback((ch: StudyChapter) => { setChapterDraft({ ...ch }); setEditingChapterId(ch.id); }, []);
   const saveChapterEdit = useCallback(() => {
     if (!selectedStudy || !chapterDraft || !editingChapterId) return;
-    updateAndSaveStudy(selectedStudy.id, s => ({ ...s, chapters: s.chapters.map(c => c.id === editingChapterId ? { ...c, ...chapterDraft } : c) }));
+    const toSave = chapterDraft.interactiveType === 'vsComputer'
+      ? { ...chapterDraft, difficulty: 10 }
+      : chapterDraft;
+    updateAndSaveStudy(selectedStudy.id, s => ({ ...s, chapters: s.chapters.map(c => c.id === editingChapterId ? { ...c, ...toSave } : c) }));
     // Deterministic sync for chapter-level fields (Lichess-like).
     if (write) {
       void appendStudyAction({
@@ -2470,7 +2528,7 @@ const StudyPage: React.FC = () => {
             interactiveType: chapterDraft.interactiveType,
             guidedPrompt: chapterDraft.guidedPrompt,
             moveHint: chapterDraft.moveHint,
-            difficulty: chapterDraft.difficulty,
+            difficulty: toSave.difficulty,
             tags: chapterDraft.tags,
           },
         },
@@ -2565,7 +2623,7 @@ const StudyPage: React.FC = () => {
         delete newVars[k];
       }
       const tree = syncState?.tree?.mainline;
-      if (tree && tree.length > currentIdx + 1 && write) {
+      if (tree && tree.length > currentIdx + 1) {
         await truncateMainlineFromMoveIndex(currentIdx);
       }
     }
@@ -2585,8 +2643,6 @@ const StudyPage: React.FC = () => {
     setSelectedAnnotationPly(Math.max(0, newMoveIndex - 1));
 
     if (syncState?.tree) {
-      alignMainlineToMoves(newMoves, newMoveIndex);
-    } else {
       void jumpToMoveIndex(newMoveIndex, newMoves);
     }
   }, [
@@ -3893,7 +3949,10 @@ const StudyPage: React.FC = () => {
                 if (n) {
                   setCurrentMoveIndex(0);
                   setPracticeFeedback(null);
-                  setPracticeFen(selectedChapter?.fen || DEFAULT_FEN);
+                  const ch = selectedChapter;
+                  const isPuzzle = ch?.lessonMode === 'interactive' && (ch.interactiveType ?? 'puzzle') === 'puzzle';
+                  const norm = isPuzzle && ch ? normalizeStudyChapterPuzzle(ch) : null;
+                  setPracticeFen(norm?.startFen ?? ch?.fen ?? DEFAULT_FEN);
                   setPracticePly(0);
                 } else {
                   setPracticeFen(null);
@@ -4079,6 +4138,9 @@ const StudyPage: React.FC = () => {
                   currentVariation={viewingStudentId ? null : currentVariation}
                   inlineNotation={boardSettings.inlineNotation}
                   showMoveAnnotations={boardSettings.showMoveAnnotations}
+                  tree={viewingStudentId ? null : syncState?.tree}
+                  currentPath={viewingStudentId ? undefined : syncState?.currentPath}
+                  onSelectPath={viewingStudentId ? undefined : (path) => { void jumpToNodePath(path); }}
                   onSelectMove={(idx, varData) => {
                     if (varData) {
                       setCurrentVariation(varData);
@@ -4097,19 +4159,24 @@ const StudyPage: React.FC = () => {
                     if (isDraggingPiece) return;
                     setHoverState(ply !== null ? (v ? { active: true, var: v } : { active: true, ply }) : null);
                   }}
-                  onDeleteFromHere={async (idx) => {
+                  onDeleteFromHere={async (idx, varInfo) => {
                     if (!selectedStudy || !selectedChapter) return;
-                    if (idx < 0) {
-                      const encoded = -idx - 1;
-                      const mlp = Math.floor(encoded / 1000);
-                      const vgi = encoded % 1000;
-                      const vars = { ...(selectedChapter.variations ?? {}) };
-                      const group = [...(vars[mlp] ?? [])];
-                      group.splice(vgi, 1);
-                      if (group.length === 0) delete vars[mlp];
-                      else vars[mlp] = group;
-                      updateChapterAtIndex(selectedChapterIndex, { variations: vars });
-                      if (currentVariation && currentVariation[0] === mlp && currentVariation[1] === vgi) {
+
+                    if (varInfo) {
+                      const [mlp, vgi, vmi] = varInfo;
+                      const exported = await truncateVariationFromMove(mlp, vgi, vmi);
+                      if (exported) {
+                        updateChapterAtIndex(selectedChapterIndex, {
+                          moves: exported.moves,
+                          variations: exported.variations,
+                        });
+                      }
+                      if (
+                        currentVariation &&
+                        currentVariation[0] === mlp &&
+                        currentVariation[1] === vgi &&
+                        currentVariation[2] >= vmi
+                      ) {
                         setCurrentVariation(null);
                       }
                       return;
@@ -4126,24 +4193,25 @@ const StudyPage: React.FC = () => {
                       delete newVars[k];
                     }
 
-                    const tree = syncState?.tree?.mainline;
-                    const needsSyncTruncate =
-                      !!tree &&
-                      tree.length > idx + 1 &&
-                      (auth?.role === 'admin' || auth?.role === 'coach');
+                    const newMoveIndex = Math.min(currentMoveIndex, idx);
 
-                    if (needsSyncTruncate) {
-                      await truncateMainlineFromMoveIndex(idx);
+                    const tree = syncState?.tree?.mainline;
+                    let exported = null as { moves: string[]; variations: Record<number, string[][]> } | null;
+                    if (tree && tree.length > idx + 1) {
+                      exported = await truncateMainlineFromMoveIndex(idx);
                     }
 
                     updateChapterAtIndex(selectedChapterIndex, {
-                      moves: newMoves,
+                      moves: exported?.moves ?? newMoves,
                       moveComments: newComments,
                       moveAnnotations: newAnnotations,
-                      variations: newVars,
+                      variations: exported?.variations ?? newVars,
                     });
+
                     setCurrentVariation(null);
-                    if (currentMoveIndex > idx) setCurrentMoveIndex(idx);
+                    setCurrentMoveIndex(newMoveIndex);
+                    setSelectedAnnotationPly(Math.max(0, newMoveIndex - 1));
+                    void jumpToMoveIndex(newMoveIndex, exported?.moves ?? newMoves);
                   }}
                   onPromoteVariation={async (mlp, vgi) => {
                     if (!selectedStudy || !selectedChapter) return;
@@ -4159,21 +4227,28 @@ const StudyPage: React.FC = () => {
                       vgi,
                       selectedChapter.fen || selectedChapterRaw?.fen,
                     );
-                    if (!promoted) return;
-
-                    alignMainlineToMoves(promoted.moves, promoted.nextMoveIndex);
-
-                    if (syncState?.tree?.mainline && syncState.tree.mainline.length > 1) {
-                      void promoteVariation(mlp, vgi);
+                    if (!promoted) {
+                      showToast('Varyasyon ana hatta yükseltilemedi.', 'warning');
+                      return;
                     }
 
                     updateChapterAtIndex(selectedChapterIndex, {
                       moves: promoted.moves,
                       variations: promoted.variations,
                     });
+
                     setCurrentVariation(null);
                     setCurrentMoveIndex(promoted.nextMoveIndex);
+                    setSelectedAnnotationPly(Math.max(0, promoted.nextMoveIndex - 1));
+
+                    if (syncState?.tree) {
+                      alignMainlineToMoves(promoted.moves, promoted.nextMoveIndex);
+                    }
                     void jumpToMoveIndex(promoted.nextMoveIndex, promoted.moves);
+
+                    if (syncState?.tree?.mainline && syncState.tree.mainline.length > 1 && write) {
+                      void promoteVariation(mlp, vgi);
+                    }
                   }}
                 />
               )}
@@ -4728,14 +4803,16 @@ const StudyPage: React.FC = () => {
 
               {chapterDraft.lessonMode === 'interactive' && (
                 <div className="p-4 bg-teal-500/5 border border-teal-500/20 rounded-2xl space-y-4 animate-in slide-in-from-top-2">
-                  <div className="grid grid-cols-2 gap-4">
-                    <Sel label="Etkileşim Tipi" value={chapterDraft.interactiveType} onChange={v => setChapterDraft(d => d ? { ...d, interactiveType: v as any } : d)} options={[['puzzle', 'Bulmaca (Hamle Bul)'], ['liveAnalysis', 'Canlı Analiz'], ['vsComputer', 'Bilgisayara Karşı Antrenman']]} />
-                    <Sel label="Zorluk Seviyesi" value={String(chapterDraft.difficulty)} onChange={v => setChapterDraft(d => d ? { ...d, difficulty: parseInt(v) } : d)} options={Array.from({length:10}, (_,i)=>[String(i+1), `Seviye ${i+1}`])} />
-                  </div>
+                  <Sel label="Etkileşim Tipi" value={chapterDraft.interactiveType} onChange={v => setChapterDraft(d => d ? { ...d, interactiveType: v as any, difficulty: v === 'vsComputer' ? 10 : d.difficulty } : d)} options={[['puzzle', 'Bulmaca (Hamle Bul)'], ['liveAnalysis', 'Canlı Analiz'], ['vsComputer', 'Bilgisayara Karşı Antrenman']]} />
+                  {chapterDraft.interactiveType === 'vsComputer' ? (
+                    <p className="text-[11px] text-teal-300/80">Bilgisayar karşısında antrenman en yüksek seviyede başlar.</p>
+                  ) : null}
+                  {(chapterDraft.interactiveType ?? 'puzzle') === 'puzzle' ? (
                   <div>
                     <label className="block text-[10px] font-bold text-teal-400/70 uppercase tracking-widest mb-1.5">İpucu (Hint)</label>
                     <input type="text" value={chapterDraft.moveHint} onChange={e => setChapterDraft(d => d ? { ...d, moveHint: e.target.value } : d)} className="w-full bg-slate-900 border border-white/5 rounded-xl px-3 py-2 text-xs text-white outline-none" placeholder="Sıkışan öğrenciye gösterilecek mesaj..." />
                   </div>
+                  ) : null}
                 </div>
               )}
 

@@ -1,4 +1,5 @@
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, Student, StudentDailyTarget } from '../types';
+import { countPerPuzzleResults } from './homeworkAnalysisUtils';
 import {
   dedupeChessComPuzzleAttempts,
   selectHomeworkGoalPuzzles,
@@ -107,6 +108,28 @@ export async function fetchStudentPlatformDayStats(
   };
 }
 
+export function homeworkAttemptsForDay(
+  attempts: HomeworkPuzzleAttempt[],
+  homeworkId: string,
+  studentId: string,
+  dayIso: string,
+): HomeworkPuzzleAttempt[] {
+  return attempts.filter(
+    (a) =>
+      a.homeworkId === homeworkId &&
+      a.studentId === studentId &&
+      puzzleAttemptMatchesDay(a.timestamp, dayIso),
+  );
+}
+
+export function internalPuzzleCountsForDay(
+  puzzleIds: string[],
+  attempts: HomeworkPuzzleAttempt[],
+): { passed: number; failed: number; solved: number } {
+  const { correct, wrong } = countPerPuzzleResults(puzzleIds, attempts);
+  return { passed: correct, failed: wrong, solved: correct + wrong };
+}
+
 export function resolveDayTargets(
   draft: StudentDailyTarget | undefined,
   hw: HomeworkAssignment,
@@ -129,12 +152,19 @@ export function evaluateDayGoals(
   minAccuracy: number,
   platform: PlatformDayStats | undefined,
   internalAttempts: HomeworkPuzzleAttempt[],
-): { gamesMet: boolean; puzzlesMet: boolean; done: boolean; puzzleSolved: number; puzzleAccuracy: number } {
-  const internalSolved = internalAttempts.length;
-  const internalCorrect = internalAttempts.filter((a) => a.correct).length;
-  const puzzleSolved = internalSolved + (platform?.puzzleSolved ?? 0);
-  const puzzleCorrect = internalCorrect + (platform?.puzzlePassed ?? 0);
-  const puzzleAccuracy = puzzleSolved > 0 ? (puzzleCorrect / puzzleSolved) * 100 : 0;
+  homeworkPuzzleIds: string[] = [],
+): { gamesMet: boolean; puzzlesMet: boolean; done: boolean; puzzleSolved: number; puzzleAccuracy: number; puzzlePassed: number; puzzleFailed: number } {
+  const internal = homeworkPuzzleIds.length > 0
+    ? internalPuzzleCountsForDay(homeworkPuzzleIds, internalAttempts)
+    : {
+        passed: internalAttempts.filter((a) => a.correct).length,
+        failed: internalAttempts.filter((a) => !a.correct).length,
+        solved: internalAttempts.length,
+      };
+  const puzzlePassed = internal.passed + (platform?.puzzlePassed ?? 0);
+  const puzzleFailed = internal.failed + (platform?.puzzleFailed ?? 0);
+  const puzzleSolved = internal.solved + (platform?.puzzleSolved ?? 0);
+  const puzzleAccuracy = puzzleSolved > 0 ? (puzzlePassed / puzzleSolved) * 100 : 0;
   const gamesMet = gameTarget <= 0 || (platform?.games ?? 0) >= gameTarget;
   const puzzlesMet = puzzleTarget <= 0 || (puzzleSolved >= puzzleTarget && puzzleAccuracy >= minAccuracy);
   return {
@@ -143,6 +173,45 @@ export function evaluateDayGoals(
     done: gamesMet && puzzlesMet,
     puzzleSolved,
     puzzleAccuracy,
+    puzzlePassed,
+    puzzleFailed,
+  };
+}
+
+/** Platform günlük hedefi — yalnızca Lichess/Chess.com sayıları (atanan ödev bulmacaları dahil değil). */
+export function evaluatePlatformDayGoalsFromStats(
+  gameTarget: number,
+  puzzleTarget: number,
+  minAccuracy: number,
+  platform: PlatformDayStats | undefined,
+): {
+  gamesMet: boolean;
+  puzzlesMet: boolean;
+  done: boolean;
+  puzzleAccuracy: number;
+  puzzleSolved: number;
+  puzzlePassed: number;
+  puzzleFailed: number;
+  games: number;
+} {
+  const games = platform?.games ?? 0;
+  const puzzleSolved = platform?.puzzleSolved ?? 0;
+  const puzzlePassed = platform?.puzzlePassed ?? 0;
+  const puzzleFailed = platform?.puzzleFailed ?? 0;
+  const base = evaluatePlatformDailyGoals(
+    gameTarget,
+    puzzleTarget,
+    minAccuracy,
+    games,
+    puzzleSolved,
+    puzzlePassed,
+  );
+  return {
+    ...base,
+    puzzleSolved,
+    puzzlePassed,
+    puzzleFailed,
+    games,
   };
 }
 
@@ -287,10 +356,10 @@ export function capDailyPuzzleDisplay(
   puzzleTarget: number,
 ): { correct: number; wrong: number } {
   if (puzzleTarget <= 0) return { correct, wrong };
-  const cappedCorrect = Math.min(correct, puzzleTarget);
-  const remainingSlots = Math.max(0, puzzleTarget - cappedCorrect);
-  const cappedWrong = Math.min(wrong, remainingSlots);
-  return { correct: cappedCorrect, wrong: cappedWrong };
+  return {
+    correct: Math.min(correct, puzzleTarget),
+    wrong,
+  };
 }
 
 /** Rate limit veya geçici hata sonrası daha düşük sayıların iyi verinin üzerine yazılmasını önler. */

@@ -1,4 +1,5 @@
 import type { SquareMarkColor } from './chessBoardUi';
+import type { StudyTree } from './studySync/types';
 
 export interface StudyChapter {
   id: string;
@@ -19,6 +20,8 @@ export interface StudyChapter {
   moveAnnotations: Record<number, string | string[]>;
   // Varyasyonlar: her hamle indeksinde alternatif varyasyon dizileri
   variations: Record<number, string[][]>;
+  /** PGN içe aktarımından gelen tam hamle ağacı (iç içe varyantlar). */
+  seedTree?: StudyTree;
   // Çizimler: oklar ve daireler (sync için)
   arrows?: Array<{ startSquare: string; endSquare: string; color: string }>;
   circles?: Record<string, boolean>;

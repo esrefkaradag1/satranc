@@ -11,10 +11,11 @@ import {
   Zap,
 } from 'lucide-react';
 import type { HomeworkPuzzleAttempt, Student } from '../../types';
-import type { LeaderboardEntry, LeaderboardPeriod, LeaderboardRankMode } from '../../lib/leaderboardUtils';
+import type { LeaderboardEntry, LeaderboardPeriod, LeaderboardPointSettings, LeaderboardRankMode } from '../../lib/leaderboardUtils';
 import {
   LEADERBOARD_RANK_MODES,
   clubDisplayName,
+  formatLeaderboardPointsSummary,
   getClubPeerStudents,
   getPeriodBounds,
   leaderboardModeLabel,
@@ -24,6 +25,9 @@ import {
 import { buildClubLeaderboard } from '../../services/leaderboardService';
 import { scheduleHourlyRefresh } from '../../lib/scheduleHourlyRefresh';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
+import { useApp } from '../../AppContext';
+import { normalizeClubKey } from '../../lib/clubScope';
+import { resolveClubLeaderboardPointSettings } from '../../lib/leaderboardPointSettings';
 
 type Props = {
   allStudents: Student[];
@@ -33,6 +37,7 @@ type Props = {
   /** Verilirse kulüp filtresi yerine bu liste kullanılır (admin paneli) */
   peerStudentsOverride?: Student[];
   compact?: boolean;
+  pointSettings?: LeaderboardPointSettings;
 };
 
 function PlatformBadges({ entry }: { entry: LeaderboardEntry }) {
@@ -98,7 +103,9 @@ export const ClubLeaderboard: React.FC<Props> = ({
   highlightStudentId,
   peerStudentsOverride,
   compact = false,
+  pointSettings: pointSettingsProp,
 }) => {
+  const { auth, clubs } = useApp();
   const [period, setPeriod] = useState<LeaderboardPeriod>('week');
   const [rankMode, setRankMode] = useState<LeaderboardRankMode>('activity');
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
@@ -114,6 +121,21 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const clubName = useMemo(() => clubDisplayName(anchorStudent), [anchorStudent]);
   const bounds = useMemo(() => getPeriodBounds(period), [period]);
 
+  const resolvedClubId = useMemo(() => {
+    if (auth?.role === 'club' && auth.clubId) return auth.clubId;
+    const office = anchorStudent?.branchOffice?.trim();
+    if (office) {
+      const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(office));
+      if (club) return club.id;
+    }
+    return null;
+  }, [auth, anchorStudent, clubs]);
+
+  const pointSettings = useMemo(
+    () => pointSettingsProp ?? resolveClubLeaderboardPointSettings(resolvedClubId, clubs),
+    [pointSettingsProp, resolvedClubId, clubs],
+  );
+
   const load = useCallback(async () => {
     if (peers.length === 0) {
       setEntries([]);
@@ -124,7 +146,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
     try {
       const result = await buildClubLeaderboard(peers, homeworkAttempts, period, rankMode, (done, total) => {
         setProgress({ done, total });
-      });
+      }, pointSettings);
       setEntries(result);
     } catch {
       setError('Sıralama yüklenemedi. Lütfen tekrar deneyin.');
@@ -132,7 +154,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
     } finally {
       setLoading(false);
     }
-  }, [peers, homeworkAttempts, period, rankMode]);
+  }, [peers, homeworkAttempts, period, rankMode, pointSettings]);
 
   useEffect(() => {
     void load();
@@ -168,7 +190,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
 
   const subtitle =
     rankMode === 'activity'
-      ? `${bounds.label} · bulmaca 1p, galibiyet 10p, beraberlik 5p, mağlubiyet 1p`
+      ? `${bounds.label} · ${pointSettings ? formatLeaderboardPointsSummary(pointSettings) : 'bulmaca 1p, galibiyet 10p, beraberlik 5p, mağlubiyet 1p'}`
       : `${bounds.label} · ${leaderboardModeLabel(rankMode)} sıralaması · Lichess + Chess.com`;
 
   return (

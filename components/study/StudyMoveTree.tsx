@@ -1,7 +1,9 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { Trash2, ArrowUpRight, MousePointer2 } from 'lucide-react';
 import type { StudyChapter } from '../../lib/studyTypes';
+import type { NodeId, StudyTree } from '../../lib/studySync/types';
 import { formatMoveGlyphs, parseMoveGlyphs } from '../../lib/studyAnnotations';
+import { StudyTreeInlineNotation, treeHasVariations } from './StudyTreeInlineNotation';
 
 interface StudyMoveTreeProps {
   chapter: StudyChapter | null;
@@ -9,11 +11,15 @@ interface StudyMoveTreeProps {
   currentVariation: [number, number, number] | null;
   onSelectMove: (idx: number, variation?: [number, number, number]) => void;
   onHoverMove?: (idx: number | null, variation?: [number, number, number]) => void;
-  onDeleteFromHere?: (idx: number) => void | Promise<void>;
+  onDeleteFromHere?: (plyIndex: number, varInfo?: [number, number, number]) => void | Promise<void>;
   onPromoteVariation?: (mainLinePos: number, varGroupIdx: number) => void;
   compact?: boolean;
   inlineNotation?: boolean;
   showMoveAnnotations?: boolean;
+  /** Tam ağaç notasyonu (iç içe varyantlar). */
+  tree?: StudyTree | null;
+  currentPath?: NodeId[];
+  onSelectPath?: (path: NodeId[]) => void;
 }
 
 /** Varyasyon satırındaki hamle numarası ve nokta (1. / 1...) */
@@ -32,6 +38,9 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   compact = false,
   inlineNotation = false,
   showMoveAnnotations = true,
+  tree = null,
+  currentPath,
+  onSelectPath,
 }) => {
   const activeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -67,6 +76,27 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   }, []);
 
   if (!chapter) return null;
+
+  const useTreeNotation = !!tree && tree.mainline.length > 1 && !!onSelectPath && !!currentPath?.length;
+
+  if (useTreeNotation && (inlineNotation || treeHasVariations(tree!)) && onSelectPath && currentPath) {
+    return (
+      <div
+        ref={containerRef}
+        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
+      >
+        <StudyTreeInlineNotation
+          tree={tree}
+          startFen={chapter.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'}
+          currentPath={currentPath}
+          onSelectPath={onSelectPath}
+          showMoveAnnotations={showMoveAnnotations}
+          compact={compact}
+          activeRef={activeRef}
+        />
+      </div>
+    );
+  }
 
   const moves = chapter.moves ?? [];
   const startMoveNumber = parseInt(chapter.fen?.split(' ')[5] ?? '1') || 1;
@@ -243,6 +273,14 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
         if (!isBlackToMove || plyIndex > 0) inlineMoveNumber++;
       }
       inlineNodes.push(renderMoveButton(san, plyIndex, isActive, annotation));
+      const moveComment = chapter.moveComments?.[plyIndex]?.trim();
+      if (moveComment) {
+        inlineNodes.push(
+          <span key={`c-${plyIndex}`} className="text-slate-500 italic mx-0.5">
+            {'{'}{moveComment}{'}'}
+          </span>,
+        );
+      }
       const varGroups = variations[plyIndex];
       if (varGroups?.length) {
         varGroups.forEach((line, gi) => {
@@ -326,17 +364,17 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            {onDeleteFromHere && !contextMenu.varInfo && (
+            {onDeleteFromHere && (
               <button
                 type="button"
                 onClick={() => {
-                  onDeleteFromHere(contextMenu.moveIdx);
+                  onDeleteFromHere(contextMenu.moveIdx, contextMenu.varInfo);
                   setContextMenu(null);
                 }}
                 className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                Buradan itibaren sil
+                Bu hamleden sonrasını sil
               </button>
             )}
             {onPromoteVariation && contextMenu.varInfo && (
@@ -350,20 +388,6 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
               >
                 <ArrowUpRight className="w-3.5 h-3.5" />
                 Ana hat yap
-              </button>
-            )}
-            {onDeleteFromHere && contextMenu.varInfo && (
-              <button
-                type="button"
-                onClick={() => {
-                  const [mlp, vgi] = contextMenu.varInfo!;
-                  onDeleteFromHere(-(mlp * 1000 + vgi + 1));
-                  setContextMenu(null);
-                }}
-                className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-rose-400 hover:bg-rose-600 hover:text-white transition-all"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Varyasyonu sil
               </button>
             )}
             <button
@@ -411,17 +435,17 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          {onDeleteFromHere && !contextMenu.varInfo && (
+          {onDeleteFromHere && (
             <button
               type="button"
               onClick={() => {
-                onDeleteFromHere(contextMenu.moveIdx);
+                onDeleteFromHere(contextMenu.moveIdx, contextMenu.varInfo);
                 setContextMenu(null);
               }}
               className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Buradan itibaren sil
+              Bu hamleden sonrasını sil
             </button>
           )}
           {onPromoteVariation && contextMenu.varInfo && (
@@ -435,20 +459,6 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
             >
               <ArrowUpRight className="w-3.5 h-3.5" />
               Ana hat yap
-            </button>
-          )}
-          {onDeleteFromHere && contextMenu.varInfo && (
-            <button
-              type="button"
-              onClick={() => {
-                const [mlp, vgi] = contextMenu.varInfo!;
-                onDeleteFromHere(-(mlp * 1000 + vgi + 1));
-                setContextMenu(null);
-              }}
-              className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-rose-400 hover:bg-rose-600 hover:text-white transition-all"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Varyasyonu sil
             </button>
           )}
           <button

@@ -6,37 +6,79 @@ import {
   fetchChessComStats,
   fetchLichessActivity,
   fetchLichessUser,
+  type ChessComGame,
 } from './chessPlatformService';
 import { buildLeaderboardPlatformSnapshot } from '../lib/leaderboardPlatformUtils';
 import {
   type LeaderboardEntry,
   type LeaderboardPeriod,
+  type LeaderboardPointSettings,
   type LeaderboardRankMode,
   type PeriodBounds,
+  DEFAULT_LEADERBOARD_POINT_SETTINGS,
   entryForStudent,
   getPeriodBounds,
   isEpochMsInPeriod,
   isTimestampInPeriod,
   lichessActivityGameCount,
-  lichessActivityGameResults,
+  lichessActivityGameResultsByMode,
   lichessActivityPuzzleCount,
   rankLeaderboardEntries,
 } from '../lib/leaderboardUtils';
+import {
+  type GameResultsByMode,
+  emptyGameResultsByMode,
+  normalizeScoringMode,
+  sumGameResultsByMode,
+} from '../lib/leaderboardPointSettings';
+
+function chessComGameResult(game: ChessComGame, username: string): 'win' | 'draw' | 'loss' | null {
+  const me = username.toLowerCase();
+  const white = (game.white?.username || '').toLowerCase();
+  const black = (game.black?.username || '').toLowerCase();
+  const isWhite = white === me;
+  const isBlack = black === me;
+  if (!isWhite && !isBlack) return null;
+  const myResult = isWhite ? game.white?.result : game.black?.result;
+  if (myResult === 'win') return 'win';
+  if (myResult === 'draw' || myResult === 'agreed' || myResult === 'repetition' || myResult === 'stalemate' || myResult === 'insufficient') {
+    return 'draw';
+  }
+  if (myResult === 'lose' || myResult === 'resigned' || myResult === 'timeout' || myResult === 'checkmated' || myResult === 'abandoned') {
+    return 'loss';
+  }
+  return null;
+}
+
+function addChessComGameToByMode(byMode: GameResultsByMode, game: ChessComGame, username: string): void {
+  const result = chessComGameResult(game, username);
+  if (!result) return;
+  const mode = normalizeScoringMode(game.time_class || game.time_control || 'other');
+  if (result === 'win') byMode[mode].wins += 1;
+  else if (result === 'draw') byMode[mode].draws += 1;
+  else byMode[mode].losses += 1;
+}
 
 async function studentPeriodStats(
   student: Student,
   bounds: PeriodBounds,
   homeworkAttempts: HomeworkPuzzleAttempt[],
-): Promise<{ puzzles: number; games: number; internalPuzzles: number; wins: number; draws: number; losses: number }> {
+): Promise<{
+  puzzles: number;
+  games: number;
+  internalPuzzles: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  gameResultsByMode: GameResultsByMode;
+}> {
   const internalPuzzles = homeworkAttempts.filter(
     (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
   ).length;
 
   let externalPuzzles = 0;
   let games = 0;
-  let wins = 0;
-  let draws = 0;
-  let losses = 0;
+  const gameResultsByMode = emptyGameResultsByMode();
 
   const lichessUsername = student.lichessUsername?.trim();
   if (lichessUsername) {
@@ -47,10 +89,12 @@ async function studentPeriodStats(
         if (!start || !isEpochMsInPeriod(start, bounds)) continue;
         externalPuzzles += lichessActivityPuzzleCount(row);
         games += lichessActivityGameCount(row);
-        const gr = lichessActivityGameResults(row);
-        wins += gr.wins;
-        draws += gr.draws;
-        losses += gr.losses;
+        const modeResults = lichessActivityGameResultsByMode(row);
+        for (const mode of Object.keys(modeResults) as (keyof GameResultsByMode)[]) {
+          gameResultsByMode[mode].wins += modeResults[mode].wins;
+          gameResultsByMode[mode].draws += modeResults[mode].draws;
+          gameResultsByMode[mode].losses += modeResults[mode].losses;
+        }
       }
     } catch {
       /* ignore */
@@ -70,32 +114,27 @@ async function studentPeriodStats(
     }
     try {
       const ccGames = await fetchChessComAllUserGames(chessComUsername, { maxTotal: 400 });
-      const me = chessComUsername.toLowerCase();
       for (const g of ccGames) {
         const ms = (g.end_time ?? 0) * 1000;
         if (ms <= 0 || !isEpochMsInPeriod(ms, bounds)) continue;
         games += 1;
-        const white = (g.white?.username || '').toLowerCase();
-        const black = (g.black?.username || '').toLowerCase();
-        const isWhite = white === me;
-        const isBlack = black === me;
-        const myResult = isWhite ? g.white?.result : isBlack ? g.black?.result : undefined;
-        if (myResult === 'win') wins += 1;
-        else if (myResult === 'draw' || myResult === 'agreed' || myResult === 'repetition' || myResult === 'stalemate' || myResult === 'insufficient') draws += 1;
-        else if (myResult === 'lose' || myResult === 'resigned' || myResult === 'timeout' || myResult === 'checkmated' || myResult === 'abandoned') losses += 1;
+        addChessComGameToByMode(gameResultsByMode, g, chessComUsername);
       }
     } catch {
       /* ignore */
     }
   }
 
+  const totals = sumGameResultsByMode(gameResultsByMode);
+
   return {
     puzzles: externalPuzzles + internalPuzzles,
     games,
     internalPuzzles,
-    wins,
-    draws,
-    losses,
+    wins: totals.wins,
+    draws: totals.draws,
+    losses: totals.losses,
+    gameResultsByMode,
   };
 }
 
@@ -119,6 +158,7 @@ export async function buildClubLeaderboard(
   period: LeaderboardPeriod,
   rankMode: LeaderboardRankMode = 'activity',
   onProgress?: (done: number, total: number) => void,
+  pointSettings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
 ): Promise<LeaderboardEntry[]> {
   const bounds = getPeriodBounds(period);
   const rows: ReturnType<typeof entryForStudent>[] = [];
@@ -136,6 +176,7 @@ export async function buildClubLeaderboard(
         stats.games,
         stats.internalPuzzles,
         platform,
+        stats.gameResultsByMode,
         stats.wins,
         stats.draws,
         stats.losses,
@@ -147,5 +188,5 @@ export async function buildClubLeaderboard(
     }
   }
 
-  return rankLeaderboardEntries(rows, rankMode);
+  return rankLeaderboardEntries(rows, rankMode, pointSettings);
 }

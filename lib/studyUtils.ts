@@ -107,12 +107,17 @@ export function migrateChapter(ch: Partial<StudyChapter>): StudyChapter {
     interactiveType: ch.interactiveType === 'liveAnalysis' ? 'liveAnalysis' : ch.interactiveType === 'vsComputer' ? 'vsComputer' : 'puzzle',
     guidedPrompt: ch.guidedPrompt ?? '',
     moveHint: ch.moveHint ?? '',
-    difficulty: typeof ch.difficulty === 'number' ? ch.difficulty : 5,
+    difficulty: typeof ch.difficulty === 'number'
+      ? ch.difficulty
+      : ch.interactiveType === 'vsComputer'
+        ? 10
+        : 5,
     comment: ch.comment ?? '',
     tags: ch.tags ?? [],
     moveComments: ch.moveComments ?? {},
     moveAnnotations: ch.moveAnnotations ?? {},
     variations: ch.variations ?? {},
+    seedTree: ch.seedTree,
     arrows: Array.isArray(ch.arrows) ? ch.arrows : [],
     circles: ch.circles ?? {},
   };

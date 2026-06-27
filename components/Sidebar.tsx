@@ -1,6 +1,30 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { NAV_ITEMS, NAV_CATEGORIES, type NavItem, type NavCategory, type NavIconColor } from "../constants";
 import { ChevronDown, ChevronLeft, ChevronRight, LogOut } from "lucide-react";
+
+function categoryKey(cat: NavCategory, index: number) {
+  return `${cat.title}::${index}`;
+}
+
+function categoryContainsTab(cat: NavCategory, tab: string) {
+  return cat.items.some(
+    (item) => item.id === tab || item.subItems?.some((sub) => sub.id === tab),
+  );
+}
+
+function isDefaultOpenCategory(cat: NavCategory) {
+  return cat.title.trim().toLocaleLowerCase('tr-TR') === 'öğrenci işleri';
+}
+
+function buildDefaultCollapsedCategories(categories: NavCategory[]): Set<string> {
+  const collapsed = new Set<string>();
+  categories.forEach((cat, idx) => {
+    if (!isDefaultOpenCategory(cat)) {
+      collapsed.add(categoryKey(cat, idx));
+    }
+  });
+  return collapsed;
+}
 
 const ICON_BOX_CLASS: Record<NavIconColor, string> = {
   blue: "bg-blue-500",
@@ -140,8 +164,24 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [desktopExpanded, setDesktopExpanded] = useState(!defaultIconOnly);
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => new Set());
+  const categoryDefaultsApplied = React.useRef(false);
   const useCategories = navCategories && navCategories.length > 0;
   const iconOnly = !desktopExpanded && !mobileOpen;
+
+  const isCategoryExpanded = useCallback(
+    (key: string) => !collapsedCategories.has(key),
+    [collapsedCategories],
+  );
+
+  const toggleCategory = useCallback((key: string) => {
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   const handleNav = (tab: string) => {
     setActiveTab(tab);
@@ -167,6 +207,32 @@ const Sidebar: React.FC<SidebarProps> = ({
     );
     if (parent) setExpandedItem((prev) => (prev === parent.id ? prev : parent.id));
   }, [activeTab, useCategories, navCategories, navItems]);
+
+  useEffect(() => {
+    if (!useCategories || !navCategories?.length) return;
+
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+
+      if (!categoryDefaultsApplied.current) {
+        categoryDefaultsApplied.current = true;
+        return buildDefaultCollapsedCategories(navCategories);
+      }
+
+      navCategories.forEach((cat, idx) => {
+        const key = categoryKey(cat, idx);
+        if (prev.has(key) || isDefaultOpenCategory(cat)) return;
+        if (!next.has(key)) next.add(key);
+      });
+
+      const validKeys = new Set(navCategories.map((c, i) => categoryKey(c, i)));
+      for (const key of next) {
+        if (!validKeys.has(key)) next.delete(key);
+      }
+
+      return next;
+    });
+  }, [navCategories, useCategories]);
 
   return (
     <>
@@ -225,36 +291,66 @@ const Sidebar: React.FC<SidebarProps> = ({
       {/* Nav */}
       <nav className={`flex-1 overflow-y-auto py-2 custom-scrollbar ${iconOnly ? "px-2" : "px-4"}`}>
         {useCategories ? (
-          <div className={iconOnly ? "space-y-1" : "space-y-6"}>
-            {navCategories.map((cat) => (
-              <div key={cat.title}>
-                {!iconOnly && (
-                  <div className="flex items-center gap-2 px-3 mb-2">
-                    {cat.icon && (
-                      <span className="text-slate-500 opacity-80">
-                        {cat.icon}
+          <div className={iconOnly ? "space-y-1" : "space-y-3"}>
+            {navCategories.map((cat, catIdx) => {
+              const catKey = categoryKey(cat, catIdx);
+              const catOpen = iconOnly || isCategoryExpanded(catKey);
+              const catHasActive = categoryContainsTab(cat, activeTab);
+
+              return (
+                <div key={catKey}>
+                  {!iconOnly && (
+                    <button
+                      type="button"
+                      onClick={() => toggleCategory(catKey)}
+                      aria-expanded={catOpen}
+                      className={`w-full flex items-center gap-2 px-3 mb-1.5 py-2 rounded-lg transition-colors group ${
+                        catHasActive && !catOpen
+                          ? "bg-indigo-500/10 hover:bg-indigo-500/15"
+                          : "hover:bg-white/[0.04]"
+                      }`}
+                    >
+                      {cat.icon && (
+                        <span
+                          className={`transition-colors ${
+                            catHasActive ? "text-indigo-400" : "text-slate-500 opacity-80 group-hover:text-slate-400"
+                          }`}
+                        >
+                          {cat.icon}
+                        </span>
+                      )}
+                      <span
+                        className={`flex-1 text-left text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                          catHasActive ? "text-indigo-300" : "text-slate-500 group-hover:text-slate-400"
+                        }`}
+                      >
+                        {cat.title}
                       </span>
-                    )}
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                      {cat.title}
-                    </span>
-                  </div>
-                )}
-                <div className="space-y-0.5">
-                  {cat.items.map((item) =>
-                    renderNavItem(
-                      item,
-                      activeTab,
-                      handleNav,
-                      expandedItem,
-                      setExpandedItem,
-                      iconOnly,
-                      expandDesktop,
-                    )
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 flex-shrink-0 transition-transform duration-200 ${
+                          catOpen ? "rotate-180" : ""
+                        } ${catHasActive ? "text-indigo-400" : "text-slate-500"}`}
+                      />
+                    </button>
+                  )}
+                  {catOpen && (
+                    <div className="space-y-0.5">
+                      {cat.items.map((item) =>
+                        renderNavItem(
+                          item,
+                          activeTab,
+                          handleNav,
+                          expandedItem,
+                          setExpandedItem,
+                          iconOnly,
+                          expandDesktop,
+                        ),
+                      )}
+                    </div>
                   )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="space-y-0.5">

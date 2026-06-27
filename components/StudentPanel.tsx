@@ -50,6 +50,7 @@ import StudentPuzzlePlayModal from './StudentPuzzlePlayModal';
 import StudentStudyView from './StudentStudyView';
 import LiveLesson, { type LiveLessonRoom } from './LiveLesson';
 import ScheduleWeeklyView from './ScheduleWeeklyView';
+import { filterLessonsToActiveGroups } from '../lib/syncGroupLessons';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
 import { LeaderboardPreview } from './leaderboard/LeaderboardPreview';
 import { StudentSummaryDashboard } from './student/StudentSummaryDashboard';
@@ -98,6 +99,7 @@ import { fetchUkdFromTsf } from '../services/ukdService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
 import { formatMidnightCountdown, todayDayKey } from '../lib/homeworkDayUtils';
 import { fetchStudentPlatformDayStats, platformSyncSummary } from '../lib/homeworkPlatformUtils';
+import { nextHomeworkPuzzle } from '../lib/puzzlePlayUtils';
 
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
 
@@ -274,7 +276,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, getAuthPermissions } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, getAuthPermissions, trainingGroups } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(() =>
@@ -299,7 +301,12 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const todayDate = new Date();
   const [scheduleWeek, setScheduleWeek] = useState(() => getWeekNumber(todayDate));
   const [scheduleYear, setScheduleYear] = useState(todayDate.getFullYear());
-  const [playingPuzzle, setPlayingPuzzle] = useState<{ puzzle: Puzzle; homeworkId: string; openKey: string } | null>(null);
+  const [playingPuzzle, setPlayingPuzzle] = useState<{
+    puzzle: Puzzle;
+    homeworkId: string;
+    openKey: string;
+    nextPuzzle?: Puzzle | null;
+  } | null>(null);
   const [selectedScheduleEntryId, setSelectedScheduleEntryId] = useState<string | null>(null);
   const [scheduleEntryModalStatus, setScheduleEntryModalStatus] = useState<ScheduleEntryStatus>('yapilmadi');
   const [scheduleEntryModalNote, setScheduleEntryModalNote] = useState('');
@@ -1035,7 +1042,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         {activeTab === 'schedule' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <ScheduleWeeklyView
-              lessons={lessons.filter((l) => {
+              lessons={filterLessonsToActiveGroups(lessons, trainingGroups).filter((l) => {
                 if (l.studentId) return String(l.studentId) === String(studentId);
                 return (l.group || '').trim().toLowerCase() === (student.group || '').trim().toLowerCase();
               })}
@@ -2373,6 +2380,16 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           puzzle={playingPuzzle.puzzle}
           homeworkId={playingPuzzle.homeworkId}
           studentId={studentId}
+          nextPuzzle={playingPuzzle.nextPuzzle}
+          onPlayNext={(next) => {
+            const hw = assignedHomeworks.find((h) => h.id === playingPuzzle.homeworkId);
+            setPlayingPuzzle({
+              puzzle: next,
+              homeworkId: playingPuzzle.homeworkId,
+              openKey: `${playingPuzzle.homeworkId}:${next.id}:${Date.now()}`,
+              nextPuzzle: hw ? nextHomeworkPuzzle(hw, next.id, puzzles) : null,
+            });
+          }}
           onClose={() => setPlayingPuzzle(null)}
           onAttemptRecord={(record) => addHomeworkAttempt(record)}
         />

@@ -136,6 +136,16 @@ export function mergeMainlineMoves(raw: string[], tree: string[]): string[] {
   if (!mainlineSansDiffer(raw, tree)) {
     return tree.length >= raw.length ? tree : raw;
   }
+  if (raw.length < tree.length) {
+    let samePrefix = true;
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] !== tree[i]) {
+        samePrefix = false;
+        break;
+      }
+    }
+    if (samePrefix) return raw;
+  }
   if (tree.length >= raw.length) return tree;
   for (let i = 0; i < tree.length; i++) {
     if (raw[i] !== tree[i]) return tree;
@@ -204,6 +214,28 @@ export function buildLegacyVariationsFromTree(tree: StudyTree): Record<number, s
   }
 
   return variations;
+}
+
+/** Varyasyon satırındaki belirli hamle indeksine karşılık gelen ağaç düğümü. */
+export function findVariationNodeAtMoveIndex(
+  tree: StudyTree,
+  mainLinePos: number,
+  varGroupIdx: number,
+  varMoveIdx: number,
+  legacyVariations?: Record<number, string[][]>,
+): string | null {
+  const branchId = findVariationBranchNodeId(tree, mainLinePos, varGroupIdx, legacyVariations);
+  if (!branchId) return null;
+  const mainSet = new Set(tree.mainline);
+  let nodeId = branchId;
+  for (let i = 0; i < varMoveIdx; i++) {
+    const node = tree.nodes[nodeId];
+    if (!node) return nodeId;
+    const nextId = node.children?.[0];
+    if (!nextId || mainSet.has(nextId)) return nodeId;
+    nodeId = nextId;
+  }
+  return nodeId;
 }
 
 /** Varyasyon grubunun ilk düğüm kimliğini bulur */

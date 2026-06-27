@@ -23,7 +23,7 @@ import {
 } from '../services/lichessService';
 import { pdfAllPagesToDataUrls } from '../services/pdfToImage';
 import { loadStudiesAsync, saveStudyAsync } from '../studyStorage';
-import { loadStudyCategories, type StudyCategoryMeta } from '../studyCategoriesStorage';
+import { loadStudyCategoriesAsync, type StudyCategoryMeta } from '../studyCategoriesStorage';
 import type { Puzzle } from '../types';
 import type { Study } from '../lib/studyTypes';
 import { genId, migrateStudy, migrateChapter } from '../lib/studyUtils';
@@ -226,14 +226,14 @@ const ChessBoard: React.FC = () => {
 
   const refreshStudiesForPicker = useCallback(() => {
     setStudyPickerLoading(true);
-    void Promise.all([loadStudiesAsync(), Promise.resolve(loadStudyCategories())])
+    void Promise.all([loadStudiesAsync(), loadStudyCategoriesAsync()])
       .then(([studies, cats]) => {
         setStudiesPickerList(studies ?? []);
         setStudyPickerCategories(cats);
       })
       .catch(() => {
         setStudiesPickerList([]);
-        setStudyPickerCategories(loadStudyCategories());
+        setStudyPickerCategories([]);
       })
       .finally(() => setStudyPickerLoading(false));
   }, []);

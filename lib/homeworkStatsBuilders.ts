@@ -6,7 +6,11 @@ import {
   type StudentHwStat,
 } from './homeworkAnalysisUtils';
 import { studentInitials } from './homeworkPanelUtils';
-import { capDailyPuzzleDisplay, evaluatePlatformDailyGoals, type PlatformDayStats } from './homeworkPlatformUtils';
+import {
+  capDailyPuzzleDisplay,
+  evaluatePlatformDayGoalsFromStats,
+  type PlatformDayStats,
+} from './homeworkPlatformUtils';
 
 export function studentDailyTargetHasGoals(
   target?: StudentDailyTarget,
@@ -23,6 +27,21 @@ export function studentDailyTargetHasGoals(
 export function homeworkHasPlatformGoals(hw: HomeworkAssignment): boolean {
   if (studentDailyTargetHasGoals(undefined, hw)) return true;
   return Object.values(hw.studentDailyTargets ?? {}).some((t) => studentDailyTargetHasGoals(t));
+}
+
+/** Atanmış sistem bulmacası var — Ödev Takibi kapsamı. */
+export function homeworkHasAssignedPuzzles(hw: HomeworkAssignment): boolean {
+  return hw.puzzles.length > 0;
+}
+
+/** Lichess/Chess.com günlük/heftalık hedef tanımlı — Günlük Program kapsamı (bulmaca ödevi olsa bile). */
+export function isDailyProgramAssignment(hw: HomeworkAssignment): boolean {
+  return homeworkHasPlatformGoals(hw);
+}
+
+/** Bulmaca ödevi — Ödev Takibi listesinde gösterilir. */
+export function isPuzzleTrackingAssignment(hw: HomeworkAssignment): boolean {
+  return homeworkHasAssignedPuzzles(hw);
 }
 
 function targetFromHwDefaults(hw: HomeworkAssignment): StudentDailyTarget {
@@ -57,6 +76,7 @@ export function resolveProgramDailyTarget(
   }
   for (const other of allHomeworks) {
     if (other.id === hw.id) continue;
+    if (!homeworkHasPlatformGoals(other)) continue;
     if (!getAssignees(other).some((s) => s.id === studentId)) continue;
     const otherOwn = other.studentDailyTargets?.[studentId];
     if (studentDailyTargetHasGoals(otherOwn)) {
@@ -161,7 +181,7 @@ function resolveStudentDayTargets(
   };
 }
 
-/** Lichess + Chess.com günlük hedef takibi — sistem bulmacaları dahil değil. */
+/** Lichess + Chess.com günlük hedef takibi; atanan ödev bulmacaları viewDate günü dahil edilir. */
 export function buildPlatformHomeworkStats(
   hw: HomeworkAssignment,
   assignees: Student[],
@@ -172,25 +192,25 @@ export function buildPlatformHomeworkStats(
   return assignees.map((student) => {
     const platform = platformByStudent[student.id];
     const { dailyGameTarget, dailyPuzzleTarget, minPuzzleAccuracy } = resolveStudentDayTargets(hw, student, viewDate);
-
-    const todayGames = platform?.games ?? 0;
-    const puzzlePassed = platform?.puzzlePassed ?? 0;
-    const puzzleFailed = platform?.puzzleFailed ?? 0;
-    const todayPuzzleSolved = platform?.puzzleSolved ?? 0;
-    const capped = capDailyPuzzleDisplay(puzzlePassed, puzzleFailed, dailyPuzzleTarget);
-
-    const platformGoals = evaluatePlatformDailyGoals(
+    const goalEval = evaluatePlatformDayGoalsFromStats(
       dailyGameTarget,
       dailyPuzzleTarget,
       minPuzzleAccuracy,
-      todayGames,
-      todayPuzzleSolved,
-      puzzlePassed,
+      platform,
     );
-    const gameGoalMet = platformGoals.gamesMet;
-    const puzzleGoalMet = platformGoals.puzzlesMet;
+
+    const todayGames = goalEval.games;
+    const todayPuzzleSolved = goalEval.puzzleSolved;
     const hasTargets = dailyGameTarget > 0 || dailyPuzzleTarget > 0;
-    const dailyGoalDone = platformGoals.done;
+    const dailyGoalDone = goalEval.done;
+
+    const capped = capDailyPuzzleDisplay(
+      goalEval.puzzlePassed,
+      goalEval.puzzleFailed,
+      dailyPuzzleTarget,
+    );
+    const displayCorrect = capped.correct;
+    const displayWrong = capped.wrong;
 
     const hasActivity = todayGames > 0 || todayPuzzleSolved > 0;
     let status: StudentHwStat['status'] = 'Başlamadı';
@@ -208,8 +228,8 @@ export function buildPlatformHomeworkStats(
       studentId: student.id,
       name: student.name,
       initials: studentInitials(student.name),
-      correct: capped.correct,
-      wrong: capped.wrong,
+      correct: displayCorrect,
+      wrong: displayWrong,
       skipped: 0,
       points: 0,
       timeSeconds: platformTimeByStudent[student.id] ?? 0,

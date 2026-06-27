@@ -2,8 +2,11 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Trophy } from 'lucide-react';
 import { useApp } from '../../AppContext';
 import { ClubLeaderboard } from './ClubLeaderboard';
+import { LeaderboardPointSettingsPanel } from './LeaderboardPointSettingsPanel';
 import { HomeworkTargetSelector } from '../homework/HomeworkTargetSelector';
 import { EMPTY_TARGET, filterStudentsByTarget, type TargetFilter } from '../../lib/homeworkPanelUtils';
+import { normalizeClubKey } from '../../lib/clubScope';
+import { resolveClubLeaderboardPointSettings } from '../../lib/leaderboardPointSettings';
 
 const LeaderboardPage: React.FC = () => {
   const {
@@ -14,6 +17,8 @@ const LeaderboardPage: React.FC = () => {
     scopedTrainingGroups: trainingGroups,
     activeClubBranch,
     auth,
+    clubs,
+    updateClub,
   } = useApp();
 
   const visibleBranchOffices = useMemo(
@@ -50,6 +55,36 @@ const LeaderboardPage: React.FC = () => {
     return null;
   }, [students, targetFilter, trainingGroups]);
 
+  const resolvedClubId = useMemo(() => {
+    if (auth?.role === 'club' && auth.clubId) return auth.clubId;
+    const office = anchorStudent?.branchOffice?.trim() || targetFilter.branchOffice?.trim() || activeClubBranch?.trim();
+    if (office) {
+      const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(office));
+      if (club) return club.id;
+    }
+    return null;
+  }, [auth, anchorStudent, targetFilter.branchOffice, activeClubBranch, clubs]);
+
+  const resolvedClub = useMemo(
+    () => (resolvedClubId ? clubs.find((c) => c.id === resolvedClubId) ?? null : null),
+    [resolvedClubId, clubs],
+  );
+
+  const pointSettings = useMemo(
+    () => resolveClubLeaderboardPointSettings(resolvedClubId, clubs),
+    [resolvedClubId, clubs],
+  );
+
+  const canEditPointSettings = auth?.role === 'club' || auth?.role === 'admin';
+
+  const handleSavePointSettings = useCallback(
+    (next: typeof pointSettings) => {
+      if (!resolvedClubId || !canEditPointSettings) return;
+      updateClub(resolvedClubId, { leaderboardPoints: next });
+    },
+    [resolvedClubId, canEditPointSettings, updateClub],
+  );
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="rounded-2xl bg-gradient-to-br from-amber-600/15 via-slate-900/50 to-slate-900/50 border border-amber-600/20 p-5 sm:p-6">
@@ -71,11 +106,21 @@ const LeaderboardPage: React.FC = () => {
         filteredStudents={targetStudents}
       />
 
+      {resolvedClubId && (
+        <LeaderboardPointSettingsPanel
+          settings={pointSettings}
+          canEdit={canEditPointSettings}
+          clubName={resolvedClub?.name}
+          onSave={handleSavePointSettings}
+        />
+      )}
+
       <ClubLeaderboard
         allStudents={students}
         anchorStudent={anchorStudent}
         homeworkAttempts={homeworkAttempts}
         peerStudentsOverride={targetStudents}
+        pointSettings={pointSettings}
       />
     </div>
   );

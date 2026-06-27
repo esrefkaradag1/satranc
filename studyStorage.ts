@@ -1,47 +1,28 @@
 /**
- * Study storage — sadece Supabase (localStorage kullanılmaz)
+ * Study storage — yalnızca Supabase (tek kaynak).
  *
- * Supabase yapılandırılmışsa tüm okuma/yazma/silme DB üzerinden yapılır.
- * Supabase yoksa boş liste döner (geliştirme ortamı için).
+ * localStorage cache kullanılmaz; canlı ve local aynı DB kaydını gösterir.
  */
 import type { Study } from './lib/studyTypes';
 import { getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
 import { migrateChapter, normalizeStudentPlaysColor } from './lib/studyUtils';
 
 const TABLE = 'chess_studies';
-const LOCAL_STUDIES_CACHE_KEY = 'netchess_studies_cache_v1';
+const LEGACY_CACHE_KEYS = ['netchess_studies_cache_v1', 'netchess_studies_v2'];
 const queuedStudySaves = new Map<string, Study>();
 const inFlightStudySaves = new Set<string>();
+let legacyCacheCleared = false;
 
-function readLocalCache(): Study[] {
-  try {
-    const raw = localStorage.getItem(LOCAL_STUDIES_CACHE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as Study[];
-  } catch {
-    return [];
+function clearLegacyLocalCaches() {
+  if (legacyCacheCleared || typeof window === 'undefined') return;
+  legacyCacheCleared = true;
+  for (const key of LEGACY_CACHE_KEYS) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
   }
-}
-
-function writeLocalCache(studies: Study[]) {
-  try {
-    localStorage.setItem(LOCAL_STUDIES_CACHE_KEY, JSON.stringify(studies));
-  } catch {}
-}
-
-function upsertLocalStudy(study: Study) {
-  const prev = readLocalCache();
-  const next = prev.some((s) => s.id === study.id)
-    ? prev.map((s) => (s.id === study.id ? study : s))
-    : [...prev, study];
-  writeLocalCache(next);
-}
-
-function removeLocalStudy(studyId: string) {
-  const prev = readLocalCache();
-  writeLocalCache(prev.filter((s) => s.id !== studyId));
 }
 
 // ── Supabase row ↔ Study ──────────────────────────────────────────────────────
@@ -165,20 +146,12 @@ async function upsertStudyRow(
   return { error };
 }
 
-function pickNewerStudy(local: Study, remote: Study): Study {
-  const lt = local.updatedAt ?? local.createdAt ?? '';
-  const rt = remote.updatedAt ?? remote.createdAt ?? '';
-  if (lt && rt) return lt >= rt ? local : remote;
-  if (lt) return local;
-  return remote;
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/** Tüm çalışmaları Supabase'den yükle */
+/** Tüm çalışmaları Supabase'den yükle (localStorage birleştirmesi yok) */
 export async function loadStudiesAsync(): Promise<Study[]> {
-  const local = readLocalCache();
-  if (!isSupabaseBackend()) return local;
+  clearLegacyLocalCaches();
+  if (!isSupabaseBackend()) return [];
   try {
     const client = getServiceSupabase() ?? supabase;
     const { data, error } = await client
@@ -187,46 +160,21 @@ export async function loadStudiesAsync(): Promise<Study[]> {
       .order('created_at', { ascending: true });
     if (error) {
       console.warn('[StudyStorage] load error:', error.message);
-      return local;
+      return [];
     }
     if (data?.[0] && typeof data[0] === 'object') {
       detectOptionalColumnsFromRow(data[0] as Record<string, unknown>);
     }
-    const remote = (data ?? []).map(rowToStudy);
-
-    // DB temizlendiyse local cache'i de temizle (aksi halde eski çalışmalar görünmeye devam eder)
-    if (remote.length === 0) {
-      writeLocalCache([]);
-      return [];
-    }
-    if (local.length === 0) {
-      writeLocalCache(remote);
-      return remote;
-    }
-    // Sync kapalıysa (local'de) o çalışmayı "tek cihaz" modunda tut:
-    // remote değişiklikleri local'i ezmesin.
-    const localById = new Map<string, Study>(local.map(s => [s.id, s]));
-    const merged = new Map<string, Study>();
-    for (const s of local) merged.set(s.id, s);
-    for (const s of remote) {
-      const localVersion = localById.get(s.id);
-      if (localVersion && localVersion.syncEnabled === false) continue;
-      merged.set(s.id, localVersion ? pickNewerStudy(localVersion, s) : s);
-    }
-    const mergedList = Array.from(merged.values());
-    writeLocalCache(mergedList);
-    return mergedList;
+    return (data ?? []).map(rowToStudy);
   } catch (e) {
     console.warn('[StudyStorage] load failed:', e);
-    return local;
+    return [];
   }
 }
 
 /** Tek çalışmayı upsert et (kaydet / güncelle) */
 export async function saveStudyAsync(study: Study): Promise<void> {
   const stamped: Study = { ...study, updatedAt: new Date().toISOString() };
-  upsertLocalStudy(stamped);
-  if (stamped.syncEnabled === false) return;
   if (!isSupabaseBackend()) return;
   queuedStudySaves.set(stamped.id, stamped);
   if (inFlightStudySaves.has(stamped.id)) return;
@@ -234,7 +182,6 @@ export async function saveStudyAsync(study: Study): Promise<void> {
   inFlightStudySaves.add(stamped.id);
   try {
     const client = getServiceSupabase() ?? supabase;
-    // Same study icin kayitlari sirali gonder; arada gelenleri tek son snapshot'a indirger.
     while (queuedStudySaves.has(stamped.id)) {
       const latest = queuedStudySaves.get(stamped.id);
       if (!latest) break;
@@ -255,7 +202,6 @@ export async function saveStudyAsync(study: Study): Promise<void> {
 
 /** Tek çalışmayı DB'den kalıcı olarak sil */
 export async function deleteStudyAsync(studyId: string): Promise<void> {
-  removeLocalStudy(studyId);
   if (!isSupabaseBackend()) return;
   try {
     const client = getServiceSupabase() ?? supabase;
@@ -285,8 +231,7 @@ export function subscribeToStudies(callback: (studies: Study[]) => void): () => 
 
 // ── Backward-compat stubs (eski import'lar kırılmasın) ────────────────────────
 export function loadStudiesFromStorage(): Study[] { return []; }
-export const STUDY_STORAGE_KEY = 'netchess_studies_v2'; // artık kullanılmıyor
+export const STUDY_STORAGE_KEY = 'netchess_studies_v2';
 export async function saveStudiesAsync(studies: Study[]): Promise<void> {
-  // Toplu upsert (gerektiğinde)
   for (const s of studies) await saveStudyAsync(s);
 }

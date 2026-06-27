@@ -1,4 +1,6 @@
 
+import type { LeaderboardPointSettings } from './lib/leaderboardPointSettings';
+
 export enum UserRole {
   ADMIN = 'ADMIN',
   COACH = 'COACH',
@@ -125,10 +127,10 @@ export interface StudentLessonLogEntry {
 /** Giriş yapan kullanıcı: admin, antrenör, veli, öğrenci veya kulüp */
 export type AuthUser =
   | { role: 'admin' }
-  | { role: 'coach'; coachId?: string; branch?: string }
+  | { role: 'coach'; coachId?: string; branch?: string; roleId?: string }
   | { role: 'parent'; studentId: string }
   | { role: 'student'; studentId: string }
-  | { role: 'club'; branch: string; clubId?: string };
+  | { role: 'club'; branch: string; clubId?: string; roleId?: string };
 
 /** Rol paneli türü */
 export type RolePanel = 'admin' | 'coach' | 'club' | 'student' | 'parent';
@@ -158,6 +160,8 @@ export interface Club {
   loginPassword?: string;
   /** Atanan özel rol (app_roles.id); boşsa varsayılan kulüp rolü */
   roleId?: string;
+  /** Lider tablosu mod bazlı puan ayarları */
+  leaderboardPoints?: LeaderboardPointSettings;
 }
 
 /** Kulüp tarafından eklenen antrenör (şubeye bağlı) */

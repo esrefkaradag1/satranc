@@ -4,7 +4,7 @@ import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardU
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
 import { Chess } from 'chess.js';
-import { X, CheckCircle2, XCircle, Lightbulb, ListChecks } from 'lucide-react';
+import { X, CheckCircle2, XCircle, Lightbulb, ListChecks, ChevronRight, RotateCcw } from 'lucide-react';
 import type { Puzzle } from '../types';
 import {
   applyPuzzleMove,
@@ -38,6 +38,9 @@ interface StudentPuzzlePlayModalProps {
   homeworkId?: string;
   studentId?: string;
   onAttemptRecord?: (record: HomeworkAttemptRecord) => void;
+  /** Aynı ödevdeki sıradaki bulmaca */
+  nextPuzzle?: Puzzle | null;
+  onPlayNext?: (puzzle: Puzzle) => void;
 }
 
 const DEFAULT_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -51,7 +54,9 @@ function makeGameFromFen(fen: string): Chess {
 }
 
 /** Öğrenci panelinde tek bulmaca oynatma: çözüm hamlelerine göre doğrulama, doğru/yanlış/solved durumu */
-const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle, onClose, homeworkId, studentId, onAttemptRecord }) => {
+const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
+  puzzle, onClose, homeworkId, studentId, onAttemptRecord, nextPuzzle, onPlayNext,
+}) => {
   const fullSolution = Array.isArray(puzzle.solution) ? puzzle.solution : [];
   const [activePlay, setActivePlay] = useState<NormalizedPuzzlePlay>(() => repairPuzzleForStudentPlay(puzzle));
   const [repairing, setRepairing] = useState(false);
@@ -70,9 +75,11 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
   const [solutionRevealed, setSolutionRevealed] = useState(false);
   const [puzzleModalBoardOrientation, setPuzzleModalBoardOrientation] = useState<'white' | 'black'>('white');
   const studentColorRef = useRef<'w' | 'b'>(activePlay.studentColor);
+  const studentTurnFenRef = useRef<string>(startFen);
 
   const applyPlayState = useCallback((normalized: NormalizedPuzzlePlay) => {
     studentColorRef.current = normalized.studentColor;
+    studentTurnFenRef.current = normalized.startFen;
     movesPlayedRef.current = [];
     reportedRef.current = false;
     puzzleStartRef.current = Date.now();
@@ -176,9 +183,37 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
     onClose();
   }, [homeworkId, studentId, onAttemptRecord, status, game, reportAttempt, onClose]);
 
+  const tryAgain = useCallback(() => {
+    setStatus('playing');
+    setHintRevealed(false);
+    setSolutionRevealed(false);
+    setSolutionIndex(0);
+    movesPlayedRef.current = [];
+    setMovesPlayed([]);
+    reportedRef.current = false;
+    setSubmitted(false);
+    puzzleStartRef.current = Date.now();
+    setGame(makeGameFromFen(studentTurnFenRef.current));
+  }, []);
+
+  const handlePlayNext = useCallback(() => {
+    if (!nextPuzzle || !onPlayNext) return;
+    if (
+      !reportedRef.current &&
+      homeworkId &&
+      studentId &&
+      onAttemptRecord &&
+      (movesPlayedRef.current.length > 0 || status === 'solved' || status === 'wrong')
+    ) {
+      reportAttempt(status === 'solved', game.fen());
+    }
+    onPlayNext(nextPuzzle);
+  }, [nextPuzzle, onPlayNext, homeworkId, studentId, onAttemptRecord, status, game, reportAttempt]);
+
   const onPieceDrop = useCallback(
     (sourceSquare: string, targetSquare: string) => {
       if (status === 'solved' || repairing) return false;
+      if (game.isGameOver()) return false;
       if (status === 'wrong') setStatus('playing');
       setHintRevealed(false);
       setSolutionRevealed(false);
@@ -267,6 +302,9 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
       const auto = applyAutoReplies(copy, nextIndex);
       nextIndex = auto.nextIndex;
       finalFen = auto.game.fen();
+      if (!auto.game.isGameOver() && nextIndex < studentMoves.length && auto.game.turn() === studentColorRef.current) {
+        studentTurnFenRef.current = auto.game.fen();
+      }
       setGame(auto.game);
       setSolutionIndex(nextIndex);
       if (nextIndex >= studentMoves.length) {
@@ -393,6 +431,13 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
               <div className="flex flex-wrap gap-2 mt-4">
                 <button
                   type="button"
+                  onClick={tryAgain}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 font-bold text-sm hover:bg-indigo-600/50 transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4" /> Tekrar dene
+                </button>
+                <button
+                  type="button"
                   onClick={() => { hintUsedRef.current = true; setHintRevealed(true); }}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-sm hover:bg-amber-500/30 transition-colors"
                 >
@@ -410,7 +455,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
                 <p className="mt-3 pt-3 border-t border-rose-500/20 text-sm">
                   <span className="text-slate-400">Beklenen hamle: </span>
                   <span className="font-mono font-bold text-amber-300">
-                    {formatHintMove(game.fen(), studentMoves[solutionIndex])}
+                    {formatHintMove(studentTurnFenRef.current, studentMoves[solutionIndex])}
                   </span>
                 </p>
               )}
@@ -423,7 +468,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
                         {i > 0 && ' → '}
                         <span className="text-amber-300">{formatHintMove(
                           (() => {
-                            const c = new Chess(game.fen());
+                            const c = new Chess(studentTurnFenRef.current);
                             for (let j = 0; j < i; j++) applyPuzzleMove(c, studentMoves[solutionIndex + j]);
                             return c.fen();
                           })(),
@@ -439,17 +484,37 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({ puzzle,
           {status === 'solved' && (
             <div className="mt-4 flex items-center gap-3 p-4 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
               <CheckCircle2 className="w-6 h-6 shrink-0" />
-              <div>
+              <div className="flex-1">
                 <p className="font-bold">Tebrikler!</p>
                 <p className="text-sm opacity-90">+{puzzle.points} puan</p>
                 {homeworkId && studentId && (
                   <p className="text-xs text-emerald-400/80 mt-2">Deneme kaydedildi; antrenör Ödev Takibinde görecektir.</p>
                 )}
               </div>
+              {nextPuzzle && onPlayNext ? (
+                <button
+                  type="button"
+                  onClick={handlePlayNext}
+                  className="shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm"
+                >
+                  Sonraki soru
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              ) : null}
             </div>
           )}
         </div>
-        <div className="px-5 py-3 border-t border-slate-700 flex justify-end gap-2">
+        <div className="px-5 py-3 border-t border-slate-700 flex flex-wrap justify-end gap-2">
+          {nextPuzzle && onPlayNext && (status === 'wrong' || submitted) ? (
+            <button
+              type="button"
+              onClick={handlePlayNext}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all"
+            >
+              Sonraki soru
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          ) : null}
           {homeworkId && studentId && onAttemptRecord && (
             <button
               type="button"

@@ -24,12 +24,14 @@ import {
   resolveClubIdFromAuth,
 } from './lib/orgStructureDb';
 import { normalizeClubKey } from './lib/clubScope';
+import { normalizeLeaderboardPointSettings } from './lib/leaderboardPointSettings';
 import {
   lessonsFromTrainingGroup,
   mergeTrainingGroupLessons,
+  reconcileTrainingGroupLessons,
   removeTrainingGroupLessonsFromList,
 } from './lib/syncGroupLessons';
-import { getPermissionsForAuth, hasPermission as checkPermission, defaultPermissionsForRole } from './lib/rolePermissions';
+import { getPermissionsForAuth, hasPermission as checkPermission, defaultPermissionsForRole, resolveCustomRoleIdForAuth } from './lib/rolePermissions';
 import {
   loadRolesLocal,
   loadRolePermissionsLocal,
@@ -1205,6 +1207,7 @@ function clubToDb(club: Club): Record<string, unknown> {
     login_password: club.loginPassword ?? null,
     login_username: club.loginUsername ?? null,
     role_id: club.roleId ?? null,
+    leaderboard_points: club.leaderboardPoints ?? null,
   };
 }
 
@@ -1258,6 +1261,7 @@ function dbToClub(row: Record<string, unknown>): Club {
   const activeDays = Array.isArray(activeDaysRaw) && activeDaysRaw.length === 7
     ? activeDaysRaw.map((v: unknown) => !!v)
     : [true, true, true, true, false, false, false];
+  const leaderboardRaw = r.leaderboard_points ?? r.leaderboardPoints;
   return {
     id: String(r.id ?? ''),
     name: String(r.name ?? ''),
@@ -1271,6 +1275,10 @@ function dbToClub(row: Record<string, unknown>): Club {
           ? String(r.loginUsername)
           : undefined,
     roleId: r.role_id != null ? String(r.role_id) : r.roleId != null ? String(r.roleId) : undefined,
+    leaderboardPoints:
+      leaderboardRaw && typeof leaderboardRaw === 'object'
+        ? normalizeLeaderboardPointSettings(leaderboardRaw as Club['leaderboardPoints'])
+        : undefined,
   };
 }
 
@@ -1414,9 +1422,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadJSON<Tournament[]>('netchess_tournaments', [])
   );
 
-  const [appRoles, setAppRoles] = useState<AppRole[]>(() => (useSupabase ? [] : loadRolesLocal()));
+  const [appRoles, setAppRoles] = useState<AppRole[]>(() => loadRolesLocal());
   const [rolePermissionMap, setRolePermissionMap] = useState<Record<string, string[]>>(() =>
-    useSupabase ? {} : loadRolePermissionsLocal(),
+    loadRolePermissionsLocal(),
   );
   const [rolesLoaded, setRolesLoaded] = useState(() => !useSupabase);
 
@@ -1549,7 +1557,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (coach) {
-      setAuth({ role: 'coach', coachId: coach.id, branch: coach.branch || 'Merkez' });
+      setAuth({
+        role: 'coach',
+        coachId: coach.id,
+        branch: coach.branch || 'Merkez',
+        roleId: coach.roleId,
+      });
       return true;
     }
 
@@ -1577,7 +1590,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const expectedPassword =
         club.loginPassword != null && club.loginPassword !== '' ? club.loginPassword : CLUB_PASSWORD;
       if (pwd !== expectedPassword) return false;
-      setAuth({ role: 'club', branch: (club.name || 'Merkez').trim(), clubId: club.id });
+      setAuth({ role: 'club', branch: (club.name || 'Merkez').trim(), clubId: club.id, roleId: club.roleId });
       return true;
     };
 
@@ -1711,6 +1724,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (remote) {
         setAppRoles(remote.roles);
         setRolePermissionMap(remote.permissions);
+        saveRolesLocal(remote.roles);
+        saveRolePermissionsLocal(remote.permissions);
         setRolesLoaded(true);
         return;
       }
@@ -1827,18 +1842,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getAuthPermissions = useCallback((): Set<string> => {
     if (!auth) return new Set();
-    let customRoleId: string | undefined;
-    if (auth.role === 'coach') {
-      const coach =
-        (auth.coachId ? coaches.find((c) => c.id === auth.coachId) : undefined) ??
-        coaches.find((c) => (c.branch || '').trim() === (auth.branch || '').trim());
-      customRoleId = coach?.roleId;
-    } else if (auth.role === 'club') {
-      const club =
-        (auth.clubId ? clubs.find((c) => c.id === auth.clubId) : undefined) ??
-        clubs.find((c) => (c.name || '').trim() === (auth.branch || '').trim());
-      customRoleId = club?.roleId;
-    }
+    const customRoleId = resolveCustomRoleIdForAuth(auth, { coaches, clubs });
     return getPermissionsForAuth(auth, rolePermissionMap, customRoleId, rolesLoaded);
   }, [auth, coaches, clubs, rolePermissionMap, rolesLoaded]);
 
@@ -1847,18 +1851,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const hasAuthPermission = useCallback(
     (key: string) => {
       if (!auth) return false;
-      let customRoleId: string | undefined;
-      if (auth.role === 'coach') {
-        const coach =
-          (auth.coachId ? coaches.find((c) => c.id === auth.coachId) : undefined) ??
-          coaches.find((c) => (c.branch || '').trim() === (auth.branch || '').trim());
-        customRoleId = coach?.roleId;
-      } else if (auth.role === 'club') {
-        const club =
-          (auth.clubId ? clubs.find((c) => c.id === auth.clubId) : undefined) ??
-          clubs.find((c) => (c.name || '').trim() === (auth.branch || '').trim());
-        customRoleId = club?.roleId;
-      }
+      const customRoleId = resolveCustomRoleIdForAuth(auth, { coaches, clubs });
       return checkPermission(auth, rolePermissionMap, key, customRoleId, rolesLoaded);
     },
     [auth, coaches, clubs, rolePermissionMap, rolesLoaded],
@@ -2023,12 +2016,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadFromSupabase();
   }, [useSupabase]);
 
-  /** Eski kulüp oturumlarında clubId eksikse tamamla */
+  /** Eski kulüp oturumlarında clubId / roleId eksikse tamamla */
   useEffect(() => {
-    if (auth?.role !== 'club' || auth.clubId || !auth.branch || clubs.length === 0) return;
-    const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(auth.branch));
-    if (club) setAuth({ ...auth, clubId: club.id });
+    if (auth?.role !== 'club' || !auth.branch || clubs.length === 0) return;
+    const club =
+      (auth.clubId ? clubs.find((c) => c.id === auth.clubId) : undefined) ??
+      clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(auth.branch));
+    if (!club) return;
+    const needsClubId = !auth.clubId;
+    const needsRoleId = club.roleId && auth.roleId !== club.roleId;
+    if (needsClubId || needsRoleId) {
+      setAuth({
+        ...auth,
+        clubId: auth.clubId ?? club.id,
+        roleId: club.roleId ?? auth.roleId,
+      });
+    }
   }, [auth, clubs]);
+
+  /** Antrenör oturumunda roleId eksikse tamamla */
+  useEffect(() => {
+    if (auth?.role !== 'coach' || coaches.length === 0) return;
+    const coach =
+      (auth.coachId ? coaches.find((c) => c.id === auth.coachId) : undefined) ??
+      (auth.branch ? coaches.find((c) => (c.branch || '').trim() === auth.branch.trim()) : undefined);
+    if (!coach?.roleId || auth.roleId === coach.roleId) return;
+    setAuth({ ...auth, coachId: auth.coachId ?? coach.id, roleId: coach.roleId });
+  }, [auth, coaches]);
 
   /** Branş–grup tanımları değişince eski disciplines/groups listelerini güncelle */
   useEffect(() => {
@@ -2844,23 +2858,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  const groupLessonsSyncedRef = useRef<Set<string>>(new Set());
-
-  /** Mevcut grupların ders slotlarını Ders Programı (lessons) tablosuna yansıt */
+  /** Mevcut grupların ders slotlarını yansıt; silinmiş gruplara ait dersleri temizle */
   useEffect(() => {
     if (!initialDataLoaded) return;
-    for (const group of trainingGroups) {
-      if (!group.lessonSlots?.length) continue;
-      const prefix = `tg-${group.id}-`;
-      const expected = lessonsFromTrainingGroup(group).length;
-      const existing = lessons.filter((l) => l.id.startsWith(prefix)).length;
-      if (groupLessonsSyncedRef.current.has(group.id) && existing >= expected) continue;
-      if (existing < expected) {
-        void persistTrainingGroupLessons(group);
+
+    let removedIds: string[] = [];
+    setLessons((prev) => {
+      const result = reconcileTrainingGroupLessons(trainingGroups, prev);
+      removedIds = result.removedIds;
+      if (
+        result.removedIds.length === 0 &&
+        result.lessons.length === prev.length &&
+        result.lessons.every((l, i) => {
+          const p = prev[i];
+          return p && p.id === l.id && p.topic === l.topic && p.group === l.group && p.day === l.day;
+        })
+      ) {
+        return prev;
       }
-      groupLessonsSyncedRef.current.add(group.id);
-    }
-  }, [initialDataLoaded, trainingGroups, lessons, persistTrainingGroupLessons]);
+      return result.lessons;
+    });
+
+    const sb = getServiceSupabase();
+    if (!sb) return;
+
+    void (async () => {
+      try {
+        const activeIds = new Set(trainingGroups.map((g) => g.id));
+        const { data: existing } = await sb.from('lessons').select('id');
+        const orphanIds = ((existing as { id?: string }[] | null) ?? [])
+          .map((r) => String(r.id ?? ''))
+          .filter((id) => {
+            if (!id.startsWith('tg-')) return false;
+            const body = id.slice(3);
+            const lastDash = body.lastIndexOf('-');
+            if (lastDash <= 0) return false;
+            const groupId = body.slice(0, lastDash);
+            return !activeIds.has(groupId);
+          });
+        const idsToDelete = [...new Set([...removedIds, ...orphanIds])];
+        if (idsToDelete.length > 0) {
+          const { error } = await sb.from('lessons').delete().in('id', idsToDelete);
+          if (error) console.error('Supabase lessons delete (reconcile orphans) error:', error);
+        }
+        const autoLessons = trainingGroups.flatMap((g) => lessonsFromTrainingGroup(g));
+        if (autoLessons.length > 0) {
+          const result = await lessonsUpsertWithRetry(sb, autoLessons);
+          if (!result.ok) console.error('Supabase lessons upsert (reconcile) error:', result.error);
+        }
+      } catch (err) {
+        console.error('reconcileTrainingGroupLessons persist failed:', err);
+      }
+    })();
+  }, [initialDataLoaded, trainingGroups]);
 
   const addPuzzle = useCallback(async (puzzle: Omit<Puzzle, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
@@ -3313,6 +3363,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (patch.loginPassword !== undefined) payload.login_password = patch.loginPassword ?? null;
       if (patch.loginUsername !== undefined) payload.login_username = patch.loginUsername ?? null;
       if (patch.roleId !== undefined) payload.role_id = patch.roleId ?? null;
+      if (patch.leaderboardPoints !== undefined) payload.leaderboard_points = patch.leaderboardPoints ?? null;
       if (Object.keys(payload).length > 0) {
         sb.from('clubs').update(payload).eq('id', id).then(({ error }) => {
           if (error) console.error('Supabase clubs update error:', error);

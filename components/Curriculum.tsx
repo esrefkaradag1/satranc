@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { useApp } from '../AppContext';
-import { Lesson } from '../types';
 import ScheduleWeeklyView from './ScheduleWeeklyView';
+import {
+  activeTrainingGroupNames,
+  filterLessonsToActiveGroups,
+} from '../lib/syncGroupLessons';
 
 const DAYS_FOR_LESSON: { value: string; label: string }[] = [
   { value: 'Pazartesi', label: 'Pazartesi' },
@@ -15,24 +18,34 @@ const DAYS_FOR_LESSON: { value: string; label: string }[] = [
 ];
 
 const Curriculum: React.FC = () => {
-  const { groups, lessons, addLesson, students } = useApp();
+  const { lessons, addLesson, students, scopedTrainingGroups } = useApp();
   const [lessonModalOpen, setLessonModalOpen] = useState(false);
   const [scheduleGroupFilter, setScheduleGroupFilter] = useState<string>('');
   const [scheduleStudentFilter, setScheduleStudentFilter] = useState<string>('');
+
+  const scheduleGroups = useMemo(
+    () => activeTrainingGroupNames(scopedTrainingGroups),
+    [scopedTrainingGroups],
+  );
+
+  const visibleLessons = useMemo(
+    () => filterLessonsToActiveGroups(lessons, scopedTrainingGroups),
+    [lessons, scopedTrainingGroups],
+  );
+
   const [lessonForm, setLessonForm] = useState<{ day: string; startTime: string; endTime: string; group: string; topic: string; studentId: string }>({
     day: 'Pazartesi',
     startTime: '12:00',
     endTime: '13:00',
-    group: groups[0] || '',
+    group: scheduleGroups[0] || '',
     topic: 'Satranç',
     studentId: '',
   });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Haftalık ders programı — 7 gün, saat + ders adı (görselle aynı) */}
       <ScheduleWeeklyView
-        lessons={lessons}
+        lessons={visibleLessons}
         groupFilter={scheduleGroupFilter}
         onGroupFilterChange={setScheduleGroupFilter}
         showAddButton
@@ -41,22 +54,21 @@ const Curriculum: React.FC = () => {
             day: 'Pazartesi',
             startTime: '12:00',
             endTime: '13:00',
-            group: groups[0] || '',
+            group: scheduleGroups[0] || '',
             topic: 'Satranç',
             studentId: scheduleStudentFilter || '',
           });
           setLessonModalOpen(true);
         }}
         title="Ders Programı"
-        subtitle="Haftalık antrenman çizelgesi"
-        groups={groups}
+        subtitle="Haftalık antrenman çizelgesi — yalnızca tanımlı eğitim grupları"
+        groups={scheduleGroups}
         studentFilter={scheduleStudentFilter}
         onStudentFilterChange={setScheduleStudentFilter}
         studentOptions={students.map((s) => ({ id: String(s.id), name: s.name }))}
         getStudentLabel={(id) => students.find((s) => String(s.id) === String(id))?.name}
       />
 
-      {/* Ders Ekle modal (Lesson) */}
       {lessonModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={() => setLessonModalOpen(false)}>
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden />
@@ -109,10 +121,10 @@ const Curriculum: React.FC = () => {
                   onChange={e => setLessonForm(f => ({ ...f, group: e.target.value }))}
                   className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-600 text-white text-sm"
                 >
-                  {groups.map(g => (
+                  {scheduleGroups.map(g => (
                     <option key={g} value={g}>{g}</option>
                   ))}
-                  {groups.length === 0 && <option value="">Grup yok</option>}
+                  {scheduleGroups.length === 0 && <option value="">Grup yok</option>}
                 </select>
               </div>
               <div>
@@ -149,7 +161,7 @@ const Curriculum: React.FC = () => {
                       day: lessonForm.day,
                       startTime: lessonForm.startTime.trim() || '12:00',
                       endTime: lessonForm.endTime.trim() || '13:00',
-                      group: lessonForm.group.trim() || groups[0] || '',
+                      group: lessonForm.group.trim() || scheduleGroups[0] || '',
                       topic: lessonForm.topic.trim() || 'Ders',
                       studentId: lessonForm.studentId || undefined,
                     });

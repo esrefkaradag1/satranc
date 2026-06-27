@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Calendar,
   CalendarCheck,
@@ -34,9 +34,6 @@ import { mergeGroupLessonLogsFromStudents, isoDateToTr } from '../lib/lessonLogU
 import { findTrainingGroupByName, studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { StudentLessonLogInline } from './attendance/StudentLessonLogInline';
 import { ResponsiveTable } from './ui/ResponsiveTable';
-
-const BRANCHES = ['Satranç', 'Robotik', 'Kodlama', 'DENEME'];
-const BRANCH_OFFICES = ['Merkez', 'Çayyolu', 'Ümitköy', 'AFYON SATRANÇ'];
 
 type AttendanceStatus = 'Present' | 'Absent' | 'Late' | 'Excused' | null;
 type AnalysisPlatform = 'lichess' | 'chesscom';
@@ -137,6 +134,33 @@ const AnalysisPlatformButtons: React.FC<{
  );
 };
 
+const StudentPhoto: React.FC<{
+  name: string;
+  photoUrl?: string;
+  sizeClass?: string;
+  textClass?: string;
+  onZoom?: (photo: { url: string; name: string }) => void;
+}> = ({ name, photoUrl, sizeClass = 'w-9 h-9', textClass = 'text-[10px]', onZoom }) => {
+  const initials = name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+  if (photoUrl) {
+    return (
+      <button
+        type="button"
+        onClick={() => onZoom?.({ url: photoUrl, name })}
+        className={`${sizeClass} rounded-lg border border-white/10 cursor-zoom-in hover:ring-2 hover:ring-indigo-500/40 transition-all overflow-hidden shrink-0 p-0`}
+        title={`${name} — büyütmek için tıklayın`}
+      >
+        <img src={photoUrl} alt={name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+      </button>
+    );
+  }
+  return (
+    <div className={`${sizeClass} rounded-lg premium-gradient flex items-center justify-center text-white font-bold ${textClass} shadow-md shadow-indigo-900/30 shrink-0`}>
+      {initials}
+    </div>
+  );
+};
+
 function attendanceCardAccent(status: AttendanceStatus): string {
  if (status === 'Present') return 'border-emerald-500/35 bg-emerald-500/[0.05]';
  if (status === 'Absent') return 'border-rose-500/35 bg-rose-500/[0.05]';
@@ -170,7 +194,10 @@ const Attendance: React.FC = () => {
     scopedStudents: students,
     addAttendanceRecord,
     attendanceRecords,
-    trainingGroups,
+    scopedTrainingGroups: trainingGroups,
+    scopedDisciplineBranches: disciplineBranches,
+    branchOffices,
+    activeClubBranch,
     refreshFromStorage,
     groupLessonLogs,
     updateGroupLessonLog,
@@ -179,8 +206,8 @@ const Attendance: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<ViewMode>('take');
   const [attendanceType, setAttendanceType] = useState<'group' | 'lesson'>('group');
-  const [branchOffice, setBranchOffice] = useState(BRANCH_OFFICES[0]);
-  const [branch, setBranch] = useState(BRANCHES[0]);
+  const [branchOffice, setBranchOffice] = useState('');
+  const [branch, setBranch] = useState('');
   const [group, setGroup] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [teacherName, setTeacherName] = useState('');
@@ -199,12 +226,80 @@ const Attendance: React.FC = () => {
   const [chessComStats, setChessComStats] = useState<ChessComStats | null>(null);
   const [chessComGames, setChessComGames] = useState<ChessComGame[]>([]);
   const [expandedNoteStudentId, setExpandedNoteStudentId] = useState<string | null>(null);
+  const [zoomedPhoto, setZoomedPhoto] = useState<{ url: string; name: string } | null>(null);
 
-  /** Yalnızca Branş & Grup'ta tanımlı aktif gruplar (silinen gruplar listelenmez) */
-  const groups = useMemo(() => {
-    const names = [...new Set(trainingGroups.map((g) => g.name.trim()).filter(Boolean))];
-    return names.sort((a, b) => a.localeCompare(b, 'tr'));
+  /** Yalnızca en az bir eğitim grubu tanımlı şubeler */
+  const attendanceBranchOffices = useMemo(() => {
+    const withGroups = new Set(
+      trainingGroups.map((g) => g.branchOffice?.trim()).filter(Boolean) as string[],
+    );
+    const registered = branchOffices.filter((o) => withGroups.has(o));
+    if (registered.length > 0) return registered;
+    return [...withGroups].sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [branchOffices, trainingGroups]);
+
+  /** Seçili şubedeki branşlar (Branş & Grup kayıtlarından) */
+  const attendanceDisciplines = useMemo(() => {
+    const office = branchOffice.trim();
+    const names = new Set<string>();
+    for (const b of disciplineBranches) {
+      if (office && b.branchOffice?.trim() !== office) continue;
+      if (b.name?.trim()) names.add(b.name.trim());
+    }
+    for (const g of trainingGroups) {
+      if (office && g.branchOffice?.trim() !== office) continue;
+      if (g.discipline?.trim()) names.add(g.discipline.trim());
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [disciplineBranches, trainingGroups, branchOffice]);
+
+  useEffect(() => {
+    if (attendanceBranchOffices.length === 0) {
+      if (branchOffice) setBranchOffice('');
+      return;
+    }
+    if (branchOffice && attendanceBranchOffices.includes(branchOffice)) return;
+    const preferred =
+      activeClubBranch && attendanceBranchOffices.includes(activeClubBranch)
+        ? activeClubBranch
+        : attendanceBranchOffices[0];
+    setBranchOffice(preferred ?? '');
+  }, [attendanceBranchOffices, activeClubBranch, branchOffice]);
+
+  useEffect(() => {
+    if (attendanceDisciplines.length === 0) {
+      if (branch) setBranch('');
+      return;
+    }
+    if (branch && attendanceDisciplines.includes(branch)) return;
+    setBranch(attendanceDisciplines[0] ?? '');
+  }, [attendanceDisciplines, branch]);
+
+  /** Tüm tanımlı gruplar (yoklama listesi) */
+  const allGroupNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const g of trainingGroups) {
+      if (g.name?.trim()) names.add(g.name.trim());
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
   }, [trainingGroups]);
+
+  /** Seçili şube + branşa göre gruplar (yoklama al) */
+  const groups = useMemo(() => {
+    const office = branchOffice.trim();
+    const discipline = branch.trim();
+    const names = new Set<string>();
+    for (const g of trainingGroups) {
+      if (office && g.branchOffice?.trim() !== office) continue;
+      if (discipline && g.discipline?.trim() !== discipline) continue;
+      if (g.name?.trim()) names.add(g.name.trim());
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [trainingGroups, branchOffice, branch]);
+
+  useEffect(() => {
+    if (group && !groups.includes(group)) setGroup('');
+  }, [groups, group]);
 
   const selectedTrainingGroup = useMemo(
     () => findTrainingGroupByName(trainingGroups, group, { branchOffice, discipline: branch }),
@@ -435,7 +530,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  className="w-full min-w-[180px] px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  >
  <option value="">Tüm gruplar</option>
- {groups.map((g) => (
+ {allGroupNames.map((g) => (
  <option key={g} value={g}>{g}</option>
  ))}
  </select>
@@ -562,10 +657,15 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  >
  <option value="">Şube Seçiniz</option>
- {BRANCH_OFFICES.map((b) => (
+ {attendanceBranchOffices.map((b) => (
  <option key={b} value={b}>{b}</option>
  ))}
  </select>
+ {attendanceBranchOffices.length === 0 && (
+ <p className="mt-2 text-xs text-amber-400/90">
+ Tanımlı şube yok. Branş & Grup sayfasından şube ve eğitim grubu ekleyin.
+ </p>
+ )}
  </SelectField>
 
  {/* Branş */}
@@ -576,10 +676,15 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  >
  <option value="">Branş Seçiniz</option>
- {BRANCHES.map((b) => (
+ {attendanceDisciplines.map((b) => (
  <option key={b} value={b}>{b}</option>
  ))}
  </select>
+ {branchOffice && attendanceDisciplines.length === 0 && (
+ <p className="mt-2 text-xs text-amber-400/90">
+ Bu şubede branş tanımı yok. Branş & Grup sayfasından branş ekleyin.
+ </p>
+ )}
  </SelectField>
 
  {/* Grup */}
@@ -702,30 +807,11 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  </div>
  ) : (
  <>
- <div className="flex gap-4 items-start">
- <aside className="hidden xl:flex flex-col gap-2 w-[4.75rem] shrink-0 sticky top-20 py-1 max-h-[calc(100vh-10rem)] overflow-y-auto custom-scrollbar rounded-xl border border-white/[0.06] bg-[#0f172a]/60 p-2">
- <p className="text-[8px] font-bold text-slate-500 uppercase tracking-wider text-center px-0.5">Görseller</p>
- {filteredStudents.map((student) => {
- const initials = student.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
- const firstName = student.name.split(' ')[0] ?? student.name;
- return (
- <div key={student.id} className="flex flex-col items-center gap-1" title={student.name}>
- {student.photoUrl ? (
- <img src={student.photoUrl} alt="" className="w-11 h-11 rounded-lg object-cover border border-white/10" referrerPolicy="no-referrer" />
- ) : (
- <div className="w-11 h-11 rounded-lg premium-gradient flex items-center justify-center text-white font-bold text-[9px] shadow-md">{initials}</div>
- )}
- <span className="text-[8px] text-slate-400 font-medium truncate w-full text-center">{firstName}</span>
- </div>
- );
- })}
- </aside>
- <div className="flex-1 min-w-0 space-y-2">
+ <div className="space-y-2">
  {/* Mobil: kompakt öğrenci kartları */}
  <div className="md:hidden space-y-2">
  {filteredStudents.map((student, idx) => {
  const s = attendance[student.id] ?? null;
- const initials = student.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
  const noteOpen = expandedNoteStudentId === student.id;
  const noteCount = student.lessonLog?.length ?? 0;
  return (
@@ -735,11 +821,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  >
  <div className="flex items-start gap-2.5">
  <span className="text-[10px] font-bold text-slate-500 w-4 pt-2 tabular-nums shrink-0">{idx + 1}</span>
- {student.photoUrl ? (
- <img src={student.photoUrl} alt="" className="w-10 h-10 rounded-lg object-cover border border-white/10 shrink-0" referrerPolicy="no-referrer" />
- ) : (
- <div className="w-10 h-10 rounded-lg premium-gradient flex items-center justify-center text-white font-bold text-[10px] shadow-md shadow-indigo-900/30 shrink-0">{initials}</div>
- )}
+ <StudentPhoto name={student.name} photoUrl={student.photoUrl} sizeClass="w-10 h-10" onZoom={setZoomedPhoto} />
  <div className="flex-1 min-w-0">
  <div className="font-semibold text-white text-sm leading-tight">{student.name}</div>
  {student.group ? <div className="text-[10px] text-slate-500 mt-0.5">{student.group}</div> : null}
@@ -801,7 +883,6 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <tbody>
  {filteredStudents.map((student, idx) => {
  const s = attendance[student.id] ?? null;
- const initials = student.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
  const noteOpen = expandedNoteStudentId === student.id;
  const noteCount = student.lessonLog?.length ?? 0;
  return (
@@ -810,11 +891,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <td data-label="No" className="px-3 py-3 text-center text-slate-500 font-semibold tabular-nums text-xs">{idx + 1}</td>
  <td data-label="Foto" className="px-3 py-3">
  <div className="flex justify-center">
- {student.photoUrl ? (
- <img src={student.photoUrl} alt="" className="w-9 h-9 rounded-lg object-cover border border-white/10" referrerPolicy="no-referrer" />
- ) : (
- <div className="w-9 h-9 rounded-lg premium-gradient flex items-center justify-center text-white font-bold text-[10px] shadow-md shadow-indigo-900/30">{initials}</div>
- )}
+ <StudentPhoto name={student.name} photoUrl={student.photoUrl} onZoom={setZoomedPhoto} />
  </div>
  </td>
  <td data-label="Öğrenci" className="px-3 py-3">
@@ -868,7 +945,6 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  </ResponsiveTable>
  </div>
  </div>
- </div>
  </>
  )}
 
@@ -907,6 +983,30 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  )}
  </>
  )}
+  {zoomedPhoto && (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm"
+      onClick={() => setZoomedPhoto(null)}
+    >
+      <div className="relative max-w-3xl max-h-[90vh] w-full flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          onClick={() => setZoomedPhoto(null)}
+          className="absolute -top-2 -right-2 z-10 p-2 rounded-full bg-slate-800 hover:bg-indigo-600/80 text-white transition-colors shadow-xl"
+          aria-label="Kapat"
+        >
+          <X className="w-6 h-6" />
+        </button>
+        <img
+          src={zoomedPhoto.url}
+          alt={zoomedPhoto.name}
+          className="max-w-full max-h-[80vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
+          referrerPolicy="no-referrer"
+        />
+        <p className="mt-4 text-lg font-bold text-white">{zoomedPhoto.name}</p>
+      </div>
+    </div>
+  )}
   {analysisModal && (
     <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm p-4 flex items-center justify-center">
       <div className="w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-xl border border-slate-700 bg-white shadow-2xl">

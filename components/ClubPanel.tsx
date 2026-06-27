@@ -15,10 +15,12 @@ import {
   Lock,
   Eye,
   EyeOff,
+  Shield,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import Sidebar from './Sidebar';
-import { clubNavForPermissions, isClubPanelTabAllowed, clubSidebarTabFor, clubPreferredStudentListTab } from '../lib/rolePermissions';
+import { clubNavForPermissions, isClubPanelTabAllowed, clubSidebarTabFor, clubPreferredStudentListTab, defaultPermissionsForRole, sanitizeCoachGrantPermissions, permissionSetsEqual, coachPermissionSummary } from '../lib/rolePermissions';
+import { CoachPermissionsPicker } from './club/CoachPermissionsPicker';
 import { readPanelHash, writePanelHash } from '../lib/panelRouting';
 import StudentAdd from './StudentAdd';
 import Finance from './Finance';
@@ -69,16 +71,15 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     updateStudent,
     updateClub,
     appRoles,
+    rolePermissionMap,
+    createAppRole,
+    setRolePermissions,
+    showToast,
     authPermissions,
     scopedStudents: branchStudents,
     scopedCoaches: branchCoaches,
     scopedTransactions: branchTx,
   } = useApp();
-
-  const coachRoleOptions = useMemo(
-    () => appRoles.filter((r) => r.panel === 'coach'),
-    [appRoles],
-  );
 
   const defaultClubTab = authPermissions.has('dashboard')
     ? 'dashboard'
@@ -169,7 +170,13 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [detailStudent, setDetailStudent] = useState<Student | null>(null);
 
-  const [coachForm, setCoachForm] = useState({ name: '', phone: '', email: '', password: '', roleId: '' });
+  const [coachForm, setCoachForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    password: '',
+    permissions: defaultPermissionsForRole('coach'),
+  });
   const [showCoachPassword, setShowCoachPassword] = useState(false);
   const [studentForm, setStudentForm] = useState({
     name: '',
@@ -198,10 +205,36 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   }, [branchStudents, studentSearch]);
 
   const resetCoachForm = () => {
-    setCoachForm({ name: '', phone: '', email: '', password: '', roleId: '' });
+    setCoachForm({
+      name: '',
+      phone: '',
+      email: '',
+      password: '',
+      permissions: defaultPermissionsForRole('coach'),
+    });
     setEditingCoach(null);
     setShowCoachPassword(false);
   };
+
+  const loadCoachPermissions = useCallback(
+    (coach: Coach) => {
+      const rid = coach.roleId;
+      if (rid && rolePermissionMap[rid]?.length) {
+        return sanitizeCoachGrantPermissions(rolePermissionMap[rid]);
+      }
+      return defaultPermissionsForRole('coach');
+    },
+    [rolePermissionMap],
+  );
+
+  const isDedicatedCoachRole = useCallback(
+    (roleId?: string) => {
+      if (!roleId || roleId === 'role-coach') return false;
+      const role = appRoles.find((r) => r.id === roleId);
+      return !!role && role.panel === 'coach' && !role.isSystem;
+    },
+    [appRoles],
+  );
 
   const resetStudentForm = () => {
     setStudentForm({
@@ -229,12 +262,33 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
       phone: coach.phone || '',
       email: coach.email || '',
       password: '',
-      roleId: coach.roleId || '',
+      permissions: loadCoachPermissions(coach),
     });
     setShowCoachModal(true);
   };
 
-  const handleCoachSubmit = (e: React.FormEvent) => {
+  const resolveCoachRoleId = async (name: string, perms: string[]): Promise<string | undefined> => {
+    const defaultPerms = defaultPermissionsForRole('coach');
+    if (permissionSetsEqual(perms, defaultPerms)) return undefined;
+
+    const existingId = editingCoach?.roleId;
+    if (existingId && isDedicatedCoachRole(existingId)) {
+      await setRolePermissions(existingId, perms);
+      return existingId;
+    }
+
+    const role = createAppRole({
+      name: `${name.trim().slice(0, 48)} · ${branch}`,
+      panel: 'coach',
+      description: `${branch} kulübü antrenör yetkileri`,
+      color: '#f59e0b',
+      isSystem: false,
+    });
+    await setRolePermissions(role.id, perms);
+    return role.id;
+  };
+
+  const handleCoachSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const name = coachForm.name.trim();
     const email = coachForm.email.trim();
@@ -244,19 +298,23 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
       alert('Yeni antrenör için giriş şifresi zorunludur.');
       return;
     }
+    const perms = sanitizeCoachGrantPermissions(coachForm.permissions);
+    const roleId = await resolveCoachRoleId(name, perms);
+
     const payload: Omit<Coach, 'id'> = {
       name,
       branch,
       phone: coachForm.phone.trim() || undefined,
       email: email || undefined,
+      roleId,
     };
     if (password) payload.password = password;
-    if (coachForm.roleId.trim()) payload.roleId = coachForm.roleId.trim();
-    else if (editingCoach) payload.roleId = undefined;
     if (editingCoach) {
       updateCoach(editingCoach.id, payload);
+      showToast('Antrenör ve yetkiler güncellendi.', 'success');
     } else {
       addCoach(payload);
+      showToast('Antrenör eklendi.', 'success');
     }
     resetCoachForm();
     setShowCoachModal(false);
@@ -417,6 +475,10 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
                             </span>
                           )}
                         </div>
+                        <p className="flex items-center gap-1 text-[10px] text-amber-400/90 mt-1">
+                          <Shield className="w-3 h-3 shrink-0" />
+                          {coachPermissionSummary(c.roleId, rolePermissionMap, appRoles)}
+                        </p>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <button
@@ -657,7 +719,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
             K
           </div>
         </header>
-        <div className="relative z-10 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full min-w-0 flex-1">
+        <div className="relative z-10 p-4 sm:p-6 lg:p-8  mx-auto w-full min-w-0 flex-1">
           {renderContent()}
         </div>
       </main>
@@ -672,7 +734,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
           }}
         >
           <div
-            className="bg-slate-900 border border-slate-700 rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+            className="bg-slate-900 border border-slate-700 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
@@ -755,24 +817,10 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
                   Antrenör girişinde e-posta/ad + bu şifre kullanılır
                 </p>
               </div>
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                  Rol
-                </label>
-                <select
-                  value={coachForm.roleId}
-                  onChange={(e) => setCoachForm((f) => ({ ...f, roleId: e.target.value }))}
-                  className={inputCls}
-                >
-                  <option value="">Varsayılan (Antrenör)</option>
-                  {coachRoleOptions.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-slate-500 mt-1">Menü erişimini belirler</p>
-              </div>
+              <CoachPermissionsPicker
+                value={coachForm.permissions}
+                onChange={(permissions) => setCoachForm((f) => ({ ...f, permissions }))}
+              />
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"

@@ -500,7 +500,7 @@ const BranchGroupManagement: React.FC = () => {
             const isOpen = expanded[branch.id] !== false;
             return (
               <div key={branch.id} className="rounded-xl border border-white/5 bg-slate-900/60 overflow-hidden">
-                <div className="grid grid-cols-[auto_1fr_auto] sm:grid-cols-[48px_80px_1fr_120px_80px_auto] gap-3 items-center px-4 py-3 border-b border-white/5 bg-slate-800/30">
+                <div className="grid grid-cols-[auto_1fr_auto] sm:grid-cols-[48px_80px_1fr_80px_auto] gap-3 items-center px-4 py-3 border-b border-white/5 bg-slate-800/30">
                   <button
                     type="button"
                     onClick={() => toggleExpand(branch.id)}
@@ -515,9 +515,6 @@ const BranchGroupManagement: React.FC = () => {
                     </span>
                     <div className="mt-1 text-sm font-black text-white truncate">{branch.name}</div>
                   </div>
-                  <span className="hidden sm:inline-flex px-2.5 py-1 rounded-full bg-slate-500/15 text-slate-400 text-[10px] font-bold border border-slate-500/25">
-                    Grup ücreti
-                  </span>
                   <span className="hidden sm:inline-flex w-8 h-8 rounded-full bg-sky-500/20 text-sky-300 text-xs font-black items-center justify-center border border-sky-500/30">
                     {branchGroups.length}
                   </span>
