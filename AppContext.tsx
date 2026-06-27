@@ -22,7 +22,6 @@ import {
   resolveClubIdFromAuth,
 } from './lib/orgStructureDb';
 import { normalizeClubKey } from './lib/clubScope';
-import { buildDefaultOrgStructure, buildClubDefaultOrgStructure } from './lib/seedDefaultOrgStructure';
 import {
   lessonsFromTrainingGroup,
   mergeTrainingGroupLessons,
@@ -117,7 +116,7 @@ interface AppContextType {
   branchOffices: string[];
   /** Şube kayıtları (branch_offices tablosu) */
   branchOfficeRecords: BranchOfficeRecord[];
-  addBranchOffice: (name: string) => void;
+  addBranchOffice: (name: string, options?: { clubId?: string }) => void;
   removeBranchOffice: (name: string) => void;
   clubs: Club[];
   addClub: (club: Omit<Club, 'id'>) => void;
@@ -1998,53 +1997,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadFromSupabase();
   }, [useSupabase]);
 
-  const clubOrgSeededRef = useRef<Set<string>>(new Set());
-
   /** Eski kulüp oturumlarında clubId eksikse tamamla */
   useEffect(() => {
     if (auth?.role !== 'club' || auth.clubId || !auth.branch || clubs.length === 0) return;
     const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(auth.branch));
     if (club) setAuth({ ...auth, clubId: club.id });
   }, [auth, clubs]);
-
-  /** Kulübün henüz şube/branş/grup tanımı yoksa admin ile aynı varsayılanları oluştur */
-  useEffect(() => {
-    if (!initialDataLoaded || auth?.role !== 'club') return;
-    const clubName = auth.branch?.trim();
-    const clubId = resolveClubIdFromAuth(auth, clubs);
-    if (!clubName || !clubId) return;
-    if (clubOrgSeededRef.current.has(clubId)) return;
-
-    const hasOrg =
-      disciplineBranches.some((b) => b.clubId === clubId) ||
-      trainingGroups.some((g) => g.clubId === clubId);
-    if (hasOrg) {
-      clubOrgSeededRef.current.add(clubId);
-      return;
-    }
-
-    clubOrgSeededRef.current.add(clubId);
-    const seeded = buildClubDefaultOrgStructure(clubName, clubId);
-
-    const hasMainOffice = branchOfficeRecords.some(
-      (r) => r.clubId === clubId && normalizeClubKey(r.name) === normalizeClubKey(clubName),
-    );
-    if (!hasMainOffice) {
-      const mainOffice: BranchOfficeRecord = { id: genId(), name: clubName, clubId };
-      setBranchOfficeRecords((prev) => [...prev, mainOffice]);
-      const sb = getServiceSupabase();
-      if (sb) void sb.from('branch_offices').upsert(branchOfficeToDb(mainOffice));
-    }
-
-    setDisciplineBranches((prev) => [...prev, ...seeded.branches]);
-    setTrainingGroups((prev) => [...prev, ...seeded.groups]);
-
-    const sb = getServiceSupabase();
-    if (sb) {
-      void sb.from('discipline_branches').upsert(seeded.branches.map((b) => disciplineBranchToDb(b, clubId)));
-      void sb.from('training_groups').upsert(seeded.groups.map((g) => trainingGroupToDb(g, clubId)));
-    }
-  }, [initialDataLoaded, auth, clubs, branchOfficeRecords, disciplineBranches, trainingGroups]);
 
   /** Branş–grup tanımları değişince eski disciplines/groups listelerini güncelle */
   useEffect(() => {
@@ -3214,11 +3172,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) { console.error('Supabase gallery throw error:', err); }
   }, [addActivityLog]);
 
-  const addBranchOffice = useCallback((name: string) => {
+  const addBranchOffice = useCallback((name: string, options?: { clubId?: string }) => {
     const trimmed = name.trim();
     if (!trimmed || branchOffices.some((o) => normalizeClubKey(o) === normalizeClubKey(trimmed))) return;
     const clubId =
-      auth?.role === 'club' ? resolveClubIdFromAuth(auth, clubs) : undefined;
+      options?.clubId ??
+      (auth?.role === 'club' ? resolveClubIdFromAuth(auth, clubs) : undefined);
     const record: BranchOfficeRecord = {
       id: genId(),
       name: trimmed,
