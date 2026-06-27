@@ -115,6 +115,8 @@ interface AppContextType {
   removeGalleryItem: (id: string) => void;
 
   branchOffices: string[];
+  /** Şube kayıtları (branch_offices tablosu) */
+  branchOfficeRecords: BranchOfficeRecord[];
   addBranchOffice: (name: string) => void;
   removeBranchOffice: (name: string) => void;
   clubs: Club[];
@@ -847,8 +849,63 @@ function lessonToDb(l: Lesson): Record<string, unknown> {
     end_time: l.endTime,
     group_name: l.group,
     topic: l.topic,
+    branch: l.branch ?? null,
     student_id: l.studentId ?? null,
   };
+}
+
+/** Eski Supabase şeması (camelCase sütun adları) */
+function lessonToDbLegacy(l: Lesson): Record<string, unknown> {
+  return {
+    id: l.id,
+    day: l.day,
+    startTime: l.startTime,
+    endTime: l.endTime,
+    group: l.group,
+    topic: l.topic,
+    branch: l.branch ?? null,
+    studentId: l.studentId ?? null,
+  };
+}
+
+function isLessonPgColumnError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return (
+    error.code === 'PGRST204' ||
+    (String(error.message || '').toLowerCase().includes('column') &&
+      String(error.message || '').toLowerCase().includes('schema'))
+  );
+}
+
+async function lessonsUpsertWithRetry(
+  sb: NonNullable<ReturnType<typeof getServiceSupabase>>,
+  items: Lesson[],
+): Promise<{ ok: boolean; error?: string }> {
+  if (items.length === 0) return { ok: true };
+  const modern = items.map((l) => lessonToDb(l));
+  const { error } = await sb.from('lessons').upsert(modern);
+  if (!error) return { ok: true };
+  if (isLessonPgColumnError(error)) {
+    const legacy = items.map((l) => lessonToDbLegacy(l));
+    const retry = await sb.from('lessons').upsert(legacy);
+    if (!retry.error) return { ok: true };
+    return { ok: false, error: retry.error.message };
+  }
+  return { ok: false, error: error.message };
+}
+
+async function lessonInsertWithRetry(
+  sb: NonNullable<ReturnType<typeof getServiceSupabase>>,
+  lesson: Lesson,
+): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await sb.from('lessons').insert(lessonToDb(lesson));
+  if (!error) return { ok: true };
+  if (isLessonPgColumnError(error)) {
+    const retry = await sb.from('lessons').insert(lessonToDbLegacy(lesson));
+    if (!retry.error) return { ok: true };
+    return { ok: false, error: retry.error.message };
+  }
+  return { ok: false, error: error.message };
 }
 function dbToLesson(row: Record<string, unknown>): Lesson {
   const r = row as Record<string, unknown> & { start_time?: string; end_time?: string };
@@ -1894,12 +1951,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (officeRows.length > 0) {
           setBranchOfficeRecords(officeRows);
         } else if (!officesRes.error) {
-          const seeds = DEFAULT_BRANCH_OFFICES.map((name) => ({ id: genId(), name }));
-          setBranchOfficeRecords(seeds);
-          const sbWrite = getServiceSupabase();
-          if (sbWrite) {
-            void sbWrite.from('branch_offices').upsert(seeds.map(branchOfficeToDb));
-          }
+          setBranchOfficeRecords([]);
         }
 
         if (!discBranchesRes.error && discBranchesRes.data) {
@@ -1914,37 +1966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (groupsFromDb.length > 0) {
           setTrainingGroups(groupsFromDb);
         } else if (!trainGroupsRes.error) {
-          const primaryOffice = officeRows[0]?.name ?? DEFAULT_BRANCH_OFFICES[0];
-          const branches =
-            !discBranchesRes.error && discBranchesRes.data
-              ? (discBranchesRes.data as Record<string, unknown>[]).map(dbToDisciplineBranch)
-              : [];
-          const seeded = buildDefaultOrgStructure(primaryOffice);
-          if (branches.length === 0) {
-            setDisciplineBranches(seeded.branches);
-          } else {
-            seeded.groups = seeded.groups.map((g) => ({
-              ...g,
-              branchOffice: branches[0].branchOffice,
-              discipline: branches[0].name,
-            }));
-          }
-          setTrainingGroups(seeded.groups);
-          const sbWrite = getServiceSupabase();
-          if (sbWrite) {
-            if (officeRows.length === 0) {
-              setBranchOfficeRecords(seeded.offices);
-              void sbWrite.from('branch_offices').upsert(seeded.offices.map(branchOfficeToDb));
-            }
-            if (branches.length === 0) {
-              void sbWrite
-                .from('discipline_branches')
-                .upsert(seeded.branches.map((b) => disciplineBranchToDb(b, null)));
-            }
-            void sbWrite
-              .from('training_groups')
-              .upsert(seeded.groups.map((g) => trainingGroupToDb(g, null)));
-          }
+          setTrainingGroups([]);
         }
 
         try {
@@ -2787,9 +2809,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newLesson = { ...lesson, id } as Lesson;
     setLessons(prev => [...prev, newLesson]);
     if (sb) try {
-      const payload = lessonToDb(newLesson);
-      const { error } = await sb.from('lessons').insert(payload);
-      if (error) console.error('Supabase lessons insert error:', error);
+      const result = await lessonInsertWithRetry(sb, newLesson);
+      if (!result.ok) console.error('Supabase lessons insert error:', result.error);
     } catch (err) { console.error('Supabase lessons throw error:', err); }
   }, []);
 
@@ -2811,8 +2832,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (error) console.error('Supabase lessons delete (group sync) error:', error);
       }
       if (synced.length > 0) {
-        const { error } = await sb.from('lessons').upsert(synced.map((l) => lessonToDb(l)));
-        if (error) console.error('Supabase lessons upsert (group sync) error:', error);
+        const result = await lessonsUpsertWithRetry(sb, synced);
+        if (!result.ok) {
+          console.error('Supabase lessons upsert (group sync) error:', result.error);
+        }
       }
     } catch (err) {
       console.error('persistTrainingGroupLessons failed:', err);
@@ -3211,29 +3234,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [branchOffices, auth, clubs, addActivityLog]);
   const removeBranchOffice = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
     const clubId = auth?.role === 'club' ? resolveClubIdFromAuth(auth, clubs) : undefined;
-    setBranchOfficeRecords((prev) => {
-      const target = prev.find((r) => {
-        if (r.name !== name) return false;
-        if (auth?.role === 'club') return r.clubId === clubId;
-        return !r.clubId;
-      });
-      return target ? prev.filter((r) => r.id !== target.id) : prev;
+    const target = branchOfficeRecords.find((r) => {
+      if (r.name !== trimmed) return false;
+      if (auth?.role === 'club') return r.clubId === clubId;
+      return true;
     });
-    addActivityLog({ user: CURRENT_USER, action: 'Şube Silindi', target: name, type: 'warning' });
+
+    if (!target) {
+      const isClub = clubs.some((c) => normalizeClubKey(c.name) === normalizeClubKey(trimmed));
+      if (isClub) {
+        showToast(`"${trimmed}" bir kulüptür. Silmek için Kurumsal Yapı sayfasını kullanın.`, 'warning');
+      } else {
+        showToast(`"${trimmed}" şube kaydı bulunamadı.`, 'warning');
+      }
+      return;
+    }
+
+    if (auth?.role === 'club' && normalizeClubKey(trimmed) === normalizeClubKey(auth.branch ?? '')) {
+      showToast('Ana kulüp şubesi silinemez.', 'warning');
+      return;
+    }
+
+    const inUse =
+      disciplineBranches.some((b) => b.branchOffice === trimmed) ||
+      trainingGroups.some((g) => g.branchOffice === trimmed);
+    if (inUse) {
+      showToast(`"${trimmed}" şubesinde branş veya grup tanımı var. Önce onları silin.`, 'warning');
+      return;
+    }
+
+    setBranchOfficeRecords((prev) => prev.filter((r) => r.id !== target.id));
+    addActivityLog({ user: CURRENT_USER, action: 'Şube Silindi', target: trimmed, type: 'warning' });
     const sb = getServiceSupabase();
     if (sb) {
-      let query = sb.from('branch_offices').delete().eq('name', name);
-      if (auth?.role === 'club' && clubId) {
-        query = query.eq('club_id', clubId);
-      } else {
-        query = query.is('club_id', null);
-      }
-      void query.then(({ error }) => {
-        if (error) console.error('Supabase branch_offices delete error:', error);
+      void sb.from('branch_offices').delete().eq('id', target.id).then(({ error }) => {
+        if (error) {
+          console.error('Supabase branch_offices delete error:', error);
+          showToast('Şube veritabanından silinemedi.', 'warning');
+        }
       });
+    } else {
+      showToast('Şube yalnızca bu cihazdan silindi. Supabase yazma anahtarı tanımlı değil.', 'warning');
     }
-  }, [auth, clubs, addActivityLog]);
+  }, [auth, clubs, branchOfficeRecords, disciplineBranches, trainingGroups, addActivityLog, showToast]);
 
   const addClub = useCallback((club: Omit<Club, 'id'>) => {
     const id = crypto.randomUUID?.() ?? `club-${Date.now()}`;
@@ -3446,13 +3492,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const sb = getServiceSupabase();
         if (sb) {
           void sb.from('training_groups').delete().eq('id', id).then(({ error }) => {
-            if (error) console.error('Supabase training_groups delete error:', error);
+            if (error) {
+              console.error('Supabase training_groups delete error:', error);
+              showToast('Grup veritabanından silinemedi. training_groups tablosunu kontrol edin.', 'warning');
+            }
           });
+        } else {
+          showToast('Grup yalnızca bu cihazdan silindi. Supabase yazma anahtarı tanımlı değil.', 'warning');
         }
       }
       return next;
     });
-  }, [addActivityLog, syncGroupNames, removeTrainingGroupLessons]);
+  }, [addActivityLog, syncGroupNames, removeTrainingGroupLessons, showToast]);
 
   const updateGroupLessonLog = useCallback(async (groupKey: string, entries: StudentLessonLogEntry[]) => {
     const key = groupKey.trim();
@@ -3518,7 +3569,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       homeworkSubmissions, addHomeworkSubmission, removeHomeworkSubmission,
       inventory, addInventoryItem, updateInventoryItem, deleteInventoryItem,
       gallery, addGalleryItem, removeGalleryItem,
-      branchOffices, addBranchOffice, removeBranchOffice,
+      branchOffices, branchOfficeRecords, addBranchOffice, removeBranchOffice,
       clubs, addClub, updateClub, removeClub,
       disciplines, addDiscipline, removeDiscipline,
       groups, addGroup, removeGroup,

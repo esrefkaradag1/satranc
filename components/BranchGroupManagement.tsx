@@ -7,7 +7,7 @@ import { useApp } from '../AppContext';
 import type { DisciplineBranch, GroupLessonSlot, TrainingGroup } from '../types';
 import {
   WEEKDAY_OPTIONS, applyGroupDefaultsToStudent, emptyLessonSlot, formatLessonSchedule, getGroupMonthlyFee,
-  mergeBranchOffices, studentsInTrainingGroup,
+  studentsInTrainingGroup,
 } from '../lib/trainingGroupUtils';
 import { coachesForClub } from '../lib/orgScope';
 import { normalizeClubKey } from '../lib/clubScope';
@@ -19,6 +19,7 @@ import { ResponsiveTable } from './ui/ResponsiveTable';
 const BranchGroupManagement: React.FC = () => {
   const {
     branchOffices,
+    branchOfficeRecords,
     addBranchOffice,
     removeBranchOffice,
     disciplineBranches: allDisciplineBranches,
@@ -69,9 +70,28 @@ const BranchGroupManagement: React.FC = () => {
   );
 
   const officeOptions = useMemo(() => {
-    const branchesForOffices = isClubUser ? disciplineBranches : allDisciplineBranches;
-    return mergeBranchOffices(branchOffices, branchesForOffices);
-  }, [branchOffices, allDisciplineBranches, disciplineBranches, isClubUser]);
+    const clubId = isClubUser ? resolveClubIdFromAuth(auth, clubs) : undefined;
+    const fromRecords = branchOfficeRecords
+      .filter((r) => {
+        if (!isClubUser) return true;
+        return !r.clubId || r.clubId === clubId;
+      })
+      .map((r) => r.name.trim())
+      .filter(Boolean);
+    if (isClubUser && clubBranch.trim()) {
+      fromRecords.unshift(clubBranch.trim());
+    }
+    return [...new Set(fromRecords)].sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [branchOfficeRecords, isClubUser, auth, clubs, clubBranch]);
+
+  /** Kulüp adları — branch_offices değil, Kurumsal Yapı'dan yönetilir */
+  const clubOfficeNames = useMemo(() => {
+    if (isClubUser) return [];
+    return clubs
+      .map((c) => c.name.trim())
+      .filter(Boolean)
+      .filter((name) => !branchOfficeRecords.some((r) => r.name === name));
+  }, [clubs, branchOfficeRecords, isClubUser]);
 
   const countStudentsInGroup = (group: TrainingGroup) => studentsInTrainingGroup(students, group).length;
 
@@ -358,7 +378,9 @@ const BranchGroupManagement: React.FC = () => {
         </div>
         <div className="flex flex-wrap gap-2">
           {officeOptions.map((office) => {
-            const inUse = disciplineBranches.some((b) => b.branchOffice === office);
+            const inUse =
+              disciplineBranches.some((b) => b.branchOffice === office) ||
+              trainingGroups.some((g) => g.branchOffice === office);
             const isMainClubOffice = isClubUser && normalizeClubKey(office) === normalizeClubKey(clubBranch);
             return (
               <span
@@ -372,12 +394,12 @@ const BranchGroupManagement: React.FC = () => {
                     isMainClubOffice
                       ? 'Ana kulüp şubesi silinemez'
                       : inUse
-                        ? 'Bu şubede branş tanımı var — önce branşları silin'
+                        ? 'Bu şubede branş veya grup tanımı var — önce silin'
                         : 'Şubeyi sil'
                   }
-                  disabled={inUse || isMainClubOffice}
+                  disabled={isMainClubOffice}
                   onClick={() => {
-                    if (inUse || isMainClubOffice) return;
+                    if (isMainClubOffice) return;
                     if (confirm(`"${office}" şubesini silmek istiyor musunuz?`)) removeBranchOffice(office);
                   }}
                   className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30 disabled:cursor-not-allowed"
@@ -387,6 +409,16 @@ const BranchGroupManagement: React.FC = () => {
               </span>
             );
           })}
+          {clubOfficeNames.map((name) => (
+            <span
+              key={`club-${name}`}
+              title="Kulüp — Kurumsal Yapı sayfasından yönetilir"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-400 text-xs font-semibold"
+            >
+              {name}
+              <Building2 className="w-3 h-3 opacity-60" />
+            </span>
+          ))}
         </div>
         <div className="flex flex-wrap gap-2">
           <input
