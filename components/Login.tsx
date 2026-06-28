@@ -17,15 +17,17 @@ import { useDashboard3DEnabled } from './dashboard/useDashboard3D';
 
 const LoginScene3D = React.lazy(() => import('./login/LoginScene3D'));
 
-type Tab = 'admin' | 'coach' | 'club' | 'parent' | 'student';
+type PublicTab = 'coach' | 'club' | 'parent' | 'student';
+type Tab = PublicTab | 'admin';
 
-const TAB_CONFIG: { id: Tab; label: string; desc: string }[] = [
+const PUBLIC_TAB_CONFIG: { id: PublicTab; label: string; desc: string }[] = [
   { id: 'parent', label: 'Veli', desc: 'Öğrenci takibi ve iletişim' },
   { id: 'student', label: 'Öğrenci', desc: 'Ders, ödev ve bulmaca' },
-  { id: 'admin', label: 'Yönetim', desc: 'Kurumsal yönetim paneli' },
   { id: 'coach', label: 'Antrenör', desc: 'Eğitim ve öğrenci işleri' },
   { id: 'club', label: 'Kulüp', desc: 'Şube ve personel yönetimi' },
 ];
+
+const ADMIN_TAB_META = { id: 'admin' as const, label: 'Yönetim', desc: 'Kurumsal yönetim paneli' };
 
 const THEME: Record<
   Tab,
@@ -88,11 +90,16 @@ const THEME: Record<
 
 const labelCls = 'block text-[10px] font-bold text-slate-400 uppercase tracking-[0.14em] mb-2';
 
-const Login: React.FC = () => {
+type LoginProps = {
+  /** `/yonetim` — yalnızca yönetim parolası girişi */
+  adminOnly?: boolean;
+};
+
+const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
   const { loginAdmin, loginCoach, loginClub, loginParent, loginStudent, setAuthWithStudent, initialDataLoaded } = useApp();
   const webgl3d = useDashboard3DEnabled();
 
-  const [tab, setTab] = useState<Tab>('parent');
+  const [tab, setTab] = useState<Tab>(adminOnly ? 'admin' : 'parent');
   const theme = THEME[tab];
 
   const [adminPassword, setAdminPassword] = useState('');
@@ -221,7 +228,7 @@ const Login: React.FC = () => {
     }
   };
 
-  const activeTabMeta = TAB_CONFIG.find((t) => t.id === tab)!;
+  const activeTabMeta = adminOnly ? ADMIN_TAB_META : PUBLIC_TAB_CONFIG.find((t) => t.id === tab)!;
 
   const ErrorMsg = ({ msg }: { msg: string }) => (
     <p className="text-sm text-rose-400 font-medium flex items-center gap-2 px-1">
@@ -317,18 +324,18 @@ const Login: React.FC = () => {
               >
                 <Shield className="w-6 h-6" style={{ color: theme.accent }} />
               </div>
-              <h2 className="text-2xl font-black text-white">Hoş Geldiniz</h2>
-              <p className="text-slate-500 text-sm mt-1">Hesabınıza giriş yapın</p>
+              <h2 className="text-2xl font-black text-white">{adminOnly ? 'Yönetim Girişi' : 'Hoş Geldiniz'}</h2>
+              <p className="text-slate-500 text-sm mt-1">{adminOnly ? activeTabMeta.desc : 'Hesabınıza giriş yapın'}</p>
             </div>
 
             <div className="hidden lg:block mb-8">
-              <h2 className="text-2xl font-black text-white">Giriş Yap</h2>
+              <h2 className="text-2xl font-black text-white">{adminOnly ? 'Yönetim Girişi' : 'Giriş Yap'}</h2>
               <p className="text-slate-500 text-sm mt-1">{activeTabMeta.desc}</p>
             </div>
 
-            {/* Rol seçimi — dikey pill list */}
+            {!adminOnly ? (
             <div className="flex gap-1.5 overflow-x-auto pb-1 mb-6 scrollbar-none -mx-1 px-1">
-              {TAB_CONFIG.map(({ id, label }) => (
+              {PUBLIC_TAB_CONFIG.map(({ id, label }) => (
                 <button
                   key={id}
                   type="button"
@@ -344,6 +351,7 @@ const Login: React.FC = () => {
                 </button>
               ))}
             </div>
+            ) : null}
 
             {/* Form kartı */}
             <div
@@ -443,7 +451,7 @@ const Login: React.FC = () => {
                 </form>
               )}
 
-              {tab === 'admin' && (
+              {(adminOnly || tab === 'admin') && (
                 <form onSubmit={handleAdminSubmit} className="p-6 sm:p-8 space-y-5">
                   <div>
                     <label className={labelCls}>Yönetim parolası</label>
@@ -458,9 +466,19 @@ const Login: React.FC = () => {
               )}
             </div>
 
+            {adminOnly ? (
+              <p className="text-center text-slate-600 text-[11px] mt-6 leading-relaxed max-w-sm mx-auto">
+                Veli veya öğrenci girişi için{' '}
+                <a href="/" className="text-violet-400 hover:text-violet-300 font-semibold underline underline-offset-2">
+                  ana giriş sayfasına
+                </a>{' '}
+                dönün.
+              </p>
+            ) : (
             <p className="text-center text-slate-600 text-[11px] mt-6 leading-relaxed max-w-sm mx-auto">
               Öğrenci girişi: kullanıcı adı, öğrenci no veya veli telefonu + PIN ile yapılabilir.
             </p>
+            )}
           </div>
         </main>
       </div>

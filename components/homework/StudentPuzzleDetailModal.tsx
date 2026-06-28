@@ -10,6 +10,7 @@ import {
   formatHomeworkDuration,
   studentTotalThinkSeconds,
 } from '../../lib/homeworkAnalysisUtils';
+import { puzzleBoardOrientationForFen, formatPuzzleHintText, puzzlePlayPreviewState } from '../../lib/puzzlePlayUtils';
 
 type Props = {
   stat: StudentHwStat;
@@ -106,7 +107,10 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
     }
 
     const thinkSec = bestAttempt ? attemptThinkSeconds(bestAttempt, studentAttempts) : null;
+    const hintUsedEver = puzzleAttempts.some((a) => a.hintUsed);
     const meta = RESULT_META[result];
+
+    const preview = puzzlePlayPreviewState(puzzle);
 
     return {
       puzzle,
@@ -116,7 +120,12 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
       attempt: bestAttempt,
       wrongCount,
       thinkSec,
-      fen: bestAttempt?.finalFen || puzzle.fen,
+      fen: bestAttempt?.finalFen || preview.fen,
+      boardOrientation: bestAttempt?.finalFen
+        ? puzzleBoardOrientationForFen(bestAttempt.finalFen)
+        : preview.orientation,
+      hintText: formatPuzzleHintText(puzzle),
+      hintUsedEver,
     };
   }), [hwPuzzles, attemptsByPuzzleId, studentAttempts]);
 
@@ -174,7 +183,7 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 custom-scrollbar space-y-6">
           {cards.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {cards.map(({ puzzle, index, result, meta, attempt, wrongCount, thinkSec, fen }) => {
+              {cards.map(({ puzzle, index, result, meta, attempt, wrongCount, thinkSec, fen, boardOrientation, hintText, hintUsedEver }) => {
                 const StatusIcon = meta.icon;
                 return (
                   <div
@@ -191,7 +200,7 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
 
                     <div className="p-3 bg-black/25">
                       <ChessBoardFrame
-                        boardOrientation="white"
+                        boardOrientation={boardOrientation}
                         hideCoordinates
                         className="w-full max-w-[240px] mx-auto rounded-lg overflow-hidden border border-white/10 shadow-inner"
                       >
@@ -200,7 +209,7 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
                             id: `hw-puzzle-${puzzle.id}-${stat.studentId}`,
                             position: fen,
                             allowDragging: false,
-                            boardOrientation: 'white',
+                            boardOrientation,
                             darkSquareStyle: { backgroundColor: '#779952' },
                             lightSquareStyle: { backgroundColor: '#edeed1' },
                             ...CHESSBOARD_ANIMATION,
@@ -226,6 +235,16 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
                           {result === 'correct' ? puzzle.points : 0}
                         </span>
                       </DetailRow>
+                      <DetailRow label="Bulmaca ipucu">
+                        {hintText ? (
+                          <span className="inline-flex items-center gap-1 text-amber-300 text-right max-w-[12rem]">
+                            <Lightbulb className="w-3.5 h-3.5 shrink-0" />
+                            {hintText}
+                          </span>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
+                      </DetailRow>
                       <DetailRow label="Süre">
                         <span className="inline-flex items-center gap-1 tabular-nums">
                           <Clock className="w-3 h-3 text-slate-500" />
@@ -237,8 +256,8 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
                           {wrongCount}
                         </span>
                       </DetailRow>
-                      <DetailRow label="İpucu">
-                        {attempt?.hintUsed ? (
+                      <DetailRow label="İpucu kullanımı">
+                        {hintUsedEver || attempt?.hintUsed ? (
                           <span className="inline-flex items-center gap-1 text-amber-400 font-bold">
                             <Lightbulb className="w-3.5 h-3.5" />
                             Kullanıldı

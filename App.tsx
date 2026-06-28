@@ -35,7 +35,7 @@ import AdminProfilePage from './components/profile/AdminProfilePage';
 import RoleManagement from './components/roles/RoleManagement';
 import { getSessionDisplay } from './lib/sessionDisplayName';
 import { filterNavByPermissions, coachNavForPermissions, isCoachPanelTabAllowed, coachSidebarTabFor } from './lib/rolePermissions';
-import { readPanelHash, writePanelHash } from './lib/panelRouting';
+import { readPanelHash, writePanelHash, isAdminLoginRoute } from './lib/panelRouting';
 
 // ─── Türkçe slug haritası (lib/panelRouting.ts) ───────────────────────────────
 import { readPanelHash as readHash, writePanelHash as writeHash } from './lib/panelRouting';
@@ -88,15 +88,23 @@ function isCoachAllowedTab(tab: string): boolean {
 const AppRoot: React.FC = () => {
   const { auth, logout } = useApp();
   const [publicForm, setPublicForm] = useState(() => getPublicFormRoute());
+  const [adminLoginRoute, setAdminLoginRoute] = useState(() => isAdminLoginRoute());
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
   }, []);
 
   useEffect(() => {
-    const onHash = () => setPublicForm(getPublicFormRoute());
+    const onHash = () => {
+      setPublicForm(getPublicFormRoute());
+      setAdminLoginRoute(isAdminLoginRoute());
+    };
     window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    window.addEventListener('popstate', onHash);
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+      window.removeEventListener('popstate', onHash);
+    };
   }, []);
 
   if (publicForm?.route === 'basvuru') return <ApplicationForm clubSlug={publicForm.clubSlug} />;
@@ -104,7 +112,7 @@ const AppRoot: React.FC = () => {
     const token = getVeliImzaToken();
     if (token) return <ParentConsentForm token={token} />;
   }
-  if (!auth) return <Login />;
+  if (!auth) return <Login adminOnly={adminLoginRoute} />;
   if (auth.role === 'parent') return <StudentPanel studentId={auth.studentId} onLogout={logout} viewAs="parent" />;
   if (auth.role === 'student') return <StudentPanel studentId={auth.studentId} onLogout={logout} viewAs="student" />;
   if (auth.role === 'coach') return <CoachLayout onLogout={logout} />;

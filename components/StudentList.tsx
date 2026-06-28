@@ -30,6 +30,7 @@ import {
 import type { StudentApplication } from'../lib/applicationTypes';
 import { APPLICATIONS_UPDATED_EVENT, loadApplicationsAsync } from'../services/applicationStorage';
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
+import { StudentLoginQuickInfo, StudentLoginQuickInfoInline } from './student/StudentLoginQuickInfo';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { getCoachNamesForStudent, coachesForClub } from '../lib/orgScope';
 import { normalizeClubKey } from '../lib/clubScope';
@@ -49,7 +50,7 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, disciplines, groups, trainingGroups, disciplineBranches, coaches, auth, confirmDialog } = useApp();
+ const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, disciplines, groups, trainingGroups, disciplineBranches, coaches, auth, confirmDialog, showToast } = useApp();
  const isAdmin = auth?.role === 'admin';
  const isCoach = auth?.role === 'coach';
  const baseStudents = scopedStudents;
@@ -654,6 +655,12 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <p><span className="text-slate-500">Şube:</span> {student.branchOffice || '—'}{student.branch ? ` / ${student.branch}` : ''}</p>
  <p><span className="text-slate-500">Aidat:</span> {formatDues(student)}</p>
  </div>
+ <div className="mt-2">
+ <StudentLoginQuickInfoInline
+   student={student}
+   onCopied={() => showToast('Giriş bilgileri kopyalandı.', 'success')}
+ />
+ </div>
  </div>
  </div>
  <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t border-white/5">
@@ -676,7 +683,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
 
  {/* Masaüstü: tablo */}
  <div className="hidden lg:block bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-slate-700/60 overflow-hidden">
- <ResponsiveTable minWidth={900} className="table-scroll">
+ <ResponsiveTable minWidth={1040} className="table-scroll">
  <table className="w-full text-left border-collapse">
  <thead>
  <tr className="border-b border-slate-700/60 bg-slate-900/50">
@@ -697,6 +704,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Grup / Paket</th>
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Aidat / Ders</th>
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Kayıt Tarihi</th>
+ <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Giriş Bilgisi</th>
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Durum</th>
  <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">İşlemler</th>
  </tr>
@@ -753,6 +761,12 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <td data-label="Aidat / Ders" className="px-6 py-4 text-sm">{formatDues(student)}</td>
  <td data-label="Kayıt Tarihi" className="px-6 py-4 text-sm text-slate-300">
  {student.registrationDate ? new Date(student.registrationDate).toLocaleDateString('tr-TR') : '—'}
+ </td>
+ <td data-label="Giriş Bilgisi" className="px-6 py-4">
+ <StudentLoginQuickInfo
+   student={student}
+   onCopied={() => showToast('Giriş bilgileri kopyalandı.', 'success')}
+ />
  </td>
  <td data-label="Durum" className="px-6 py-4">
  <span

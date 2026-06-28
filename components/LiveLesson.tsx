@@ -43,6 +43,7 @@ import type { Puzzle as PuzzleType, Student } from '../types';
 import { makeBuilderGame, applyMove, studyDisplayEmoji } from '../lib/studyUtils';
 import {
   liveLessonFenAt,
+  inferLiveLessonNavFromFen,
   sanitizeLiveVariations,
   type LiveVariationRef,
 } from '../lib/liveLessonVariations';
@@ -75,6 +76,26 @@ const BOARD_SCALE_MAX = 125;
 const BOARD_SCALE_DEFAULT = 100;
 /** UI %100 = önceki %80 boyut (canlı ders sınıf düzeni) */
 const BOARD_BASE_SCALE = 0.8;
+const VIDEO_DOCK_WIDTH_STORAGE_KEY = 'live_lesson_video_dock_width_px';
+const VIDEO_DOCK_WIDTH_MIN = 168;
+const VIDEO_DOCK_WIDTH_MAX = 520;
+const VIDEO_DOCK_WIDTH_DEFAULT = 232;
+
+function clampVideoDockWidth(v: number): number {
+  return Math.min(VIDEO_DOCK_WIDTH_MAX, Math.max(VIDEO_DOCK_WIDTH_MIN, Math.round(v)));
+}
+
+function readVideoDockWidthPx(): number {
+  if (typeof window === 'undefined') return VIDEO_DOCK_WIDTH_DEFAULT;
+  try {
+    const raw = localStorage.getItem(VIDEO_DOCK_WIDTH_STORAGE_KEY);
+    if (!raw) return VIDEO_DOCK_WIDTH_DEFAULT;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? clampVideoDockWidth(n) : VIDEO_DOCK_WIDTH_DEFAULT;
+  } catch {
+    return VIDEO_DOCK_WIDTH_DEFAULT;
+  }
+}
 
 const liveLessonStudyTargetKey = (roomId: string) => `live_lesson_study_target_${roomId}`;
 
@@ -280,6 +301,8 @@ export type SessionMediaState = {
   rosterStudentIds?: string[];
   /** Antrenörün işaretlediği yoklama durumları */
   attendanceMarks?: Record<string, 'present' | 'absent' | 'late' | 'excused'>;
+  /** Zoom benzeri: öğrenciler antrenörden söz hakkı almadan mikrofonu açabilir */
+  studentsCanUnmuteSelf?: boolean;
 };
 
 export type LiveStudentBoardSnapshot = {
@@ -307,6 +330,7 @@ const DEFAULT_SESSION_MEDIA: SessionMediaState = {
   independentBoardStudentIds: [],
   studentBoards: {},
   studentPlaySides: {},
+  studentsCanUnmuteSelf: false,
 };
 
 /** Agora stream değişince video önizlemesinin siyah kalmasını önler */
@@ -510,6 +534,29 @@ function StudentSpeakFloorBar({
   );
 }
 
+function ClassroomVideoDockResizeHandle({
+  onResizeStart,
+}: {
+  onResizeStart: (e: React.PointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Kamera paneli genişliği"
+      title="Sürükleyerek kamera alanını genişletin"
+      onPointerDown={onResizeStart}
+      className="hidden lg:flex shrink-0 w-4 cursor-col-resize items-center justify-center group touch-none select-none self-stretch py-4"
+    >
+      <div className="flex h-14 w-2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/10 bg-slate-800/90 shadow-md group-hover:border-indigo-500/40 group-hover:bg-slate-700/90 group-active:border-indigo-500/60 group-active:bg-indigo-950/80 transition-colors">
+        <span className="block h-1 w-1 rounded-full bg-slate-500 group-hover:bg-indigo-300" aria-hidden />
+        <span className="block h-1 w-1 rounded-full bg-slate-500 group-hover:bg-indigo-300" aria-hidden />
+        <span className="block h-1 w-1 rounded-full bg-slate-500 group-hover:bg-indigo-300" aria-hidden />
+      </div>
+    </div>
+  );
+}
+
 function ClassroomAttendancePanel({
   rosterStudents,
   tiles,
@@ -538,6 +585,7 @@ function ClassroomAttendancePanel({
   onReleaseSpeakFloor,
   sessionMedia,
   onSetStudentPlayPermission,
+  dockWidthPx = VIDEO_DOCK_WIDTH_DEFAULT,
 }: {
   rosterStudents: Student[];
   tiles: LiveVideoTile[];
@@ -566,6 +614,7 @@ function ClassroomAttendancePanel({
   onReleaseSpeakFloor?: (studentId: string) => void;
   sessionMedia?: SessionMediaState;
   onSetStudentPlayPermission?: (studentId: string, side: PlayBoardSide | null) => void;
+  dockWidthPx?: number;
 }) {
   const coachTile = tiles.find((t) => t.role === 'coach') ?? null;
   const tileByStudentId = useMemo(() => {
@@ -605,7 +654,9 @@ function ClassroomAttendancePanel({
     const hasFloor = idsEqual(floorStudentId, sid);
     const handRaised = handRaisedStudentIds.some((kid) => idsEqual(kid, sid));
     const micBlocked = studentMicBlocked[sid] ?? false;
-    const audioOpen = hasFloor && !micBlocked;
+    const audioOpen = sessionMedia
+      ? canStudentTransmitAudio(sid, sessionMedia)
+      : hasFloor && !micBlocked;
     const camForcedOff = !!(studentCamForcedOff[sid]);
     const isSpeaking = speakingStudentIds?.has(sid) ?? false;
 
@@ -744,8 +795,24 @@ function ClassroomAttendancePanel({
                         ? 'bg-slate-800/90 text-slate-300 hover:bg-indigo-600 hover:text-white'
                         : 'bg-rose-800/70 text-white hover:bg-rose-700'
                     }`}
-                    title={audioOpen ? 'Sesi kapat' : 'Sesi aç (söz hakkı)'}
-                    aria-label={audioOpen ? 'Sesi kapat' : 'Sesi aç'}
+                    title={
+                      sessionMedia?.studentsCanUnmuteSelf
+                        ? audioOpen
+                          ? 'Öğrenciyi sustur'
+                          : 'Susturmayı kaldır'
+                        : audioOpen
+                          ? 'Sesi kapat'
+                          : 'Sesi aç (söz hakkı)'
+                    }
+                    aria-label={
+                      sessionMedia?.studentsCanUnmuteSelf
+                        ? audioOpen
+                          ? 'Öğrenciyi sustur'
+                          : 'Susturmayı kaldır'
+                        : audioOpen
+                          ? 'Sesi kapat'
+                          : 'Sesi aç'
+                    }
                   >
                     {audioOpen ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
                   </button>
@@ -813,7 +880,10 @@ function ClassroomAttendancePanel({
   }
 
   return (
-    <aside className="hidden lg:flex w-[min(13rem,24vw)] xl:w-[min(14.5rem,22vw)] shrink-0 flex-col gap-1.5 sticky top-2 self-start max-h-[min(72vh,560px)]">
+    <aside
+      className="hidden lg:flex shrink-0 flex-col gap-1.5 sticky top-2 self-start max-h-[min(72vh,560px)] min-h-0"
+      style={{ width: dockWidthPx, minWidth: dockWidthPx, maxWidth: dockWidthPx }}
+    >
       {coachTile ? (
         <div className="relative aspect-video w-full rounded-lg overflow-hidden ring-1 ring-white/10 shrink-0">
           <ClassroomVideoTile tile={coachTile} muted={coachTile.isSelf} className="w-full h-full rounded-lg" labelClassName="text-[8px]" />
@@ -852,6 +922,7 @@ function ClassroomStudentVideoPanel({
   speakingStudentIds,
   coachIsSpeaking = false,
   studentSpeakFloor,
+  dockWidthPx = VIDEO_DOCK_WIDTH_DEFAULT,
 }: {
   tiles: LiveVideoTile[];
   focusedId: string | null;
@@ -873,6 +944,7 @@ function ClassroomStudentVideoPanel({
     onCancel: () => void;
     onRelease: () => void;
   };
+  dockWidthPx?: number;
 }) {
   const coachTile = tiles.find((t) => t.role === 'coach') ?? null;
   const selfTile = tiles.find((t) => t.isSelf) ?? null;
@@ -964,7 +1036,10 @@ function ClassroomStudentVideoPanel({
   }
 
   return (
-    <aside className="hidden lg:flex w-[min(12rem,22vw)] xl:w-[min(13.5rem,20vw)] shrink-0 flex-col gap-1.5 sticky top-2 self-start max-h-[min(72vh,520px)]">
+    <aside
+      className="hidden lg:flex shrink-0 flex-col gap-1.5 sticky top-2 self-start max-h-[min(72vh,560px)] min-h-0"
+      style={{ width: dockWidthPx, minWidth: dockWidthPx, maxWidth: dockWidthPx }}
+    >
       <div className="flex items-center justify-between gap-1">
         <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Canlı görüntü</span>
         {blurBtn}
@@ -1219,6 +1294,7 @@ function parseSessionMedia(raw: unknown): SessionMediaState {
       o.engineMultiPvLines === 1 || o.engineMultiPvLines === 3 ? o.engineMultiPvLines : undefined,
     rosterStudentIds: parseIdList('rosterStudentIds'),
     attendanceMarks: parseAttendanceMarks(o.attendanceMarks),
+    studentsCanUnmuteSelf: !!o.studentsCanUnmuteSelf,
   };
 }
 
@@ -1495,6 +1571,80 @@ function resolveStudentPlaySide(
   return getExplicitStudentPlaySide(studentId, sessionMedia);
 }
 
+function isStudentMicBlockedByCoach(
+  studentId: string | null | undefined,
+  sessionMedia: SessionMediaState,
+): boolean {
+  const sid = normalizeStudentId(studentId);
+  if (!sid) return true;
+  return sessionMedia.studentMicBlocked[sid] === true;
+}
+
+/** Öğrencinin mikrofon yayınına izin var mı (antrenör susturmadıysa + söz hakkı veya serbest açma). */
+function canStudentTransmitAudio(
+  studentId: string | null | undefined,
+  sessionMedia: SessionMediaState,
+): boolean {
+  const sid = normalizeStudentId(studentId);
+  if (!sid) return false;
+  if (isStudentMicBlockedByCoach(sid, sessionMedia)) return false;
+  if (sessionMedia.studentsCanUnmuteSelf) return true;
+  return idsEqual(sessionMedia.floorStudentId, sid);
+}
+
+function collectLiveStudentMediaIds(
+  sessionMedia: SessionMediaState,
+  rosterStudents: Student[],
+): string[] {
+  const ids = new Set<string>();
+  for (const raw of [
+    ...(sessionMedia.admittedStudentIds ?? []),
+    ...(sessionMedia.pendingStudentIds ?? []),
+    ...(sessionMedia.rosterStudentIds ?? []),
+  ]) {
+    const sid = normalizeStudentId(raw);
+    if (sid) ids.add(sid);
+  }
+  for (const s of rosterStudents) {
+    const sid = normalizeStudentId(s.id);
+    if (sid) ids.add(sid);
+  }
+  return [...ids];
+}
+
+/** session_media yamalarını ref üzerinden birleştir — eski closure ile susturma geri yazılmasın */
+function applySessionMediaPatch(
+  prev: SessionMediaState,
+  patch: Partial<SessionMediaState>,
+): SessionMediaState {
+  return {
+    ...prev,
+    ...patch,
+    studentMicBlocked:
+      patch.studentMicBlocked !== undefined ? patch.studentMicBlocked : prev.studentMicBlocked,
+    studentCamForcedOff:
+      patch.studentCamForcedOff !== undefined
+        ? { ...prev.studentCamForcedOff, ...patch.studentCamForcedOff }
+        : prev.studentCamForcedOff,
+    studentPlaySides:
+      patch.studentPlaySides !== undefined
+        ? { ...prev.studentPlaySides, ...patch.studentPlaySides }
+        : prev.studentPlaySides,
+    studentBoards:
+      patch.studentBoards !== undefined
+        ? { ...prev.studentBoards, ...patch.studentBoards }
+        : prev.studentBoards,
+    attendanceMarks:
+      patch.attendanceMarks !== undefined
+        ? { ...prev.attendanceMarks, ...patch.attendanceMarks }
+        : prev.attendanceMarks,
+    handRaisedStudentIds:
+      patch.handRaisedStudentIds !== undefined
+        ? patch.handRaisedStudentIds
+        : prev.handRaisedStudentIds,
+  };
+}
+
 function parseCoachSideFromRow(raw: unknown): CollaborativeBoardSide | null | undefined {
   if (raw === 'w' || raw === 'b' || raw === 'both') return raw;
   if (raw == null || raw === '') return null;
@@ -1750,6 +1900,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const [game, setGame] = useState(() => new Chess());
   const [fen, setFen] = useState(game.fen());
   const [baseFen, setBaseFen] = useState(START_FEN);
+  const baseFenRef = useRef(baseFen);
+  baseFenRef.current = baseFen;
   const [hoverFen, setHoverFen] = useState<string | null>(null);
   const [enginePvHovered, setEnginePvHovered] = useState<PvHoverState>(null);
   const [enginePvLinePreview, setEnginePvLinePreview] = useState<LinePreviewState>(null);
@@ -1892,11 +2044,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const [drawingColor, setDrawingColor] = useState<SquareMarkColor>('red');
   const [marks, setMarks] = useState<Record<string, { color: SquareMarkColor, type: 'square' | 'circle' | 'x' }>>({});
-  /** Öğrenci: yalnızca kendi ekranında görünen bulmaca tarzı işaretler */
-  const [studentLocalMarks, setStudentLocalMarks] = useState<
-    Record<string, { color: SquareMarkColor; type: 'circle' }>
-  >({});
-  const [studentLocalArrows, setStudentLocalArrows] = useState<ArrowItem[]>([]);
   /** DB'de coach_side kolonu yoksa false (400 sonrası) */
   const schemaHasExtendedRef = useRef<boolean | null>(null);
   /** arrows kolonu — marks gibi ayrı tespit (coach_side olmasa da ok senkronu çalışsın) */
@@ -1926,6 +2073,49 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const [arrows, setArrows] = useState<Array<{ startSquare: string; endSquare: string; color: string }>>([]);
   const [boardDrawRevision, setBoardDrawRevision] = useState(0);
+  const [videoDockWidthPx, setVideoDockWidthPx] = useState(readVideoDockWidthPx);
+  const videoDockWidthRef = useRef(videoDockWidthPx);
+  const boardVideoRowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    videoDockWidthRef.current = videoDockWidthPx;
+  }, [videoDockWidthPx]);
+
+  const handleVideoDockResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const handleEl = e.currentTarget;
+    const startX = e.clientX;
+    const startW = videoDockWidthRef.current;
+
+    const onMove = (ev: PointerEvent) => {
+      const rowW = boardVideoRowRef.current?.clientWidth ?? window.innerWidth;
+      const maxW = Math.min(VIDEO_DOCK_WIDTH_MAX, Math.floor(rowW * 0.52));
+      const delta = ev.clientX - startX;
+      setVideoDockWidthPx(clampVideoDockWidth(Math.min(maxW, startW - delta)));
+    };
+
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      try {
+        handleEl.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try {
+        localStorage.setItem(VIDEO_DOCK_WIDTH_STORAGE_KEY, String(videoDockWidthRef.current));
+      } catch {
+        /* ignore */
+      }
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    handleEl.setPointerCapture(e.pointerId);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
   const [boardReady, setBoardReady] = useState(false);
   /** Yerel kamera/mikrofon akışı (önizleme + track.enabled ile aç/kapa) */
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -1974,22 +2164,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   }, [students, isStudentView, studentIdProp, sessionMedia, remoteStreamsByUid]);
   const [attendanceSaving, setAttendanceSaving] = useState(false);
   const [attendanceSaveToast, setAttendanceSaveToast] = useState<string | null>(null);
-  const [speakRequestNotice, setSpeakRequestNotice] = useState<string | null>(null);
-  const speakRequestNoticeTimerRef = useRef<number | null>(null);
 
-  const showSpeakRequestNotice = useCallback((message: string, autoClearMs?: number) => {
-    setSpeakRequestNotice(message);
-    if (speakRequestNoticeTimerRef.current != null) {
-      window.clearTimeout(speakRequestNoticeTimerRef.current);
-      speakRequestNoticeTimerRef.current = null;
-    }
-    if (autoClearMs != null && autoClearMs > 0) {
-      speakRequestNoticeTimerRef.current = window.setTimeout(() => {
-        setSpeakRequestNotice(null);
-        speakRequestNoticeTimerRef.current = null;
-      }, autoClearMs);
-    }
-  }, []);
+  const showSpeakRequestError = useCallback((message: string) => {
+    showToast(message, 'error');
+  }, [showToast]);
 
   const classroomRosterStudents = useMemo(() => {
     const roster = sessionMedia.rosterStudentIds ?? [];
@@ -2051,15 +2229,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const agoraUid = agoraUidForStudent(s.id);
       const remoteForStudent = agoraUid ? remoteStreamsByUid[agoraUid] ?? null : null;
       const coachForcedStudentCam = !!(sid && (sessionMedia.studentCamForcedOff[sid] ?? false));
-      const hasFloor = idsEqual(sessionMedia.floorStudentId, sid);
-      const micBlocked = sessionMedia.studentMicBlocked[sid] ?? false;
+      const micAllowed = canStudentTransmitAudio(sid, sessionMedia);
       tiles.push({
         id: `student-${sid || s.id}`,
         name: s.name,
         role: 'student',
         isSelf: false,
         stream: remoteForStudent,
-        micMuted: micBlocked || !hasFloor,
+        micMuted: !micAllowed,
         camOff: coachForcedStudentCam,
       });
     }
@@ -2101,10 +2278,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         classroomRosterStudents.find((s) => agoraUidForStudent(s.id) === uid) ??
         students.find((s) => agoraUidForStudent(s.id) === uid);
       const sid = matched ? normalizeStudentId(matched.id) : '';
-      const blocked = sid ? (sm.studentMicBlocked[sid] ?? false) : true;
-      const hasFloor = sid ? idsEqual(sm.floorStudentId, sid) : false;
+      const sm = sessionMediaRef.current;
       try {
-        if (hasFloor && !blocked) void user.audioTrack.play();
+        if (canStudentTransmitAudio(sid, sm)) void user.audioTrack.play();
         else user.audioTrack.stop();
       } catch {
         /* ignore */
@@ -2329,10 +2505,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       camEnabled = !sessionMedia.coachCamOff;
     } else {
       const sid = normalizeStudentId(studentIdProp);
-      const blocked = sid ? (sessionMedia.studentMicBlocked[sid] ?? false) : true;
-      const hasFloor = !!(sid && idsEqual(sessionMedia.floorStudentId, sid));
       const coachForcedCamOff = !!(sid && (sessionMedia.studentCamForcedOff[sid] ?? false));
-      micEnabled = hasFloor && !blocked && !isMuted;
+      micEnabled = canStudentTransmitAudio(sid, sessionMedia) && !isMuted;
       camEnabled = !isCameraOff && !coachForcedCamOff;
     }
 
@@ -2481,20 +2655,30 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const sidForBoard = normalizeStudentId(studentIdProp);
 
       if (!skipBoardSync) {
-        const syncKey = `${data.fen}|${data.updated_at}|${annoKey}|${JSON.stringify(data.session_media ?? '')}|${JSON.stringify(data.chat_messages ?? '')}`;
+        const syncKey = `${data.fen}|${JSON.stringify(data.variations ?? {})}|${data.updated_at}|${annoKey}|${JSON.stringify(data.session_media ?? '')}|${JSON.stringify(data.chat_messages ?? '')}`;
         if (syncKey !== lastSyncRef.current) {
           lastSyncRef.current = syncKey;
           try {
             const c = new Chess(data.fen as string);
+            const syncedFen = c.fen();
+            const moves = Array.isArray(data.moves) ? (data.moves as string[]) : [];
+            const vars = 'variations' in data
+              ? sanitizeLiveVariations(data.variations)
+              : {};
             setGame(c);
-            setFen(c.fen());
-            setMoveHistory(Array.isArray(data.moves) ? (data.moves as string[]) : []);
-            if ('variations' in data) {
-              setVariations(sanitizeLiveVariations(data.variations));
-            }
-            setCurrentVariation(null);
+            setFen(syncedFen);
+            setMoveHistory(moves);
+            setVariations(vars);
+            const nav = inferLiveLessonNavFromFen(baseFenRef.current, moves, vars, syncedFen);
+            setCurrentVariation(nav.currentVariation);
+            setReplayNavPly(
+              nav.currentVariation
+                ? null
+                : nav.mainLinePly >= moves.length
+                  ? null
+                  : nav.mainLinePly,
+            );
             if (isStudentView) {
-              setReplayNavPly(null);
               setHoverFen(null);
               setReplayIsPlaying(false);
             }
@@ -2540,12 +2724,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           setIsCameraOff(sm.coachCamOff);
         } else if (studentIdProp) {
           const sid = normalizeStudentId(studentIdProp);
-          const blocked = !!(sid && sm.studentMicBlocked[sid]);
-          const hasFloor = idsEqual(sm.floorStudentId, sid);
-          if (blocked || !hasFloor) {
+          if (!canStudentTransmitAudio(sid, sm)) {
             setIsMuted(true);
-          } else {
-            /** Söz hakkı + mik. izni var: yerel sessizi kapat ki ses akışı açılsın */
+          } else if (!sm.studentsCanUnmuteSelf && idsEqual(sm.floorStudentId, sid)) {
+            /** Söz hakkı verildi: yerel sessizi kapat ki ses akışı açılsın */
             setIsMuted(false);
           }
         }
@@ -3070,16 +3252,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   }, [inviteStudentIds, isPgColumnError, rooms, selectedRoomId]);
 
   const pushSessionMediaRemote = useCallback(
-    async (next: SessionMediaState) => {
+    async (patch: Partial<SessionMediaState>) => {
       if (!isSupabaseBackend()) return;
-      const { handRaisedStudentIds: _hands, ...nextWithoutHands } = next;
-      sessionMediaRef.current = {
-        ...nextWithoutHands,
-        handRaisedStudentIds: sessionMediaRef.current.handRaisedStudentIds ?? [],
-      };
-      setSessionMedia((prev) => ({
-        ...nextWithoutHands,
+      const prev = sessionMediaRef.current;
+      const { handRaisedStudentIds: _patchHands, ...patchRest } = patch;
+      const merged = applySessionMediaPatch(prev, patchRest);
+      const nextWithoutHands: SessionMediaState = {
+        ...merged,
         handRaisedStudentIds: prev.handRaisedStudentIds ?? [],
+      };
+      sessionMediaRef.current = nextWithoutHands;
+      setSessionMedia((cur) => ({
+        ...nextWithoutHands,
+        handRaisedStudentIds: cur.handRaisedStudentIds ?? [],
       }));
       if (schemaHasSessionMediaRef.current === false) return;
       const result = await persistSessionMediaReplace(
@@ -3094,8 +3279,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         schemaHasSessionMediaRef.current = true;
         if (result.sessionMedia) {
           const sm = parseSessionMedia(result.sessionMedia);
-          sessionMediaRef.current = sm;
-          setSessionMedia(sm);
+          sessionMediaRef.current = {
+            ...sm,
+            handRaisedStudentIds: sessionMediaRef.current.handRaisedStudentIds ?? sm.handRaisedStudentIds ?? [],
+          };
+          setSessionMedia((cur) => ({
+            ...sm,
+            handRaisedStudentIds: cur.handRaisedStudentIds ?? sm.handRaisedStudentIds ?? [],
+          }));
         }
       }
     },
@@ -3160,32 +3351,37 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
       if (!id) return;
-      const blocked = sessionMedia.studentMicBlocked[id] ?? false;
-      const hasFloor = idsEqual(sessionMedia.floorStudentId, id);
+      const prev = sessionMediaRef.current;
+      if (prev.studentsCanUnmuteSelf) {
+        const blocked = prev.studentMicBlocked[id] === true;
+        void pushSessionMediaRemote({
+          studentMicBlocked: { ...prev.studentMicBlocked, [id]: !blocked },
+        });
+        window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
+        return;
+      }
+      const blocked = prev.studentMicBlocked[id] === true;
+      const hasFloor = idsEqual(prev.floorStudentId, id);
       const audioOpenForCoach = !blocked && hasFloor;
-      const clearHand = (sessionMedia.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
-      if (clearHand.length < (sessionMedia.handRaisedStudentIds ?? []).length) {
+      const clearHand = (prev.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
+      if (clearHand.length < (prev.handRaisedStudentIds ?? []).length) {
         void persistSessionMediaOp(effectiveRoomId, 'handLower', id, getServiceSupabase);
       }
       if (audioOpenForCoach) {
-        const nextBlocked = { ...sessionMedia.studentMicBlocked, [id]: true };
-        let floor = sessionMedia.floorStudentId;
-        if (idsEqual(floor, id)) floor = null;
+        const nextBlocked = { ...prev.studentMicBlocked, [id]: true };
         void pushSessionMediaRemote({
-          ...sessionMedia,
           studentMicBlocked: nextBlocked,
-          floorStudentId: floor,
+          floorStudentId: idsEqual(prev.floorStudentId, id) ? null : prev.floorStudentId,
         });
       } else {
         void pushSessionMediaRemote({
-          ...sessionMedia,
           floorStudentId: id,
-          studentMicBlocked: { ...sessionMedia.studentMicBlocked, [id]: false },
+          studentMicBlocked: { ...prev.studentMicBlocked, [id]: false },
         });
       }
       window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
     },
-    [sessionMedia, pushSessionMediaRemote, effectiveRoomId],
+    [pushSessionMediaRemote, effectiveRoomId],
   );
 
   const grantFloorToStudent = useCallback(
@@ -3199,13 +3395,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           setSessionMedia(sm);
         }
       });
+      const prev = sessionMediaRef.current;
       void pushSessionMediaRemote({
-        ...sessionMedia,
         floorStudentId: id,
-        studentMicBlocked: { ...sessionMedia.studentMicBlocked, [id]: false },
+        studentMicBlocked: { ...prev.studentMicBlocked, [id]: false },
       });
     },
-    [isStudentView, sessionMedia, pushSessionMediaRemote, effectiveRoomId],
+    [isStudentView, pushSessionMediaRemote, effectiveRoomId],
   );
 
   const requestSpeakFloor = useCallback(() => {
@@ -3215,7 +3411,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     const raised = sessionMedia.handRaisedStudentIds ?? [];
     if (raised.some((kid) => idsEqual(kid, sid))) return;
     pendingHandRaiseRef.current = true;
-    showSpeakRequestNotice('Söz isteğiniz gönderiliyor…');
     setSessionMedia((prev) => ({
       ...prev,
       handRaisedStudentIds: [...(prev.handRaisedStudentIds ?? []), sid],
@@ -3227,7 +3422,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           ...prev,
           handRaisedStudentIds: (prev.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, sid)),
         }));
-        showSpeakRequestNotice(result.error ?? 'Söz isteği gönderilemedi. Tekrar deneyin.', 6000);
+        showSpeakRequestError(result.error ?? 'Söz isteği gönderilemedi. Tekrar deneyin.');
         console.warn('[LiveLesson] handRaise başarısız:', result.error);
         return;
       }
@@ -3236,9 +3431,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         sessionMediaRef.current = sm;
         setSessionMedia(sm);
       }
-      showSpeakRequestNotice('Söz isteğiniz antrenöre iletildi. Onay bekleniyor…');
     });
-  }, [canStudentRequestSpeak, studentIdProp, sessionMedia.handRaisedStudentIds, effectiveRoomId, showSpeakRequestNotice]);
+  }, [canStudentRequestSpeak, studentIdProp, sessionMedia.handRaisedStudentIds, effectiveRoomId, showSpeakRequestError]);
 
   const cancelSpeakRequest = useCallback(() => {
     if (!isStudentView) return;
@@ -3248,7 +3442,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       ...prev,
       handRaisedStudentIds: (prev.handRaisedStudentIds ?? []).filter((kid) => !idsEqual(kid, sid)),
     }));
-    setSpeakRequestNotice(null);
     void persistSessionMediaOp(effectiveRoomId, 'handLower', sid, getServiceSupabase).then((result) => {
       if (!result.ok) {
         console.warn('[LiveLesson] handLower başarısız:', result.error);
@@ -3267,26 +3460,23 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const id = normalizeStudentId(targetStudentId ?? (isStudentView ? studentIdProp : ''));
       if (!id) return;
       if (isStudentView && !idsEqual(id, studentIdProp)) return;
-      if (!idsEqual(sessionMedia.floorStudentId, id)) return;
+      const prev = sessionMediaRef.current;
+      if (!idsEqual(prev.floorStudentId, id)) return;
 
       if (isStudentView) {
         setIsMuted(true);
-        showSpeakRequestNotice('Söz hakkınızı bıraktınız.', 5000);
       }
 
-      const nextBlocked = isStudentView
-        ? sessionMedia.studentMicBlocked
-        : { ...sessionMedia.studentMicBlocked, [id]: true };
-      const next: SessionMediaState = {
-        ...sessionMedia,
-        floorStudentId: null,
-        studentMicBlocked: nextBlocked,
-      };
+      const selfUnmute = !!prev.studentsCanUnmuteSelf;
+      const nextBlocked =
+        !isStudentView && !selfUnmute
+          ? { ...prev.studentMicBlocked, [id]: true }
+          : prev.studentMicBlocked;
 
-      setSessionMedia((prev) => ({
-        ...prev,
-        floorStudentId: idsEqual(prev.floorStudentId, id) ? null : prev.floorStudentId,
-        studentMicBlocked: isStudentView ? prev.studentMicBlocked : nextBlocked,
+      setSessionMedia((cur) => ({
+        ...cur,
+        floorStudentId: idsEqual(cur.floorStudentId, id) ? null : cur.floorStudentId,
+        studentMicBlocked: isStudentView ? cur.studentMicBlocked : nextBlocked,
       }));
       sessionMediaRef.current = {
         ...sessionMediaRef.current,
@@ -3301,60 +3491,60 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       void persistSessionMediaOp(effectiveRoomId, 'releaseFloor', id, getServiceSupabase).then((result) => {
         if (result.ok && result.sessionMedia) {
           const sm = parseSessionMedia(result.sessionMedia);
-          sessionMediaRef.current = sm;
-          setSessionMedia((prev) => ({
+          sessionMediaRef.current = {
             ...sm,
-            studentMicBlocked: isStudentView ? prev.studentMicBlocked : nextBlocked,
+            handRaisedStudentIds: sessionMediaRef.current.handRaisedStudentIds ?? sm.handRaisedStudentIds ?? [],
+          };
+          setSessionMedia((cur) => ({
+            ...sm,
+            handRaisedStudentIds: cur.handRaisedStudentIds ?? sm.handRaisedStudentIds ?? [],
+            studentMicBlocked: isStudentView ? cur.studentMicBlocked : nextBlocked,
           }));
         }
       });
 
       if (!isStudentView) {
-        void pushSessionMediaRemote(next);
+        void pushSessionMediaRemote({
+          floorStudentId: null,
+          ...(selfUnmute ? {} : { studentMicBlocked: nextBlocked }),
+        });
         window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
       }
     },
-    [
-      isStudentView,
-      studentIdProp,
-      sessionMedia,
-      effectiveRoomId,
-      showSpeakRequestNotice,
-      pushSessionMediaRemote,
-    ],
+    [isStudentView, studentIdProp, effectiveRoomId, pushSessionMediaRemote],
   );
 
   const setStudentPlayPermission = useCallback(
     (studentId: string, side: PlayBoardSide | null) => {
       const id = normalizeStudentId(studentId);
       if (!id || isStudentView) return;
-      const playSides = { ...(sessionMedia.studentPlaySides ?? {}) };
+      const prev = sessionMediaRef.current;
+      const playSides = { ...(prev.studentPlaySides ?? {}) };
       if (side) playSides[id] = side;
       else delete playSides[id];
-      const boards = { ...(sessionMedia.studentBoards ?? {}) };
+      const boards = { ...(prev.studentBoards ?? {}) };
       delete boards[id];
-      const indIds = (sessionMedia.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
+      const indIds = (prev.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
       void pushSessionMediaRemote({
-        ...sessionMedia,
         studentPlaySides: playSides,
         studentBoards: boards,
         independentBoardStudentIds: indIds,
       });
     },
-    [isStudentView, sessionMedia, pushSessionMediaRemote],
+    [isStudentView, pushSessionMediaRemote],
   );
 
   const toggleCoachStudentCam = useCallback(
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
       if (!id) return;
-      const forcedOff = !!(sessionMedia.studentCamForcedOff[id]);
+      const prev = sessionMediaRef.current;
+      const forcedOff = !!(prev.studentCamForcedOff[id]);
       void pushSessionMediaRemote({
-        ...sessionMedia,
-        studentCamForcedOff: { ...sessionMedia.studentCamForcedOff, [id]: !forcedOff },
+        studentCamForcedOff: { ...prev.studentCamForcedOff, [id]: !forcedOff },
       });
     },
-    [sessionMedia, pushSessionMediaRemote]
+    [pushSessionMediaRemote]
   );
 
   const attendanceRecordedRef = useRef<Set<string>>(new Set());
@@ -3384,27 +3574,27 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     (studentId: string, status: 'present' | 'absent' | 'late' | 'excused') => {
       const id = normalizeStudentId(studentId);
       if (!id || isStudentView) return;
-      const marks = { ...(sessionMedia.attendanceMarks ?? {}), [id]: status };
-      void pushSessionMediaRemote({ ...sessionMedia, attendanceMarks: marks });
+      const marks = { ...(sessionMediaRef.current.attendanceMarks ?? {}), [id]: status };
+      void pushSessionMediaRemote({ attendanceMarks: marks });
       if (status === 'present') recordLiveAttendance(id);
     },
-    [isStudentView, pushSessionMediaRemote, recordLiveAttendance, sessionMedia],
+    [isStudentView, pushSessionMediaRemote, recordLiveAttendance],
   );
 
   const markAllLiveAttendance = useCallback(
     (status: 'present' | 'absent' | 'late' | 'excused') => {
       if (isStudentView) return;
-      const marks = { ...(sessionMedia.attendanceMarks ?? {}) };
+      const marks = { ...(sessionMediaRef.current.attendanceMarks ?? {}) };
       for (const s of classroomRosterStudents) {
         const id = normalizeStudentId(s.id);
         if (id) marks[id] = status;
       }
-      void pushSessionMediaRemote({ ...sessionMedia, attendanceMarks: marks });
+      void pushSessionMediaRemote({ attendanceMarks: marks });
       if (status === 'present') {
         classroomRosterStudents.forEach((s) => recordLiveAttendance(s.id));
       }
     },
-    [classroomRosterStudents, isStudentView, pushSessionMediaRemote, recordLiveAttendance, sessionMedia],
+    [classroomRosterStudents, isStudentView, pushSessionMediaRemote, recordLiveAttendance],
   );
 
   const saveLiveAttendance = useCallback(async () => {
@@ -3460,30 +3650,30 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         variant: 'danger',
       });
       if (!ok) return;
-      const pending = [...new Set([...(sessionMedia.pendingStudentIds ?? []), id])];
-      const nextBlocked = { ...sessionMedia.studentMicBlocked, [id]: true };
-      let floor = sessionMedia.floorStudentId;
+      const prev = sessionMediaRef.current;
+      const pending = [...new Set([...(prev.pendingStudentIds ?? []), id])];
+      const nextBlocked = { ...prev.studentMicBlocked, [id]: true };
+      let floor = prev.floorStudentId;
       if (idsEqual(floor, id)) floor = null;
       void persistSessionMediaOp(effectiveRoomId, 'handLower', id, getServiceSupabase);
       void pushSessionMediaRemote({
-        ...sessionMedia,
-        kickedStudentIds: (sessionMedia.kickedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        kickedStudentIds: (prev.kickedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
         pendingStudentIds: pending,
-        admittedStudentIds: (sessionMedia.admittedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
-        independentBoardStudentIds: (sessionMedia.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        admittedStudentIds: (prev.admittedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        independentBoardStudentIds: (prev.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
         studentBoards: Object.fromEntries(
-          Object.entries(sessionMedia.studentBoards ?? {}).filter(([kid]) => !idsEqual(kid, id)),
+          Object.entries(prev.studentBoards ?? {}).filter(([kid]) => !idsEqual(kid, id)),
         ),
         studentPlaySides: Object.fromEntries(
-          Object.entries(sessionMedia.studentPlaySides ?? {}).filter(([kid]) => !idsEqual(kid, id)),
+          Object.entries(prev.studentPlaySides ?? {}).filter(([kid]) => !idsEqual(kid, id)),
         ),
         floorStudentId: floor,
         studentMicBlocked: nextBlocked,
-        studentCamForcedOff: { ...sessionMedia.studentCamForcedOff, [id]: true },
+        studentCamForcedOff: { ...prev.studentCamForcedOff, [id]: true },
       });
       setParticipantMenuStudentId(null);
     },
-    [sessionMedia, pushSessionMediaRemote, isStudentView, effectiveRoomId, confirmDialog],
+    [pushSessionMediaRemote, isStudentView, effectiveRoomId, confirmDialog],
   );
 
   const banParticipantPermanently = useCallback(
@@ -3497,45 +3687,45 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         variant: 'danger',
       });
       if (!ok) return;
-      const kicks = new Set([...(sessionMedia.kickedStudentIds ?? []), id]);
-      const nextBlocked = { ...sessionMedia.studentMicBlocked, [id]: true };
-      let floor = sessionMedia.floorStudentId;
+      const prev = sessionMediaRef.current;
+      const kicks = new Set([...(prev.kickedStudentIds ?? []), id]);
+      const nextBlocked = { ...prev.studentMicBlocked, [id]: true };
+      let floor = prev.floorStudentId;
       if (idsEqual(floor, id)) floor = null;
       void persistSessionMediaOp(effectiveRoomId, 'handLower', id, getServiceSupabase);
       void pushSessionMediaRemote({
-        ...sessionMedia,
         kickedStudentIds: Array.from(kicks),
-        pendingStudentIds: (sessionMedia.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
-        admittedStudentIds: (sessionMedia.admittedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
-        independentBoardStudentIds: (sessionMedia.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        pendingStudentIds: (prev.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        admittedStudentIds: (prev.admittedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        independentBoardStudentIds: (prev.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
         studentBoards: Object.fromEntries(
-          Object.entries(sessionMedia.studentBoards ?? {}).filter(([kid]) => !idsEqual(kid, id)),
+          Object.entries(prev.studentBoards ?? {}).filter(([kid]) => !idsEqual(kid, id)),
         ),
         studentPlaySides: Object.fromEntries(
-          Object.entries(sessionMedia.studentPlaySides ?? {}).filter(([kid]) => !idsEqual(kid, id)),
+          Object.entries(prev.studentPlaySides ?? {}).filter(([kid]) => !idsEqual(kid, id)),
         ),
         floorStudentId: floor,
         studentMicBlocked: nextBlocked,
-        studentCamForcedOff: { ...sessionMedia.studentCamForcedOff, [id]: true },
+        studentCamForcedOff: { ...prev.studentCamForcedOff, [id]: true },
       });
       setParticipantMenuStudentId(null);
     },
-    [sessionMedia, pushSessionMediaRemote, isStudentView, effectiveRoomId, confirmDialog],
+    [pushSessionMediaRemote, isStudentView, effectiveRoomId, confirmDialog],
   );
 
   const readmitParticipant = useCallback(
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
       if (!id || isStudentView) return;
-      const kicks = (sessionMedia.kickedStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
-      const nextBlocked = { ...sessionMedia.studentMicBlocked };
+      const prev = sessionMediaRef.current;
+      const kicks = (prev.kickedStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
+      const nextBlocked = { ...prev.studentMicBlocked };
       delete nextBlocked[id];
-      const nextCam = { ...sessionMedia.studentCamForcedOff };
+      const nextCam = { ...prev.studentCamForcedOff };
       delete nextCam[id];
-      const admitted = [...new Set([...(sessionMedia.admittedStudentIds ?? []), id])];
-      const pending = (sessionMedia.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
+      const admitted = [...new Set([...(prev.admittedStudentIds ?? []), id])];
+      const pending = (prev.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
       void pushSessionMediaRemote({
-        ...sessionMedia,
         kickedStudentIds: kicks,
         admittedStudentIds: admitted,
         pendingStudentIds: pending,
@@ -3545,49 +3735,97 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       recordLiveAttendance(id);
       setParticipantMenuStudentId(null);
     },
-    [sessionMedia, pushSessionMediaRemote, isStudentView, recordLiveAttendance],
+    [pushSessionMediaRemote, isStudentView, recordLiveAttendance],
   );
 
   const toggleOpenParticipationRemote = useCallback(() => {
-    const next = !(sessionMedia.openParticipation ?? false);
-    void pushSessionMediaRemote({ ...sessionMedia, openParticipation: next });
-  }, [sessionMedia, pushSessionMediaRemote]);
+    const next = !(sessionMediaRef.current.openParticipation ?? false);
+    void pushSessionMediaRemote({ openParticipation: next });
+  }, [pushSessionMediaRemote]);
+
+  const toggleStudentsCanUnmuteSelf = useCallback(() => {
+    if (isStudentView) return;
+    const prev = sessionMediaRef.current;
+    const next = !(prev.studentsCanUnmuteSelf ?? false);
+    const ids = collectLiveStudentMediaIds(prev, classroomRosterStudents);
+    const clearedBlocked = { ...prev.studentMicBlocked };
+    if (next) {
+      ids.forEach((id) => {
+        delete clearedBlocked[id];
+      });
+    }
+    void pushSessionMediaRemote({
+      studentsCanUnmuteSelf: next,
+      floorStudentId: next ? null : prev.floorStudentId,
+      ...(next ? { studentMicBlocked: clearedBlocked } : {}),
+    });
+  }, [isStudentView, classroomRosterStudents, pushSessionMediaRemote]);
+
+  const muteAllStudentsRemote = useCallback(() => {
+    if (isStudentView) return;
+    const prev = sessionMediaRef.current;
+    const ids = collectLiveStudentMediaIds(prev, classroomRosterStudents);
+    const nextBlocked = { ...prev.studentMicBlocked };
+    ids.forEach((id) => {
+      nextBlocked[id] = true;
+    });
+    void pushSessionMediaRemote({
+      floorStudentId: null,
+      handRaisedStudentIds: [],
+      studentMicBlocked: nextBlocked,
+    });
+    window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
+  }, [isStudentView, classroomRosterStudents, pushSessionMediaRemote]);
+
+  const unmuteAllStudentsRemote = useCallback(() => {
+    if (isStudentView) return;
+    const prev = sessionMediaRef.current;
+    const ids = collectLiveStudentMediaIds(prev, classroomRosterStudents);
+    const nextBlocked = { ...prev.studentMicBlocked };
+    ids.forEach((id) => {
+      delete nextBlocked[id];
+    });
+    void pushSessionMediaRemote({
+      studentMicBlocked: nextBlocked,
+    });
+    window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
+  }, [isStudentView, classroomRosterStudents, pushSessionMediaRemote]);
 
   const admitStudentToClass = useCallback(
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
       if (!id || isStudentView) return;
-      const pending = (sessionMedia.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
-      const admitted = [...new Set([...(sessionMedia.admittedStudentIds ?? []), id])];
-      const marks = { ...(sessionMedia.attendanceMarks ?? {}), [id]: 'present' as const };
+      const prev = sessionMediaRef.current;
+      const pending = (prev.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, id));
+      const admitted = [...new Set([...(prev.admittedStudentIds ?? []), id])];
+      const marks = { ...(prev.attendanceMarks ?? {}), [id]: 'present' as const };
       void pushSessionMediaRemote({
-        ...sessionMedia,
         pendingStudentIds: pending,
         admittedStudentIds: admitted,
         attendanceMarks: marks,
       });
       recordLiveAttendance(id);
     },
-    [isStudentView, pushSessionMediaRemote, recordLiveAttendance, sessionMedia],
+    [isStudentView, pushSessionMediaRemote, recordLiveAttendance],
   );
 
   const admitAllPendingStudents = useCallback(() => {
     if (isStudentView) return;
-    const pending = sessionMedia.pendingStudentIds ?? [];
+    const prev = sessionMediaRef.current;
+    const pending = prev.pendingStudentIds ?? [];
     if (pending.length === 0) return;
-    const admitted = [...new Set([...(sessionMedia.admittedStudentIds ?? []), ...pending])];
-    const marks = { ...(sessionMedia.attendanceMarks ?? {}) };
+    const admitted = [...new Set([...(prev.admittedStudentIds ?? []), ...pending])];
+    const marks = { ...(prev.attendanceMarks ?? {}) };
     pending.forEach((id) => {
       marks[normalizeStudentId(id)] = 'present';
     });
     void pushSessionMediaRemote({
-      ...sessionMedia,
       pendingStudentIds: [],
       admittedStudentIds: admitted,
       attendanceMarks: marks,
     });
     pending.forEach((id) => recordLiveAttendance(id));
-  }, [isStudentView, pushSessionMediaRemote, recordLiveAttendance, sessionMedia]);
+  }, [isStudentView, pushSessionMediaRemote, recordLiveAttendance]);
 
   useEffect(() => {
     if (!isStudentView || showClassList || !isSupabaseBackend()) return;
@@ -3604,11 +3842,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (openPart) {
       if (studentJoinRegisteredRef.current) return;
       studentJoinRegisteredRef.current = true;
-      const nextAdmitted = [...new Set([...admitted, sid])];
-      const nextPending = pending.filter((kid) => !idsEqual(kid, sid));
-      const marks = { ...(sessionMedia.attendanceMarks ?? {}), [sid]: 'present' as const };
+      const prev = sessionMediaRef.current;
+      const nextAdmitted = [...new Set([...(prev.admittedStudentIds ?? []), sid])];
+      const nextPending = (prev.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, sid));
+      const marks = { ...(prev.attendanceMarks ?? {}), [sid]: 'present' as const };
       void pushSessionMediaRemote({
-        ...sessionMedia,
         admittedStudentIds: nextAdmitted,
         pendingStudentIds: nextPending,
         attendanceMarks: marks,
@@ -3668,44 +3906,36 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     sidSelfMedia &&
     (sessionMedia.handRaisedStudentIds ?? []).some((kid) => idsEqual(kid, sidSelfMedia))
   );
-  const studentMicToggleDisabled =
-    isStudentView && (!studentHasSpeakFloor || (sessionMedia.studentMicBlocked[sidSelfMedia] ?? false));
-
-  const prevStudentHadFloorRef = useRef(false);
-  useEffect(() => {
-    if (!isStudentView) return;
-    if (studentHasSpeakFloor && !prevStudentHadFloorRef.current) {
-      showSpeakRequestNotice('Antrenör size söz hakkı verdi! Mikrofonu açabilirsiniz.', 8000);
-    }
-    prevStudentHadFloorRef.current = studentHasSpeakFloor;
-  }, [isStudentView, studentHasSpeakFloor, showSpeakRequestNotice]);
-
-  useEffect(() => {
-    return () => {
-      if (speakRequestNoticeTimerRef.current != null) {
-        window.clearTimeout(speakRequestNoticeTimerRef.current);
-      }
-    };
-  }, []);
+  const studentCanUseMic = !!(
+    isStudentView &&
+    sidSelfMedia &&
+    canStudentTransmitAudio(sidSelfMedia, sessionMedia)
+  );
+  const studentMicBlockedByCoach = !!(
+    isStudentView &&
+    sidSelfMedia &&
+    isStudentMicBlockedByCoach(sidSelfMedia, sessionMedia)
+  );
+  const studentMicToggleDisabled = isStudentView && !studentCanUseMic;
 
   const toggleLocalMic = useCallback(() => {
     if (!isStudentView) {
       coachLocalMediaShieldUntilRef.current = Date.now() + 4500;
-      void pushSessionMediaRemote({ ...sessionMedia, coachMicMuted: !sessionMedia.coachMicMuted });
-    } else if (studentHasSpeakFloor) {
+      void pushSessionMediaRemote({ coachMicMuted: !sessionMediaRef.current.coachMicMuted });
+    } else if (studentCanUseMic) {
       setIsMuted((m) => !m);
     }
-  }, [isStudentView, sessionMedia, pushSessionMediaRemote, studentHasSpeakFloor]);
+  }, [isStudentView, pushSessionMediaRemote, studentCanUseMic]);
 
   const toggleLocalCam = useCallback(() => {
     if (!isStudentView) {
       coachLocalMediaShieldUntilRef.current = Date.now() + 4500;
-      const nextCamOff = !sessionMedia.coachCamOff;
-      void pushSessionMediaRemote({ ...sessionMedia, coachCamOff: nextCamOff });
+      const nextCamOff = !sessionMediaRef.current.coachCamOff;
+      void pushSessionMediaRemote({ coachCamOff: nextCamOff });
     } else {
       setIsCameraOff((c) => !c);
     }
-  }, [isStudentView, sessionMedia, pushSessionMediaRemote]);
+  }, [isStudentView, pushSessionMediaRemote]);
 
   const refreshLocalVideoPreview = useCallback(() => {
     const videoTrack = agoraLocalVideoTrackRef.current;
@@ -3950,30 +4180,29 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     } catch { return fen; }
   }, [displayBaseFen, displayMoveHistory, fen]);
 
-  const mainLinePly = isStudentView
-    ? displayMoveHistory.length
-    : replayNavPly === null
-      ? displayMoveHistory.length
-      : replayNavPly;
-  const liveLessonCurrentPly = isStudentView
-    ? displayMoveHistory.length
-    : currentVariation
-      ? currentVariation[2] + 1
-      : mainLinePly;
+  const mainLinePly = currentVariation
+    ? currentVariation[0]
+    : (replayNavPly ?? displayMoveHistory.length);
+  const liveLessonCurrentPly = currentVariation
+    ? currentVariation[2] + 1
+    : mainLinePly;
   const activeLineLength = currentVariation && !isStudentView
     ? (displayVariations[currentVariation[0]]?.[currentVariation[1]]?.length ?? 0)
     : displayMoveHistory.length;
   /** Oynanabilir uç pozisyon (notasyon gezintisinde değiliz) */
   const atLiveGameHead = isStudentView || liveLessonCurrentPly === activeLineLength;
   const studentPlaySideResolved = resolveStudentPlaySide(studentIdProp, sessionMedia);
-  /** Analiz sekmesinde veya analiz modunda geçmiş konumdan varyasyon denenebilir */
-  const boardExploreMode = !isStudentView && (analysisMode || atLiveGameHead || sidebarTab === 'analiz');
+  /** Öğrenci: antrenör izin verdiyse tahta oynanır; antrenör: analiz / canlı uç / analiz sekmesi */
+  const boardExploreMode = isStudentView
+    ? studentPlaySideResolved != null
+    : (analysisMode || atLiveGameHead || sidebarTab === 'analiz');
   const replayNavActive = !isStudentView && (replayNavPly !== null || currentVariation !== null);
 
   const boardDisplayFen = useMemo(() => {
     if (hoverFen && !replayNavActive) return hoverFen;
+    if (isStudentView) return fen;
     return liveLessonFenAt(displayBaseFen, displayMoveHistory, displayVariations, mainLinePly, currentVariation);
-  }, [displayBaseFen, displayMoveHistory, displayVariations, mainLinePly, currentVariation, hoverFen, replayNavActive]);
+  }, [isStudentView, fen, hoverFen, replayNavActive, displayBaseFen, displayMoveHistory, displayVariations, mainLinePly, currentVariation]);
 
   useEffect(() => {
     setMoveHintSquare(null);
@@ -4127,9 +4356,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       payload.coach_side = broadcastCoachSide;
     }
 
-    const applySyncKey = () => {
-      const stamp = new Date().toISOString();
-      lastSyncRef.current = `${broadcastFen}-${stamp}`;
+    if (!isStudentView) {
+      lastLocalMoveTimeRef.current = Date.now();
+    }
+
+    const applySyncKey = (stamp: string) => {
+      const varsKey = JSON.stringify(payload.variations ?? {});
+      lastSyncRef.current = `${broadcastFen}|${varsKey}|${stamp}|${JSON.stringify(payload.session_media ?? '')}|${JSON.stringify(payload.chat_messages ?? '')}`;
       if (broadcastMarks !== undefined || broadcastArrows !== undefined) {
         lastAnnoSyncRef.current = `${JSON.stringify(broadcastMarks ?? null)}|${JSON.stringify(broadcastArrows ?? [])}`;
       }
@@ -4139,7 +4372,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (!error) {
         if ('marks' in payload) schemaHasMarksRef.current = true;
         if ('arrows' in payload) schemaHasArrowsRef.current = true;
-        applySyncKey();
+        applySyncKey(new Date().toISOString());
         return;
       }
       /** Sunucuda `marks` kolonu yokken gönderilirse tam upsert reddedilir; önce marksız yeniden dene. */
@@ -4150,7 +4383,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         delete sansMarks.marks;
         void sb.from('live_lesson_state').upsert(sansMarks, { onConflict: 'id' }).then(({ error: e2 }) => {
           if (!e2) {
-            applySyncKey();
+            applySyncKey(new Date().toISOString());
             return;
           }
           if (schemaHasExtendedRef.current !== false) {
@@ -4163,7 +4396,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               updated_at: new Date().toISOString(),
             };
             void sb.from('live_lesson_state').upsert(minimal, { onConflict: 'id' }).then(({ error: e3 }) => {
-              if (!e3) applySyncKey();
+              if (!e3) applySyncKey(new Date().toISOString());
             });
           }
         });
@@ -4179,11 +4412,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           updated_at: new Date().toISOString(),
         };
         void sb.from('live_lesson_state').upsert(minimal, { onConflict: 'id' }).then(({ error: e2 }) => {
-          if (!e2) applySyncKey();
+          if (!e2) applySyncKey(new Date().toISOString());
         });
       }
     });
-  }, [effectiveRoomId, effectiveRoomName, isPgColumnError]);
+  }, [effectiveRoomId, effectiveRoomName, isPgColumnError, isStudentView]);
 
   useEffect(() => {
     if (!isStudentView && sidebarTab === 'oyunlar') {
@@ -4238,7 +4471,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setMoveHistory([]);
       setSelectedPoolPuzzleId(puzzle.id);
       void pushSessionMediaRemote({
-        ...sessionMedia,
         activePuzzleId: puzzle.id,
       });
       setReplayNavPly(null);
@@ -4247,7 +4479,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     } catch (e) {
       console.error('[LiveLesson] Failed to apply puzzle:', e);
     }
-  }, [pushState, coachSide, pushSessionMediaRemote, sessionMedia]);
+  }, [pushState, coachSide, pushSessionMediaRemote]);
 
   const filteredPuzzles = useMemo(() => {
     const q = puzzleSearch.trim().toLowerCase();
@@ -4265,13 +4497,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     () => puzzles.find((p) => p.id === selectedPoolPuzzleId) ?? null,
     [puzzles, selectedPoolPuzzleId]
   );
-
-  const studentVisiblePuzzleSolution = useMemo(() => {
-    if (!isStudentView) return null;
-    if (!sessionMedia.studentCanSeePuzzleSolution) return null;
-    if (!selectedPoolPuzzle || !selectedPoolPuzzle.solution || selectedPoolPuzzle.solution.length === 0) return null;
-    return selectedPoolPuzzle.solution.join(', ');
-  }, [isStudentView, sessionMedia.studentCanSeePuzzleSolution, selectedPoolPuzzle]);
 
   useEffect(() => {
     if (sessionMedia.activePuzzleId) {
@@ -4292,39 +4517,34 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const toggleStudentPuzzleSolutionVisibility = useCallback(() => {
     if (isStudentView) return;
     void pushSessionMediaRemote({
-      ...sessionMedia,
-      studentCanSeePuzzleSolution: !sessionMedia.studentCanSeePuzzleSolution,
+      studentCanSeePuzzleSolution: !sessionMediaRef.current.studentCanSeePuzzleSolution,
     });
-  }, [isStudentView, pushSessionMediaRemote, sessionMedia]);
+  }, [isStudentView, pushSessionMediaRemote]);
 
   const toggleStudentAnalysisVisibility = useCallback(() => {
     if (isStudentView) return;
-    const next = !(sessionMedia.studentAnalysisVisible ?? false);
     void pushSessionMediaRemote({
-      ...sessionMedia,
-      studentAnalysisVisible: next,
+      studentAnalysisVisible: !(sessionMediaRef.current.studentAnalysisVisible ?? false),
     });
-  }, [isStudentView, pushSessionMediaRemote, sessionMedia]);
+  }, [isStudentView, pushSessionMediaRemote]);
 
   const toggleCoachEvalBarVisible = useCallback(() => {
     if (isStudentView) return;
     const next = !engineEvalVisible;
     setEngineEvalVisible(next);
     void pushSessionMediaRemote({
-      ...sessionMedia,
       studentEvalBarVisible: next,
     });
-  }, [isStudentView, engineEvalVisible, pushSessionMediaRemote, sessionMedia]);
+  }, [isStudentView, engineEvalVisible, pushSessionMediaRemote]);
 
   const toggleCoachEngineLinesVisible = useCallback(() => {
     if (isStudentView) return;
     const next = !engineLinesVisible;
     setEngineLinesVisible(next);
     void pushSessionMediaRemote({
-      ...sessionMedia,
       engineMultiPvLines: next ? 3 : 1,
     });
-  }, [engineLinesVisible, isStudentView, pushSessionMediaRemote, sessionMedia]);
+  }, [engineLinesVisible, isStudentView, pushSessionMediaRemote]);
 
   const recordVariation = useCallback((
     from: string,
@@ -4414,18 +4634,31 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     };
   }, [displayBaseFen, displayMoveHistory, displayVariations]);
 
-  const selectLiveMove = useCallback((idx: number, varInfo?: LiveVariationRef) => {
+  const publishCoachBoardNav = useCallback((
+    nextVar: LiveVariationRef | null,
+    nextReplay: number | null,
+  ) => {
     if (isStudentView) return;
     setReplayIsPlaying(false);
     setHoverFen(null);
+    const mainPly = nextVar ? nextVar[0] : (nextReplay ?? moveHistory.length);
+    const nextFen = liveLessonFenAt(baseFen, moveHistory, variations, mainPly, nextVar);
+    setCurrentVariation(nextVar);
+    setReplayNavPly(nextReplay);
+    setFen(nextFen);
+    setGame(new Chess(nextFen));
+    lastLocalMoveTimeRef.current = Date.now();
+    pushState(nextFen, moveHistory, undefined, undefined, coachSide ?? undefined, variations);
+  }, [isStudentView, baseFen, moveHistory, variations, pushState, coachSide]);
+
+  const selectLiveMove = useCallback((idx: number, varInfo?: LiveVariationRef) => {
+    if (isStudentView) return;
     if (varInfo) {
-      setCurrentVariation(varInfo);
-      setReplayNavPly(null);
+      publishCoachBoardNav(varInfo, null);
       return;
     }
-    setCurrentVariation(null);
-    setReplayNavPly(Math.max(0, idx));
-  }, [isStudentView]);
+    publishCoachBoardNav(null, Math.max(0, idx));
+  }, [isStudentView, publishCoachBoardNav]);
 
   const deleteLiveMoveFromHere = useCallback((idx: number) => {
     if (isStudentView) return;
@@ -4497,11 +4730,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (!targetSquare || !sourceSquare) return false;
 
     if (!boardExploreMode) return false;
-
-    if (isStudentView) {
-      setStudentLocalArrows([]);
-      setStudentLocalMarks({});
-    }
 
     let turnNow: 'w' | 'b';
     try {
@@ -4740,33 +4968,31 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         if (currentVariation) {
           const [mainLinePos, varGroupIdx, varMoveIdx] = currentVariation;
           const varLine = displayVariations[mainLinePos]?.[varGroupIdx] ?? [];
+          let nextVar: LiveVariationRef | null = currentVariation;
+          let nextReplay: number | null = null;
           if (e.key === 'ArrowLeft') {
             if (varMoveIdx > 0) {
-              setCurrentVariation([mainLinePos, varGroupIdx, varMoveIdx - 1]);
+              nextVar = [mainLinePos, varGroupIdx, varMoveIdx - 1];
             } else {
-              setCurrentVariation(null);
-              setReplayNavPly(mainLinePos);
+              nextVar = null;
+              nextReplay = mainLinePos;
             }
           } else if (varMoveIdx < varLine.length - 1) {
-            setCurrentVariation([mainLinePos, varGroupIdx, varMoveIdx + 1]);
+            nextVar = [mainLinePos, varGroupIdx, varMoveIdx + 1];
           } else {
-            setCurrentVariation(null);
-            setReplayNavPly(mainLinePos + 1 >= displayMoveHistory.length ? null : mainLinePos + 1);
+            nextVar = null;
+            nextReplay = mainLinePos + 1 >= displayMoveHistory.length ? null : mainLinePos + 1;
           }
+          publishCoachBoardNav(nextVar, nextReplay);
           return;
         }
         const len = displayMoveHistory.length;
+        const cur = replayNavPly ?? len;
         if (e.key === 'ArrowLeft') {
-          setReplayNavPly((p) => {
-            const cur = p ?? len;
-            return Math.max(0, cur - 1);
-          });
+          publishCoachBoardNav(null, Math.max(0, cur - 1));
         } else {
-          setReplayNavPly((p) => {
-            const cur = p ?? len;
-            const next = Math.min(len, cur + 1);
-            return next >= len ? null : next;
-          });
+          const next = Math.min(len, cur + 1);
+          publishCoachBoardNav(null, next >= len ? null : next);
         }
       }
     };
@@ -4777,8 +5003,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     displayMoveHistory.length,
     displayVariations,
     currentVariation,
+    replayNavPly,
     isStudentView,
     deleteLiveMoveFromHere,
+    publishCoachBoardNav,
   ]);
 
   const setCoachPlaySide = useCallback(
@@ -4843,18 +5071,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const applyLiveLessonSquareMarkAt = useCallback(
     (square: string, markType: 'circle' | 'square' = 'circle') => {
-      if (isStudentView) {
-        setStudentLocalMarks((prev) => {
-          const current = prev[square];
-          if (current?.type === markType) {
-            const next = { ...prev };
-            delete next[square];
-            return next;
-          }
-          return { ...prev, [square]: { color: 'red', type: 'circle' } };
-        });
-        return;
-      }
+      if (isStudentView) return;
       setMarks((prev) => {
         const current = prev[square];
         if (current?.type === markType && current.color === drawingColor) {
@@ -4873,30 +5090,16 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const handleBoardSquareRightClick = useCallback(
     (arg: unknown) => {
+      if (isStudentView) return;
       const square = pickSquare(arg);
       if (!square) return;
-      if (isStudentView) {
-        applyLiveLessonSquareMarkAt(square, 'circle');
-        return;
-      }
       if (drawingTool !== 'mouse') return;
       applyLiveLessonSquareMarkAt(square, 'circle');
     },
     [isStudentView, drawingTool, applyLiveLessonSquareMarkAt],
   );
 
-  const boardArrowsToShow = useMemo(() => {
-    if (!isStudentView) return arrowsToShow;
-    const seen = new Set<string>();
-    const merged: ArrowItem[] = [];
-    for (const a of [...arrowsToShow, ...studentLocalArrows]) {
-      const k = `${a.startSquare}-${a.endSquare}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      merged.push(a);
-    }
-    return merged;
-  }, [isStudentView, arrowsToShow, studentLocalArrows]);
+  const boardArrowsToShow = arrowsToShow;
 
   const moveHintsToolOk = !isStudentView && drawingTool === 'mouse';
 
@@ -4986,7 +5189,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       ...lastMoveSquares,
       ...legalMoveHintStyles,
       ...squareMarksToStyles(marks),
-      ...squareMarksToStyles(studentLocalMarks),
     },
     /** Klasik yeşil / krem Chess.com tahtası */
     darkSquareStyle: { backgroundColor: '#769656' },
@@ -5028,10 +5230,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (!square || !liveLessonPieceEligibleForMoveHints(square, piece, !!isSparePiece)) return;
       setMoveHintSquare((prev) => (prev === square ? null : square));
     },
-    onSquareRightClick: isStudentView || drawingTool === 'mouse' ? handleBoardSquareRightClick : undefined,
+    onSquareRightClick: !isStudentView && drawingTool === 'mouse' ? handleBoardSquareRightClick : undefined,
     onSquareClick: (arg: unknown) => {
       const square = pickSquare(arg);
       if (!square) return;
+      if (isStudentView) return;
       const mousePlay = moveHintsToolOk && boardExploreMode;
       if (mousePlay && moveHintSquare) {
         if (square === moveHintSquare) {
@@ -5044,10 +5247,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           return;
         }
         setMoveHintSquare(null);
-        return;
-      }
-      if (isStudentView) {
-        applyLiveLessonSquareMarkAt(square, 'circle');
         return;
       }
       if (drawingTool === 'mouse') return;
@@ -5081,7 +5280,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       (isStudentView
         ? playSide != null
         : drawingTool === 'mouse') && boardExploreMode,
-    allowDrawingArrows: liveLessonDrawArrowsEnabled || isStudentView,
+    allowDrawingArrows: liveLessonDrawArrowsEnabled,
     arrows: boardArrowsToShow,
     clearArrowsOnPositionChange: false,
     arrowOptions: {
@@ -5097,17 +5296,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       arrowStartOffset: 0,
     },
     onArrowsChange: (payload: unknown) => {
+      if (isStudentView) return;
       const raw = Array.isArray(payload)
         ? (payload as ArrowItem[])
         : ((payload as { arrows?: ArrowItem[] } | null)?.arrows ?? []);
       const withoutPreview = raw.filter((a) => !ARROW_PREVIEW_COLORS.has(a.color));
       const next = sanitizeArrows(withoutPreview);
-      if (isStudentView) {
-        const engineColors = new Set(['rgba(99,102,241,0.85)', 'rgba(99,102,241,0.4)']);
-        const localOnly = next.filter((a) => !engineColors.has(a.color));
-        setStudentLocalArrows(persistedArrows(localOnly));
-        return;
-      }
       const prevKeys = new Set(sanitizedArrows.map((a) => `${a.startSquare}-${a.endSquare}`));
       const colored = next.map((a) => {
         const key = `${a.startSquare}-${a.endSquare}`;
@@ -5160,6 +5354,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const liveEvalBarScore = liveEvalBarMeta.score;
 
   const classroomOpenParticipation = sessionMedia.openParticipation ?? false;
+  const classroomStudentsCanUnmuteSelf = sessionMedia.studentsCanUnmuteSelf ?? false;
 
   const STALE_ROOM_MS = 24 * 60 * 60 * 1000;
   const activeRooms = useMemo(
@@ -5491,68 +5686,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     <div
       className={`flex flex-col overflow-hidden rounded-none sm:rounded-2xl lg:rounded-3xl border-0 sm:border border-white/10 bg-[#0f172a] animate-in fade-in duration-500 shadow-[0_24px_70px_rgba(0,0,0,0.45)] ring-0 sm:ring-1 ring-indigo-500/10 atmospheric-bg h-full min-h-0 max-h-[100dvh]`}
     >
-      {isStudentView && studentHasRaisedHand && !studentHasSpeakFloor ? (
-        <div
-          className="shrink-0 flex items-center justify-center gap-2 px-3 py-2.5 bg-amber-500/20 border-b border-amber-400/40 text-amber-50 text-[13px] font-semibold"
-          role="status"
-          aria-live="polite"
-        >
-          <Hand className="w-4 h-4 shrink-0 text-amber-300 animate-pulse" aria-hidden />
-          <span>Söz isteğiniz antrenöre iletildi — onay bekleniyor</span>
-        </div>
-      ) : null}
-      {isStudentView && studentHasSpeakFloor ? (
-        <div
-          className="shrink-0 flex items-center justify-between gap-2 px-3 py-2.5 bg-emerald-500/20 border-b border-emerald-400/40 text-emerald-50 text-[13px] font-semibold"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <Mic className="w-4 h-4 shrink-0 text-emerald-300" aria-hidden />
-            <span>Söz hakkınız var — mikrofonu açabilirsiniz</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => releaseSpeakFloor()}
-            className="shrink-0 rounded-md border border-emerald-400/40 bg-emerald-600/30 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-50 hover:bg-emerald-600/45"
-          >
-            Sözü bırak
-          </button>
-        </div>
-      ) : null}
-      {!isStudentView && sessionMedia.floorStudentId ? (
-        <div
-          className="shrink-0 flex items-center justify-between gap-2 px-3 py-2.5 bg-emerald-500/15 border-b border-emerald-400/30 text-emerald-50 text-[13px] font-semibold"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <Mic className="w-4 h-4 shrink-0 text-emerald-300" aria-hidden />
-            <span className="truncate">
-              Söz hakkı:{' '}
-              {students.find((s) => idsEqual(s.id, sessionMedia.floorStudentId))?.name ?? 'Öğrenci'}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => releaseSpeakFloor(sessionMedia.floorStudentId!)}
-            className="shrink-0 rounded-md bg-rose-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white hover:bg-rose-500"
-          >
-            Sözü kes
-          </button>
-        </div>
-      ) : null}
-      {speakRequestNotice &&
-      isStudentView &&
-      !studentHasRaisedHand &&
-      !studentHasSpeakFloor ? (
-        <div
-          className="shrink-0 px-3 py-2 text-center text-[12px] font-medium border-b border-rose-500/30 bg-rose-500/15 text-rose-100"
-          role="alert"
-        >
-          {speakRequestNotice}
-        </div>
-      ) : null}
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col lg:flex-row pb-14 lg:pb-0">
         {/* ── Classroom: Tahta (ekrana oturan kare) ── */}
         <section className={`${mobileClassroomPanel === 'board' ? 'flex' : 'hidden'} lg:flex flex-1 lg:flex-[2.2] xl:flex-[2.5] min-w-0 min-h-0 flex-col bg-gradient-to-b from-slate-900/90 via-[#0f172a] to-slate-950 lg:border-r lg:border-white/10`}>
@@ -5562,25 +5695,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 ? 'overflow-y-auto overflow-x-hidden custom-scrollbar justify-center'
                 : 'overflow-y-auto custom-scrollbar justify-start xl:justify-center'
             }`}
-          >
-            {isStudentView && selectedPoolPuzzle && (
-              <div
-                className={`${lessonBoardSizing} ${isStudentView ? 'mb-2' : 'mb-4'} rounded-xl border px-4 py-2.5 ${
-                  sessionMedia.studentCanSeePuzzleSolution ? 'bg-indigo-500/10 border-indigo-500/30' : 'bg-slate-800/40 border-white/10'
-                }`}
-                style={boardColumnStyle}
-              >
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Antrenör bulmacası</p>
-                <p className="text-sm font-semibold text-white truncate mt-1">{selectedPoolPuzzle.title}</p>
-                {studentVisiblePuzzleSolution ? (
-                  <p className="text-xs text-indigo-200 mt-1 break-words">Çözüm: {studentVisiblePuzzleSolution}</p>
-                ) : (
-                  <p className="text-xs text-slate-500 mt-1">Çözüm paylaşılmadı.</p>
-                )}
-              </div>
-            )}
-
-            <div className="flex flex-1 min-h-0 w-full max-w-full flex-col lg:flex-row items-stretch lg:items-start justify-center gap-2 lg:gap-3 xl:gap-4">
+            >
+            <div
+              ref={boardVideoRowRef}
+              className="flex flex-1 min-h-0 w-full max-w-full flex-col lg:flex-row items-stretch lg:items-start justify-center gap-0 lg:gap-1 xl:gap-2"
+            >
             <div
               className={`${lessonBoardSizing} min-h-0 min-w-0 flex flex-col gap-2 ${
                 isStudentView ? 'flex-1 min-h-0' : 'shrink-0 lg:flex-1'
@@ -5588,13 +5707,24 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               style={boardColumnStyle}
             >
               <div
-                className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 pb-1"
+                className="flex shrink-0 flex-wrap items-center justify-start gap-2 sm:gap-3 pb-1"
                 aria-label="Tahta boyutu"
               >
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                  Tahta boyutu
-                </span>
+                {!isStudentView ? (
+                  <button
+                    type="button"
+                    onClick={() => (onBack ? onBack() : setSelectedRoomId(null))}
+                    className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+                    aria-label="Geri"
+                    title="Ders listesine dön"
+                  >
+                    <ArrowLeft className="w-5 h-5" />
+                  </button>
+                ) : null}
                 <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 hidden sm:inline">
+                    Tahta boyutu
+                  </span>
                   <div className="flex items-center rounded-xl border border-white/10 bg-slate-800/60 p-0.5">
                     <button
                       type="button"
@@ -5669,26 +5799,32 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   if (now - boardWheelNavTsRef.current < 80) return;
                   const dy = e.deltaY;
                   if (Math.abs(dy) < 2) return;
-                  if (displayMoveHistory.length === 0) return;
+                  if (displayMoveHistory.length === 0 && !currentVariation) return;
                   e.preventDefault();
                   boardWheelNavTsRef.current = now;
-                  setReplayIsPlaying(false);
-                  setHoverFen(null);
-                  setCurrentVariation(null);
                   const len = displayMoveHistory.length;
+                  if (currentVariation) {
+                    const [mainLinePos, varGroupIdx, varMoveIdx] = currentVariation;
+                    const varLine = displayVariations[mainLinePos]?.[varGroupIdx] ?? [];
+                    if (dy < 0) {
+                      if (varMoveIdx > 0) {
+                        publishCoachBoardNav([mainLinePos, varGroupIdx, varMoveIdx - 1], null);
+                      } else {
+                        publishCoachBoardNav(null, mainLinePos);
+                      }
+                    } else if (varMoveIdx < varLine.length - 1) {
+                      publishCoachBoardNav([mainLinePos, varGroupIdx, varMoveIdx + 1], null);
+                    } else {
+                      publishCoachBoardNav(null, mainLinePos + 1 >= len ? null : mainLinePos + 1);
+                    }
+                    return;
+                  }
+                  const cur = replayNavPly ?? len;
                   if (dy < 0) {
-                    // yukarı: geri
-                    setReplayNavPly((p) => {
-                      const cur = p ?? len;
-                      return Math.max(0, cur - 1);
-                    });
+                    publishCoachBoardNav(null, Math.max(0, cur - 1));
                   } else {
-                    // aşağı: ileri
-                    setReplayNavPly((p) => {
-                      const cur = p ?? len;
-                      const next = Math.min(len, cur + 1);
-                      return next >= len ? null : next;
-                    });
+                    const next = Math.min(len, cur + 1);
+                    publishCoachBoardNav(null, next >= len ? null : next);
                   }
                 }}
               >
@@ -5729,9 +5865,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </div>
             </div>
 
+            <ClassroomVideoDockResizeHandle onResizeStart={handleVideoDockResizeStart} />
+
             {!isStudentView ? (
             <ClassroomAttendancePanel
               variant="dock"
+              dockWidthPx={videoDockWidthPx}
               rosterStudents={classroomRosterStudents}
               tiles={liveVideoTiles}
               attendanceMarks={sessionMedia.attendanceMarks}
@@ -5762,6 +5901,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             ) : (
             <ClassroomStudentVideoPanel
               variant="dock"
+              dockWidthPx={videoDockWidthPx}
               tiles={liveVideoTiles}
               focusedId={focusedVideoTileId}
               onFocus={setFocusedVideoTileId}
@@ -5774,7 +5914,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               speakingStudentIds={speakingStudentIds}
               coachIsSpeaking={speakingUids.has('coach')}
               studentSpeakFloor={
-                canStudentRequestSpeak
+                canStudentRequestSpeak && !classroomStudentsCanUnmuteSelf
                   ? {
                       hasFloor: studentHasSpeakFloor,
                       hasRaisedHand: studentHasRaisedHand,
@@ -5836,7 +5976,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   speakingStudentIds={speakingStudentIds}
                   coachIsSpeaking={speakingUids.has('coach')}
                   studentSpeakFloor={
-                    canStudentRequestSpeak
+                    canStudentRequestSpeak && !classroomStudentsCanUnmuteSelf
                       ? {
                           hasFloor: studentHasSpeakFloor,
                           hasRaisedHand: studentHasRaisedHand,
@@ -6095,9 +6235,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       className="p-2 rounded text-slate-300 hover:bg-indigo-500/20 hover:text-white"
                       title="Başa dön"
                       onClick={() => {
-                        setHoverFen(null);
-                        setReplayNavPly(0);
-                        setReplayIsPlaying(false);
+                        publishCoachBoardNav(null, 0);
                       }}
                     >
                       <ChevronFirst className="w-5 h-5" />
@@ -6107,12 +6245,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       className="p-2 rounded text-slate-300 hover:bg-indigo-500/20 hover:text-white"
                       title="Önceki hamle"
                       onClick={() => {
-                        setHoverFen(null);
-                        setReplayNavPly((p) => {
-                          const cur = p ?? displayMoveHistory.length;
-                          return Math.max(0, cur - 1);
-                        });
-                        setReplayIsPlaying(false);
+                        const cur = replayNavPly ?? displayMoveHistory.length;
+                        publishCoachBoardNav(null, Math.max(0, cur - 1));
                       }}
                     >
                       <ChevronLeft className="w-5 h-5" />
@@ -6122,14 +6256,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       className="p-2 rounded text-slate-300 hover:bg-indigo-500/20 hover:text-white"
                       title="Sonraki hamle"
                       onClick={() => {
-                        setHoverFen(null);
-                        setReplayNavPly((p) => {
-                          const len = displayMoveHistory.length;
-                          const cur = p ?? len;
-                          const next = Math.min(len, cur + 1);
-                          return next >= len ? null : next;
-                        });
-                        setReplayIsPlaying(false);
+                        const len = displayMoveHistory.length;
+                        const cur = replayNavPly ?? len;
+                        const next = Math.min(len, cur + 1);
+                        publishCoachBoardNav(null, next >= len ? null : next);
                       }}
                     >
                       <ChevronRight className="w-5 h-5" />
@@ -6139,9 +6269,17 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       className="p-2 rounded text-slate-300 hover:bg-indigo-500/20 hover:text-white"
                       title="Son konum"
                       onClick={() => {
-                        setHoverFen(null);
-                        setReplayNavPly(null);
-                        setReplayIsPlaying(false);
+                        if (currentVariation) {
+                          const [mainLinePos, varGroupIdx] = currentVariation;
+                          const varLine = displayVariations[mainLinePos]?.[varGroupIdx] ?? [];
+                          if (varLine.length === 0) {
+                            publishCoachBoardNav(null, null);
+                          } else {
+                            publishCoachBoardNav([mainLinePos, varGroupIdx, varLine.length - 1], null);
+                          }
+                        } else {
+                          publishCoachBoardNav(null, null);
+                        }
                       }}
                     >
                       <ChevronLast className="w-5 h-5" />
@@ -6208,6 +6346,37 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         on={classroomOpenParticipation}
                         onToggle={() => toggleOpenParticipationRemote()}
                       />
+                    </div>
+                    <div className="flex items-center gap-2 min-h-[2rem] flex-wrap">
+                      <label htmlFor="live-student-mic-self-toggle" className="cursor-pointer text-[13px] leading-snug text-slate-300 flex-1 min-w-0 pr-1 inline-flex items-center gap-1.5">
+                        <span>Öğrenci mik. açabilir</span>
+                        <HelpCircle className="w-4 h-4 shrink-0 text-slate-500" aria-hidden title="Açık: öğrenciler söz istemeden mikrofonu açabilir. Kapalı: yalnızca söz hakkı verilen konuşur." />
+                      </label>
+                      <ClassroomToggle
+                        id="live-student-mic-self-toggle"
+                        on={classroomStudentsCanUnmuteSelf}
+                        onToggle={() => toggleStudentsCanUnmuteSelf()}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => muteAllStudentsRemote()}
+                        className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-950/30 px-3 py-2 text-[12px] font-semibold text-rose-200 hover:bg-rose-950/50"
+                        title="Tüm öğrencilerin mikrofonunu kapat"
+                      >
+                        <MicOff className="w-3.5 h-3.5 shrink-0" />
+                        Tümünü sustur
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => unmuteAllStudentsRemote()}
+                        className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-950/25 px-3 py-2 text-[12px] font-semibold text-emerald-200 hover:bg-emerald-950/40"
+                        title="Öğrencilerin antrenör susturmasını kaldır"
+                      >
+                        <Mic className="w-3.5 h-3.5 shrink-0" />
+                        Susturmayı kaldır
+                      </button>
                     </div>
                     <div className="relative">
                       <button
@@ -6428,7 +6597,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                           {localCamOff ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
                         </div>
                       </div>
-                      {isStudentView && canStudentRequestSpeak ? (
+                      {isStudentView && canStudentRequestSpeak && !classroomStudentsCanUnmuteSelf ? (
                         <div className="px-3 pb-2.5">
                           <StudentSpeakFloorBar
                             hasFloor={studentHasSpeakFloor}
@@ -6446,7 +6615,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       const blocked = sessionMedia.studentMicBlocked[sid] ?? false;
                       const hasFloor = idsEqual(sessionMedia.floorStudentId, sid);
                       const handRaised = (sessionMedia.handRaisedStudentIds ?? []).some((kid) => idsEqual(kid, sid));
-                      const audioCoachOpen = !blocked && hasFloor;
+                      const audioCoachOpen = canStudentTransmitAudio(s.id, sessionMedia);
                       const camForcedOffByCoach = !!(sessionMedia.studentCamForcedOff[sid]);
                       const isSpeaking = speakingStudentIds.has(sid);
                       const isPending = (sessionMedia.pendingStudentIds ?? []).some((k) => idsEqual(k, sid));
@@ -6523,7 +6692,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                               onMouseDown={(e) => e.stopPropagation()}
                               onClick={(e) => e.stopPropagation()}
                             >
-                              {hasFloor ? (
+                              {!classroomStudentsCanUnmuteSelf && hasFloor ? (
                                 <button
                                   type="button"
                                   onClick={() => releaseSpeakFloor(s.id)}
@@ -6532,7 +6701,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                                 >
                                   Sözü kes
                                 </button>
-                              ) : handRaised ? (
+                              ) : !classroomStudentsCanUnmuteSelf && handRaised ? (
                                 <button
                                   type="button"
                                   onClick={() => grantFloorToStudent(s.id)}
@@ -6557,9 +6726,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                                 onClick={() => toggleCoachStudentLiveAudio(s.id)}
                                 className={`p-1.5 rounded ${audioCoachOpen ? 'bg-slate-700/80 text-slate-200' : 'bg-rose-800/60 text-white'}`}
                                 title={
-                                  audioCoachOpen
-                                    ? 'Sözü kes ve mikrofonu kapat'
-                                    : 'Söz hakkı ver ve mikrofonu aç'
+                                  classroomStudentsCanUnmuteSelf
+                                    ? audioCoachOpen
+                                      ? 'Öğrenciyi sustur'
+                                      : 'Susturmayı kaldır'
+                                    : audioCoachOpen
+                                      ? 'Sözü kes ve mikrofonu kapat'
+                                      : 'Söz hakkı ver ve mikrofonu aç'
                                 }
                               >
                                 {audioCoachOpen ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
@@ -7108,7 +7281,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           <div className="row-start-4 border-t border-white/10 bg-slate-900/80 px-3 py-2 flex items-center justify-between gap-2">
             <span className="text-[11px] font-mono text-slate-400 tabular-nums shrink-0">{wallClock}</span>
             <div className="flex items-center justify-end gap-1.5">
-              {isStudentView && canStudentRequestSpeak ? (
+              {isStudentView && canStudentRequestSpeak && !classroomStudentsCanUnmuteSelf ? (
                 studentHasSpeakFloor ? (
                   <button
                     type="button"
@@ -7153,7 +7326,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 }`}
                 title={
                   studentMicToggleDisabled
-                    ? 'Mikrofon için antrenörden söz hakkı gerekir'
+                    ? studentMicBlockedByCoach
+                      ? 'Antrenör mikrofonunuzu kapattı'
+                      : 'Mikrofon için antrenörden izin gerekir'
                     : localMicMuted
                       ? 'Mikrofonu aç'
                       : 'Mikrofonu kapat'

@@ -24,7 +24,7 @@ import {
 import { pdfAllPagesToDataUrls } from '../services/pdfToImage';
 import { loadStudiesAsync, saveStudyAsync } from '../studyStorage';
 import { loadStudyCategoriesAsync, type StudyCategoryMeta } from '../studyCategoriesStorage';
-import type { Puzzle } from '../types';
+import { applyPuzzleMove, initCoachStyleSession, materializeLichessPuzzleRecord, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
 import type { Study } from '../lib/studyTypes';
 import { genId, migrateStudy, migrateChapter } from '../lib/studyUtils';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
@@ -629,10 +629,10 @@ const ChessBoard: React.FC = () => {
     setPoints(puzzle.points);
     setTheme(puzzle.theme || '');
     setHint(puzzle.hint || '');
-    setSolutionMoves(puzzle.solution || []);
     setPlayingPuzzleImage(puzzle.imageData || null);
 
     let fenToUse = puzzle.fen?.trim() || DEFAULT_START_FEN;
+    let solutionForPlay: string[] = Array.isArray(puzzle.solution) ? puzzle.solution : [];
     const isDefaultStart = fenToUse === DEFAULT_START_FEN;
 
     if (puzzle.imageData && isDefaultStart) {
@@ -641,18 +641,25 @@ const ChessBoard: React.FC = () => {
         const result = await imageToFen(puzzle.imageData);
         if (result?.fen) {
           fenToUse = result.fen;
-          if (result.solution?.length) setSolutionMoves(result.solution.replace(/\s+/g, ',').split(',').map((s: string) => s.trim()).filter(Boolean));
+          if (result.solution?.length) {
+            solutionForPlay = result.solution.replace(/\s+/g, ',').split(',').map((s: string) => s.trim()).filter(Boolean);
+          }
         }
       } catch { /* keep default */ } finally {
         setPuzzlePositionLoading(false);
       }
     }
 
+    const session = initCoachStyleSession(
+      materializeLichessPuzzleRecord({ ...puzzle, fen: fenToUse, solution: solutionForPlay } as Puzzle),
+    );
+    setSolutionMoves(session.solutionMoves);
+    if (session.solutionMoves[0]) setHint(session.solutionMoves[0]);
+
     try {
-      // Sadece pozisyonu (FEN) yükle; böylece hamle listesi sadece bu tahtada oynanan hamleleri gösterir (eski oyun hamleleri değil)
-      const c = new Chess(fenToUse);
+      const c = new Chess(session.playFen);
       setGame(c);
-      setGameInitialFen(fenToUse);
+      setGameInitialFen(session.playFen);
       setBrowseIndex(null);
       setOptionSquares({});
       setLastMoveSquares({});
@@ -1229,8 +1236,9 @@ const ChessBoard: React.FC = () => {
     onSquareClick: isBrowsing ? undefined : handleSquareClick,
   };
 
-  const staticBoardOptions = (fen: string): any => ({
+  const staticBoardOptions = (fen: string, boardOrientation: 'white' | 'black' = 'white'): any => ({
     position: fen,
+    boardOrientation,
     darkSquareStyle: { backgroundColor: '#779952' },
     lightSquareStyle: { backgroundColor: '#edeed1' },
     ...CHESSBOARD_ANIMATION,
@@ -1794,9 +1802,14 @@ const ChessBoard: React.FC = () => {
                   <div className="w-full aspect-square mb-5 rounded-lg overflow-hidden border-4 border-[#1e293b] relative flex-shrink-0 shadow-inner bg-slate-800/50">
                     {puzzle.imageData ? (
                       <img src={puzzle.imageData} alt={puzzle.title} className="w-full h-full object-contain" />
-                    ) : (
-                      <ChessBoardFrame hideCoordinates boardOrientation="white"><Chessboard options={staticBoardOptions(puzzle.fen)} /></ChessBoardFrame>
-                    )}
+                    ) : (() => {
+                      const preview = puzzlePlayPreviewState(puzzle);
+                      return (
+                      <ChessBoardFrame hideCoordinates boardOrientation={preview.orientation}>
+                        <Chessboard options={staticBoardOptions(preview.fen, preview.orientation)} />
+                      </ChessBoardFrame>
+                      );
+                    })()}
                     <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-auto backdrop-blur-sm">
                       <button onClick={() => playPuzzle(puzzle)} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-black shadow-2xl scale-90 group-hover:scale-100 transition-all uppercase tracking-wider">Hemen Oyna</button>
                     </div>

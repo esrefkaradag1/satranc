@@ -1,9 +1,13 @@
-import React, { useEffect, useState } from 'react';
-import { X, FileText, Printer, Loader2 } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { X, FileText, Printer, Loader2, Send } from 'lucide-react';
+import { useApp } from '../AppContext';
 import type { Student } from '../types';
 import type { StudentApplication } from '../lib/applicationTypes';
+import { openWhatsAppSend } from '../lib/whatsappUtils';
 import {
   buildApplicationPreviewFromStudent,
+  getOrCreateParentConsentInviteAsync,
+  getParentConsentFormUrl,
   loadApplicationsByStudentId,
 } from '../services/applicationStorage';
 import ApplicationPrintView from './ApplicationPrintView';
@@ -30,10 +34,20 @@ function formStatusClass(app: StudentApplication): string {
   return 'bg-amber-500/15 text-amber-400 border-amber-500/25';
 }
 
+function needsParentSignature(app: StudentApplication): boolean {
+  return !app.signatureDataUrl?.trim() && app.status !== 'signed';
+}
+
+function parentConsentMessage(studentName: string, url: string): string {
+  return `Merhaba,\n\n${studentName} için kulüp kayıt formunu onaylamanız ve dijital imzanızı eklemeniz gerekmektedir.\n\nForm linki:\n${url}\n\nTeşekkürler.`;
+}
+
 const StudentSignedFormsModal: React.FC<Props> = ({ student, onClose }) => {
+  const { showToast } = useApp();
   const [applications, setApplications] = useState<StudentApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [printApplication, setPrintApplication] = useState<StudentApplication | null>(null);
+  const [sendingAppId, setSendingAppId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +74,50 @@ const StudentSignedFormsModal: React.FC<Props> = ({ student, onClose }) => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [printApplication, onClose]);
+
+  const handleSendToParent = useCallback(
+    async (app: StudentApplication) => {
+      setSendingAppId(app.id);
+      try {
+        let url: string;
+        if (app.inviteToken?.trim()) {
+          url = getParentConsentFormUrl(app.inviteToken);
+        } else {
+          const invite = await getOrCreateParentConsentInviteAsync(student);
+          url = invite.url;
+          setApplications((prev) => {
+            const idx = prev.findIndex((row) => row.id === invite.application.id);
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = invite.application;
+              return next;
+            }
+            return [invite.application, ...prev.filter((row) => row.id !== app.id)];
+          });
+        }
+
+        const phone =
+          student.fatherPhone?.trim() ||
+          student.motherPhone?.trim() ||
+          student.parentPhone?.trim() ||
+          '';
+        const msg = parentConsentMessage(student.name, url);
+
+        if (phone) {
+          openWhatsAppSend(phone, msg);
+          showToast('Veli formu WhatsApp ile açıldı.', 'success');
+        } else {
+          await navigator.clipboard?.writeText(url);
+          showToast('Veli telefonu yok; form linki panoya kopyalandı.', 'info');
+        }
+      } catch {
+        showToast('Veli form linki oluşturulamadı.', 'error');
+      } finally {
+        setSendingAppId(null);
+      }
+    },
+    [showToast, student]
+  );
 
   return (
     <>
@@ -118,14 +176,31 @@ const StudentSignedFormsModal: React.FC<Props> = ({ student, onClose }) => {
                         )}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setPrintApplication(app)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white text-xs font-bold"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                      Görüntüle / İndir
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {needsParentSignature(app) ? (
+                        <button
+                          type="button"
+                          disabled={sendingAppId === app.id}
+                          onClick={() => void handleSendToParent(app)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-bold"
+                        >
+                          {sendingAppId === app.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Send className="w-3.5 h-3.5" />
+                          )}
+                          Veliye Gönder
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setPrintApplication(app)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white text-xs font-bold"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        Görüntüle / İndir
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

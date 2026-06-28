@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
@@ -6,16 +6,20 @@ import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../li
 import { Chess } from 'chess.js';
 import { X, CheckCircle2, XCircle, Lightbulb, ListChecks, ChevronRight, RotateCcw } from 'lucide-react';
 import type { Puzzle } from '../types';
+import { fetchPuzzleById } from '../services/lichessService';
 import {
   applyPuzzleMove,
-  findMatchingSolutionMove,
-  formatHintMove,
-  looksLikeLichessPuzzleId,
-  repairPuzzleForStudentPlay,
-  resolveExpectedMoveSquares,
-  type NormalizedPuzzlePlay,
+  applySolutionMoveOnGame,
+  displayPuzzleMoveLabel,
+  dropMatchesSolutionMove,
+  formatMoveLabel,
+  initCoachStyleSession,
+  isStudentMoveAtIndex,
+  isMoveLegalForSideToMove,
+  nextStudentSolutionIndex,
+  fenBeforeSolutionMove,
+  puzzleBoardOrientationForStudent,
 } from '../lib/puzzlePlayUtils';
-import { fetchPuzzleById } from '../services/lichessService';
 
 export interface HomeworkAttemptRecord {
   studentId: string;
@@ -25,7 +29,6 @@ export interface HomeworkAttemptRecord {
   correct: boolean;
   movesPlayed: string[];
   solutionMoves: string[];
-  /** Tahtanın son pozisyonu (FEN); admin detayda gösterilir */
   finalFen?: string;
   thinkSeconds?: number;
   hintUsed?: boolean;
@@ -34,11 +37,9 @@ export interface HomeworkAttemptRecord {
 interface StudentPuzzlePlayModalProps {
   puzzle: Puzzle;
   onClose: () => void;
-  /** Ödevden açıldıysa denemeyi kaydetmek için */
   homeworkId?: string;
   studentId?: string;
   onAttemptRecord?: (record: HomeworkAttemptRecord) => void;
-  /** Aynı ödevdeki sıradaki bulmaca */
   nextPuzzle?: Puzzle | null;
   onPlayNext?: (puzzle: Puzzle) => void;
 }
@@ -53,101 +54,130 @@ function makeGameFromFen(fen: string): Chess {
   }
 }
 
-/** Öğrenci panelinde tek bulmaca oynatma: çözüm hamlelerine göre doğrulama, doğru/yanlış/solved durumu */
+/** Bulmaca yönetimi solution modu: history.length ile çözüm indeksi, çift ply öğrenci. */
 const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   puzzle, onClose, homeworkId, studentId, onAttemptRecord, nextPuzzle, onPlayNext,
 }) => {
-  const fullSolution = Array.isArray(puzzle.solution) ? puzzle.solution : [];
-  const [activePlay, setActivePlay] = useState<NormalizedPuzzlePlay>(() => repairPuzzleForStudentPlay(puzzle));
-  const [repairing, setRepairing] = useState(false);
-  const { startFen, studentMoves, setupMoveSan, dataError, relaxedMode } = activePlay;
+  const puzzleResetKey = useMemo(
+    () => `${puzzle.id}|${puzzle.fen ?? ''}|${(puzzle.solution ?? []).join(',')}`,
+    [puzzle.id, puzzle.fen, puzzle.solution],
+  );
+  const [playPuzzle, setPlayPuzzle] = useState(puzzle);
+  const [lichessRepairing, setLichessRepairing] = useState(false);
+
+  useEffect(() => {
+    setPlayPuzzle(puzzle);
+  }, [puzzleResetKey, puzzle]);
+
+  const session = useMemo(
+    () => initCoachStyleSession(playPuzzle),
+    [playPuzzle],
+  );
+  const { playFen, solutionMoves, studentColor, setupMoveSan } = session;
+  const fullSolution = Array.isArray(playPuzzle.solution) ? playPuzzle.solution.filter(Boolean) : [];
+
+  const lichessRepairAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    lichessRepairAttemptedRef.current = false;
+  }, [puzzleResetKey]);
+
+  // Bozuk kayıt: çözüm tahtayla uyuşmuyorsa Lichess API'den taze veri çek
+  useEffect(() => {
+    if (lichessRepairAttemptedRef.current) return;
+    const lichessId = playPuzzle.lichessId?.trim() || playPuzzle.id?.trim();
+    if (!lichessId || playPuzzle.source === 'custom') return;
+
+    const firstIdx = nextStudentSolutionIndex(playFen, solutionMoves, 0, studentColor);
+    const firstOk = firstIdx != null && isMoveLegalForSideToMove(
+      fenBeforeSolutionMove(playFen, solutionMoves, firstIdx),
+      solutionMoves[firstIdx]!,
+    );
+    if (solutionMoves.length > 0 && firstOk) return;
+
+    lichessRepairAttemptedRef.current = true;
+    let cancelled = false;
+    setLichessRepairing(true);
+    fetchPuzzleById(lichessId)
+      .then((fresh) => {
+        if (cancelled || !fresh) return;
+        setPlayPuzzle((prev) => ({
+          ...prev,
+          fen: fresh.fen,
+          solution: fresh.solution,
+          hint: fresh.hint,
+          lichessSetupMove: fresh.lichessSetupMove ?? prev.lichessSetupMove,
+          lichessId: fresh.lichessId ?? prev.lichessId,
+          source: 'lichess',
+        }));
+      })
+      .finally(() => {
+        if (!cancelled) setLichessRepairing(false);
+      });
+    return () => { cancelled = true; };
+  }, [playPuzzle.id, playPuzzle.lichessId, playPuzzle.source, playFen, solutionMoves, studentColor]);
+
   const movesPlayedRef = useRef<string[]>([]);
   const reportedRef = useRef(false);
   const puzzleStartRef = useRef<number>(Date.now());
-  const hintUsedRef = useRef(false);
+  const sessionHintUsedRef = useRef(false);
+  const playFenRef = useRef(playFen);
+  /** Çözüm hattındaki ply — FEN'den kurulan game'de history boş kalır, indeks ayrı tutulur. */
+  const [solutionPly, setSolutionPly] = useState(0);
+
   const [movesPlayed, setMovesPlayed] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
-  const [game, setGame] = useState(() => makeGameFromFen(startFen));
-  const [solutionIndex, setSolutionIndex] = useState(0);
+  const [game, setGame] = useState(() => makeGameFromFen(playFen));
   const [status, setStatus] = useState<'playing' | 'wrong' | 'solved'>('playing');
   const [hintRevealed, setHintRevealed] = useState(false);
   const [solutionRevealed, setSolutionRevealed] = useState(false);
-  const [puzzleModalBoardOrientation, setPuzzleModalBoardOrientation] = useState<'white' | 'black'>('white');
-  const studentColorRef = useRef<'w' | 'b'>(activePlay.studentColor);
-  const studentTurnFenRef = useRef<string>(startFen);
+  const [autoPlaying, setAutoPlaying] = useState(false);
+  const [autoPlayError, setAutoPlayError] = useState<string | null>(null);
+  const [puzzleModalBoardOrientation, setPuzzleModalBoardOrientation] = useState<'white' | 'black'>(() =>
+    puzzleBoardOrientationForStudent(studentColor),
+  );
 
-  const applyPlayState = useCallback((normalized: NormalizedPuzzlePlay) => {
-    studentColorRef.current = normalized.studentColor;
-    studentTurnFenRef.current = normalized.startFen;
-    movesPlayedRef.current = [];
-    reportedRef.current = false;
-    puzzleStartRef.current = Date.now();
-    hintUsedRef.current = false;
-    setMovesPlayed([]);
-    setSubmitted(false);
-    setShowSuccessToast(false);
-    setSolutionIndex(0);
-    setStatus('playing');
-    setHintRevealed(false);
-    setSolutionRevealed(false);
-    setPuzzleModalBoardOrientation(normalized.studentColor === 'b' ? 'black' : 'white');
-    setGame(makeGameFromFen(normalized.startFen));
+  const markHintUsed = useCallback(() => {
+    sessionHintUsedRef.current = true;
   }, []);
 
-  // Öğrencinin hamlesinden sonra çözümdeki rakip hamle(ler)i otomatik uygula.
-  const applyAutoReplies = useCallback((base: Chess, startIndex: number) => {
-    const next = new Chess(base.fen());
-    let idx = startIndex;
-    let guard = 0;
-    while (idx < studentMoves.length && next.turn() !== studentColorRef.current && guard < 8) {
-      const mv = applyPuzzleMove(next, studentMoves[idx]);
-      if (!mv) break;
-      idx += 1;
-      guard += 1;
+  const resetPlay = useCallback((opts?: { keepHint?: boolean }) => {
+    playFenRef.current = playFen;
+    movesPlayedRef.current = [];
+    const keepHint = opts?.keepHint ?? sessionHintUsedRef.current;
+    if (!keepHint) {
+      reportedRef.current = false;
+      sessionHintUsedRef.current = false;
+      setHintRevealed(false);
+      setSolutionRevealed(false);
+    } else {
+      sessionHintUsedRef.current = true;
     }
-    return { game: next, nextIndex: idx };
-  }, [studentMoves]);
+    puzzleStartRef.current = Date.now();
+    setMovesPlayed([]);
+    setSubmitted(false);
+    setAutoPlaying(false);
+    setStatus('playing');
+    setAutoPlayError(null);
+    setPuzzleModalBoardOrientation(puzzleBoardOrientationForStudent(studentColor));
+    setSolutionPly(0);
+    setGame(makeGameFromFen(playFen));
+  }, [playFen, studentColor]);
 
+  // Yeni bulmaca → oturumu sıfırla
   useEffect(() => {
-    if (!showSuccessToast) return;
-    const t = setTimeout(() => setShowSuccessToast(false), 3000);
-    return () => clearTimeout(t);
-  }, [showSuccessToast]);
+    sessionHintUsedRef.current = false;
+    reportedRef.current = false;
+    resetPlay();
+  }, [playPuzzle.id]); // eslint-disable-line react-hooks/exhaustive-deps -- playFen değişiminde ipucu korunur
 
-  // Modal açılınca bulmacayı onar; gerekirse Lichess'ten yeniden çek.
+  // Lichess onarımı / FEN güncellemesi → tahtayı sıfırla, ipucu kullanımını koru
   useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      setRepairing(true);
-      let working = puzzle;
-      let normalized = repairPuzzleForStudentPlay(working);
+    resetPlay({ keepHint: sessionHintUsedRef.current });
+  }, [playFen, studentColor, resetPlay]);
 
-      if (normalized.dataError) {
-        const fetchId = working.lichessId
-          ?? (looksLikeLichessPuzzleId(working.id) ? working.id : null);
-        if (fetchId) {
-          try {
-            const fresh = await fetchPuzzleById(fetchId);
-            if (fresh && !cancelled) {
-              working = { ...fresh, id: puzzle.id, lichessId: fetchId };
-              normalized = repairPuzzleForStudentPlay(working);
-            }
-          } catch {
-            /* ağ hatası — yerel veriyle devam */
-          }
-        }
-      }
-
-      if (!cancelled) {
-        setActivePlay(normalized);
-        applyPlayState(normalized);
-        setRepairing(false);
-      }
-    };
-    void run();
-    return () => { cancelled = true; };
-  }, [puzzle.id, puzzle.fen, puzzle.solution, puzzle.source, puzzle.gamePgn, puzzle.lichessId, puzzle.lichessThemes, applyPlayState]);
+  const currentPly = solutionPly;
 
   const reportAttempt = useCallback(
     (correct: boolean, finalFen?: string) => {
@@ -156,164 +186,163 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       onAttemptRecord({
         studentId,
         homeworkId,
-        puzzleId: puzzle.id,
-        puzzleTitle: puzzle.title,
+        puzzleId: playPuzzle.id,
+        puzzleTitle: playPuzzle.title,
         correct,
         movesPlayed: [...movesPlayedRef.current],
         solutionMoves: [...fullSolution],
         finalFen: finalFen || undefined,
         thinkSeconds: Math.max(1, Math.round((Date.now() - puzzleStartRef.current) / 1000)),
-        hintUsed: hintUsedRef.current,
+        hintUsed: sessionHintUsedRef.current,
       });
       setSubmitted(true);
     },
-    [homeworkId, studentId, onAttemptRecord, puzzle.id, puzzle.title, fullSolution]
+    [homeworkId, studentId, onAttemptRecord, playPuzzle.id, playPuzzle.title, fullSolution]
   );
 
-  const handleClose = useCallback(() => {
-    if (
-      !reportedRef.current &&
-      homeworkId &&
-      studentId &&
-      onAttemptRecord &&
-      (movesPlayedRef.current.length > 0 || status === 'solved' || status === 'wrong')
-    ) {
-      reportAttempt(status === 'solved', game.fen());
+  /** Yanlış cevaptan sonra ipucu tıklanabilsin diye denemeyi kapatınca / tekrar dene / sonraki soruda kaydet. */
+  const flushAttemptIfNeeded = useCallback(
+    (correct: boolean, finalFen?: string) => {
+      if (reportedRef.current || !homeworkId || !studentId || !onAttemptRecord) return;
+      const hasActivity =
+        movesPlayedRef.current.length > 0
+        || status === 'wrong'
+        || sessionHintUsedRef.current;
+      if (!correct && !hasActivity) return;
+      reportAttempt(correct, finalFen);
+    },
+    [homeworkId, studentId, onAttemptRecord, reportAttempt, status],
+  );
+
+  const revealHint = useCallback(() => {
+    markHintUsed();
+    setHintRevealed(true);
+  }, [markHintUsed]);
+
+  const revealSolution = useCallback(() => {
+    markHintUsed();
+    setSolutionRevealed(true);
+  }, [markHintUsed]);
+
+  // Rakip hamlesi: tahtada sıra öğrencide değilken çözümdeki hamleyi otomatik oyna.
+  useEffect(() => {
+    if (status !== 'playing' || solutionMoves.length === 0) return;
+    const ply = solutionPly;
+    if (ply >= solutionMoves.length) {
+      if (!game.isGameOver() && ply > 0) {
+        setStatus('solved');
+        reportAttempt(true, game.fen());
+      }
+      return;
     }
+    if (game.turn() === studentColor) {
+      setAutoPlaying(false);
+      return;
+    }
+    setAutoPlaying(true);
+    setAutoPlayError(null);
+    const timer = setTimeout(() => {
+      const g = makeGameFromFen(game.fen());
+      const mv = applySolutionMoveOnGame(g, solutionMoves[ply]!);
+      if (!mv) {
+        setAutoPlaying(false);
+        setAutoPlayError('Rakip hamlesi uygulanamadı. Bulmaca verisi hatalı olabilir; sayfayı yenileyin veya antrenöre bildirin.');
+        return;
+      }
+      const nextPly = ply + 1;
+      setSolutionPly(nextPly);
+      setGame(makeGameFromFen(g.fen()));
+      setAutoPlaying(false);
+      if (nextPly >= solutionMoves.length || g.isGameOver()) {
+        setStatus('solved');
+        reportAttempt(true, g.fen());
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [game, solutionPly, solutionMoves, status, reportAttempt, studentColor]);
+
+  useEffect(() => {
+    if (!showSuccessToast) return;
+    const t = setTimeout(() => setShowSuccessToast(false), 3000);
+    return () => clearTimeout(t);
+  }, [showSuccessToast]);
+
+  const handleClose = useCallback(() => {
+    flushAttemptIfNeeded(status === 'solved', game.fen());
     onClose();
-  }, [homeworkId, studentId, onAttemptRecord, status, game, reportAttempt, onClose]);
+  }, [status, game, flushAttemptIfNeeded, onClose]);
 
   const tryAgain = useCallback(() => {
-    setStatus('playing');
-    setHintRevealed(false);
-    setSolutionRevealed(false);
-    setSolutionIndex(0);
-    movesPlayedRef.current = [];
-    setMovesPlayed([]);
-    reportedRef.current = false;
-    setSubmitted(false);
-    puzzleStartRef.current = Date.now();
-    setGame(makeGameFromFen(studentTurnFenRef.current));
-  }, []);
+    resetPlay({ keepHint: true });
+  }, [resetPlay]);
 
   const handlePlayNext = useCallback(() => {
     if (!nextPuzzle || !onPlayNext) return;
-    if (
-      !reportedRef.current &&
-      homeworkId &&
-      studentId &&
-      onAttemptRecord &&
-      (movesPlayedRef.current.length > 0 || status === 'solved' || status === 'wrong')
-    ) {
-      reportAttempt(status === 'solved', game.fen());
-    }
+    flushAttemptIfNeeded(status === 'solved', game.fen());
     onPlayNext(nextPuzzle);
-  }, [nextPuzzle, onPlayNext, homeworkId, studentId, onAttemptRecord, status, game, reportAttempt]);
+  }, [nextPuzzle, onPlayNext, status, game, flushAttemptIfNeeded]);
+
+  const canDragStudentPiece = useCallback(
+    ({ piece }: { piece?: { pieceType?: string } | string }) => {
+      if (status === 'solved' || autoPlaying) return false;
+      if (game.turn() !== studentColor) return false;
+      if (solutionPly >= solutionMoves.length) return false;
+      const pieceType = typeof piece === 'string' ? piece : piece?.pieceType ?? '';
+      const colorChar = typeof pieceType === 'string' ? pieceType.charAt(0) : '';
+      if (colorChar !== 'w' && colorChar !== 'b') return false;
+      return colorChar === game.turn() && colorChar === studentColor;
+    },
+    [game, status, autoPlaying, studentColor, solutionPly, solutionMoves],
+  );
 
   const onPieceDrop = useCallback(
     (sourceSquare: string, targetSquare: string) => {
-      if (status === 'solved' || repairing) return false;
+      if (status === 'solved' || autoPlaying) return false;
       if (game.isGameOver()) return false;
       if (status === 'wrong') setStatus('playing');
       setHintRevealed(false);
       setSolutionRevealed(false);
 
-      const copy = new Chess(game.fen());
+      const ply = solutionPly;
+      if (game.turn() !== studentColor) return false;
+
+      const copy = makeGameFromFen(game.fen());
       const piece = copy.get(sourceSquare as `${string}${number}`);
-      if (!piece) return false;
+      if (!piece || piece.color !== copy.turn() || piece.color !== studentColor) return false;
 
-      if (relaxedMode) {
-        if (piece.color !== copy.turn()) return false;
-      } else if (copy.turn() !== studentColorRef.current) {
-        return false;
-      }
-
-      if (solutionIndex >= studentMoves.length) {
-        const anyMove = copy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
-        if (anyMove) {
-          setGame(copy);
-          if (studentMoves.length === 0) {
-            setStatus('solved');
-            reportAttempt(true, copy.fen());
-          }
-          return true;
-        }
+      if (ply >= solutionMoves.length) {
         setStatus('wrong');
-        if (!relaxedMode) reportAttempt(false, game.fen());
         return false;
       }
 
-      let matchIndex = solutionIndex;
-      let moveStr = studentMoves[solutionIndex] ?? '';
-      let expected = resolveExpectedMoveSquares(game.fen(), moveStr);
+      const expectedMove = solutionMoves[ply] ?? '';
+      const match = dropMatchesSolutionMove(game.fen(), sourceSquare, targetSquare, expectedMove);
 
-      if (!expected) {
-        const inStudent = findMatchingSolutionMove(
-          game.fen(), studentMoves, solutionIndex, sourceSquare, targetSquare,
-        );
-        const inFull = inStudent
-          ? null
-          : findMatchingSolutionMove(game.fen(), fullSolution, 0, sourceSquare, targetSquare);
-        const loose = inStudent ?? inFull;
-        if (loose) {
-          matchIndex = inStudent ? loose.index : solutionIndex;
-          moveStr = loose.moveStr;
-          expected = { from: sourceSquare, to: targetSquare, san: loose.san };
-        }
-      }
-
-      if (!expected) {
-        if (relaxedMode) {
-          const free = copy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
-          if (free) {
-            movesPlayedRef.current = [...movesPlayedRef.current, free.san];
-            setMovesPlayed([...movesPlayedRef.current]);
-            setGame(copy);
-            return true;
-          }
-        }
-        setStatus('wrong');
-        if (!relaxedMode && !dataError) reportAttempt(false, game.fen());
-        return false;
-      }
-
-      if (sourceSquare !== expected.from || targetSquare !== expected.to) {
-        const wrongCopy = new Chess(game.fen());
+      if (!match.ok) {
+        const wrongCopy = makeGameFromFen(game.fen());
         const wrongMove = wrongCopy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
         if (wrongMove) {
           movesPlayedRef.current = [...movesPlayedRef.current, wrongMove.san];
           setMovesPlayed([...movesPlayedRef.current]);
         }
         setStatus('wrong');
-        if (!relaxedMode) reportAttempt(false, wrongCopy.fen());
         return false;
       }
 
-      const played = applyPuzzleMove(copy, moveStr);
+      const played = applyPuzzleMove(copy, expectedMove)
+        ?? copy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
       if (!played) {
         setStatus('wrong');
-        if (!relaxedMode && !dataError) reportAttempt(false, game.fen());
         return false;
       }
+
       movesPlayedRef.current = [...movesPlayedRef.current, played.san];
       setMovesPlayed([...movesPlayedRef.current]);
-      let finalFen = copy.fen();
-      let nextIndex = matchIndex + 1;
-      const auto = applyAutoReplies(copy, nextIndex);
-      nextIndex = auto.nextIndex;
-      finalFen = auto.game.fen();
-      if (!auto.game.isGameOver() && nextIndex < studentMoves.length && auto.game.turn() === studentColorRef.current) {
-        studentTurnFenRef.current = auto.game.fen();
-      }
-      setGame(auto.game);
-      setSolutionIndex(nextIndex);
-      if (nextIndex >= studentMoves.length) {
-        setStatus('solved');
-        reportAttempt(true, finalFen);
-      }
+      setSolutionPly(ply + 1);
+      setGame(makeGameFromFen(copy.fen()));
       return true;
     },
-    [game, studentMoves, fullSolution, solutionIndex, status, reportAttempt, applyAutoReplies, dataError, relaxedMode, repairing]
+    [game, solutionMoves, solutionPly, status, autoPlaying, studentColor]
   );
 
   const handleDrop = useCallback(
@@ -339,14 +368,46 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   }, []);
 
   const lastMoveSquares: Record<string, React.CSSProperties> = {};
-  const history = game.history();
-  if (history.length > 0) {
-    const last = game.history({ verbose: true }).slice(-1)[0];
-    if (last) {
-      lastMoveSquares[last.from] = { background: 'rgba(255, 255, 50, 0.35)' };
-      lastMoveSquares[last.to] = { background: 'rgba(255, 255, 50, 0.35)' };
+  // FEN tabanlı tahta history tutmaz; son hamle vurgusu movesPlayed üzerinden yapılmaz
+
+  const sideToMove = game.turn();
+  const turnLabel = sideToMove === 'w' ? 'Beyaz' : 'Siyah';
+  const studentLabel = studentColor === 'w' ? 'Beyaz' : 'Siyah';
+  const isStudentTurn = status === 'playing'
+    && sideToMove === studentColor
+    && !autoPlaying;
+
+  const studentMoveIndex = nextStudentSolutionIndex(
+    playFenRef.current,
+    solutionMoves,
+    currentPly,
+    studentColor,
+  );
+  const expectedStudentMove = studentMoveIndex != null ? solutionMoves[studentMoveIndex] : undefined;
+  const expectedMoveFen = studentMoveIndex != null
+    ? fenBeforeSolutionMove(playFenRef.current, solutionMoves, studentMoveIndex)
+    : game.fen();
+
+  const hintText = expectedStudentMove
+    ? formatMoveLabel(expectedMoveFen, expectedStudentMove)
+    : null;
+  const showHintText = hintRevealed && hintText && hintText !== '—';
+  const remainingStudentMoves = useMemo(() => {
+    const out: string[] = [];
+    for (let i = currentPly; i < solutionMoves.length; i++) {
+      if (!isStudentMoveAtIndex(playFenRef.current, solutionMoves, i, studentColor)) continue;
+      out.push(displayPuzzleMoveLabel(playFenRef.current, solutionMoves, i));
     }
-  }
+    return out;
+  }, [currentPly, solutionMoves, game.fen(), studentColor]);
+
+  const hintDisplayLabel = useMemo(() => {
+    if (studentMoveIndex != null) {
+      const label = displayPuzzleMoveLabel(playFenRef.current, solutionMoves, studentMoveIndex);
+      if (label) return label;
+    }
+    return '';
+  }, [currentPly, solutionMoves, game.fen(), studentColor, studentMoveIndex]);
 
   const boardOptions = {
     position: game.fen(),
@@ -355,6 +416,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     darkSquareStyle: { backgroundColor: '#779952' },
     lightSquareStyle: { backgroundColor: '#edeed1' },
     ...CHESSBOARD_ANIMATION,
+    allowDragging: isStudentTurn,
+    canDragPiece: canDragStudentPiece,
     onPieceDrop: handleDrop,
   };
 
@@ -372,8 +435,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       >
         <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-black text-white truncate max-w-[240px]">{puzzle.title}</h3>
-            <p className="text-xs text-slate-400 mt-0.5">{puzzle.points} puan · {puzzle.difficulty}</p>
+            <h3 className="text-lg font-black text-white truncate max-w-[240px]">{playPuzzle.title}</h3>
+            <p className="text-xs text-slate-400 mt-0.5">{playPuzzle.points} puan · {playPuzzle.difficulty}</p>
           </div>
           <button
             type="button"
@@ -385,20 +448,59 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
           </button>
         </div>
         <div className="p-4">
-          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 text-center">Tahta öğretmenin belirlediği pozisyonda. Sadece doğru hamleleri yapın; farklı hamle hata verir.</p>
+          {lichessRepairing ? (
+            <p className="text-xs text-sky-300/90 text-center mb-2 px-2">Bulmaca Lichess&apos;ten yükleniyor…</p>
+          ) : solutionMoves.length === 0 ? (
+            <p className="text-xs text-rose-300/90 text-center mb-2 px-2">
+              Bu bulmacanın çözüm kaydı tahtayla uyuşmuyor. Antrenörden bulmacayı Lichess&apos;ten yeniden çekmesini isteyin veya sonraki soruya geçin.
+            </p>
+          ) : (
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 text-center">
+              Tahta öğretmenin belirlediği pozisyonda. Sadece doğru hamleleri yapın; farklı hamle hata verir.
+            </p>
+          )}
           {setupMoveSan ? (
             <p className="text-xs text-sky-300/90 text-center mb-2">
-              Rakip kurulum hamlesi: <span className="font-mono font-bold">{setupMoveSan}</span>
+              Rakip kurulum hamlesi uygulandı: <span className="font-mono font-bold">{setupMoveSan}</span>
             </p>
           ) : null}
-          {dataError ? (
-            <p className="text-xs text-amber-400/90 text-center mb-2 px-2">
-              {dataError}
-              {relaxedMode ? ' Yine de hamle yapıp denemeyi gönderebilirsiniz.' : ''}
-            </p>
+          {autoPlaying ? (
+            <p className="text-xs text-slate-400 text-center mb-2">Rakip hamle oynanıyor…</p>
           ) : null}
-          {repairing ? (
-            <p className="text-xs text-slate-400 text-center mb-2">Bulmaca hazırlanıyor…</p>
+          {autoPlayError ? (
+            <p className="text-xs text-rose-300/90 text-center mb-2 px-2">{autoPlayError}</p>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-center gap-2 mb-2">
+            <span
+              className={`text-[11px] font-bold px-3 py-1 rounded-full border ${
+                isStudentTurn
+                  ? 'text-indigo-200 border-indigo-500/40 bg-indigo-500/15'
+                  : 'text-slate-400 border-white/10 bg-slate-800/60'
+              }`}
+            >
+              Sırada: {turnLabel}
+              {isStudentTurn ? ' · Sizin hamleniz' : status === 'playing' ? ' · Rakip' : ''}
+            </span>
+            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+              Siz: {studentLabel}
+            </span>
+          </div>
+          {status === 'playing' && isStudentTurn && !hintRevealed ? (
+            <div className="flex justify-center mb-2">
+              <button
+                type="button"
+                onClick={revealHint}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold hover:bg-amber-500/25 transition-colors"
+              >
+                <Lightbulb className="w-3.5 h-3.5" /> İpucu
+              </button>
+            </div>
+          ) : null}
+          {showHintText ? (
+            <p className="text-xs text-amber-200/90 text-center mb-2 px-2 flex items-center justify-center gap-1.5">
+              <Lightbulb className="w-3.5 h-3.5 shrink-0" />
+              <span>Beklenen hamle: {hintText}</span>
+            </p>
           ) : null}
           <ChessBoardFrame boardOrientation={puzzleModalBoardOrientation} className="max-w-full mx-auto">
             <Chessboard options={{ ...boardOptions, ...CHESSBOARD_NO_NOTATION }} />
@@ -424,7 +526,11 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
                   <p className="font-black text-lg">Olmadı!</p>
                   <p className="text-sm opacity-90 mt-1">Başka bir şey dene.</p>
                   {homeworkId && studentId && (
-                    <p className="text-xs text-rose-400/80 mt-2">Deneme kaydedildi; antrenör Ödev Takibinde görecektir.</p>
+                    <p className="text-xs text-rose-400/80 mt-2">
+                      {submitted
+                        ? 'Deneme kaydedildi; antrenör Ödev Takibinde görecektir.'
+                        : 'Kapatınca deneme kaydedilir (ipucu dahil).'}
+                    </p>
                   )}
                 </div>
               </div>
@@ -438,45 +544,46 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => { hintUsedRef.current = true; setHintRevealed(true); }}
+                  onClick={revealHint}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-sm hover:bg-amber-500/30 transition-colors"
                 >
                   <Lightbulb className="w-4 h-4" /> İpucu
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSolutionRevealed(true)}
+                  onClick={revealSolution}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-600/80 border border-slate-500/50 text-slate-200 font-bold text-sm hover:bg-slate-500/50 transition-colors"
                 >
                   <ListChecks className="w-4 h-4" /> Çözümü Göster
                 </button>
               </div>
-              {hintRevealed && solutionIndex < studentMoves.length && (
+              {hintRevealed && (
                 <p className="mt-3 pt-3 border-t border-rose-500/20 text-sm">
-                  <span className="text-slate-400">Beklenen hamle: </span>
-                  <span className="font-mono font-bold text-amber-300">
-                    {formatHintMove(studentTurnFenRef.current, studentMoves[solutionIndex])}
-                  </span>
+                  {hintDisplayLabel ? (
+                    <>
+                      <span className="text-slate-400">Beklenen hamle: </span>
+                      <span className="font-mono font-bold text-amber-300">{hintDisplayLabel}</span>
+                    </>
+                  ) : (
+                    <span className="text-slate-500">Bu pozisyonda geçerli ipucu yok. Antrenörden bulmacayı Lichess&apos;ten yeniden çekmesini isteyin.</span>
+                  )}
                 </p>
               )}
-              {solutionRevealed && studentMoves.length > solutionIndex && (
+              {solutionRevealed && (
                 <div className="mt-3 pt-3 border-t border-rose-500/20">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Çözüm (kalan hamleler)</p>
-                  <p className="text-sm font-mono text-slate-300 break-all">
-                    {studentMoves.slice(solutionIndex).map((m, i) => (
-                      <span key={i}>
-                        {i > 0 && ' → '}
-                        <span className="text-amber-300">{formatHintMove(
-                          (() => {
-                            const c = new Chess(studentTurnFenRef.current);
-                            for (let j = 0; j < i; j++) applyPuzzleMove(c, studentMoves[solutionIndex + j]);
-                            return c.fen();
-                          })(),
-                          m,
-                        )}</span>
-                      </span>
-                    ))}
-                  </p>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Çözüm (kalan hamleleriniz)</p>
+                  {remainingStudentMoves.length > 0 ? (
+                    <p className="text-sm font-mono text-slate-300 break-all">
+                      {remainingStudentMoves.map((label, i) => (
+                        <span key={i}>
+                          {i > 0 && ' → '}
+                          <span className="text-amber-300">{label}</span>
+                        </span>
+                      ))}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-slate-500">Bu bulmaca için kayıtlı çözüm hamlesi yok.</p>
+                  )}
                 </div>
               )}
             </div>
@@ -486,7 +593,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
               <CheckCircle2 className="w-6 h-6 shrink-0" />
               <div className="flex-1">
                 <p className="font-bold">Tebrikler!</p>
-                <p className="text-sm opacity-90">+{puzzle.points} puan</p>
+                <p className="text-sm opacity-90">+{playPuzzle.points} puan</p>
                 {homeworkId && studentId && (
                   <p className="text-xs text-emerald-400/80 mt-2">Deneme kaydedildi; antrenör Ödev Takibinde görecektir.</p>
                 )}
@@ -515,20 +622,6 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
               <ChevronRight className="w-4 h-4" />
             </button>
           ) : null}
-          {homeworkId && studentId && onAttemptRecord && (
-            <button
-              type="button"
-              disabled={submitted}
-              onClick={() => {
-                if (submitted) return;
-                reportAttempt(status === 'solved', game.fen());
-                setShowSuccessToast(true);
-              }}
-              className={`px-5 py-2.5 rounded-lg font-bold text-sm transition-all ${submitted ? 'bg-slate-700 text-slate-500 cursor-default' : 'bg-teal-600 hover:bg-teal-500 text-white'}`}
-            >
-              {submitted ? 'Gönderildi' : 'Kaydet ve Gönder'}
-            </button>
-          )}
           <button
             type="button"
             onClick={handleClose}

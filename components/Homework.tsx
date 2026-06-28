@@ -40,6 +40,13 @@ import {
   type PlatformDayStats,
 } from '../lib/homeworkPlatformUtils';
 import {
+  mergePlatformActivitySeconds,
+  mergePlatformWeekStatsStore,
+  mergePlatformWeekTimeStore,
+  readCoachPlatformCache,
+  writeCoachPlatformCache,
+} from '../lib/homeworkPlatformCache';
+import {
   buildInternalHomeworkStats,
   buildPlatformHomeworkStats,
   homeworkHasPlatformGoals,
@@ -49,6 +56,7 @@ import {
   type PlatformStudentStat,
 } from '../lib/homeworkStatsBuilders';
 import { isToday, todayDayKey, weekdayKeyFromIso, mondayOfWeek, isoDateForWeekday, type DayCompletionStatus } from '../lib/homeworkDayUtils';
+import { puzzleBoardOrientationForFen, puzzleBoardOrientationForStudent, formatPuzzleHintText, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
 
 /** Platform API otomatik kontrol aralığı (manuel yenileme sonrası / sekme açıkken) */
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
@@ -136,13 +144,23 @@ const Homework: React.FC = () => {
   const [detailStat, setDetailStat] = useState<StudentHwStat | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<{ eksiklikler: string; hamleler: string } | null>(null);
-  const [studentPlatformWeekStats, setStudentPlatformWeekStats] = useState<Record<string, Record<string, PlatformDayStats>>>({});
-  const [studentPlatformWeekTimeSeconds, setStudentPlatformWeekTimeSeconds] = useState<Record<string, Record<string, number>>>({});
+  const initialPlatformCache = readCoachPlatformCache();
+  const [studentPlatformWeekStats, setStudentPlatformWeekStats] = useState<
+    Record<string, Record<string, PlatformDayStats>>
+  >(() => initialPlatformCache?.stats ?? {});
+  const [studentPlatformWeekTimeSeconds, setStudentPlatformWeekTimeSeconds] = useState<
+    Record<string, Record<string, number>>
+  >(() => initialPlatformCache?.timeSeconds ?? {});
   const [loadingProgramPlatformStats, setLoadingProgramPlatformStats] = useState(false);
   const [loadingDailyPlatformStats, setLoadingDailyPlatformStats] = useState(false);
   const dailyPlatformPollEnabledRef = useRef(false);
   const dailyPlatformRefreshInFlightRef = useRef(false);
-  const studentPlatformWeekStatsRef = useRef<Record<string, Record<string, PlatformDayStats>>>({});
+  const studentPlatformWeekStatsRef = useRef<Record<string, Record<string, PlatformDayStats>>>(
+    initialPlatformCache?.stats ?? {},
+  );
+  const studentPlatformWeekTimeSecondsRef = useRef<Record<string, Record<string, number>>>(
+    initialPlatformCache?.timeSeconds ?? {},
+  );
   const [dailyTargetDrafts, setDailyTargetDrafts] = useState<Record<string, StudentDailyTarget>>({});
   const [assignDailyTargetDrafts, setAssignDailyTargetDrafts] = useState<Record<string, StudentDailyTarget>>({});
   const [assignDefaultTargets, setAssignDefaultTargets] = useState<StudentDailyTarget>({
@@ -337,6 +355,20 @@ const Homework: React.FC = () => {
     setDailyTargetDrafts(next);
   }, [programHomework?.id, programAssigneeIdsKey, homeworks, getAssignees]);
 
+  const applyPlatformStatsPatch = useCallback((patch: Record<string, Record<string, PlatformDayStats>>) => {
+    const nextStats = mergePlatformWeekStatsStore(studentPlatformWeekStatsRef.current, patch);
+    studentPlatformWeekStatsRef.current = nextStats;
+    setStudentPlatformWeekStats(nextStats);
+    writeCoachPlatformCache(nextStats, studentPlatformWeekTimeSecondsRef.current);
+  }, []);
+
+  const applyPlatformTimePatch = useCallback((patch: Record<string, Record<string, number>>) => {
+    const nextTime = mergePlatformWeekTimeStore(studentPlatformWeekTimeSecondsRef.current, patch);
+    studentPlatformWeekTimeSecondsRef.current = nextTime;
+    setStudentPlatformWeekTimeSeconds(nextTime);
+    writeCoachPlatformCache(studentPlatformWeekStatsRef.current, nextTime);
+  }, []);
+
   const refreshDailyPlatformStats = useCallback(async (opts?: { silent?: boolean }) => {
     const hw = programSelectedHw ?? programHomework;
     if (!hw || !homeworkHasPlatformGoals(hw)) {
@@ -353,70 +385,83 @@ const Homework: React.FC = () => {
     const dateKey = viewDate;
     const pause = (ms: number) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
     try {
-      const weekSnapshot = studentPlatformWeekStatsRef.current;
-      const platformByStudent: Record<string, PlatformDayStats> = {};
+      const platformPatch: Record<string, Record<string, PlatformDayStats>> = {};
       let requestIndex = 0;
+      let hadFreshData = false;
 
       for (const s of scopeAssignees) {
         if (requestIndex++ > 0) await pause(STUDENT_PLATFORM_GAP_MS);
+        const prevStats = studentPlatformWeekStatsRef.current[s.id]?.[dateKey];
         try {
           const fresh = await fetchStudentPlatformDayStats(s, dateKey);
-          platformByStudent[s.id] = mergePlatformDayStats(
-            weekSnapshot[s.id]?.[dateKey],
-            fresh,
-          );
+          const merged = mergePlatformDayStats(prevStats, fresh);
+          platformPatch[s.id] = { [dateKey]: merged };
+          if (
+            !prevStats
+            || merged.games > prevStats.games
+            || merged.puzzleSolved > prevStats.puzzleSolved
+          ) {
+            hadFreshData = true;
+          }
         } catch {
-          const prev = weekSnapshot[s.id]?.[dateKey];
-          if (prev) platformByStudent[s.id] = prev;
+          if (prevStats) {
+            platformPatch[s.id] = { [dateKey]: prevStats };
+          }
         }
       }
 
-      setStudentPlatformWeekStats((prev) => {
-        const next = { ...prev };
-        for (const [sid, platformStats] of Object.entries(platformByStudent)) {
-          next[sid] = { ...(next[sid] ?? {}), [dateKey]: platformStats };
-        }
-        studentPlatformWeekStatsRef.current = next;
-        return next;
-      });
+      if (Object.keys(platformPatch).length > 0) {
+        applyPlatformStatsPatch(platformPatch);
+      }
 
-      const timeEntries: [string, number][] = [];
+      const timePatch: Record<string, Record<string, number>> = {};
       for (const s of scopeAssignees) {
         const target = hw.studentDailyTargets?.[s.id];
         const currentDayKey = weekdayKeyFromIso(dateKey);
         const dayTarget = target?.weeklySchedule?.[currentDayKey];
         const dailyGameTarget = Math.max(0, dayTarget?.dailyGameTarget ?? target?.dailyGameTarget ?? hw.dailyGameTarget ?? 0);
         const dailyPuzzleTarget = Math.max(0, dayTarget?.dailyPuzzleTarget ?? target?.dailyPuzzleTarget ?? hw.dailyPuzzleTarget ?? 0);
-        if (dailyGameTarget <= 0 && dailyPuzzleTarget <= 0) {
-          timeEntries.push([s.id, 0]);
-          continue;
-        }
+        if (dailyGameTarget <= 0 && dailyPuzzleTarget <= 0) continue;
         try {
           const sec = await fetchStudentPlatformActivityTimeSeconds(s, dateKey, {
             puzzleTarget: dailyPuzzleTarget,
             gameTarget: dailyGameTarget,
           });
-          timeEntries.push([s.id, sec]);
+          const prevSec = studentPlatformWeekTimeSecondsRef.current[s.id]?.[dateKey];
+          timePatch[s.id] = {
+            [dateKey]: mergePlatformActivitySeconds(prevSec, sec),
+          };
         } catch {
-          timeEntries.push([s.id, 0]);
+          /* önceki süre korunur */
         }
         await pause(300);
       }
-      setStudentPlatformWeekTimeSeconds((prev) => {
-        const next = { ...prev };
-        for (const [sid, sec] of timeEntries) {
-          next[sid] = { ...(next[sid] ?? {}), [dateKey]: sec };
-        }
-        return next;
-      });
-      if (!opts?.silent) showToast('Platform verileri güncellendi.', 'success');
+      if (Object.keys(timePatch).length > 0) {
+        applyPlatformTimePatch(timePatch);
+      }
+
+      if (!opts?.silent) {
+        showToast(
+          hadFreshData ? 'Platform verileri güncellendi.' : 'Yeni aktivite yok; önceki veriler korundu.',
+          hadFreshData ? 'success' : 'info',
+        );
+      }
     } catch {
       if (!opts?.silent) showToast('Platform verisi alınamadı.', 'warning');
     } finally {
       setLoadingDailyPlatformStats(false);
       dailyPlatformRefreshInFlightRef.current = false;
     }
-  }, [programSelectedHw, programHomework, getAssignees, targetStudentIds, viewDate, showToast]);
+  }, [
+    programSelectedHw,
+    programHomework,
+    getAssignees,
+    targetStudentIds,
+    viewDate,
+    showToast,
+    applyPlatformStatsPatch,
+    applyPlatformTimePatch,
+  ]);
 
   const isStudentDailyActive = useCallback((studentId: string) => {
     const today = todayDayKey();
@@ -433,6 +478,10 @@ const Homework: React.FC = () => {
   useEffect(() => {
     studentPlatformWeekStatsRef.current = studentPlatformWeekStats;
   }, [studentPlatformWeekStats]);
+
+  useEffect(() => {
+    studentPlatformWeekTimeSecondsRef.current = studentPlatformWeekTimeSeconds;
+  }, [studentPlatformWeekTimeSeconds]);
 
   const stats: StudentHwStat[] = useMemo(() => {
     if (!selectedHw) return [];
@@ -611,36 +660,50 @@ const Homework: React.FC = () => {
     const pause = (ms: number) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
     let requestIndex = 0;
     try {
-      const fetched: Record<string, Record<string, PlatformDayStats>> = {};
+      const platformPatch: Record<string, Record<string, PlatformDayStats>> = {};
+      let hadFreshData = false;
+
       for (const student of programStudents) {
-        fetched[student.id] = {};
         for (const iso of daysToFetch) {
           if (requestIndex++ > 0) await pause(STUDENT_PLATFORM_GAP_MS);
-          const fresh = await fetchStudentPlatformDayStats(student, iso);
-          fetched[student.id][iso] = mergePlatformDayStats(
-            studentPlatformWeekStatsRef.current[student.id]?.[iso],
-            fresh,
-          );
-        }
-      }
-      setStudentPlatformWeekStats((prev) => {
-        const next = { ...prev };
-        for (const [sid, byDate] of Object.entries(fetched)) {
-          next[sid] = { ...(next[sid] ?? {}) };
-          for (const [iso, stats] of Object.entries(byDate)) {
-            next[sid][iso] = stats;
+          const prevStats = studentPlatformWeekStatsRef.current[student.id]?.[iso];
+          try {
+            const fresh = await fetchStudentPlatformDayStats(student, iso);
+            const merged = mergePlatformDayStats(prevStats, fresh);
+            if (!platformPatch[student.id]) platformPatch[student.id] = {};
+            platformPatch[student.id][iso] = merged;
+            if (
+              !prevStats
+              || merged.games > prevStats.games
+              || merged.puzzleSolved > prevStats.puzzleSolved
+            ) {
+              hadFreshData = true;
+            }
+          } catch {
+            if (prevStats) {
+              if (!platformPatch[student.id]) platformPatch[student.id] = {};
+              platformPatch[student.id][iso] = prevStats;
+            }
           }
         }
-        studentPlatformWeekStatsRef.current = next;
-        return next;
-      });
-      if (!opts?.silent) showToast('Lichess ve Chess.com verileri güncellendi.', 'success');
+      }
+
+      if (Object.keys(platformPatch).length > 0) {
+        applyPlatformStatsPatch(platformPatch);
+      }
+
+      if (!opts?.silent) {
+        showToast(
+          hadFreshData ? 'Lichess ve Chess.com verileri güncellendi.' : 'Yeni aktivite yok; önceki veriler korundu.',
+          hadFreshData ? 'success' : 'info',
+        );
+      }
     } catch {
       if (!opts?.silent) showToast('Platform verisi alınamadı.', 'warning');
     } finally {
       setLoadingProgramPlatformStats(false);
     }
-  }, [programStudents, showToast]);
+  }, [programStudents, showToast, applyPlatformStatsPatch]);
 
   const programPlatformForDay = useCallback((studentId: string, iso: string): PlatformDayStats | undefined => {
     return studentPlatformWeekStats[studentId]?.[iso];
@@ -1919,7 +1982,13 @@ const Homework: React.FC = () => {
                           </table>
                         </div>
                         <div className="space-y-6">
-                          {studentAttempts.slice().reverse().map((a) => (
+                          {studentAttempts.slice().reverse().map((a) => {
+                            const puzzleMeta = hwPuzzles.find((p) => p.id === a.puzzleId);
+                            const previewFen = a.finalFen || puzzleMeta?.fen;
+                            const previewOrientation = previewFen
+                              ? puzzleBoardOrientationForFen(previewFen)
+                              : 'white';
+                            return (
                             <div key={a.id} className="bg-slate-800/40 rounded-2xl border border-white/10 overflow-hidden">
                               <div className="p-4 sm:p-5 border-b border-white/5 flex flex-wrap items-center justify-between gap-2">
                                 <span className="text-base font-bold text-white">{a.puzzleTitle}</span>
@@ -1934,6 +2003,15 @@ const Homework: React.FC = () => {
                               </div>
                               <div className="p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-[1fr,280px] gap-6">
                                 <div className="space-y-4 min-w-0">
+                                  {(() => {
+                                    const hintLabel = puzzleMeta ? formatPuzzleHintText(puzzleMeta) : null;
+                                    return hintLabel ? (
+                                    <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2.5">
+                                      <p className="text-[10px] font-bold text-amber-400/90 uppercase tracking-wider mb-1">Bulmaca ipucu</p>
+                                      <p className="text-sm text-amber-100/90">{hintLabel}</p>
+                                    </div>
+                                    ) : null;
+                                  })()}
                                   <div>
                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Öğrencinin oynadığı hamleler</p>
                                     <MainlineMoveGrid moves={a.movesPlayed} compact showHeader />
@@ -1943,16 +2021,16 @@ const Homework: React.FC = () => {
                                     <MainlineMoveGrid moves={a.solutionMoves} compact showHeader />
                                   </div>
                                 </div>
-                                {a.finalFen && (
+                                {previewFen && (
                                   <div className="lg:place-self-center">
                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Tahtanın son hali</p>
-                                    <ChessBoardFrame boardOrientation="white" hideCoordinates className="w-full max-w-[260px] sm:max-w-[280px] mx-auto lg:mx-0 rounded-xl overflow-hidden border border-white/10 shadow-lg">
+                                    <ChessBoardFrame boardOrientation={previewOrientation} hideCoordinates className="w-full max-w-[260px] sm:max-w-[280px] mx-auto lg:mx-0 rounded-xl overflow-hidden border border-white/10 shadow-lg">
                                       <Chessboard
                                         options={{
                                           id: `hw-attempt-${a.id}`,
-                                          position: a.finalFen,
+                                          position: previewFen,
                                           allowDragging: false,
-                                          boardOrientation: 'white',
+                                          boardOrientation: previewOrientation,
                                           darkSquareStyle: { backgroundColor: '#779952' },
                                           lightSquareStyle: { backgroundColor: '#edeed1' },
                                           ...CHESSBOARD_ANIMATION,
@@ -1964,7 +2042,8 @@ const Homework: React.FC = () => {
                                 )}
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -1977,7 +2056,7 @@ const Homework: React.FC = () => {
                         </h4>
                         <p className="text-slate-300">Ödev <strong className="text-white">Ödevi bitir</strong> ile teslim edildi.</p>
                         <p className="text-sm text-slate-500 mt-1">Teslim: {new Date(submission.submittedAt).toLocaleString('tr-TR', { dateStyle: 'medium', timeStyle: 'short' })}</p>
-                        <p className="text-sm text-amber-400/90 mt-3">Hamle kaydı yok — öğrenci bulmacaları oynayıp Kaydet ve Gönder yaptığında burada görünecek.</p>
+                        <p className="text-sm text-amber-400/90 mt-3">Hamle kaydı yok — öğrenci bulmacaları oynadığında burada görünecek.</p>
                       </div>
                     );
                   }
@@ -1986,7 +2065,7 @@ const Homework: React.FC = () => {
                       <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider flex items-center gap-2 mb-3">
                         <Eye className="w-4 h-4" /> İşlem geçmişi
                       </h4>
-                      <p className="text-slate-400">Henüz deneme yok. Öğrenci bulmacaya tıklayıp <strong className="text-slate-300">Kaydet ve Gönder</strong> yaptığında hamleler ve tahta burada görünecek.</p>
+                      <p className="text-slate-400">Henüz deneme yok. Öğrenci bulmacaya tıklayıp oynadığında hamleler ve tahta burada görünecek.</p>
                     </div>
                   );
                 })()}

@@ -1,4 +1,5 @@
 import { Chess } from 'chess.js';
+import { lichessImportToPlayState } from '../lib/puzzlePlayUtils';
 import type { Puzzle } from '../types';
 
 const LICHESS_API = 'https://lichess.org/api';
@@ -113,8 +114,9 @@ export interface LichessPuzzleCSVRow {
 export function csvRowToPuzzle(row: LichessPuzzleCSVRow): Puzzle {
   const { category, theme } = translateThemes(row.Themes);
   const difficulty = ratingToDifficulty(row.Rating);
-  /** Lichess CSV: Moves = tüm çözüm hattı (UCI); ilk hamle rakibin kurulumu — oynatma sırasında uygulanır. */
+  /** Lichess CSV: FEN kurulum öncesi; Moves[0] rakip kurulumu, geri kalan öğrenci hattı. */
   const uciMoves = row.Moves.trim().split(/\s+/).filter(Boolean);
+  const imported = lichessImportToPlayState(row.FEN, uciMoves);
 
   const themeLabels = row.Themes.split(' ').filter(Boolean);
   const matMatch = themeLabels.find(t => t.startsWith('mateIn'));
@@ -131,14 +133,15 @@ export function csvRowToPuzzle(row: LichessPuzzleCSVRow): Puzzle {
   return {
     id: row.PuzzleId,
     lichessId: row.PuzzleId,
-    fen: row.FEN,
-    solution: uciMoves,
+    fen: imported.playFen,
+    solution: imported.solutionMoves,
     title,
     difficulty,
     points: ratingToPoints(row.Rating),
     category,
     theme,
-    hint: uciMoves[1] || uciMoves[0] || '',
+    hint: imported.solutionMoves[0] || uciMoves[0] || '',
+    lichessSetupMove: imported.lichessSetupMove,
     lichessThemes: row.Themes,
     source: 'lichess',
   };
@@ -266,17 +269,19 @@ function lichessApiResponseToPuzzle(
   const themes = themeList.join(' ');
   const { category, theme } = translateThemes(themes);
   const title = titleOverride?.trim() || puzzleTitleFromThemes(themeList, r);
+  const imported = lichessImportToPlayState(fen, sol);
   return {
     id,
     lichessId: id,
-    fen,
-    solution: sol,
+    fen: imported.playFen,
+    solution: imported.solutionMoves,
     title,
     difficulty: ratingToDifficulty(r),
     points: ratingToPoints(r),
     category,
     theme,
-    hint: sol[0] || '',
+    hint: imported.solutionMoves[0] || sol[0] || '',
+    lichessSetupMove: imported.lichessSetupMove,
     gamePgn: typeof data.game?.pgn === 'string' ? data.game.pgn : undefined,
     lichessThemes: themes,
     source: 'lichess',

@@ -116,3 +116,12 @@ export function writeStudyEditorHash(studyId: string | null, chapterIndex?: numb
     chapterIndex: chapterIndex ?? null,
   });
 }
+
+/** Yönetim paneli girişi — `/yonetim` veya `#/yonetim` */
+export function isAdminLoginRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/yonetim') return true;
+  const head = window.location.hash.replace(/^#\/?/, '').split('/')[0];
+  return head === 'yonetim';
+}

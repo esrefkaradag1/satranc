@@ -5,7 +5,7 @@ import { MOCK_STUDENTS } from './constants';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
 import { homeworkAssigneesOverlap } from './lib/homeworkPanelUtils';
 import { homeworkAssignmentCategory } from './lib/homeworkStatsBuilders';
-import { looksLikeLichessPuzzleId } from './lib/puzzlePlayUtils';
+import { looksLikeLichessPuzzleId, materializeLichessPuzzleRecord } from './lib/puzzlePlayUtils';
 import { insertHomeworkAttemptSupabase, detectHomeworkAttemptPayloadStyle, setCachedHomeworkAttemptPayloadStyle } from './lib/homeworkAttemptDb.mjs';
 import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentAuth.ts';
 import { apiLocalAuthParentLogin } from './services/backendApi';
@@ -763,7 +763,7 @@ const DEFAULT_PUZZLE_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -
 
 function dbToPuzzle(row: Record<string, unknown>): Puzzle {
   const lichessRaw = row.lichess_themes ?? row.lichessThemes;
-  return {
+  const base: Puzzle = {
     id: String(row.id ?? ''),
     fen: String(row.fen ?? ''),
     solution: Array.isArray(row.solution) ? (row.solution as string[]) : [],
@@ -791,9 +791,15 @@ function dbToPuzzle(row: Record<string, unknown>): Puzzle {
       : row.lichessId != null
         ? String(row.lichessId)
         : undefined,
+    lichessSetupMove: row.lichess_setup_move != null
+      ? String(row.lichess_setup_move)
+      : row.lichessSetupMove != null
+        ? String(row.lichessSetupMove)
+        : undefined,
     source: (row.source as Puzzle['source'])
       ?? (lichessRaw != null ? 'lichess' : 'custom'),
   };
+  return materializeLichessPuzzleRecord(base);
 }
 
 function puzzleToDb(p: Puzzle): Record<string, unknown> {
@@ -815,6 +821,7 @@ function puzzleToDb(p: Puzzle): Record<string, unknown> {
   if (p.gamePgn) row.game_pgn = p.gamePgn;
   if (p.lichessThemes) row.lichess_themes = p.lichessThemes;
   if (p.lichessId) row.lichess_id = p.lichessId;
+  if (p.lichessSetupMove) row.lichess_setup_move = p.lichessSetupMove;
   return row;
 }
 
@@ -1089,7 +1096,7 @@ function dbToHomeworkAttempt(row: Record<string, unknown>): HomeworkPuzzleAttemp
     solutionMoves: Array.isArray(r.solution_moves) ? r.solution_moves : Array.isArray(r.solutionMoves) ? r.solutionMoves : Array.isArray(r.solutionmoves) ? r.solutionmoves : [],
     finalFen: r.final_fen != null ? String(r.final_fen) : r.finalFen != null ? String(r.finalFen) : r.finalfen != null ? String(r.finalfen) : undefined,
     thinkSeconds: r.think_seconds != null ? Number(r.think_seconds) : r.thinkSeconds != null ? Number(r.thinkSeconds) : r.thinkseconds != null ? Number(r.thinkseconds) : undefined,
-    hintUsed: Boolean(r.hint_used ?? r.hintUsed ?? r.hintused ?? false),
+    hintUsed: Boolean(r.hintused ?? r.hintUsed ?? r.hint_used ?? false),
     timestamp: String(r.timestamp ?? ''),
   };
 }
@@ -1103,8 +1110,17 @@ function mergeHomeworkAttemptsFromStorage(fromDb: HomeworkPuzzleAttempt[]): Home
     /* ignore */
   }
   const byId = new Map(fromDb.map((a) => [a.id, a]));
-  for (const a of localAttempts) {
-    if (!byId.has(a.id)) byId.set(a.id, a);
+  for (const local of localAttempts) {
+    const existing = byId.get(local.id);
+    if (!existing) {
+      byId.set(local.id, local);
+      continue;
+    }
+    byId.set(local.id, {
+      ...existing,
+      hintUsed: Boolean(existing.hintUsed || local.hintUsed),
+      thinkSeconds: existing.thinkSeconds ?? local.thinkSeconds,
+    });
   }
   return [...byId.values()].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
@@ -2366,8 +2382,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const refreshFromStorage = useCallback(async () => {
     try {
       if (useSupabase) {
-        const sb = getServiceSupabase();
-        if (!sb) return;
+      // Reads: service role varsa onu kullan; yoksa anon (coach tarayıcısı).
+      const sb = getServiceSupabase() ?? supabase;
         const [
           hwRes, attRes, subRes, puzRes,
           stuRes, transRes, lessRes, attenRes,
@@ -3023,7 +3039,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addPuzzle = useCallback(async (puzzle: Omit<Puzzle, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
-    const newPuzzle = { ...puzzle, id, source: puzzle.source ?? 'custom' } as Puzzle;
+    const newPuzzle = materializeLichessPuzzleRecord(
+      { ...puzzle, id, source: puzzle.source ?? 'custom' } as Puzzle,
+    );
     setPuzzles(prev => [...prev, newPuzzle]);
     const sb = canWriteSupabase() ? getServiceSupabase() : supabase;
     try {
@@ -3033,7 +3051,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let { data, error } = await sb.from('puzzles').insert(payload).select('id').single();
       if (error && (error.code === 'PGRST204' || String(error.message || '').toLowerCase().includes('column'))) {
         const minimal = { ...payload };
-        for (const col of ['image_data', 'game_pgn', 'lichess_themes']) {
+        for (const col of ['image_data', 'game_pgn', 'lichess_themes', 'lichess_setup_move']) {
           if (col in minimal) delete minimal[col];
         }
         const retry = await sb.from('puzzles').insert(minimal).select('id').single();
@@ -3064,7 +3082,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
         const lichessId = p.lichessId
           ?? (looksLikeLichessPuzzleId(p.id) ? p.id : undefined);
-        freshWithIds.push({ ...p, id, lichessId });
+        freshWithIds.push(materializeLichessPuzzleRecord({ ...p, id, lichessId }));
       }
       return [...prev, ...freshWithIds];
     });
@@ -3080,7 +3098,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (error && (error.code === 'PGRST204' || String(error.message || '').toLowerCase().includes('column'))) {
           chunkPayload = chunk.map((row) => {
             const minimal = { ...row };
-            for (const col of ['image_data', 'game_pgn', 'lichess_themes']) {
+            for (const col of ['image_data', 'game_pgn', 'lichess_themes', 'lichess_setup_move']) {
               if (col in minimal) delete minimal[col];
             }
             return minimal;

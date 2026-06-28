@@ -35,7 +35,6 @@ import {
   Gamepad2,
   Trophy,
   Copy,
-  Check,
   Camera,
   KeyRound,
 } from 'lucide-react';
@@ -210,12 +209,6 @@ function writePanelHash(tab: PanelTab, opts?: { liveRoomId?: string | null }) {
   if (window.location.hash !== next) window.location.hash = next;
 }
 
-/** Öğrenci paneli: aynı canlı ders odasına arkadaş daveti için paylaşılacak tam URL */
-function buildLiveLessonPeerInviteUrl(roomId: string): string {
-  if (typeof window === 'undefined') return '';
-  return `${window.location.origin}${window.location.pathname}#/canli-ders?room=${encodeURIComponent(roomId)}`;
-}
-
 function formatPlayTime(seconds: number): string {
   if (!seconds || seconds < 0) return '0 saat';
   const h = Math.floor(seconds / 3600);
@@ -318,8 +311,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const [zoomedGalleryItem, setZoomedGalleryItem] = useState<GalleryItem | null>(null);
   const [selectedTournamentId, setSelectedTournamentId] = useState<string | null>(null);
   const [liveLessonRooms, setLiveLessonRooms] = useState<LiveLessonRoom[]>([]);
-  /** Arkadaş daveti: hangi oda linki az önce kopyalandı */
-  const [peerInviteCopiedFor, setPeerInviteCopiedFor] = useState<string | null>(null);
   const [lichessProfile, setLichessProfile] = useState<LichessUserProfile | null>(null);
   const [lichessActivities, setLichessActivities] = useState<LichessActivity[]>([]);
   const [lichessGames, setLichessGames] = useState<LichessGame[]>([]);
@@ -1127,24 +1118,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                           <button
                             type="button"
                             onClick={() => {
-                              const url = buildLiveLessonPeerInviteUrl(r.id);
-                              navigator.clipboard?.writeText(url).then(() => {
-                                setPeerInviteCopiedFor(r.id);
-                                setTimeout(() => setPeerInviteCopiedFor(null), 2000);
-                              });
-                            }}
-                            className="px-4 py-2.5 rounded-xl border border-slate-600/80 text-slate-200 hover:bg-slate-700/80 text-sm font-bold flex items-center gap-2 transition-colors"
-                          >
-                            {peerInviteCopiedFor === r.id ? (
-                              <Check className="w-4 h-4 text-emerald-400" />
-                            ) : (
-                              <Copy className="w-4 h-4 text-slate-400" />
-                            )}
-                            Arkadaş daveti
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
                               setJoinedRoomId(r.id);
                               writePanelHash('live-lesson', { liveRoomId: r.id });
                             }}
@@ -1174,31 +1147,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                       ← Ders listesine dön
                     </button>
                   </div>
-                  {joinedRoomId && (
-                    <div className="flex flex-wrap items-center gap-2 rounded-xl bg-indigo-600/10 border border-indigo-600/25 px-3 py-2">
-                      <p className="text-xs text-indigo-200/90 flex-1 min-w-[200px]">
-                        <span className="font-bold text-indigo-300">Arkadaşını davet et:</span> Linki kopyalayıp WhatsApp vb. ile gönderin; giriş yapmış öğrenci aynı odaya katılır.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const url = buildLiveLessonPeerInviteUrl(joinedRoomId);
-                          navigator.clipboard?.writeText(url).then(() => {
-                            setPeerInviteCopiedFor(joinedRoomId);
-                            setTimeout(() => setPeerInviteCopiedFor(null), 2000);
-                          });
-                        }}
-                        className="shrink-0 px-3 py-1.5 rounded-lg bg-indigo-600/40 hover:bg-indigo-600/55 text-white text-xs font-bold flex items-center gap-1.5"
-                      >
-                        {peerInviteCopiedFor === joinedRoomId ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-300" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                        Davet linkini kopyala
-                      </button>
-                    </div>
-                  )}
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                   <LiveLesson

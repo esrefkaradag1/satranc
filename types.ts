@@ -285,6 +285,8 @@ export interface Puzzle {
   lichessThemes?: string;
   /** Orijinal Lichess bulmaca kimliği (UUID dışı) — onarım için */
   lichessId?: string;
+  /** Lichess rakip kurulum hamlesi (UCI) — import sırasında kaydedilir; FEN kurulum sonrasıdır */
+  lichessSetupMove?: string;
 }
 
 export type AssignmentType = 'group' | 'package';
