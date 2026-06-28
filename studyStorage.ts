@@ -165,7 +165,7 @@ export async function loadStudiesAsync(): Promise<Study[]> {
     if (data?.[0] && typeof data[0] === 'object') {
       detectOptionalColumnsFromRow(data[0] as Record<string, unknown>);
     }
-    return (data ?? []).map(rowToStudy);
+    return (data ?? []).filter(Boolean).map(rowToStudy);
   } catch (e) {
     console.warn('[StudyStorage] load failed:', e);
     return [];

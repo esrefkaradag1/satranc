@@ -21,6 +21,7 @@ import {
 } from '../lib/studyTypes';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { StudyBottomTools } from './study/StudyBottomTools';
+import { StudyBoardPgnHeader } from './study/StudyBoardPgnHeader';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import Analysis from './Analysis';
 import { getBestMove, getBestMoveAsync, getEvaluationPawns, evaluatePosition } from '../services/chessEngine';
@@ -28,9 +29,11 @@ import {
   DEFAULT_FEN, genId, migrateChapter, migrateStudy, setFenTurn, makeBuilderGame, applyMove,
   buildPgn, parsePgnBlockToMoves, engineLevelFromDifficulty, 
   cpLossThresholdForDifficulty, chapterModeBadge, formatChapterListLabel, chapterListLabelMatches,
-  loadEditorSelection, saveEditorSelection, EMOJIS, LICHESS_PIECE
+  loadEditorSelection, saveEditorSelection, EMOJIS, LICHESS_PIECE, studyDisplayEmoji
 } from '../lib/studyUtils';
 import { parsePgnBlockToChapter } from '../lib/pgnChapterParse';
+import { defaultChapterPgnTags, setPgnTagValue, buildStudyBoardPgnDisplay } from '../lib/studyPgnTags';
+import { chapterFromParsedPgnBlock, splitLichessStudyPgnBlocks } from '../lib/studyChapterImport';
 import { normalizeStudyChapterPuzzle } from '../lib/puzzlePlayUtils';
 import { loadStudyEvents, type StudyEvent } from '../studyEvents';
 import { useApp } from '../AppContext';
@@ -43,6 +46,7 @@ import { useStudyChapterSync } from '../hooks/useStudyChapterSync';
 import { appendStudyAction } from '../services/studyActions';
 import { loadStudyPresence, subscribeStudyPresence, upsertPresence } from '../services/studyActions';
 import { serializePath } from '../lib/studySync/types';
+import { nodeCommentText } from '../lib/studySync/apply';
 import { mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, promoteVariationLines, mergeMainlineMoves, mergeVariationRecords, findVariationNodeAtMoveIndex } from '../lib/studySync/moveList';
 import { exportLegacyFromTree } from '../lib/studySync/treeModel';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
@@ -159,7 +163,7 @@ const StudyPage: React.FC = () => {
     }
     return saved;
   }, []);
-  const { scopedStudents: students, coaches, auth, showToast } = useApp();
+  const { scopedStudents: students, coaches, auth, showToast, confirmDialog } = useApp();
   const currentUserName = useMemo(() => {
     if (auth?.role === 'admin') return 'Admin';
     if (auth?.role === 'coach') return 'Antrenör';
@@ -202,6 +206,8 @@ const StudyPage: React.FC = () => {
   const [chatInput, setChatInput] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const deletedIdsRef = useRef<Set<string>>(new Set());
+  const selectedStudyIdRef = useRef<string | null>(initialSelection.studyId);
+  selectedStudyIdRef.current = selectedStudyId;
 
   // Modals
   const [showAddMember, setShowAddMember] = useState(false);
@@ -317,12 +323,14 @@ const StudyPage: React.FC = () => {
 
   // New Chapter modal
   const [showNewChapterModal, setShowNewChapterModal] = useState(false);
+  const [pendingNewChapterForStudyId, setPendingNewChapterForStudyId] = useState<string | null>(null);
   const [ncName, setNcName] = useState('');
   const [ncTab, setNcTab] = useState<'empty' | 'editor' | 'fen' | 'vision'>('empty');
   const [ncFen, setNcFen] = useState(DEFAULT_FEN);
   const [ncFenInput, setNcFenInput] = useState('');
   const [ncOrientation, setNcOrientation] = useState<'white' | 'black'>('white');
-  const [ncMode, setNcMode] = useState<'normal' | 'practice' | 'interactive'>('normal');
+  const [ncMode, setNcMode] = useState<'normal' | 'interactive'>('normal');
+  const [ncInteractiveType, setNcInteractiveType] = useState<'puzzle' | 'liveAnalysis' | 'vsComputer'>('puzzle');
   const [ncEditorTool, setNcEditorTool] = useState<string | null>(null);
   const [ncCastling, setNcCastling] = useState({ K: true, Q: true, k: true, q: true });
   const [ncTurn, setNcTurn] = useState<'w' | 'b'>('w');
@@ -397,27 +405,31 @@ const StudyPage: React.FC = () => {
   }, [builderFen, showBoardBuilder]);
 
   // ── Persistence ──────────────────────────────────────────────────────────────
+  const mergeStudiesFromServer = useCallback((prev: Study[], fresh: Study[]) => {
+    const filtered = fresh
+      .filter((s) => !deletedIdsRef.current.has(s.id))
+      .map(migrateStudy);
+    const activeId = selectedStudyIdRef.current;
+    if (!activeId || filtered.some((s) => s.id === activeId)) return filtered;
+    const pinned = prev.find((s) => s.id === activeId);
+    return pinned ? [...filtered, migrateStudy(pinned)] : filtered;
+  }, []);
+
   useEffect(() => {
     setStudiesLoading(true);
     loadStudiesAsync()
-      .then(fresh => {
-        setStudies(fresh
-          .filter(s => !deletedIdsRef.current.has(s.id))
-          .map(migrateStudy)
-        );
+      .then((fresh) => {
+        setStudies((prev) => mergeStudiesFromServer(prev, fresh));
       })
       .catch(() => {})
       .finally(() => setStudiesLoading(false));
 
-    const unsub = subscribeToStudies(fresh => {
+    const unsub = subscribeToStudies((fresh) => {
       setStudiesLoading(false);
-      setStudies(fresh
-        .filter(s => !deletedIdsRef.current.has(s.id))
-        .map(migrateStudy)
-      );
+      setStudies((prev) => mergeStudiesFromServer(prev, fresh));
     });
     return unsub;
-  }, []);
+  }, [mergeStudiesFromServer]);
 
   useEffect(() => {
     void loadStudyCategoriesAsync()
@@ -468,6 +480,11 @@ const StudyPage: React.FC = () => {
     () => studies.find(s => s.id === selectedStudyId) ?? null,
     [studies, selectedStudyId],
   );
+
+  useEffect(() => {
+    if (view !== 'editor' || studiesLoading || !selectedStudyId || selectedStudy) return;
+    setView('list');
+  }, [view, studiesLoading, selectedStudyId, selectedStudy]);
 
   // Auto-select first student for coaches
   useEffect(() => {
@@ -531,6 +548,7 @@ const StudyPage: React.FC = () => {
     actorRole,
     initialSticky: true,
     initialWrite: recording,
+    confirmAction: confirmDialog,
   });
 
   const selectedChapter = useMemo(() => {
@@ -547,6 +565,7 @@ const StudyPage: React.FC = () => {
         ...treeCh,
         moves: treeCh.moves ?? [],
         variations: treeCh.variations ?? {},
+        pgnTags: treeCh.pgnTags ?? raw.pgnTags,
         moveComments: {
           ...(raw.moveComments ?? {}),
           ...(treeCh.moveComments ?? {}),
@@ -565,6 +584,7 @@ const StudyPage: React.FC = () => {
       ...raw,
       moves: mergeMainlineMoves(rawMoves, treeMoves),
       variations: mergedVars,
+      pgnTags: treeCh?.pgnTags ?? raw.pgnTags,
       moveComments: {
         ...(raw.moveComments ?? {}),
         ...(treeCh.moveComments ?? {}),
@@ -574,7 +594,7 @@ const StudyPage: React.FC = () => {
         ...(treeCh.moveAnnotations ?? {}),
       },
     };
-  }, [legacyChapter, selectedChapterRaw, syncState?.chapterId, syncState?.tree?.mainline?.length]);
+  }, [legacyChapter, selectedChapterRaw, syncState?.chapterId, syncState?.tree?.mainline?.length, syncState?.meta?.pgnTags]);
 
   /** Sync yüklenmeden önce seedTree ile anında ağaç notasyonu */
   const effectiveStudyTree = useMemo(() => {
@@ -597,6 +617,46 @@ const StudyPage: React.FC = () => {
     if (effectiveStudyTree?.mainline?.length) return effectiveStudyTree.mainline.slice();
     return undefined;
   }, [syncState, selectedChapterRaw?.id, effectiveStudyTree]);
+
+  const commentTargetNodeId = useMemo(() => {
+    if (!syncState?.tree) return null;
+    const path = effectiveStudyPath ?? syncState.currentPath ?? [];
+    if (!path.length) return syncState.tree.rootId;
+    return path[path.length - 1] ?? syncState.tree.rootId;
+  }, [syncState?.tree, effectiveStudyPath, syncState?.currentPath]);
+
+  const currentCommentText = useMemo(() => {
+    const rootId = syncState?.tree?.rootId;
+    if (commentTargetNodeId && syncState?.tree?.nodes[commentTargetNodeId]) {
+      const fromTree = nodeCommentText(syncState.tree.nodes[commentTargetNodeId]);
+      if (fromTree) return fromTree;
+      if (commentTargetNodeId === rootId) return selectedChapter?.comment ?? '';
+      const mainIdx = syncState.tree.mainline?.indexOf(commentTargetNodeId) ?? -1;
+      if (mainIdx > 0) return selectedChapter?.moveComments?.[mainIdx - 1] ?? '';
+      return '';
+    }
+    if (currentMoveIndex === 0) return selectedChapter?.comment ?? '';
+    return selectedChapter?.moveComments?.[currentMoveIndex - 1] ?? '';
+  }, [commentTargetNodeId, syncState?.tree, currentMoveIndex, selectedChapter?.comment, selectedChapter?.moveComments]);
+
+  const currentCommentLabel = useMemo(() => {
+    const rootId = syncState?.tree?.rootId;
+    if (!commentTargetNodeId || commentTargetNodeId === rootId) return 'Bölüm başlangıcı yorumu';
+    const san = syncState?.tree?.nodes[commentTargetNodeId]?.san;
+    const mainIdx = syncState?.tree?.mainline?.indexOf(commentTargetNodeId) ?? -1;
+    const moveNo = mainIdx > 0 ? Math.max(1, Math.ceil(mainIdx / 2)) : Math.max(1, Math.ceil(currentMoveIndex / 2));
+    return san ? `Hamle ${moveNo} · ${san} yorumu` : `Hamle ${moveNo} yorumu`;
+  }, [currentMoveIndex, commentTargetNodeId, syncState?.tree]);
+
+  const boardPgnDisplay = useMemo(() => {
+    if (!selectedStudy || !selectedChapter) return null;
+    return buildStudyBoardPgnDisplay(
+      selectedStudy.title,
+      selectedChapter.title,
+      selectedChapterIndex,
+      selectedChapter.pgnTags,
+    );
+  }, [selectedStudy?.title, selectedChapter?.title, selectedChapter?.pgnTags, selectedChapterIndex]);
 
   const isInteractivePuzzleChapter = useMemo(
     () =>
@@ -671,14 +731,21 @@ const StudyPage: React.FC = () => {
 
   const initialMoveRestoreDoneRef = useRef(false);
   useEffect(() => {
+    initialMoveRestoreDoneRef.current = false;
+  }, [selectedChapter?.id]);
+
+  useEffect(() => {
     if (!selectedChapter || initialMoveRestoreDoneRef.current) return;
     const maxMoves = chapterMovesForUi.length;
     const savedMove = initialSelection.moveIndex ?? 0;
-    // İlk açılışta kayıtlı hamle yoksa bile bölümün sonuna git (yenilemede başa dönmesin).
-    const targetMove = savedMove > 0 ? Math.min(savedMove, maxMoves) : maxMoves;
+    const targetMove = isInteractivePuzzleChapter
+      ? 0
+      : savedMove > 0
+        ? Math.min(savedMove, maxMoves)
+        : maxMoves;
     setCurrentMoveIndex(targetMove);
     initialMoveRestoreDoneRef.current = true;
-  }, [selectedChapter, initialSelection.moveIndex, chapterMovesForUi.length]);
+  }, [selectedChapter, initialSelection.moveIndex, chapterMovesForUi.length, isInteractivePuzzleChapter]);
 
   // Live analizde hamleler append edildikçe otomatik en sona git
   const prevLiveMovesLenRef = useRef<number>(0);
@@ -796,7 +863,7 @@ const StudyPage: React.FC = () => {
   }, [syncState, selectedChapterRaw?.id]);
 
   const currentFen = useMemo(() => {
-    if (syncPathFen) return syncPathFen;
+    if (!isInteractivePuzzleChapter && syncPathFen) return syncPathFen;
     const ch = moveListChapter ?? selectedChapter;
     if (!ch) return DEFAULT_FEN;
     try {
@@ -808,7 +875,7 @@ const StudyPage: React.FC = () => {
       }
       return game.fen();
     } catch { return ch.fen || DEFAULT_FEN; }
-  }, [syncPathFen, moveListChapter, selectedChapter, currentMoveIndex]);
+  }, [isInteractivePuzzleChapter, syncPathFen, moveListChapter, selectedChapter, currentMoveIndex]);
 
   // Practice (vs computer) oynanıyorsa chapter.moves yerine local fen kullan
   const practiceActiveFen = useMemo(() => {
@@ -1061,8 +1128,14 @@ const StudyPage: React.FC = () => {
     setCategoryAddOpen(false);
   }, [categoryAddName]);
 
-  const deleteStudyCategory = useCallback((id: string) => {
-    if (!window.confirm('Kategori silinsin mi? Bu klasördeki çalışmalar genel listeye taşınır.')) return;
+  const deleteStudyCategory = useCallback(async (id: string) => {
+    const ok = await confirmDialog({
+      title: 'Kategoriyi sil',
+      message: 'Kategori silinsin mi? Bu klasördeki çalışmalar genel listeye taşınır.',
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setStudyCategories((prev) => prev.filter((c) => c.id !== id));
     setStudies((prev) => {
       let changed = false;
@@ -1076,7 +1149,7 @@ const StudyPage: React.FC = () => {
       return changed ? next : prev;
     });
     setListSidebar((cur) => (cur.type === 'category' && cur.id === id ? { type: 'all' } : cur));
-  }, []);
+  }, [confirmDialog]);
 
   const createStudyFromDraft = useCallback((draft: Partial<Study>) => {
     const id = genId();
@@ -1092,7 +1165,7 @@ const StudyPage: React.FC = () => {
       shareExport: (draft.shareExport as any) ?? 'everyone',
       syncEnabled: typeof draft.syncEnabled === 'boolean' ? draft.syncEnabled : true,
       studyComments: (draft.studyComments as any) ?? 'none',
-      chapters: [migrateChapter({ id: genId(), title: 'Bölüm 1' })],
+      chapters: [],
       description: String(draft.description ?? ''),
       tags: Array.isArray(draft.tags) ? draft.tags : [],
       topicTags: Array.isArray(draft.topicTags) ? draft.topicTags : [],
@@ -1112,6 +1185,7 @@ const StudyPage: React.FC = () => {
     setSelectedChapterIndex(0);
     setCurrentMoveIndex(0);
     setView('editor');
+    setPendingNewChapterForStudyId(id);
   }, [studies.length]);
 
   const openCreateStudyModal = useCallback(() => {
@@ -1160,14 +1234,16 @@ const StudyPage: React.FC = () => {
   }, [selectedStudy, updateAndSaveStudy]);
 
   // ── Chapter CRUD ──────────────────────────────────────────────────────────────
-  const openNewChapterModal = useCallback((tab: 'empty' | 'editor' | 'fen' | 'vision' = 'empty') => {
-    if (!selectedStudy) return;
-    setNcName(`Bölüm ${selectedStudy.chapters.length + 1}`);
+  const openNewChapterModal = useCallback((tab: 'empty' | 'editor' | 'fen' | 'vision' = 'empty', studyOverride?: Study) => {
+    const study = studyOverride ?? selectedStudy;
+    if (!study) return;
+    setNcName(`Bölüm ${study.chapters.length + 1}`);
     setNcTab(tab);
     setNcFen(DEFAULT_FEN);
     setNcFenInput('');
     setNcOrientation('white');
     setNcMode('normal');
+    setNcInteractiveType('puzzle');
     setNcEditorTool(null);
     setNcCastling({ K: true, Q: true, k: true, q: true });
     setNcTurn('w');
@@ -1179,6 +1255,14 @@ const StudyPage: React.FC = () => {
     setStudyVisionError('');
     setShowNewChapterModal(true);
   }, [selectedStudy]);
+
+  useEffect(() => {
+    if (!pendingNewChapterForStudyId || selectedStudyId !== pendingNewChapterForStudyId) return;
+    const study = studies.find((s) => s.id === pendingNewChapterForStudyId);
+    if (!study) return;
+    setPendingNewChapterForStudyId(null);
+    openNewChapterModal('empty', study);
+  }, [pendingNewChapterForStudyId, selectedStudyId, studies, openNewChapterModal]);
 
   const addChapter = useCallback(() => openNewChapterModal('empty'), [openNewChapterModal]);
 
@@ -1254,7 +1338,7 @@ const StudyPage: React.FC = () => {
     if (validationError) return showToast(validationError, 'error');
 
     const lessonMode = ncMode === 'normal' ? 'direct' as const : 'interactive' as const;
-    const interactiveType = ncMode === 'interactive' ? 'liveAnalysis' as const : 'puzzle' as const;
+    const interactiveType = ncMode === 'interactive' ? ncInteractiveType : 'puzzle' as const;
     const ch = migrateChapter({
       id: genId(),
       title: ncName || `Bölüm ${selectedStudy.chapters.length + 1}`,
@@ -1263,6 +1347,8 @@ const StudyPage: React.FC = () => {
       orientation: ncOrientation,
       lessonMode,
       interactiveType,
+      difficulty: interactiveType === 'vsComputer' ? 10 : undefined,
+      pgnTags: defaultChapterPgnTags(selectedStudy.title, ncName || `Bölüm ${selectedStudy.chapters.length + 1}`),
     });
     updateAndSaveStudy(selectedStudy.id, s => ({ ...s, chapters: [...s.chapters, ch] }));
     setSelectedChapterIndex(selectedStudy.chapters.length);
@@ -1278,7 +1364,7 @@ const StudyPage: React.FC = () => {
     setStudyVisionBoards(null);
     setStudyVisionBoardIdx(0);
     setStudyVisionError('');
-  }, [selectedStudy, ncTab, ncFen, ncFenInput, ncOrientation, ncMode, ncName, updateAndSaveStudy]);
+  }, [selectedStudy, ncTab, ncFen, ncFenInput, ncOrientation, ncMode, ncInteractiveType, ncName, updateAndSaveStudy]);
 
   const updateChapterAtIndex = useCallback((idx: number, patch: Partial<StudyChapter>) => {
     if (!selectedStudy) return;
@@ -1415,6 +1501,7 @@ const StudyPage: React.FC = () => {
       title: `${src.title} (kopya)`,
       moves: [...(src.moves ?? [])],
       tags: [...(src.tags ?? [])],
+      pgnTags: src.pgnTags?.length ? [...src.pgnTags] : undefined,
       moveComments: { ...(src.moveComments ?? {}) },
       moveAnnotations: { ...(src.moveAnnotations ?? {}) },
       variations: JSON.parse(JSON.stringify(src.variations ?? {})),
@@ -1465,12 +1552,7 @@ const StudyPage: React.FC = () => {
 
   const bulkImportPgn = useCallback((pgnText: string) => {
     if (!selectedStudy || !pgnText.trim()) return 0;
-    const normalized = pgnText.replace(/\r\n/g, '\n').trim();
-    let blocks = normalized.split(/\n\s*\n(?=\s*\[(?:Event|FEN|White|Black|Round|Date|Site|Result|SetUp)\s)/i);
-    if (blocks.length <= 1) {
-      blocks = normalized.split(/\n\s*\n(?=\s*\d+\.\s)/);
-    }
-    if (blocks.length <= 1 && normalized.trim()) blocks = [normalized];
+    const blocks = splitLichessStudyPgnBlocks(pgnText);
     const newChapters: StudyChapter[] = [];
     const firstNewIdx = selectedStudy.chapters.length;
     let titleIdx = firstNewIdx;
@@ -1479,16 +1561,8 @@ const StudyPage: React.FC = () => {
        if (!block) continue;
        const parsed = parsePgnBlockToChapter(block);
        titleIdx += 1;
-       newChapters.push(migrateChapter({
-         id: genId(),
-         title: parsed.title || `Bölüm ${titleIdx}`,
-         fen: parsed.startFen,
-         moves: parsed.moves,
-         variations: parsed.variations,
-         moveComments: parsed.moveComments,
-         moveAnnotations: parsed.moveAnnotations,
-         seedTree: parsed.tree,
-       }));
+       const base = chapterFromParsedPgnBlock(parsed, `Bölüm ${titleIdx}`);
+       newChapters.push(migrateChapter({ ...base, id: genId() }));
     }
     if (newChapters.length === 0) return 0;
     updateAndSaveStudy(selectedStudy.id, s => ({ ...s, chapters: [...s.chapters, ...newChapters] }));
@@ -2269,7 +2343,7 @@ const StudyPage: React.FC = () => {
   const createChaptersFromVisionBoards = useCallback(() => {
     if (!selectedStudy || !studyVisionBoards || studyVisionBoards.length === 0) return;
     const lessonMode = ncMode === 'normal' ? 'direct' as const : 'interactive' as const;
-    const interactiveType = ncMode === 'interactive' ? 'liveAnalysis' as const : 'puzzle' as const;
+    const interactiveType = ncMode === 'interactive' ? ncInteractiveType : 'puzzle' as const;
     const baseIdx = selectedStudy.chapters.length;
     const newChapters = studyVisionBoards
       .map((board, i) => {
@@ -2283,6 +2357,7 @@ const StudyPage: React.FC = () => {
           orientation: ncOrientation,
           lessonMode,
           interactiveType,
+          difficulty: interactiveType === 'vsComputer' ? 10 : undefined,
         });
       })
       .filter((ch): ch is NonNullable<typeof ch> => ch !== null);
@@ -2303,6 +2378,7 @@ const StudyPage: React.FC = () => {
     selectedStudy,
     studyVisionBoards,
     ncMode,
+    ncInteractiveType,
     ncOrientation,
     ncName,
     normalizeVisionBoardFen,
@@ -2509,13 +2585,26 @@ const StudyPage: React.FC = () => {
   );
 
   const saveMoveComment = useCallback((comment: string) => {
-    if (!selectedChapter || currentMoveIndex === 0) return;
+    if (!selectedChapter) return;
     if (!write || !selectedStudy) return;
     const text = String(comment ?? '').trim();
-    if (!text) return;
+    const path = effectiveStudyPath ?? syncState?.currentPath ?? [];
     const ml = syncState?.tree?.mainline ?? [];
-    const nodeId = ml.length > 0 ? ml[Math.max(0, Math.min(ml.length - 1, currentMoveIndex))] : null;
-    if (!nodeId) return;
+    const rootId = syncState?.tree?.rootId;
+    const nodeId = path.length > 0
+      ? path[path.length - 1]!
+      : ml[Math.min(ml.length - 1, currentMoveIndex)] ?? null;
+    if (!nodeId || nodeId === rootId) return;
+
+    const mainIdx = ml.indexOf(nodeId);
+    if (mainIdx > 0) {
+      const plyIdx = mainIdx - 1;
+      const nextComments = { ...(selectedChapter.moveComments ?? {}) };
+      if (text) nextComments[plyIdx] = text;
+      else delete nextComments[plyIdx];
+      updateChapterAtIndex(selectedChapterIndex, { moveComments: nextComments });
+    }
+
     void appendStudyAction({
       studyId: selectedStudy.id,
       chapterId: selectedChapter.id,
@@ -2524,14 +2613,18 @@ const StudyPage: React.FC = () => {
       type: 'setComment',
       payload: { nodeId, text, author: currentUserName ?? (auth?.role === 'coach' ? 'Antrenör' : 'Admin') },
     });
-  }, [selectedChapter, currentMoveIndex, write, selectedStudy, syncState, actorId, actorRole, currentUserName, auth?.role]);
+  }, [
+    selectedChapter, selectedChapterIndex, currentMoveIndex, write, selectedStudy,
+    effectiveStudyPath, syncState, updateChapterAtIndex, actorId, actorRole, currentUserName, auth?.role,
+  ]);
 
   const saveChapterComment = useCallback((comment: string) => {
     if (!selectedChapter) return;
     if (!write || !selectedStudy) return;
     const text = String(comment ?? '').trim();
-    if (!text) return;
     const rootId = syncState?.tree?.rootId ?? 'root';
+    updateChapterAtIndex(selectedChapterIndex, { comment: text });
+
     void appendStudyAction({
       studyId: selectedStudy.id,
       chapterId: selectedChapter.id,
@@ -2540,35 +2633,23 @@ const StudyPage: React.FC = () => {
       type: 'setComment',
       payload: { nodeId: rootId, text, author: currentUserName ?? (auth?.role === 'coach' ? 'Antrenör' : 'Admin') },
     });
-  }, [selectedChapter, write, selectedStudy, syncState, actorId, actorRole, currentUserName, auth?.role]);
+  }, [selectedChapter, selectedChapterIndex, updateChapterAtIndex, write, selectedStudy, syncState, actorId, actorRole, currentUserName, auth?.role]);
 
-  const addTag = useCallback((tag: string) => {
-    if (!selectedChapter || !tag.trim()) return;
+  const setPgnTag = useCallback((name: string, value: string) => {
+    if (!selectedChapter || !name.trim()) return;
     if (!write || !selectedStudy) return;
-    const tags = [...new Set([...(selectedChapter.tags ?? []), tag.trim()])];
-    updateChapterAtIndex(selectedChapterIndex, { tags });
+    const base = selectedChapter.pgnTags?.length
+      ? selectedChapter.pgnTags
+      : defaultChapterPgnTags(selectedStudy.title, selectedChapter.title);
+    const pgnTags = setPgnTagValue(base, name, value);
+    updateChapterAtIndex(selectedChapterIndex, { pgnTags });
     void appendStudyAction({
       studyId: selectedStudy.id,
       chapterId: selectedChapter.id,
       actorId,
       actorRole,
       type: 'setChapterMeta',
-      payload: { patch: { tags } },
-    });
-  }, [selectedChapter, selectedChapterIndex, updateChapterAtIndex, write, selectedStudy, actorId, actorRole]);
-
-  const removeTag = useCallback((tag: string) => {
-    if (!selectedChapter) return;
-    if (!write || !selectedStudy) return;
-    const tags = (selectedChapter.tags ?? []).filter(t => t !== tag);
-    updateChapterAtIndex(selectedChapterIndex, { tags });
-    void appendStudyAction({
-      studyId: selectedStudy.id,
-      chapterId: selectedChapter.id,
-      actorId,
-      actorRole,
-      type: 'setChapterMeta',
-      payload: { patch: { tags } },
+      payload: { patch: { pgnTags } },
     });
   }, [selectedChapter, selectedChapterIndex, updateChapterAtIndex, write, selectedStudy, actorId, actorRole]);
 
@@ -2594,9 +2675,15 @@ const StudyPage: React.FC = () => {
     updateAndSaveStudy(settingsStudyId, s => ({ ...s, ...studyDraft }));
     closeStudySettings();
   }, [studyDraft, settingsStudyId, updateAndSaveStudy, closeStudySettings]);
-  const deleteStudy = useCallback(() => {
+  const deleteStudy = useCallback(async () => {
     if (!studyDraft || !settingsStudyId) return;
-    if (!window.confirm(`"${studyDraft.title}" silinsin mi?`)) return;
+    const ok = await confirmDialog({
+      title: 'Çalışmayı sil',
+      message: `"${studyDraft.title}" silinsin mi?`,
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
+    if (!ok) return;
     deletedIdsRef.current.add(settingsStudyId);
     setStudies(prev => prev.filter(s => s.id !== settingsStudyId));
     if (selectedStudyId === settingsStudyId) {
@@ -2605,7 +2692,7 @@ const StudyPage: React.FC = () => {
     }
     deleteStudyAsync(settingsStudyId).catch(() => {});
     closeStudySettings();
-  }, [studyDraft, settingsStudyId, selectedStudyId, closeStudySettings]);
+  }, [studyDraft, settingsStudyId, selectedStudyId, closeStudySettings, confirmDialog]);
   const openChapterEdit = useCallback((ch: StudyChapter) => { setChapterDraft({ ...ch }); setEditingChapterId(ch.id); }, []);
   const saveChapterEdit = useCallback(() => {
     if (!selectedStudy || !chapterDraft || !editingChapterId) return;
@@ -2638,7 +2725,20 @@ const StudyPage: React.FC = () => {
     setEditingChapterId(null);
     setChapterDraft(null);
   }, [selectedStudy, chapterDraft, editingChapterId, updateAndSaveStudy, write, actorId, actorRole]);
-  const deleteChapter = useCallback((chapterId: string) => { if (!selectedStudy || selectedStudy.chapters.length <= 1) return; if (!window.confirm('Emin misiniz?')) return; updateAndSaveStudy(selectedStudy.id, s => ({ ...s, chapters: s.chapters.filter(c => c.id !== chapterId) })); setSelectedChapterIndex(0); setCurrentMoveIndex(0); setEditingChapterId(null); }, [selectedStudy, updateAndSaveStudy]);
+  const deleteChapter = useCallback(async (chapterId: string) => {
+    if (!selectedStudy || selectedStudy.chapters.length <= 1) return;
+    const ok = await confirmDialog({
+      title: 'Bölümü sil',
+      message: 'Bu bölüm kalıcı olarak silinecek. Emin misiniz?',
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    updateAndSaveStudy(selectedStudy.id, s => ({ ...s, chapters: s.chapters.filter(c => c.id !== chapterId) }));
+    setSelectedChapterIndex(0);
+    setCurrentMoveIndex(0);
+    setEditingChapterId(null);
+  }, [selectedStudy, updateAndSaveStudy, confirmDialog]);
 
   const copyToClipboard = useCallback((text: string) => navigator.clipboard.writeText(text).catch(() => {}), []);
   const canExportCurrentStudy = useMemo(
@@ -2787,7 +2887,7 @@ const StudyPage: React.FC = () => {
           <div className="flex gap-4">
             <div className="w-24">
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Flair</label>
-              <select value={studyDraft.emoji} onChange={e => setStudyDraft(d => d ? { ...d, emoji: e.target.value } : d)} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2.5 text-2xl focus:ring-2 focus:ring-teal-500/50 outline-none">{EMOJIS.map(em => <option key={em} value={em}>{em}</option>)}</select>
+              <select value={studyDraft.emoji ?? '♟️'} onChange={e => setStudyDraft(d => d ? { ...d, emoji: e.target.value } : d)} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2.5 text-2xl focus:ring-2 focus:ring-teal-500/50 outline-none">{EMOJIS.map(em => <option key={em} value={em}>{em}</option>)}</select>
             </div>
             <div className="flex-1">
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">İsim</label>
@@ -3050,7 +3150,7 @@ const StudyPage: React.FC = () => {
                   </span>
                 )}
                 <div className="flex items-center gap-4 mb-4">
-                  <span className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-2xl">{s.emoji}</span>
+                  <span className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-2xl">{studyDisplayEmoji(s)}</span>
                   <div className="min-w-0">
                     <h3 className="font-bold text-white group-hover:text-teal-400 truncate">{s.title}</h3>
                     <p className="text-[10px] text-slate-500 uppercase tracking-widest">
@@ -3080,7 +3180,25 @@ const StudyPage: React.FC = () => {
                   {auth?.role === 'admin' && (
                     <button type="button" onClick={e => openStudySettingsFromList(s, e)} className="p-2 rounded-xl text-slate-500 hover:text-teal-400" title="Ayarlar"><Settings2 className="w-4 h-4" /></button>
                   )}
-                  <button type="button" onClick={e => { e.stopPropagation(); if (window.confirm('Silinsin mi?')) { deletedIdsRef.current.add(s.id); setStudies(prev => prev.filter(x => x.id !== s.id)); deleteStudyAsync(s.id); } }} className="p-2 rounded-xl text-slate-500 hover:text-rose-400 ml-auto"><Trash2 className="w-4 h-4" /></button>
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const ok = await confirmDialog({
+                        title: 'Çalışmayı sil',
+                        message: `"${s.title}" silinsin mi?`,
+                        confirmLabel: 'Sil',
+                        variant: 'danger',
+                      });
+                      if (!ok) return;
+                      deletedIdsRef.current.add(s.id);
+                      setStudies(prev => prev.filter(x => x.id !== s.id));
+                      deleteStudyAsync(s.id);
+                    }}
+                    className="p-2 rounded-xl text-slate-500 hover:text-rose-400 ml-auto"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             ))}
@@ -3284,6 +3402,32 @@ const StudyPage: React.FC = () => {
     );
   }
 
+  if (!selectedStudy) {
+    if (studiesLoading || (view === 'editor' && selectedStudyId)) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full min-h-[200px] bg-[#0a0f1e] text-slate-400 gap-3">
+          <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
+          <p className="text-sm font-medium">Çalışma yükleniyor…</p>
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col items-center justify-center h-full min-h-[200px] bg-[#0a0f1e] text-slate-400 gap-4 p-6">
+        <p className="text-sm font-medium text-slate-300">Çalışma bulunamadı veya erişiminiz yok.</p>
+        <button
+          type="button"
+          onClick={() => { setView('list'); setSelectedStudyId(null); }}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-bold uppercase tracking-wider"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Çalışmalara Dön
+        </button>
+      </div>
+    );
+  }
+
+  const activeStudy = selectedStudy;
+
   return (
     <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0a0f1e] text-slate-300 overflow-hidden font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
 
@@ -3299,12 +3443,12 @@ const StudyPage: React.FC = () => {
           <span className="sm:hidden">Geri</span>
         </button>
         <div className="flex-1 min-w-0 flex items-center gap-2">
-          <span className="text-lg leading-none shrink-0">{selectedStudy.emoji}</span>
-          <h1 className="text-sm font-bold text-white truncate">{selectedStudy.title}</h1>
+          <span className="text-lg leading-none shrink-0">{studyDisplayEmoji(activeStudy)}</span>
+          <h1 className="text-sm font-bold text-white truncate">{activeStudy.title}</h1>
         </div>
         <button
           type="button"
-          onClick={() => setStudentPreviewStudyId(selectedStudy.id)}
+          onClick={() => setStudentPreviewStudyId(activeStudy.id)}
           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 hover:text-indigo-200 text-xs font-bold uppercase tracking-wider transition-all shrink-0 border border-indigo-500/20"
           title="Öğrenci görünümü"
         >
@@ -3703,6 +3847,14 @@ const StudyPage: React.FC = () => {
                     <Settings2 className="w-4 h-4" />
                   </button>
                 </div>
+                {boardPgnDisplay ? (
+                  <StudyBoardPgnHeader
+                    display={boardPgnDisplay}
+                    boardOrientation={boardOrientation}
+                    variant="player-top"
+                    className="w-full overflow-hidden border-x border-white/5"
+                  />
+                ) : null}
                 <ChessBoardFrame
                   boardOrientation={boardOrientation}
                   shellClassName="bg-[#0f172a] border-r border-white/5 shadow-inner"
@@ -3857,6 +4009,14 @@ const StudyPage: React.FC = () => {
                     </div>
                   )}
                 </ChessBoardFrame>
+                {boardPgnDisplay ? (
+                  <StudyBoardPgnHeader
+                    display={boardPgnDisplay}
+                    boardOrientation={boardOrientation}
+                    variant="player-bottom"
+                    className="w-full rounded-b-lg overflow-hidden border border-white/5 border-t-0"
+                  />
+                ) : null}
               </div>
 
               {/* Drawing Toolbar Row (Coach Only) - Outside Board */}
@@ -3937,12 +4097,13 @@ const StudyPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Study info — mobilde kompakt */}
+              {/* Study info — etiket sekmesinde alt panelde gösterilir */}
+              {bottomTab !== 'tags' && (
               <div className="w-full sm:max-w-[min(66vh,60vw)] bg-[#0f172a] rounded-xl border border-white/5 px-3 py-3 sm:px-6 sm:py-5 shadow-2xl">
                 <div className="flex items-center gap-2 sm:gap-3">
-                  <span className="text-xl sm:text-2xl shrink-0 leading-none">{selectedStudy.emoji}</span>
+                  <span className="text-xl sm:text-2xl shrink-0 leading-none">{studyDisplayEmoji(activeStudy)}</span>
                   <div className="flex-1 min-w-0">
-                    <h2 className="text-xs sm:text-sm font-bold text-white truncate">{selectedStudy.title}</h2>
+                    <h2 className="text-xs sm:text-sm font-bold text-white truncate">{activeStudy.title}</h2>
                     <p className="text-[10px] text-indigo-400 font-extrabold uppercase tracking-tight truncate mt-0.5">{currentUserName}</p>
                   </div>
                   <button
@@ -3984,6 +4145,7 @@ const StudyPage: React.FC = () => {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Bottom tools (tabs: tags, comments, annotations, etc.) */}
               <div className="w-full sm:max-w-[min(66vh,60vw)] min-w-0">
@@ -3992,6 +4154,8 @@ const StudyPage: React.FC = () => {
                   chapter={selectedChapter}
                   activeTab={bottomTab}
                   currentMoveIndex={currentMoveIndex}
+                  currentCommentText={currentCommentText}
+                  currentCommentLabel={currentCommentLabel}
                   currentFen={currentFen}
                   chatMessages={chatMessages}
                   moveAnalysisEntries={moveAnalysisEntries}
@@ -4002,9 +4166,22 @@ const StudyPage: React.FC = () => {
                   viewingStudentId={viewingStudentId}
                   onViewingStudentChange={setViewingStudentId}
                   onTabChange={setBottomTab}
-                  onAddTag={addTag}
-                  onRemoveTag={removeTag}
-                  onSaveComment={(msg) => currentMoveIndex === 0 ? saveChapterComment(msg) : saveMoveComment(msg)}
+                  onSetPgnTag={setPgnTag}
+                  canEditPgnTags={!!write}
+                  onOpenTopics={openStudySettings}
+                  onToggleLike={() => {
+                    const updated = {
+                      ...selectedStudy,
+                      liked: !selectedStudy.liked,
+                      likes: selectedStudy.liked ? Math.max(0, selectedStudy.likes - 1) : selectedStudy.likes + 1,
+                    };
+                    updateStudy(updated);
+                  }}
+                  onSaveComment={(msg) => {
+                    const rootId = syncState?.tree?.rootId;
+                    if (!commentTargetNodeId || commentTargetNodeId === rootId) saveChapterComment(msg);
+                    else saveMoveComment(msg);
+                  }}
                   onAddAnnotation={addAnnotation}
                   canAnnotate={canAnnotateMoves}
                   annotationPlyIndex={annotationPlyIndex}
@@ -4870,14 +5047,31 @@ const StudyPage: React.FC = () => {
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Analiz modu</label>
                 <select
                   value={ncMode}
-                  onChange={e => setNcMode(e.target.value as any)}
+                  onChange={e => setNcMode(e.target.value as 'normal' | 'interactive')}
                   className="w-full bg-slate-900 border border-white/5 rounded-xl px-3 py-2.5 text-white text-sm outline-none"
                 >
                   <option value="normal">Normal analiz</option>
-                  <option value="practice">Bilgisayar ile pratik yapın</option>
                   <option value="interactive">Etkileşimli ders</option>
                 </select>
               </div>
+
+              {ncMode === 'interactive' && (
+                <div className="p-4 bg-teal-500/5 border border-teal-500/20 rounded-2xl space-y-3 animate-in slide-in-from-top-2">
+                  <label className="block text-[10px] font-bold text-teal-400/70 uppercase tracking-widest">Etkileşim tipi</label>
+                  <select
+                    value={ncInteractiveType}
+                    onChange={e => setNcInteractiveType(e.target.value as 'puzzle' | 'liveAnalysis' | 'vsComputer')}
+                    className="w-full bg-slate-900 border border-teal-500/30 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:ring-2 focus:ring-teal-500/40"
+                  >
+                    <option value="puzzle">Bulmaca (Hamle Bul)</option>
+                    <option value="liveAnalysis">Canlı Analiz</option>
+                    <option value="vsComputer">Bilgisayara Karşı Antrenman</option>
+                  </select>
+                  {ncInteractiveType === 'vsComputer' ? (
+                    <p className="text-[11px] text-teal-300/80">Bilgisayar karşısında antrenman en yüksek seviyede başlar.</p>
+                  ) : null}
+                </div>
+              )}
             </div>
 
             {/* Footer */}

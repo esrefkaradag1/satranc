@@ -107,13 +107,23 @@ export function deleteSubtree(tree: StudyTree, nodeId: NodeId): StudyTree {
 export function setNodeComment(tree: StudyTree, nodeId: NodeId, commentText: string, author: string): StudyTree {
   const node = tree.nodes[nodeId];
   if (!node) return tree;
-  const id = genNodeId();
-  const createdAt = new Date().toISOString();
+  const trimmed = commentText.trim();
+  if (!trimmed) {
+    return { ...tree, nodes: { ...tree.nodes, [nodeId]: { ...node, comments: [] } } };
+  }
+  const existing = node.comments[0];
+  const id = existing?.id ?? genNodeId();
+  const createdAt = existing?.createdAt ?? new Date().toISOString();
   const next = {
     ...node,
-    comments: [...node.comments, { id, by: author, text: commentText, createdAt }],
+    comments: [{ id, by: author, text: trimmed, createdAt }],
   };
   return { ...tree, nodes: { ...tree.nodes, [nodeId]: next } };
+}
+
+/** Düğüm yorum metni (Lichess tek yorum alanı). */
+export function nodeCommentText(node: StudyTree['nodes'][string] | undefined): string {
+  return (node?.comments ?? []).map((c) => c.text).join('\n').trim();
 }
 
 export function deleteNodeComment(tree: StudyTree, nodeId: NodeId, commentId: string): StudyTree {

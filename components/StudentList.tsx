@@ -49,7 +49,7 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, disciplines, groups, trainingGroups, disciplineBranches, coaches, auth } = useApp();
+ const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, disciplines, groups, trainingGroups, disciplineBranches, coaches, auth, confirmDialog } = useApp();
  const isAdmin = auth?.role === 'admin';
  const isCoach = auth?.role === 'coach';
  const baseStudents = scopedStudents;
@@ -230,11 +230,16 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  }
  };
 
- const handleBulkDelete = () => {
- if (window.confirm(`${selectedIds.length} öğrenciyi silmek istediğinize emin misiniz?`)) {
+ const handleBulkDelete = async () => {
+ const ok = await confirmDialog({
+ title: 'Öğrencileri sil',
+ message: `${selectedIds.length} öğrenciyi silmek istediğinize emin misiniz?`,
+ confirmLabel: 'Sil',
+ variant: 'danger',
+ });
+ if (!ok) return;
  bulkDeleteStudents(selectedIds);
  setSelectedIds([]);
- }
  };
 
  const handleBulkUpdateGroup = () => {

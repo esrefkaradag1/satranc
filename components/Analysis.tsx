@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, TrendingUp, Target, Brain, ChevronRight, ArrowLeft, X, Users, BookOpen, PieChart, Search, Sparkles, Loader2 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { useApp } from '../AppContext';
@@ -61,7 +61,8 @@ const SKILL_COLORS: Record<SkillKeyLocal, string> = {
   strategy: 'bg-amber-500',
 };
 
-const PLATFORM_SAMPLE_LIMIT = 100;
+const PLATFORM_SAMPLE_LIMIT = 60;
+const PLATFORM_FIRST_PAGE_SIZE = 20;
 
 function mapCategoryToSkill(cat: string, theme?: string): SkillKeyLocal | null {
   const c = (cat || '').toLowerCase();
@@ -213,6 +214,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
   const [compareAcademy, setCompareAcademy] = useState(false);
   const [focusSkill, setFocusSkill] = useState<SkillKeyLocal | null>(null);
   const [eloPeriod, setEloPeriod] = useState<3 | 6 | 12>(6);
+  const platformLoadGenRef = useRef(0);
 
   const selectedStudent = useMemo(
     () => (selectedStudentId ? students.find((s) => s.id === selectedStudentId) ?? null : null),
@@ -383,48 +385,110 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
       setChessComGames([]);
       return;
     }
+    const gen = ++platformLoadGenRef.current;
+    const lUser = selectedStudent.lichessUsername?.trim();
+    const cUser = selectedStudent.chessComUsername?.trim();
+
     setPlatformLoading(true);
+    let lPage: Awaited<ReturnType<typeof fetchLichessGamesPage>> = { games: [], nextUntil: null, hasMore: false };
+    let cPage: Awaited<ReturnType<typeof fetchChessComGamesPage>> = { games: [], nextBeforeEndTime: null, hasMore: false };
     try {
-      const lUser = selectedStudent.lichessUsername?.trim();
-      const cUser = selectedStudent.chessComUsername?.trim();
-      const [lp, cp, cs, la, cms] = await Promise.all([
+      const [lp, cp, cs, lFirst, cFirst] = await Promise.all([
         lUser ? fetchLichessUser(lUser) : Promise.resolve(null),
         cUser ? fetchChessComPlayer(cUser) : Promise.resolve(null),
         cUser ? fetchChessComStats(cUser) : Promise.resolve(null),
-        lUser ? fetchLichessActivity(lUser) : Promise.resolve([]),
-        cUser ? fetchChessComMemberStats(cUser) : Promise.resolve(null),
+        lUser
+          ? fetchLichessGamesPage(lUser, { max: PLATFORM_FIRST_PAGE_SIZE })
+          : Promise.resolve({ games: [] as LichessGame[], nextUntil: null, hasMore: false }),
+        cUser
+          ? fetchChessComGamesPage(cUser, { max: PLATFORM_FIRST_PAGE_SIZE })
+          : Promise.resolve({ games: [] as ChessComGame[], nextBeforeEndTime: null, hasMore: false }),
       ]);
-      let lg: LichessGame[] = [];
+      lPage = lFirst;
+      cPage = cFirst;
+
+      if (gen !== platformLoadGenRef.current) return;
+
+      setLichessProfile(lp);
+      setChessComProfile(cp);
+      setChessComStats(cs);
+      setLichessGames(lPage.games);
+      setChessComGames(cPage.games);
+
       if (lUser) {
-        let until: number | null = null;
-        while (lg.length < PLATFORM_SAMPLE_LIMIT) {
-          const page = await fetchLichessGamesPage(lUser, { max: 20, until: until ?? undefined });
+        void fetchLichessActivity(lUser).then((activity) => {
+          if (gen === platformLoadGenRef.current) setLichessActivity(activity);
+        });
+      } else {
+        setLichessActivity([]);
+      }
+      if (cUser) {
+        void fetchChessComMemberStats(cUser).then((cms) => {
+          if (gen === platformLoadGenRef.current) setChessComMemberStats(cms);
+        });
+      } else {
+        setChessComMemberStats(null);
+      }
+    } finally {
+      if (gen === platformLoadGenRef.current) setPlatformLoading(false);
+    }
+
+    const appendMoreGames = async () => {
+      const mergeLichess = (prev: LichessGame[], batch: LichessGame[]) => {
+        const seen = new Set(prev.map((g) => g.id));
+        const next = [...prev];
+        for (const g of batch) {
+          if (!g.id || seen.has(g.id)) continue;
+          seen.add(g.id);
+          next.push(g);
+        }
+        return next.slice(0, PLATFORM_SAMPLE_LIMIT);
+      };
+      const mergeChessCom = (prev: ChessComGame[], batch: ChessComGame[]) => {
+        const seen = new Set(prev.map((g) => `${g.end_time}:${g.url}`));
+        const next = [...prev];
+        for (const g of batch) {
+          const key = `${g.end_time}:${g.url}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          next.push(g);
+        }
+        return next.slice(0, PLATFORM_SAMPLE_LIMIT);
+      };
+
+      if (lUser) {
+        let until = lPage.hasMore ? lPage.nextUntil : null;
+        let lg = lPage.games;
+        while (lg.length < PLATFORM_SAMPLE_LIMIT && until != null) {
+          if (gen !== platformLoadGenRef.current) return;
+          const page = await fetchLichessGamesPage(lUser, { max: PLATFORM_FIRST_PAGE_SIZE, until });
           if (!page.games.length) break;
-          lg = [...lg, ...page.games];
+          lg = mergeLichess(lg, page.games);
+          if (gen !== platformLoadGenRef.current) return;
+          setLichessGames(lg);
           if (!page.hasMore || page.nextUntil == null) break;
           until = page.nextUntil;
         }
       }
-      let cg: ChessComGame[] = [];
+
       if (cUser) {
-        let beforeEndTime: number | null = null;
-        while (cg.length < PLATFORM_SAMPLE_LIMIT) {
-          const page = await fetchChessComGamesPage(cUser, { max: 20, beforeEndTime: beforeEndTime ?? undefined });
+        let beforeEndTime = cPage.hasMore ? cPage.nextBeforeEndTime : null;
+        let cg = cPage.games;
+        while (cg.length < PLATFORM_SAMPLE_LIMIT && beforeEndTime != null) {
+          if (gen !== platformLoadGenRef.current) return;
+          const page = await fetchChessComGamesPage(cUser, { max: PLATFORM_FIRST_PAGE_SIZE, beforeEndTime });
           if (!page.games.length) break;
-          cg = [...cg, ...page.games];
+          cg = mergeChessCom(cg, page.games);
+          if (gen !== platformLoadGenRef.current) return;
+          setChessComGames(cg);
           if (!page.hasMore || page.nextBeforeEndTime == null) break;
           beforeEndTime = page.nextBeforeEndTime;
         }
       }
-      setLichessProfile(lp);
-      setLichessGames(lg.slice(0, PLATFORM_SAMPLE_LIMIT));
-      setLichessActivity(la);
-      setChessComProfile(cp);
-      setChessComStats(cs);
-      setChessComMemberStats(cms);
-      setChessComGames(cg.slice(0, PLATFORM_SAMPLE_LIMIT));
-    } finally {
-      setPlatformLoading(false);
+    };
+
+    if (lUser || cUser) {
+      void appendMoreGames().catch(() => {});
     }
   }, [selectedStudent]);
 
@@ -1075,6 +1139,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
                   chessComUsername={selectedStudent.chessComUsername}
                   lichessGames={lichessGames}
                   chessComGames={chessComGames}
+                  gamesLoading={platformLoading}
                 />
                 </div>
               </div>

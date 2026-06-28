@@ -1,10 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, ArrowUpRight } from 'lucide-react';
 import type { StudyTree, NodeId } from '../../lib/studySync/types';
-import { pathToNode } from '../../lib/studySync/apply';
+import { pathToNode, nodeCommentText } from '../../lib/studySync/apply';
+import { variationStartMoveNumber } from '../../lib/studyNotationUtils';
 import { sideToMove } from '../../lib/studyUtils';
 import { formatMoveGlyphs, parseMoveGlyphs } from '../../lib/studyAnnotations';
 import { FigurineSan } from '../chess/FigurineSan';
+import {
+  StudyNotationContextMenu,
+  STUDY_NOTATION_MOVE_CELL,
+  openStudyNotationMenuFromEvent,
+  studyMoveCellButtonClass,
+  type StudyNotationMenuPoint,
+} from './StudyNotationContextMenu';
 
 type Props = {
   tree: StudyTree;
@@ -68,10 +76,8 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
   activeRef,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
+    point: StudyNotationMenuPoint;
     nodeId: NodeId;
     branchId: NodeId | null;
   } | null>(null);
@@ -83,26 +89,12 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
   const mainline = tree.mainline ?? [];
   const mainSet = useMemo(() => new Set(mainline), [mainline]);
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = (e: MouseEvent) => {
-      if (contextMenuRef.current?.contains(e.target as Node)) return;
-      setContextMenu(null);
-    };
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [contextMenu]);
-
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, nodeId: NodeId) => {
       if (nodeId === tree.rootId) return;
       if (!onDeleteFromNode && !onPromoteBranch) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const rect = containerRef.current?.getBoundingClientRect();
       setContextMenu({
-        x: e.clientX - (rect?.left ?? 0),
-        y: e.clientY - (rect?.top ?? 0),
+        point: openStudyNotationMenuFromEvent(e),
         nodeId,
         branchId: variationBranchRootId(tree, nodeId),
       });
@@ -110,7 +102,23 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
     [onDeleteFromNode, onPromoteBranch, tree],
   );
 
-  const renderMoveButton = (nodeId: NodeId, isVar = false) => {
+  const renderCommentBlock = (nodeId: NodeId) => {
+    const text = nodeCommentText(tree.nodes[nodeId]);
+    if (!text) return null;
+    const isActive = nodeId === activeNodeId;
+    return (
+      <div
+        key={`comment-${nodeId}`}
+        className={`col-span-3 px-2.5 py-1.5 my-0.5 rounded-md whitespace-pre-wrap break-words italic text-slate-300 ${
+          isActive ? 'bg-slate-700/55 ring-1 ring-[#3692e7]/30' : 'bg-slate-800/45'
+        } ${compact ? 'text-[11px]' : 'text-xs'}`}
+      >
+        {text}
+      </div>
+    );
+  };
+
+  const renderMoveButton = (nodeId: NodeId, isVar = false, prefix?: React.ReactNode) => {
     const node = tree.nodes[nodeId];
     if (!node?.san) return null;
     const isActive = nodeId === activeNodeId;
@@ -118,25 +126,21 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
     const canMenu = nodeId !== tree.rootId && (!!onDeleteFromNode || !!onPromoteBranch);
 
     return (
-      <button
-        key={`btn-${nodeId}`}
-        ref={isActive ? activeRef : undefined}
-        type="button"
-        onClick={() => onSelectPath(pathToNode(tree, nodeId))}
-        onContextMenu={canMenu ? (e) => handleContextMenu(e, nodeId) : undefined}
-        className={`inline-flex items-center px-1.5 rounded font-bold transition-colors ${
-          isActive
-            ? 'bg-[#3692e7] text-white shadow-sm'
-            : isVar
-              ? 'text-slate-300 hover:bg-white/10'
-              : 'text-slate-200 hover:bg-white/10'
-        }`}
-      >
-        <FigurineSan san={node.san} figurine={figurineNotation} />
-        {showMoveAnnotations && annotation != null && parseMoveGlyphs(annotation).length > 0 && (
-          <span className="text-amber-500 font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
-        )}
-      </button>
+      <div key={`cell-${nodeId}`} className={STUDY_NOTATION_MOVE_CELL}>
+        <button
+          ref={isActive ? activeRef : undefined}
+          type="button"
+          onClick={() => onSelectPath(pathToNode(tree, nodeId))}
+          onContextMenu={canMenu ? (e) => handleContextMenu(e, nodeId) : undefined}
+          className={studyMoveCellButtonClass(isActive, isVar)}
+        >
+          {prefix}
+          <FigurineSan san={node.san} figurine={figurineNotation} />
+          {showMoveAnnotations && annotation != null && parseMoveGlyphs(annotation).length > 0 && (
+            <span className="text-amber-500 font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
+          )}
+        </button>
+      </div>
     );
   };
 
@@ -154,11 +158,26 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
     return node.children.filter((cid): cid is NodeId => !!cid && cid !== mainId);
   };
 
+  const collectBranchNodeIds = (startId: NodeId): NodeId[] => {
+    const ids: NodeId[] = [];
+    let cur: NodeId | null = startId;
+    let guard = 0;
+    while (cur && guard++ < 256) {
+      const node = tree.nodes[cur];
+      if (!node?.san) break;
+      ids.push(cur);
+      const nextId = node.children?.[0] ?? null;
+      if (!nextId || mainSet.has(nextId)) break;
+      cur = nextId;
+    }
+    return ids;
+  };
+
   const renderBranchLine = (startId: NodeId, branchStartFen: string): React.ReactNode[] => {
     const out: React.ReactNode[] = [];
     let cur: NodeId | null = startId;
     let guard = 0;
-    let moveNumber = startMoveNumber;
+    let moveNumber = variationStartMoveNumber(tree, startId, startMoveNumber, isBlackToMove);
     let first = true;
 
     while (cur && guard++ < 256) {
@@ -198,12 +217,20 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
         const sig = `${parentNodeId}\0${branchLineSignature(tree, altId, mainSet)}`;
         if (seen.has(sig)) continue;
         seen.add(sig);
+        const branchComments = collectBranchNodeIds(altId).filter((id) => nodeCommentText(tree.nodes[id]));
         bars.push(
           <div
             key={`varbar-${sig}`}
-            className={`w-full flex flex-wrap items-center gap-x-0.5 gap-y-0.5 px-2 rounded-md bg-slate-700/35 ring-1 ring-white/5 ${compact ? 'py-1 my-0.5' : 'py-1.5 my-1'} ${textSize} text-slate-300`}
+            className={`w-full flex flex-col gap-0.5 px-2 rounded-md bg-slate-700/35 ring-1 ring-white/5 ${compact ? 'py-1 my-0.5' : 'py-1.5 my-1'} ${textSize} text-slate-300`}
           >
-            {renderBranchLine(altId, tree.nodes[parentNodeId]?.fen ?? startFen)}
+            <div className="flex flex-wrap items-center gap-x-0.5 gap-y-0.5">
+              {renderBranchLine(altId, tree.nodes[parentNodeId]?.fen ?? startFen)}
+            </div>
+            {branchComments.map((id) => (
+              <div key={`varcmt-${id}`} className="w-full">
+                {renderCommentBlock(id)}
+              </div>
+            ))}
           </div>,
         );
       }
@@ -213,7 +240,6 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
 
   const rowGrid = 'grid grid-cols-[2rem_1fr_1fr] gap-x-1.5 items-stretch w-full';
   const indexCell = `text-[11px] font-bold text-slate-500 text-right pr-1.5 tabular-nums bg-slate-800/50 flex items-center justify-end ${compact ? 'py-1' : 'py-1.5'}`;
-  const moveCell = `min-w-0 flex items-center ${compact ? 'py-0.5' : 'py-1'}`;
 
   const rows: React.ReactNode[] = [];
   let currentMoveNumber = startMoveNumber;
@@ -226,12 +252,14 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
       <div key="row-black-first" className="w-full">
         <div className={rowGrid}>
           <span className={indexCell}>{currentMoveNumber}</span>
-          <div className={moveCell} />
-          <div className={moveCell}>
-            <span className="text-slate-500 font-bold mr-1 tabular-nums">{currentMoveNumber}...</span>
-            {renderMoveButton(blackId)}
-          </div>
+          <div />
+          {renderMoveButton(
+            blackId,
+            false,
+            <span className="text-slate-500 font-bold tabular-nums shrink-0">{currentMoveNumber}...</span>,
+          )}
         </div>
+        <div className={rowGrid}>{renderCommentBlock(blackId)}</div>
         {renderVariationBarsForParents([tree.rootId], rowSeen)}
       </div>,
     );
@@ -253,9 +281,15 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
       <div key={`row-${mi}`} className="w-full">
         <div className={rowGrid}>
           <span className={indexCell}>{currentMoveNumber}</span>
-          <div className={moveCell}>{renderMoveButton(whiteId)}</div>
-          <div className={moveCell}>{blackId ? renderMoveButton(blackId) : null}</div>
+          {renderMoveButton(whiteId)}
+          {blackId ? renderMoveButton(blackId) : <div />}
         </div>
+        {(nodeCommentText(tree.nodes[whiteId]) || (blackId && nodeCommentText(tree.nodes[blackId]))) ? (
+          <div className={rowGrid}>
+            {renderCommentBlock(whiteId)}
+            {blackId ? renderCommentBlock(blackId) : null}
+          </div>
+        ) : null}
         {renderVariationBarsForParents(parentIds, rowSeen)}
       </div>,
     );
@@ -270,48 +304,41 @@ export const StudyTreeTableNotation: React.FC<Props> = ({
         <span>Siyah</span>
       </div>
       {rows}
-      {contextMenu ? (
-        <div
-          ref={contextMenuRef}
-          className="absolute z-50 glass-card rounded-xl border border-white/10 shadow-2xl py-1 min-w-[200px] overflow-hidden animate-in zoom-in-95"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {onPromoteBranch && contextMenu.branchId ? (
-            <button
-              type="button"
-              onClick={() => {
-                void onPromoteBranch(contextMenu.branchId!);
-                setContextMenu(null);
-              }}
-              className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all"
-            >
-              <ArrowUpRight className="w-3.5 h-3.5" />
-              Ana hat yap
-            </button>
-          ) : null}
-          {onDeleteFromNode ? (
-            <button
-              type="button"
-              onClick={() => {
-                void onDeleteFromNode(contextMenu.nodeId);
-                setContextMenu(null);
-              }}
-              className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Bu hamleden sonrasını sil
-            </button>
-          ) : null}
+      <StudyNotationContextMenu open={contextMenu?.point ?? null} onClose={() => setContextMenu(null)}>
+        {onPromoteBranch && contextMenu?.branchId ? (
           <button
             type="button"
-            onClick={() => setContextMenu(null)}
-            className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-slate-500 hover:bg-white/5 transition-all"
+            onClick={() => {
+              void onPromoteBranch(contextMenu.branchId!);
+              setContextMenu(null);
+            }}
+            className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all"
           >
-            İptal
+            <ArrowUpRight className="w-3.5 h-3.5" />
+            Ana hat yap
           </button>
-        </div>
-      ) : null}
+        ) : null}
+        {onDeleteFromNode && contextMenu ? (
+          <button
+            type="button"
+            onClick={() => {
+              void onDeleteFromNode(contextMenu.nodeId);
+              setContextMenu(null);
+            }}
+            className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Bu hamleden sonrasını sil
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => setContextMenu(null)}
+          className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-slate-500 hover:bg-white/5 transition-all"
+        >
+          İptal
+        </button>
+      </StudyNotationContextMenu>
     </div>
   );
 };

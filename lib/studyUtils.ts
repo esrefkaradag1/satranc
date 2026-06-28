@@ -1,6 +1,7 @@
 import { Chess, type Square } from 'chess.js';
 import type { Study, StudyChapter, StudentPlaysColor } from './studyTypes';
 import { formatMoveGlyphs, parseMoveGlyphs } from './studyAnnotations';
+import { defaultChapterPgnTags, formatPgnTagLines } from './studyPgnTags';
 
 export const DEFAULT_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 export const STUDY_EDITOR_SELECTION_KEY = 'netchess_study_editor_selection';
@@ -113,6 +114,7 @@ export function migrateChapter(ch: Partial<StudyChapter>): StudyChapter {
         ? 10
         : 5,
     comment: ch.comment ?? '',
+    pgnTags: Array.isArray(ch.pgnTags) ? ch.pgnTags : [],
     tags: ch.tags ?? [],
     moveComments: ch.moveComments ?? {},
     moveAnnotations: ch.moveAnnotations ?? {},
@@ -152,6 +154,10 @@ export function migrateStudy(s: Partial<Study>): Study {
     categoryId:
       typeof s.categoryId === 'string' && s.categoryId.trim() !== '' ? s.categoryId.trim() : null,
   };
+}
+
+export function studyDisplayEmoji(study: Pick<Study, 'emoji'> | null | undefined): string {
+  return study?.emoji ?? '♟️';
 }
 
 export function setFenTurn(fen: string, turn: 'w' | 'b'): string {
@@ -351,13 +357,11 @@ export function studentCanMovePieces(studentPlaysColor: StudentPlaysColor): bool
 }
 
 export function buildPgn(study: Study, chapter: StudyChapter): string {
+  const tagPairs = chapter.pgnTags?.length
+    ? chapter.pgnTags
+    : defaultChapterPgnTags(study.title, chapter.title);
   const lines = [
-    `[Event "${study.title}"]`,
-    `[Site "netchess"]`,
-    `[Date "${new Date().toLocaleDateString('tr-TR')}"]`,
-    `[White "?"]`,
-    `[Black "?"]`,
-    `[Result "*"]`,
+    ...formatPgnTagLines(tagPairs.filter(([k]) => k.toLowerCase() !== 'fen' && k.toLowerCase() !== 'setup')),
     `[SetUp "1"]`,
     `[FEN "${chapter.fen || DEFAULT_FEN}"]`,
     '',

@@ -113,7 +113,7 @@ const AppRoot: React.FC = () => {
 };
 
 const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
-  const { auth, students, coaches, clubs, getAuthPermissions } = useApp();
+  const { auth, students, coaches, clubs, authPermissions } = useApp();
   const [profileTick, setProfileTick] = useState(0);
   useEffect(() => {
     const onProfile = () => setProfileTick((n) => n + 1);
@@ -248,8 +248,8 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       : defaultAdminTab;
 
   const adminNavCategories = useMemo(
-    () => filterNavByPermissions(NAV_CATEGORIES, getAuthPermissions()),
-    [getAuthPermissions],
+    () => filterNavByPermissions(NAV_CATEGORIES, authPermissions),
+    [authPermissions],
   );
 
   return (
@@ -317,7 +317,7 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
 
 /** Antrenör paneli: öğrenci işleri, eğitim & içerik, medya, raporlama */
 const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
-  const { auth, students, scopedStudents, coaches, clubs, getAuthPermissions, rolesLoaded } = useApp();
+  const { auth, students, scopedStudents, coaches, clubs, authPermissions, rolesLoaded } = useApp();
   const [profileTick, setProfileTick] = useState(0);
   useEffect(() => {
     const onProfile = () => setProfileTick((n) => n + 1);
@@ -328,7 +328,7 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
     () => getSessionDisplay(auth, { students, coaches, clubs }),
     [auth, students, coaches, clubs, profileTick],
   );
-  const coachPermissions = getAuthPermissions();
+  const coachPermissions = authPermissions;
   const isCoachTabAllowed = useCallback(
     (tab: string) => isCoachPanelTabAllowed(coachPermissions, tab),
     [coachPermissions],

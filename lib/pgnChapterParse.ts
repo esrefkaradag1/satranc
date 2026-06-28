@@ -1,7 +1,9 @@
 import { DEFAULT_FEN, makeBuilderGame, applyMove } from './studyUtils';
+import { headersToPgnTags, sortPgnTags } from './studyPgnTags';
 import { buildInitialTree, rebuildMainlineFromTree, genNodeId } from './studySync/apply';
 import { exportLegacyFromTree } from './studySync/treeModel';
 import type { StudyTree, StudyNode, NodeId } from './studySync/types';
+import type { Shape } from './studySync/types';
 
 type PgnToken =
   | { type: 'moveNumber'; value: string }
@@ -15,6 +17,7 @@ type PgnToken =
 export type ParsedPgnChapter = {
   startFen: string;
   title?: string;
+  pgnTags: Array<[string, string]>;
   moves: string[];
   moveComments: Record<number, string>;
   moveAnnotations: Record<number, string | string[]>;
@@ -125,6 +128,70 @@ function attachGlyphs(tree: StudyTree, nodeId: NodeId, glyphs: string[]): StudyT
   };
 }
 
+function lichessShapeColor(code: string): string {
+  switch (code.toUpperCase()) {
+    case 'Y': return '#e68a00cc';
+    case 'R': return '#c02020cc';
+    case 'B': return '#003088cc';
+    default: return '#15781Bcc';
+  }
+}
+
+/** Lichess yorum etiketleri: [%cal Ge2e4] ok, [%csl Ge4] daire. */
+export function parseLichessDiagramShapes(text: string): Shape[] {
+  const shapes: Shape[] = [];
+  const calMatch = text.match(/\[%cal\s+([^\]]+)\]/i);
+  if (calMatch?.[1]) {
+    for (const raw of calMatch[1].split(',')) {
+      const token = raw.trim();
+      if (token.length < 5) continue;
+      const color = lichessShapeColor(token[0]!);
+      const from = token.slice(1, 3).toLowerCase();
+      const to = token.slice(3, 5).toLowerCase();
+      if (/^[a-h][1-8]$/.test(from) && /^[a-h][1-8]$/.test(to)) {
+        shapes.push({ startSquare: from, endSquare: to, color });
+      }
+    }
+  }
+  const cslMatch = text.match(/\[%csl\s+([^\]]+)\]/i);
+  if (cslMatch?.[1]) {
+    for (const raw of cslMatch[1].split(',')) {
+      const token = raw.trim();
+      if (token.length < 3) continue;
+      const color = lichessShapeColor(token[0]!);
+      const sq = token.slice(1, 3).toLowerCase();
+      if (/^[a-h][1-8]$/.test(sq)) {
+        shapes.push({ startSquare: sq, endSquare: sq, color });
+      }
+    }
+  }
+  return shapes;
+}
+
+function stripLichessDiagramTags(text: string): string {
+  return text
+    .replace(/\[%cal[^\]]*\]/gi, '')
+    .replace(/\[%csl[^\]]*\]/gi, '')
+    .replace(/\[%clk[^\]]*\]/gi, '')
+    .replace(/\[%emt[^\]]*\]/gi, '')
+    .replace(/\[%eval[^\]]*\]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function attachShapes(tree: StudyTree, nodeId: NodeId, shapes: Shape[]): StudyTree {
+  if (!shapes.length) return tree;
+  const node = tree.nodes[nodeId];
+  if (!node) return tree;
+  return {
+    ...tree,
+    nodes: {
+      ...tree.nodes,
+      [nodeId]: { ...node, shapes: [...node.shapes, ...shapes] },
+    },
+  };
+}
+
 function addMoveNode(tree: StudyTree, parentId: NodeId, san: string, glyphs: string[]): { tree: StudyTree; nodeId: NodeId | null } {
   const parent = tree.nodes[parentId];
   if (!parent) return { tree, nodeId: null };
@@ -209,9 +276,10 @@ function parseSequence(
     }
 
     if (tok.type === 'lparen') {
-      if (!lastNodeId) { pos.i++; continue; }
       pos.i++;
-      const branchParentId = resolveVariationParentId(tree, lastNodeId, tokens, pos);
+      const branchParentId = lastNodeId
+        ? resolveVariationParentId(tree, lastNodeId, tokens, pos)
+        : currentParentId;
       const nested = parseSequence(tree, branchParentId, tokens, pos, 'rparen');
       tree = nested.tree;
       if (tokens[pos.i]?.type === 'rparen') pos.i++;
@@ -241,7 +309,11 @@ function parseSequence(
       currentParentId = added.nodeId;
 
       if (pos.i < tokens.length && tokens[pos.i].type === 'comment') {
-        tree = attachComment(tree, lastNodeId, tokens[pos.i].value);
+        const rawComment = tokens[pos.i].value;
+        const diagramShapes = parseLichessDiagramShapes(rawComment);
+        if (diagramShapes.length) tree = attachShapes(tree, lastNodeId, diagramShapes);
+        const clean = stripLichessDiagramTags(rawComment);
+        if (clean) tree = attachComment(tree, lastNodeId, clean);
         pos.i++;
       }
       continue;
@@ -277,16 +349,17 @@ export function parsePgnBlockToChapter(block: string): ParsedPgnChapter {
   const trimmed = block.trim();
   if (!trimmed) {
     const empty = buildInitialTree(DEFAULT_FEN);
-    return { startFen: DEFAULT_FEN, moves: [], moveComments: {}, moveAnnotations: {}, variations: {}, tree: empty };
+    return { startFen: DEFAULT_FEN, pgnTags: [], moves: [], moveComments: {}, moveAnnotations: {}, variations: {}, tree: empty };
   }
 
   const { headers, movetext } = extractHeaders(trimmed);
   const startFen = headers.FEN?.trim() || DEFAULT_FEN;
   const title = headers.ChapterName?.trim() || headers.Event?.trim() || undefined;
+  const pgnTags = headersToPgnTags(headers);
 
   if (!movetext || movetext === '*') {
     const empty = buildInitialTree(startFen);
-    return { startFen, title, moves: [], moveComments: {}, moveAnnotations: {}, variations: {}, tree: empty };
+    return { startFen, title, pgnTags, moves: [], moveComments: {}, moveAnnotations: {}, variations: {}, tree: empty };
   }
 
   const tokens = tokenizeMovetext(movetext);
@@ -300,6 +373,7 @@ export function parsePgnBlockToChapter(block: string): ParsedPgnChapter {
   return {
     startFen: legacy.fen ?? startFen,
     title,
+    pgnTags,
     moves: legacy.moves ?? [],
     moveComments: meta.moveComments,
     moveAnnotations: meta.moveAnnotations,

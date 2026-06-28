@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, Plus, Trash2, Save, ClipboardList, Link2 } from 'lucide-react';
 import type { Student, StudentLessonLogEntry } from '../types';
 import { ResponsiveTable } from './ui/ResponsiveTable';
+import { useApp } from '../AppContext';
 
 function newEntryId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -60,6 +61,7 @@ const emptyDraft = (): StudentLessonLogEntry => ({
 });
 
 const StudentLessonLogModal: React.FC<Props> = ({ student, onClose, onSave }) => {
+  const { confirmDialog } = useApp();
   const [entries, setEntries] = useState<StudentLessonLogEntry[]>(() =>
     sortEntries(student.lessonLog ?? [])
   );
@@ -108,8 +110,14 @@ const StudentLessonLogModal: React.FC<Props> = ({ student, onClose, onSave }) =>
     });
   };
 
-  const removeRow = (id: string) => {
-    if (!window.confirm('Bu ders kaydını silmek istiyor musunuz?')) return;
+  const removeRow = async (id: string) => {
+    const ok = await confirmDialog({
+      title: 'Kaydı sil',
+      message: 'Bu ders kaydını silmek istiyor musunuz?',
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setEntries((prev) => prev.filter((e) => e.id !== id));
     if (editingId === id) {
       setEditingId(null);

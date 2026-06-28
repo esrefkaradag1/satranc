@@ -26,13 +26,15 @@ import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
   loadProgress, saveProgress, fenToCurrentFen,
   loadVcProgress, saveVcProgress,
   describeGameOutcomeFromFen, matedKingSquareFromFen,
-  genId, migrateStudy, migrateChapter,
+  genId, migrateStudy, migrateChapter, studyDisplayEmoji,
   normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
 } from '../lib/studyUtils';
-import { normalizeStudyChapterPuzzle } from '../lib/puzzlePlayUtils';
+import { applyPuzzleAutoReplies, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares, expectedMoveSan } from '../lib/puzzlePlayUtils';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
+import { StudyBoardPgnHeader } from './study/StudyBoardPgnHeader';
+import { buildStudyBoardPgnDisplay } from '../lib/studyPgnTags';
 import { loadStudyPresence, subscribeStudyPresence } from '../services/studyActions';
 import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, mergeMainlineMoves } from '../lib/studySync/moveList';
 import { liveLessonFenAt } from '../lib/liveLessonVariations';
@@ -76,10 +78,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 }) => {
   const { students, coaches, auth } = useApp();
   const [studies, setStudies] = useState<Study[]>([]);
+  const selectedStudyIdRef = useRef<string | null>(
+    previewMode && previewStudyId ? previewStudyId : null,
+  );
   /** Öğretmendeki gibi girişte tüm çalışmalar listesi; son dosyaya otomatik gitme. */
   const [selectedStudyId, setSelectedStudyId] = useState<string | null>(
     () => (previewMode && previewStudyId ? previewStudyId : null),
   );
+  selectedStudyIdRef.current = selectedStudyId;
   const [selectedChapterIndex, setSelectedChapterIndex] = useState(0);
   const [listSearch, setListSearch] = useState('');
   const [studyListCategory, setStudyListCategory] = useState<'mine' | 'teacher'>('mine');
@@ -165,11 +171,21 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     loadStudiesAsync().then(fresh => setStudies(fresh)).catch(() => {});
   }, []);
 
+  const mergeStudiesFromServer = useCallback((prev: Study[], fresh: Study[]) => {
+    const next = fresh.map(migrateStudy);
+    const activeId = selectedStudyIdRef.current;
+    if (!activeId || next.some((s) => s.id === activeId)) return next;
+    const pinned = prev.find((s) => s.id === activeId);
+    return pinned ? [...next, migrateStudy(pinned)] : next;
+  }, []);
+
   useEffect(() => {
     refreshStudies();
-    const unsub = subscribeToStudies(fresh => setStudies(fresh));
+    const unsub = subscribeToStudies((fresh) => {
+      setStudies((prev) => mergeStudiesFromServer(prev, fresh));
+    });
     return unsub;
-  }, [refreshStudies]);
+  }, [refreshStudies, mergeStudiesFromServer]);
 
   const studentStudies = useMemo(() => {
     if (previewMode && previewStudyId) {
@@ -290,7 +306,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const puzzlePlayNorm = useMemo(() => {
     if (!isInteractivePuzzle || !effectiveChapter) return null;
     return normalizeStudyChapterPuzzle(effectiveChapter);
-  }, [isInteractivePuzzle, effectiveChapter?.fen, effectiveChapter?.moves, effectiveChapter?.id]);
+  }, [isInteractivePuzzle, effectiveChapter?.fen, effectiveChapter?.moves, effectiveChapter?.orientation, effectiveChapter?.id]);
+
+  const boardPgnDisplay = useMemo(() => {
+    if (!selectedStudy || !effectiveChapter) return null;
+    return buildStudyBoardPgnDisplay(
+      selectedStudy.title,
+      effectiveChapter.title,
+      selectedChapterIndex,
+      effectiveChapter.pgnTags,
+    );
+  }, [selectedStudy?.title, effectiveChapter?.title, effectiveChapter?.pgnTags, selectedChapterIndex]);
 
   /** Tahta = sync ana hat; liste eski chapter.moves'ta kaldığında burada birleştirilir. */
   const chapterMovesForUi = useMemo(() => {
@@ -479,10 +505,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [selectedStudy?.chatMessages?.length]);
   const scenarioText = useMemo(() => {
-    if (!effectiveChapter) return "Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.";
-    if (effectiveChapter.comment?.trim()) return effectiveChapter.comment.trim();
-    return "Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.";
-  }, [effectiveChapter]);
+    if (effectiveChapter?.guidedPrompt?.trim()) return effectiveChapter.guidedPrompt.trim();
+    if (effectiveChapter?.comment?.trim()) return effectiveChapter.comment.trim();
+    if (isInteractivePuzzle && puzzlePlayNorm) {
+      const colorLabel = puzzlePlayNorm.studentColor === 'w' ? 'Beyaz' : 'Siyah';
+      return `Sıra sizde. ${colorLabel} için en iyi hamleyi bulun.`;
+    }
+    return 'Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.';
+  }, [effectiveChapter, isInteractivePuzzle, puzzlePlayNorm]);
   const hintText = useMemo(() => {
     if (!effectiveChapter) return '';
     if (effectiveChapter.moveHint?.trim()) return effectiveChapter.moveHint.trim();
@@ -497,10 +527,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const syncPathFen = useMemo(() => fenAtSyncPath(syncState), [syncState]);
 
   const currentFen = useMemo(() => {
-    if (syncPathFen) return syncPathFen;
+    // Bulmacada sync ağacı PGN sonuna gidebilir — tahta pozisyonu yerel ply ile hesaplanmalı.
+    if (!isInteractivePuzzle && syncPathFen) return syncPathFen;
     if (!moveListChapter) return DEFAULT_FEN;
     return fenToCurrentFen(moveListChapter, currentMoveIndex);
-  }, [syncPathFen, moveListChapter, currentMoveIndex]);
+  }, [isInteractivePuzzle, syncPathFen, moveListChapter, currentMoveIndex]);
 
   const totalMoves = chapterMovesForUi.length;
   const isComplete = isLiveAnalysis ? false : totalMoves > 0 && currentMoveIndex >= totalMoves;
@@ -509,6 +540,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     () => isInteractivePuzzle && !isLiveAnalysis && !vsComputer && !isComplete,
     [isInteractivePuzzle, isLiveAnalysis, vsComputer, isComplete]
   );
+
+  const chapterOrientation = effectiveChapter?.orientation ?? 'white';
+  const [studentBoardOrientation, setStudentBoardOrientation] = useState<'white' | 'black'>(chapterOrientation);
+  const [puzzleSetupPreviewFen, setPuzzleSetupPreviewFen] = useState<string | null>(null);
 
   useEffect(() => {
     const now = Date.now();
@@ -526,12 +561,27 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setEngineHoverMove(null);
   }, [hideEngineForStudentPuzzle, effectiveChapter?.id, currentMoveIndex]);
 
+  useEffect(() => {
+    if (!isInteractivePuzzle || !puzzlePlayNorm?.setupMoveSan || !effectiveChapter) {
+      setPuzzleSetupPreviewFen(null);
+      return;
+    }
+    const preSetupFen = effectiveChapter.fen || DEFAULT_FEN;
+    setPuzzleSetupPreviewFen(preSetupFen);
+    const timer = window.setTimeout(() => setPuzzleSetupPreviewFen(null), 650);
+    return () => window.clearTimeout(timer);
+  }, [effectiveChapter?.id, isInteractivePuzzle, puzzlePlayNorm?.setupMoveSan, effectiveChapter?.fen]);
+
   const studentPlaysColor = normalizeStudentPlaysColor(selectedStudy?.studentPlaysColor);
   const studentMoveEnabled = studentCanMovePieces(studentPlaysColor);
-  const chapterOrientation = effectiveChapter?.orientation ?? 'white';
-  const [studentBoardOrientation, setStudentBoardOrientation] = useState<'white' | 'black'>(chapterOrientation);
 
-  useEffect(() => { setStudentBoardOrientation(chapterOrientation); }, [effectiveChapter?.id, chapterOrientation]);
+  useEffect(() => {
+    if (isInteractivePuzzle && puzzlePlayNorm) {
+      setStudentBoardOrientation(puzzlePlayNorm.studentColor === 'b' ? 'black' : 'white');
+      return;
+    }
+    setStudentBoardOrientation(chapterOrientation);
+  }, [effectiveChapter?.id, chapterOrientation, isInteractivePuzzle, puzzlePlayNorm?.studentColor]);
 
   const flipStudentBoard = useCallback(() => {
     setStudentBoardOrientation((o) => (o === 'white' ? 'black' : 'white'));
@@ -546,12 +596,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const studyBoardFen = useMemo(() => {
     if (vsComputer) return vcFen;
+    if (puzzleSetupPreviewFen && hideEngineForStudentPuzzle) return puzzleSetupPreviewFen;
     if (isComplete && hoverPly !== null && (moveListChapter ?? effectiveChapter) && totalMoves > 0) {
       return fenToCurrentFen(moveListChapter ?? effectiveChapter!, Math.min(Math.max(0, hoverPly), totalMoves));
     }
     if (freePlayFen != null) return freePlayFen;
     return currentFen;
-  }, [vsComputer, vcFen, isComplete, hoverPly, effectiveChapter, moveListChapter, totalMoves, freePlayFen, currentFen]);
+  }, [vsComputer, vcFen, puzzleSetupPreviewFen, hideEngineForStudentPuzzle, isComplete, hoverPly, effectiveChapter, moveListChapter, totalMoves, freePlayFen, currentFen]);
 
   const turn = sideToMove(studyBoardFen);
   const studentTurnCode: 'w' | 'b' | null =
@@ -600,7 +651,28 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setCurrentMoveIndex(isLiveAnalysis ? totalMoves : 0);
   }, [effectiveChapter?.id, totalMoves, studentPlaysColor, isLiveAnalysis]);
 
-  const boardGameOutcome = useMemo(() => describeGameOutcomeFromFen(studyBoardFen), [studyBoardFen]);
+  /** Bulmacada sıra rakipteyse otomatik ilerle (Lichess çözüm hattı). */
+  useEffect(() => {
+    if (!isInteractivePuzzle || !puzzlePlayNorm || !moveListChapter || totalMoves === 0) return;
+    let idx = currentMoveIndex;
+    let fen = fenToCurrentFen(moveListChapter, idx);
+    const studentColor = puzzlePlayNorm.studentColor;
+    let guard = 0;
+    while (idx < totalMoves) {
+      const turnCode = sideToMove(fen) === 'white' ? 'w' : 'b';
+      if (turnCode === studentColor) break;
+      idx += 1;
+      fen = fenToCurrentFen(moveListChapter, idx);
+      guard += 1;
+      if (guard > 16) break;
+    }
+    if (idx !== currentMoveIndex) setCurrentMoveIndex(idx);
+  }, [isInteractivePuzzle, puzzlePlayNorm, moveListChapter, totalMoves, effectiveChapter?.id, currentMoveIndex]);
+
+  const boardGameOutcome = useMemo(() => {
+    if (hideEngineForStudentPuzzle) return null;
+    return describeGameOutcomeFromFen(studyBoardFen);
+  }, [studyBoardFen, hideEngineForStudentPuzzle]);
 
   /** Bulmacada gizli; bilgisayara karşı ve normal çalışmada tahta yanında avantaj çubuğu */
   const showEvalBar = !hideEngineForStudentPuzzle && boardSettings.showEvalBar;
@@ -998,7 +1070,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     // ── INTERACTIVE PUZZLE ─────────────────────────────────────────────────────
     const isInteractivePuzzle = effectiveChapter.lessonMode === 'interactive' && (effectiveChapter.interactiveType ?? 'puzzle') === 'puzzle';
     
-    if (isInteractivePuzzle && !isComplete && currentMoveIndex < totalMoves) {
+    if (isInteractivePuzzle && !isComplete && currentMoveIndex < totalMoves && puzzlePlayNorm) {
+      const studentColor = puzzlePlayNorm.studentColor;
+      const turnCode = sideToMove(currentFen) === 'white' ? 'w' : 'b';
+      if (turnCode !== studentColor) return false;
+
       const game = makeBuilderGame(currentFen);
       const expectedSan = chapterMovesForUi[currentMoveIndex];
       
@@ -1043,7 +1119,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
         if (matched) {
           setLastActionMs(now);
-          const nextIdx = currentMoveIndex + 1;
+          const afterStudentIdx = currentMoveIndex + 1;
+          const auto = applyPuzzleAutoReplies(
+            nextFen,
+            chapterMovesForUi,
+            afterStudentIdx,
+            studentColor,
+          );
+          const nextIdx = auto.nextIndex;
           
           setChapterMoveAnalysis((prev) => [
             ...prev,
@@ -1070,10 +1153,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           });
 
           setCurrentMoveIndex(nextIdx);
-          void jumpToMoveIndex(nextIdx);
 
           if (nextIdx >= totalMoves) {
-            const outcome = describeGameOutcomeFromFen(nextFen);
+            const outcome = describeGameOutcomeFromFen(auto.fen);
             showFeedback(
               'solved',
               outcome
@@ -1124,7 +1206,61 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, appendLiveMoveToChapter, syncState, jumpToMoveIndex, progressKey, makeMove, studentMoveEnabled]);
+  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, appendLiveMoveToChapter, syncState, progressKey, makeMove, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle]);
+
+  const puzzleBranchChoices = useMemo(() => {
+    if (!hideEngineForStudentPuzzle || !syncState?.tree || isComplete) return [];
+    const tree = syncState.tree;
+    let nodeId: string | null = null;
+    for (const [id, node] of Object.entries(tree.nodes)) {
+      if (node.fen === studyBoardFen) {
+        nodeId = id;
+        break;
+      }
+    }
+    if (!nodeId) {
+      const path = syncState.currentPath ?? [];
+      nodeId = path[path.length - 1] ?? tree.rootId;
+    }
+    const node = tree.nodes[nodeId];
+    if (!node?.children || node.children.length < 2) return [];
+    const expectedRaw = chapterMovesForUi[currentMoveIndex];
+    const expectedSan = expectedRaw ? expectedMoveSan(studyBoardFen, expectedRaw) : null;
+    return node.children
+      .map((cid) => tree.nodes[cid])
+      .filter((n) => n?.san)
+      .map((n) => ({
+        nodeId: n!.id,
+        san: n!.san!,
+        isCorrect: !!(expectedSan && n!.san === expectedSan),
+      }));
+  }, [
+    hideEngineForStudentPuzzle,
+    syncState?.tree,
+    syncState?.currentPath,
+    isComplete,
+    studyBoardFen,
+    chapterMovesForUi,
+    currentMoveIndex,
+  ]);
+
+  const restartPuzzleChapter = useCallback(() => {
+    setCurrentMoveIndex(0);
+    setFeedback(null);
+    setFeedbackText(null);
+    setFreePlayFen(null);
+    setLaHint(null);
+    if (!isInteractivePuzzle) void jumpToMoveIndex(0);
+  }, [isInteractivePuzzle, jumpToMoveIndex]);
+
+  const handlePuzzleBranchPick = useCallback((san: string) => {
+    const exp = resolveExpectedMoveSquares(studyBoardFen, san);
+    if (!exp) {
+      showFeedback('wrong');
+      return;
+    }
+    handlePieceDrop({ sourceSquare: exp.from, targetSquare: exp.to });
+  }, [studyBoardFen, handlePieceDrop, showFeedback]);
 
   useEffect(() => () => {
     if (autoReplyTimer.current) clearTimeout(autoReplyTimer.current);
@@ -1463,14 +1599,20 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     const pieceType = typeof piece === 'string' ? piece : piece?.pieceType ?? '';
     const colorChar = typeof pieceType === 'string' ? pieceType.charAt(0) : '';
     if (!colorChar) return studentMoveEnabled;
+    if (hideEngineForStudentPuzzle && puzzlePlayNorm) {
+      const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
+      if (turnCode !== puzzlePlayNorm.studentColor) return false;
+      if (colorChar !== puzzlePlayNorm.studentColor) return false;
+      return studentMoveEnabled;
+    }
     return canStudentDragPieceOnFen(studentPlaysColor, studyBoardFen, colorChar);
-  }, [vsComputer, studentPlaysColor, studyBoardFen, studentMoveEnabled]);
+  }, [vsComputer, studentPlaysColor, studyBoardFen, studentMoveEnabled, hideEngineForStudentPuzzle, puzzlePlayNorm]);
 
   if (!selectedStudyId || !selectedStudy) {
     if (previewMode && previewStudyId) {
       return (
         <div className="flex flex-col h-full items-center justify-center bg-[#0d0f12] gap-4 p-6">
-          {studies.length === 0 ? (
+          {studies.length === 0 || studies.every((s) => s.id !== previewStudyId) ? (
             <>
               <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
               <p className="text-sm text-slate-400">Çalışma yükleniyor…</p>
@@ -1530,7 +1672,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                 }}
                 className="p-6 rounded-3xl bg-slate-800/40 border border-white/5 hover:border-teal-500/30 transition-all text-left flex items-start gap-4 group"
               >
-                 <span className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-3xl">{s.emoji}</span>
+                 <span className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-3xl">{studyDisplayEmoji(s)}</span>
                  <div className="flex-1">
                     <h3 className="font-bold text-white group-hover:text-teal-400 mb-1">{s.title}</h3>
                     <p className="text-xs text-slate-500">{s.chapters.length} Bölüm</p>
@@ -1542,6 +1684,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     );
   }
 
+  const activeStudy = selectedStudy;
+
   return (
     <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0d0f12] text-slate-200 overflow-hidden font-sans">
       {previewMode && (
@@ -1550,7 +1694,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             <Eye className="w-4 h-4 text-indigo-300 shrink-0" />
             <div className="min-w-0">
               <p className="text-[10px] font-black text-indigo-300 uppercase tracking-widest leading-none">Öğrenci önizlemesi</p>
-              <p className="text-xs text-slate-300 truncate">{selectedStudy.title}</p>
+              <p className="text-xs text-slate-300 truncate">{activeStudy.title}</p>
             </div>
           </div>
           <button
@@ -1826,9 +1970,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
-                <span className="text-lg shrink-0">{selectedStudy.emoji}</span>
+                <span className="text-lg shrink-0">{studyDisplayEmoji(activeStudy)}</span>
                <h2 className="font-bold text-[#bababa] tracking-tight text-xs sm:text-sm truncate min-w-0">
-                 <span className="truncate">{selectedStudy.title}</span>
+                 <span className="truncate">{activeStudy.title}</span>
                  <span className="mx-1 sm:mx-2 text-[#555]">/</span>
                  <span className="text-[#6366f1] truncate">{effectiveChapter?.title ?? selectedChapter?.title}</span>
                </h2>
@@ -1890,6 +2034,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                     <Settings2 className="w-4 h-4" />
                   </button>
                 </div>
+                {boardPgnDisplay ? (
+                  <StudyBoardPgnHeader
+                    display={boardPgnDisplay}
+                    boardOrientation={studentBoardOrientation}
+                    variant="player-top"
+                    className="w-full overflow-hidden border-x border-[rgba(255,255,255,0.05)]"
+                  />
+                ) : null}
                 <ChessBoardFrame
                   boardOrientation={studentBoardOrientation}
                   boardClassName="rounded-sm overflow-hidden ring-1 ring-[rgba(255,255,255,0.05)]"
@@ -2013,6 +2165,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                     )}
                 </div>
                 </ChessBoardFrame>
+                {boardPgnDisplay ? (
+                  <StudyBoardPgnHeader
+                    display={boardPgnDisplay}
+                    boardOrientation={studentBoardOrientation}
+                    variant="player-bottom"
+                    className="w-full rounded-b-sm overflow-hidden border border-[rgba(255,255,255,0.05)] border-t-0"
+                  />
+                ) : null}
              </div>
 
              <div className="w-full flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 bg-[#0f172a] p-2 rounded-sm border border-[rgba(255,255,255,0.05)]">
@@ -2040,8 +2200,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                  totalCorrectThinkLabel={formatDuration(totalCorrectThinkMs)}
                  totalWrongThinkLabel={formatDuration(totalWrongThinkMs)}
                  onTabChange={setBottomTab}
-                 onAddTag={() => {}}
-                 onRemoveTag={() => {}}
+                 onSetPgnTag={() => {}}
                  onSaveComment={() => {}}
                  onAddAnnotation={() => {}}
                  onSelectChapter={(idx) => { setSelectedChapterIndex(idx); setCurrentMoveIndex(0); }}
@@ -2091,7 +2250,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   </p>
                   {puzzlePlayNorm?.setupMoveSan ? (
                     <p className="text-xs text-sky-300/90 mt-3">
-                      Rakip hamle: <span className="font-mono font-bold">{puzzlePlayNorm.setupMoveSan}</span>
+                      Rakip kurulum hamlesi: <span className="font-mono font-bold">{puzzlePlayNorm.setupMoveSan}</span>
+                    </p>
+                  ) : null}
+                  {!isComplete && puzzlePlayNorm ? (
+                    <p className="text-[11px] text-slate-500 mt-2">
+                      {puzzlePlayNorm.studentColor === 'w' ? 'Beyaz' : 'Siyah'} oynar · tahta yönü otomatik ayarlandı
                     </p>
                   ) : null}
                 </div>
@@ -2275,19 +2439,43 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
               <div className="flex gap-2">
                 {feedback === 'solved' ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCurrentMoveIndex(0);
-                      setFeedback(null);
-                      setFeedbackText(null);
-                      void jumpToMoveIndex(0);
-                    }}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    TEKRAR OYNA
-                  </button>
+                  <div className="flex flex-col gap-2 w-full">
+                    {selectedChapterIndex < (selectedStudy?.chapters.length ?? 1) - 1 ? (
+                      <button
+                        type="button"
+                        onClick={goNextChapter}
+                        className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
+                      >
+                        Sonraki bölüm
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={restartPuzzleChapter}
+                      className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white/5 hover:bg-white/10 text-slate-200 rounded-xl font-bold transition-all border border-white/10 active:scale-95"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Tekrar oyna
+                    </button>
+                  </div>
+                ) : puzzleBranchChoices.length > 0 ? (
+                  <div className="flex flex-col gap-2 w-full">
+                    {puzzleBranchChoices.map((choice) => (
+                      <button
+                        key={choice.nodeId}
+                        type="button"
+                        onClick={() => handlePuzzleBranchPick(choice.san)}
+                        className={`w-full py-3 px-4 rounded-xl text-sm font-bold transition-all border active:scale-[0.98] ${
+                          choice.isCorrect
+                            ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/35'
+                            : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                        }`}
+                      >
+                        {choice.san}
+                      </button>
+                    ))}
+                  </div>
                 ) : (
                   <>
                     <button

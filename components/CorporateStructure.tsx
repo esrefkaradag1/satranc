@@ -10,7 +10,7 @@ const DEFAULT_CLUB_PASSWORD = 'kulup'; // Giriş sayfasında kullanılan varsay�
 const MAX_CLUBS = 20;
 
 const CorporateStructure: React.FC = () => {
-  const { clubs, addClub, updateClub, removeClub, coaches, appRoles } = useApp();
+  const { clubs, addClub, updateClub, removeClub, coaches, appRoles, showToast, confirmDialog } = useApp();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState('');
@@ -53,11 +53,11 @@ const CorporateStructure: React.FC = () => {
     if (!name) return;
     const loginUsername = (formLoginUsername.trim() || suggestClubUsername(name, clubs, editingId ?? undefined)).toLowerCase();
     if (!loginUsername) {
-      alert('Kulüp kullanıcı adı gerekli.');
+      showToast('Kulüp kullanıcı adı gerekli.', 'warning');
       return;
     }
     if (isClubUsernameTaken(clubs, loginUsername, editingId ?? undefined)) {
-      alert('Bu kullanıcı adı başka bir kulüpte kullanılıyor.');
+      showToast('Bu kullanıcı adı başka bir kulüpte kullanılıyor.', 'warning');
       return;
     }
     const loginPassword = formLoginPassword.trim() || undefined;
@@ -73,7 +73,7 @@ const CorporateStructure: React.FC = () => {
       });
     } else {
       if (clubs.length >= MAX_CLUBS) {
-        alert(`En fazla ${MAX_CLUBS} kulüp ekleyebilirsiniz.`);
+        showToast(`En fazla ${MAX_CLUBS} kulüp ekleyebilirsiniz.`, 'warning');
         return;
       }
       addClub({
@@ -231,10 +231,14 @@ const CorporateStructure: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (window.confirm(`"${club.name}" kulübünü silmek istediğinize emin misiniz?`)) {
-                          removeClub(club.id);
-                        }
+                      onClick={async () => {
+                        const ok = await confirmDialog({
+                          title: 'Kulübü sil',
+                          message: `"${club.name}" kulübünü silmek istediğinize emin misiniz?`,
+                          confirmLabel: 'Sil',
+                          variant: 'danger',
+                        });
+                        if (ok) removeClub(club.id);
                       }}
                       className="p-2 rounded-lg text-slate-400 hover:bg-rose-500/20 hover:text-rose-400 transition-colors"
                       title="Sil"

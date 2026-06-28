@@ -16,6 +16,25 @@ function getHeaders(): HeadersInit {
   return headers;
 }
 
+/** Supabase modunda veli/öğrenci girişi (service role; Vite dev + Vercel `/api/auth-parent`). */
+export async function apiLocalAuthParentLogin(
+  phoneOrStudentId: string,
+  pin: string
+): Promise<{ studentId: string; student: Student } | null> {
+  const res = await fetch('/api/auth-parent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      phoneOrStudentId: phoneOrStudentId.trim(),
+      pin: pin.trim(),
+    }),
+  }).catch(() => null);
+  if (!res?.ok) return null;
+  const data = await res.json().catch(() => null);
+  if (!data?.studentId || !data?.student) return null;
+  return { studentId: String(data.studentId), student: data.student as Student };
+}
+
 /** Veli/öğrenci girişi: telefon veya öğrenci no + PIN */
 export async function apiParentLogin(
   phoneOrStudentId: string,

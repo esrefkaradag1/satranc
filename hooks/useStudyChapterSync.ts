@@ -22,6 +22,15 @@ function pathFromTree(tree: StudyTree): NodeId[] {
   return tree.mainline?.length ? tree.mainline.slice() : [tree.rootId];
 }
 
+/** Etkileşimli bulmaca: Lichess gibi kökten başla; ders/okuma: ana hattın sonu. */
+function initialPathFromTree(tree: StudyTree, chapter: StudyChapter | null | undefined): NodeId[] {
+  const isPuzzle =
+    chapter?.lessonMode === 'interactive' &&
+    (chapter.interactiveType ?? 'puzzle') === 'puzzle';
+  if (isPuzzle) return [tree.rootId];
+  return pathFromTree(tree);
+}
+
 /** syncState ile chapter.seedTree uyumsuzsa (PGN içe aktarım) seedTree'yi kullan */
 function reconcileTreeState(
   state: StudyChapterState,
@@ -32,7 +41,7 @@ function reconcileTreeState(
   const syncPlies = treeMainlinePlyCount(state.tree);
   const seedPlies = treeMainlinePlyCount(seed);
   if (seedPlies <= syncPlies && state.tree.nodes[seed.rootId]) return state;
-  const path = pathFromTree(seed);
+  const path = initialPathFromTree(seed, chapter);
   return { ...state, tree: seed, currentPath: path, serverPath: path, lastSeq: 0 };
 }
 
@@ -109,6 +118,7 @@ function treeToLegacyChapter(state: StudyChapterState, fallback: StudyChapter | 
     difficulty: meta.difficulty ?? base.difficulty,
     comment: meta.comment ?? (chapterCommentFromRoot || base.comment),
     tags: meta.tags ?? base.tags,
+    pgnTags: meta.pgnTags ?? base.pgnTags,
     fen: root.fen || base.fen,
     moves,
     moveComments,
@@ -125,6 +135,7 @@ export function useStudyChapterSync(args: {
   actorRole: string;
   initialSticky: boolean;
   initialWrite: boolean;
+  confirmAction?: (options: { message: string; title?: string; confirmLabel?: string; variant?: 'danger' | 'default' }) => Promise<boolean>;
 }) {
   const studyId = args.study?.id ?? null;
   const chapterId = args.chapter?.id ?? null;
@@ -158,6 +169,7 @@ export function useStudyChapterSync(args: {
       difficulty: args.chapter?.difficulty,
       comment: args.chapter?.comment,
       tags: args.chapter?.tags,
+      pgnTags: args.chapter?.pgnTags,
     };
     let base = initialChapterState({ studyId, chapterId, startFen, meta });
     base.vm.sticky = !!args.initialSticky;
@@ -178,7 +190,7 @@ export function useStudyChapterSync(args: {
       (!snapTree || snapPlies < seedPlies || (snapPlies === 0 && chapterMoveCount > 0));
 
     if (snapshotStale && seedTree) {
-      const path = pathFromTree(seedTree);
+      const path = initialPathFromTree(seedTree, args.chapter);
       base = {
         ...base,
         tree: seedTree,
@@ -191,7 +203,7 @@ export function useStudyChapterSync(args: {
         (snapTree as any)?.meta && typeof (snapTree as any).meta === 'object'
           ? (snapTree as any).meta
           : {};
-      const path = pathFromTree(snapTree);
+      const path = initialPathFromTree(snapTree, args.chapter);
       base = {
         ...base,
         tree: snapTree,
@@ -201,7 +213,7 @@ export function useStudyChapterSync(args: {
         serverPath: path,
       };
     } else if (seedTree?.rootId && seedTree.nodes) {
-      const path = pathFromTree(seedTree);
+      const path = initialPathFromTree(seedTree, args.chapter);
       base = {
         ...base,
         tree: seedTree,
@@ -215,7 +227,7 @@ export function useStudyChapterSync(args: {
         moves: args.chapter.moves,
         variations: args.chapter.variations ?? {},
       });
-      const path = pathFromTree(built);
+      const path = initialPathFromTree(built, args.chapter);
       base = {
         ...base,
         tree: built,
@@ -914,7 +926,14 @@ export function useStudyChapterSync(args: {
     const root = syncState.tree.nodes[syncState.tree.rootId];
     if (!root || !root.children || root.children.length === 0) return;
 
-    if (!window.confirm('Bu bölümdeki TÜM hamleler silinecek. Emin misiniz?')) return;
+    if (
+      !(await (args.confirmAction?.({
+        title: 'Bölümü sıfırla',
+        message: 'Bu bölümdeki TÜM hamleler silinecek. Emin misiniz?',
+        confirmLabel: 'Sıfırla',
+        variant: 'danger',
+      }) ?? Promise.resolve(false)))
+    ) return;
 
     ephemeralTipsRef.current = [];
     // Delete all direct children of root
@@ -923,7 +942,7 @@ export function useStudyChapterSync(args: {
     }
     
     setSyncState(prev => (prev ? { ...prev, currentPath: [prev.tree.rootId] } : prev));
-  }, [syncState, canWrite, deleteMove]);
+  }, [syncState, canWrite, deleteMove, args.confirmAction]);
 
   const navigationState = useMemo(() => {
     if (!syncState) return { moveIndex: 0, currentVariation: null };

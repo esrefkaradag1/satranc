@@ -1,5 +1,21 @@
 import type { CSSProperties } from 'react';
 
+/** Mat / kesin kazanç — evalBarWhitePercent bunu %0 veya %100 yapar */
+export const EVAL_BAR_DECISIVE_SCORE = 100;
+
+/** Eval çubuğu için beyaz pay (0–100), Lichess benzeri atan eğrisi */
+export function evalBarWhitePercent(score: number): number {
+  if (score >= EVAL_BAR_DECISIVE_SCORE) return 100;
+  if (score <= -EVAL_BAR_DECISIVE_SCORE) return 0;
+  return 50 + (50 * (2 / Math.PI)) * Math.atan(Math.max(-3, Math.min(3, score)) * 0.5);
+}
+
+export function formatEvalLabel(score: number): string {
+  if (Math.abs(score) >= EVAL_BAR_DECISIVE_SCORE) return 'Mat';
+  const sign = score > 0 ? '+' : '';
+  return `${sign}${score.toFixed(1)}`;
+}
+
 /** react-chessboard: taş hareket geçişleri (Lichess benzeri) */
 export const CHESSBOARD_ANIMATION = {
   showAnimations: true as const,
@@ -20,8 +36,8 @@ export function pvLineToEvalBarPawns(
   const flip = turn === 'b' ? -1 : 1;
   if (line.mate !== null) {
     const m = line.mate * flip;
-    if (m > 0) return 8;
-    if (m < 0) return -8;
+    if (m > 0) return EVAL_BAR_DECISIVE_SCORE;
+    if (m < 0) return -EVAL_BAR_DECISIVE_SCORE;
     return 0;
   }
   const v = line.score * flip;

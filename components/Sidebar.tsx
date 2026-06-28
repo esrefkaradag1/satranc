@@ -13,7 +13,8 @@ function categoryContainsTab(cat: NavCategory, tab: string) {
 }
 
 function isDefaultOpenCategory(cat: NavCategory) {
-  return cat.title.trim().toLocaleLowerCase('tr-TR') === 'öğrenci işleri';
+  const t = cat.title.trim().toLocaleLowerCase('tr-TR');
+  return t === 'öğrenci işleri' || t === 'genel';
 }
 
 function buildDefaultCollapsedCategories(categories: NavCategory[]): Set<string> {
@@ -166,6 +167,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [desktopExpanded, setDesktopExpanded] = useState(!defaultIconOnly);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => new Set());
   const categoryDefaultsApplied = React.useRef(false);
+  const knownCategoryKeysRef = React.useRef<Set<string>>(new Set());
   const useCategories = navCategories && navCategories.length > 0;
   const iconOnly = !desktopExpanded && !mobileOpen;
 
@@ -212,27 +214,47 @@ const Sidebar: React.FC<SidebarProps> = ({
     if (!useCategories || !navCategories?.length) return;
 
     setCollapsedCategories((prev) => {
-      const next = new Set(prev);
-
       if (!categoryDefaultsApplied.current) {
         categoryDefaultsApplied.current = true;
-        return buildDefaultCollapsedCategories(navCategories);
+        const defaults = buildDefaultCollapsedCategories(navCategories);
+        navCategories.forEach((cat, idx) => knownCategoryKeysRef.current.add(categoryKey(cat, idx)));
+        return defaults;
       }
+
+      const validKeys = new Set(navCategories.map((c, i) => categoryKey(c, i)));
+      const next = new Set(prev);
 
       navCategories.forEach((cat, idx) => {
         const key = categoryKey(cat, idx);
-        if (prev.has(key) || isDefaultOpenCategory(cat)) return;
-        if (!next.has(key)) next.add(key);
+        if (knownCategoryKeysRef.current.has(key)) return;
+        knownCategoryKeysRef.current.add(key);
+        if (!isDefaultOpenCategory(cat)) next.add(key);
       });
 
-      const validKeys = new Set(navCategories.map((c, i) => categoryKey(c, i)));
-      for (const key of next) {
+      for (const key of [...next]) {
         if (!validKeys.has(key)) next.delete(key);
+      }
+      for (const key of [...knownCategoryKeysRef.current]) {
+        if (!validKeys.has(key)) knownCategoryKeysRef.current.delete(key);
       }
 
       return next;
     });
   }, [navCategories, useCategories]);
+
+  /** Aktif sekmenin bulunduğu kategori otomatik açılsın */
+  useEffect(() => {
+    if (!useCategories || !navCategories?.length) return;
+    const catIdx = navCategories.findIndex((cat) => categoryContainsTab(cat, activeTab));
+    if (catIdx < 0) return;
+    const key = categoryKey(navCategories[catIdx]!, catIdx);
+    setCollapsedCategories((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }, [activeTab, navCategories, useCategories]);
 
   return (
     <>

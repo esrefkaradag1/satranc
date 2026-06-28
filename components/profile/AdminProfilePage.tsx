@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { loadAdminProfile, saveAdminProfile } from '../../lib/adminProfile';
 import { getServiceSupabase, isSupabaseBackend } from '../../services/supabase';
+import { useApp } from '../../AppContext';
 
 const inputCls =
   'w-full px-3 py-2 rounded-xl text-sm bg-slate-950/50 border border-slate-700/50 text-white placeholder:text-slate-600 outline-none focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/20 transition-all';
@@ -100,6 +101,7 @@ function SectionCard({
 }
 
 const AdminProfilePage: React.FC = () => {
+  const { showToast, confirmDialog } = useApp();
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   const [displayName, setDisplayName] = useState('Yönetici');
@@ -148,7 +150,7 @@ const AdminProfilePage: React.FC = () => {
 
   const handlePhotoUpload = async (file: File) => {
     if (file.size > 2 * 1024 * 1024) {
-      alert('Fotoğraf en fazla 2 MB olabilir.');
+      showToast('Fotoğraf en fazla 2 MB olabilir.', 'warning');
       return;
     }
 
@@ -173,14 +175,20 @@ const AdminProfilePage: React.FC = () => {
       };
       reader.readAsDataURL(file);
     } catch {
-      alert('Fotoğraf yüklenemedi. Daha küçük bir dosya deneyin.');
+      showToast('Fotoğraf yüklenemedi. Daha küçük bir dosya deneyin.', 'error');
     } finally {
       setPhotoUploading(false);
     }
   };
 
-  const handleRemovePhoto = () => {
-    if (!window.confirm('Profil fotoğrafını kaldırmak istiyor musunuz?')) return;
+  const handleRemovePhoto = async () => {
+    const ok = await confirmDialog({
+      title: 'Fotoğrafı kaldır',
+      message: 'Profil fotoğrafını kaldırmak istiyor musunuz?',
+      confirmLabel: 'Kaldır',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setPhotoUrl('');
   };
 

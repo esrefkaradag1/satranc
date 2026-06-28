@@ -291,7 +291,7 @@ const StudentAdd: React.FC<{
       username: loginUsername,
       password: loginPassword,
     });
-    setSavedCredentials({ username: loginUsername, password: loginPassword });
+    setSavedCredentials({ username: newStudent.username ?? loginUsername, password: newStudent.password ?? loginPassword });
     setSavedStudent(newStudent);
   };
   const [photo, setPhoto] = useState<File | null>(null);
@@ -502,7 +502,6 @@ const StudentAdd: React.FC<{
 
       const loginUsername = suggestStudentUsername(form.name.trim(), students.map((s) => s.username));
       const loginPassword = generateStudentPassword();
-      setSavedCredentials({ username: loginUsername, password: loginPassword });
 
       const newStudent = await addStudent({
         name: form.name.trim(),
@@ -559,6 +558,10 @@ const StudentAdd: React.FC<{
         })?.id,
         coachId: form.coachId !== PLACEHOLDER_COACH ? form.coachId : undefined,
         lessonSchedule: lessonSchedule.length ? lessonSchedule : undefined,
+      });
+      setSavedCredentials({
+        username: newStudent.username ?? loginUsername,
+        password: newStudent.password ?? loginPassword,
       });
 
       try {

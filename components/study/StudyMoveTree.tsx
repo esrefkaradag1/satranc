@@ -6,6 +6,14 @@ import { formatMoveGlyphs, parseMoveGlyphs } from '../../lib/studyAnnotations';
 import { FigurineSan } from '../chess/FigurineSan';
 import { StudyTreeInlineNotation } from './StudyTreeInlineNotation';
 import { StudyTreeTableNotation } from './StudyTreeTableNotation';
+import { StudyNotationPgnFooter } from './StudyNotationPgnFooter';
+import {
+  StudyNotationContextMenu,
+  STUDY_NOTATION_MOVE_CELL,
+  openStudyNotationMenuFromEvent,
+  studyMoveCellButtonClass,
+  type StudyNotationMenuPoint,
+} from './StudyNotationContextMenu';
 
 interface StudyMoveTreeProps {
   chapter: StudyChapter | null;
@@ -52,36 +60,62 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
 }) => {
   const activeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const [contextMenu, setContextMenu] = React.useState<{
-    x: number; y: number; moveIdx: number; varInfo?: [number, number, number];
+    point: StudyNotationMenuPoint;
+    moveIdx: number;
+    varInfo?: [number, number, number];
   } | null>(null);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [currentMoveIndex, currentVariation, chapter?.id]);
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = (e: MouseEvent) => {
-      if (contextMenuRef.current?.contains(e.target as Node)) return;
-      setContextMenu(null);
-    };
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [contextMenu]);
-
   const handleContextMenu = useCallback((e: React.MouseEvent, moveIdx: number, varInfo?: [number, number, number]) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const rect = containerRef.current?.getBoundingClientRect();
+    if (!onDeleteFromHere && !onPromoteVariation) return;
     setContextMenu({
-      x: e.clientX - (rect?.left ?? 0),
-      y: e.clientY - (rect?.top ?? 0),
+      point: openStudyNotationMenuFromEvent(e),
       moveIdx,
       varInfo,
     });
-  }, []);
+  }, [onDeleteFromHere, onPromoteVariation]);
+
+  const notationContextMenu = (
+    <StudyNotationContextMenu open={contextMenu?.point ?? null} onClose={() => setContextMenu(null)}>
+      {onDeleteFromHere && contextMenu ? (
+        <button
+          type="button"
+          onClick={() => {
+            onDeleteFromHere(contextMenu.moveIdx, contextMenu.varInfo);
+            setContextMenu(null);
+          }}
+          className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          Bu hamleden sonrasını sil
+        </button>
+      ) : null}
+      {onPromoteVariation && contextMenu?.varInfo ? (
+        <button
+          type="button"
+          onClick={() => {
+            onPromoteVariation(contextMenu.varInfo![0], contextMenu.varInfo![1]);
+            setContextMenu(null);
+          }}
+          className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all"
+        >
+          <ArrowUpRight className="w-3.5 h-3.5" />
+          Ana hat yap
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => setContextMenu(null)}
+        className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-slate-500 hover:bg-white/5 transition-all"
+      >
+        İptal
+      </button>
+    </StudyNotationContextMenu>
+  );
 
   if (!chapter) return null;
 
@@ -97,7 +131,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
     return (
       <div
         ref={containerRef}
-        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
+        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative ${compact ? 'p-2' : 'p-3'}`}
         onMouseLeave={() => onHoverMove?.(null)}
       >
         <StudyTreeInlineNotation
@@ -112,6 +146,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
           compact={compact}
           activeRef={activeRef}
         />
+        <StudyNotationPgnFooter pgnTags={chapter.pgnTags} compact={compact} />
       </div>
     );
   }
@@ -120,7 +155,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
     return (
       <div
         ref={containerRef}
-        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
+        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative ${compact ? 'p-2' : 'p-3'}`}
         onMouseLeave={() => onHoverMove?.(null)}
       >
         <StudyTreeTableNotation
@@ -135,6 +170,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
           compact={compact}
           activeRef={activeRef}
         />
+        <StudyNotationPgnFooter pgnTags={chapter.pgnTags} compact={compact} />
       </div>
     );
   }
@@ -148,7 +184,21 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   const textSize = compact ? 'text-[11px]' : 'text-[13px]';
   const rowGrid = 'grid grid-cols-[2rem_1fr_1fr] gap-x-1.5 items-stretch w-full';
   const indexCell = `text-[11px] font-bold text-slate-500 text-right pr-1.5 tabular-nums bg-slate-800/50 flex items-center justify-end ${compact ? 'py-1' : 'py-1.5'}`;
-  const moveCell = `min-w-0 flex items-center ${compact ? 'py-0.5' : 'py-1'}`;
+
+  const renderCommentBlock = (plyIndex: number, isActive: boolean) => {
+    const text = chapter.moveComments?.[plyIndex]?.trim();
+    if (!text) return null;
+    return (
+      <div
+        key={`comment-${plyIndex}`}
+        className={`col-span-3 px-2.5 py-1.5 my-0.5 rounded-md whitespace-pre-wrap break-words italic text-slate-300 ${
+          isActive ? 'bg-slate-700/55 ring-1 ring-[#3692e7]/30' : 'bg-slate-800/45'
+        } ${compact ? 'text-[11px]' : 'text-xs'}`}
+      >
+        {text}
+      </div>
+    );
+  };
 
   const renderMoveButton = (
     san: string,
@@ -156,35 +206,36 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
     isActive: boolean,
     annotation?: string | string[],
     varInfo?: [number, number, number],
+    prefix?: React.ReactNode,
   ) => {
     const isVar = !!varInfo;
+    const canMenu = !!onDeleteFromHere || !!onPromoteVariation;
     return (
-      <button
+      <div
         key={varInfo ? `v-${varInfo[0]}-${varInfo[1]}-${varInfo[2]}` : `m-${plyIndex}`}
-        ref={isActive ? activeRef : undefined}
-        type="button"
-        onClick={() => {
-          if (varInfo) onSelectMove(varInfo[0], varInfo);
-          else onSelectMove(plyIndex + 1);
-        }}
-        onMouseEnter={() => {
-          if (varInfo) onHoverMove?.(varInfo[0], varInfo);
-          else onHoverMove?.(plyIndex + 1);
-        }}
-        onContextMenu={(e) => handleContextMenu(e, plyIndex, varInfo)}
-        className={`inline-flex items-center px-1.5 rounded font-bold transition-colors ${
-          isActive
-            ? 'bg-[#3692e7] text-white shadow-sm'
-            : isVar
-            ? 'text-slate-400 hover:bg-white/10'
-            : 'text-slate-200 hover:bg-white/10'
-        }`}
+        className={STUDY_NOTATION_MOVE_CELL}
       >
-        <FigurineSan san={san} figurine={figurineNotation} />
-        {showMoveAnnotations && annotation != null && parseMoveGlyphs(annotation).length > 0 && (
-          <span className="text-amber-500 font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
-        )}
-      </button>
+        <button
+          ref={isActive ? activeRef : undefined}
+          type="button"
+          onClick={() => {
+            if (varInfo) onSelectMove(varInfo[0], varInfo);
+            else onSelectMove(plyIndex + 1);
+          }}
+          onMouseEnter={() => {
+            if (varInfo) onHoverMove?.(varInfo[0], varInfo);
+            else onHoverMove?.(plyIndex + 1);
+          }}
+          onContextMenu={canMenu ? (e) => handleContextMenu(e, plyIndex, varInfo) : undefined}
+          className={studyMoveCellButtonClass(isActive, isVar)}
+        >
+          {prefix}
+          <FigurineSan san={san} figurine={figurineNotation} />
+          {showMoveAnnotations && annotation != null && parseMoveGlyphs(annotation).length > 0 && (
+            <span className="text-amber-500 font-bold ml-0.5">{formatMoveGlyphs(parseMoveGlyphs(annotation))}</span>
+          )}
+        </button>
+      </div>
     );
   };
 
@@ -258,12 +309,17 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
       <div key="row-black-first" className="w-full">
         <div className={rowGrid}>
           <span className={indexCell}>{currentMoveNumber}</span>
-          <div className={moveCell} />
-          <div className={moveCell}>
-            <span className="text-slate-500 font-bold mr-1 tabular-nums">{currentMoveNumber}...</span>
-            {renderMoveButton(bm, 0, isActive, chapter.moveAnnotations?.[0])}
-          </div>
+          <div />
+          {renderMoveButton(
+            bm,
+            0,
+            isActive,
+            chapter.moveAnnotations?.[0],
+            undefined,
+            <span className="text-slate-500 font-bold tabular-nums shrink-0">{currentMoveNumber}...</span>,
+          )}
         </div>
+        <div className={rowGrid}>{renderCommentBlock(0, isActive)}</div>
         {renderVariationLines(0, rowSeen)}
       </div>,
     );
@@ -282,13 +338,15 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
       <div key={`row-${i}`} className="w-full">
         <div className={rowGrid}>
           <span className={indexCell}>{currentMoveNumber}</span>
-          <div className={moveCell}>
-            {wm !== undefined && renderMoveButton(wm, i, wmActive, chapter.moveAnnotations?.[i])}
-          </div>
-          <div className={moveCell}>
-            {bm !== undefined && renderMoveButton(bm, i + 1, bmActive, chapter.moveAnnotations?.[i + 1])}
-          </div>
+          {wm !== undefined && renderMoveButton(wm, i, wmActive, chapter.moveAnnotations?.[i])}
+          {bm !== undefined ? renderMoveButton(bm, i + 1, bmActive, chapter.moveAnnotations?.[i + 1]) : <div />}
         </div>
+        {(chapter.moveComments?.[i]?.trim() || (bm !== undefined && chapter.moveComments?.[i + 1]?.trim())) ? (
+          <div className={rowGrid}>
+            {renderCommentBlock(i, wmActive)}
+            {bm !== undefined ? renderCommentBlock(i + 1, bmActive) : null}
+          </div>
+        ) : null}
         {renderVariationLines(i, rowSeen)}
         {bm !== undefined && renderVariationLines(i + 1, rowSeen)}
       </div>,
@@ -385,7 +443,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
     return (
       <div
         ref={containerRef}
-        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
+        className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative ${compact ? 'p-2' : 'p-3'}`}
         onMouseLeave={() => onHoverMove?.(null)}
       >
         {moves.length === 0 ? (
@@ -401,50 +459,10 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
             <div className="flex flex-wrap items-baseline gap-x-0.5 gap-y-1">
               {inlineNodes}
             </div>
+            <StudyNotationPgnFooter pgnTags={chapter.pgnTags} compact={compact} />
           </div>
         )}
-        {contextMenu && (
-          <div
-            ref={contextMenuRef}
-            className="absolute z-50 glass-card rounded-xl border border-white/10 shadow-2xl py-1 min-w-[200px] overflow-hidden animate-in zoom-in-95"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            {onDeleteFromHere && (
-              <button
-                type="button"
-                onClick={() => {
-                  onDeleteFromHere(contextMenu.moveIdx, contextMenu.varInfo);
-                  setContextMenu(null);
-                }}
-                className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Bu hamleden sonrasını sil
-              </button>
-            )}
-            {onPromoteVariation && contextMenu.varInfo && (
-              <button
-                type="button"
-                onClick={() => {
-                  onPromoteVariation(contextMenu.varInfo![0], contextMenu.varInfo![1]);
-                  setContextMenu(null);
-                }}
-                className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all"
-              >
-                <ArrowUpRight className="w-3.5 h-3.5" />
-                Ana hat yap
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setContextMenu(null)}
-              className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-slate-500 hover:bg-white/5 transition-all"
-            >
-              İptal
-            </button>
-          </div>
-        )}
+        {notationContextMenu}
       </div>
     );
   }
@@ -452,7 +470,7 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative [contain:layout] ${compact ? 'p-2' : 'p-3'}`}
+      className={`flex-1 overflow-y-auto min-h-0 bg-[#0f172a] overscroll-contain custom-scrollbar relative ${compact ? 'p-2' : 'p-3'}`}
       onMouseLeave={() => onHoverMove?.(null)}
     >
       {moves.length === 0 ? (
@@ -471,51 +489,11 @@ export const StudyMoveTree: React.FC<StudyMoveTreeProps> = ({
             <span>Siyah</span>
           </div>
           {rows}
+          <StudyNotationPgnFooter pgnTags={chapter.pgnTags} compact={compact} />
         </div>
       )}
 
-      {contextMenu && (
-        <div
-          ref={contextMenuRef}
-          className="absolute z-50 glass-card rounded-xl border border-white/10 shadow-2xl py-1 min-w-[200px] overflow-hidden animate-in zoom-in-95"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {onDeleteFromHere && (
-            <button
-              type="button"
-              onClick={() => {
-                onDeleteFromHere(contextMenu.moveIdx, contextMenu.varInfo);
-                setContextMenu(null);
-              }}
-              className="flex items-center gap-2 w-full px-3 py-2 text-xs text-red-400 hover:bg-[rgba(255,255,255,0.05)] transition-colors"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Bu hamleden sonrasını sil
-            </button>
-          )}
-          {onPromoteVariation && contextMenu.varInfo && (
-            <button
-              type="button"
-              onClick={() => {
-                onPromoteVariation(contextMenu.varInfo![0], contextMenu.varInfo![1]);
-                setContextMenu(null);
-              }}
-              className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all"
-            >
-              <ArrowUpRight className="w-3.5 h-3.5" />
-              Ana hat yap
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setContextMenu(null)}
-            className="flex items-center gap-2 w-full px-3 py-2.5 text-xs font-bold text-slate-500 hover:bg-white/5 transition-all"
-          >
-            İptal
-          </button>
-        </div>
-      )}
+      {notationContextMenu}
     </div>
   );
 };

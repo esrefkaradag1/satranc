@@ -32,6 +32,7 @@ export function findStudentForLogin(students: Student[], phoneOrStudentId: strin
     const num = parseInt(trimmed, 10);
     if (!Number.isNaN(num) && getDisplayStudentNoFromList(s, students) === num) return true;
     if (s.username && s.username.toLowerCase() === trimmedLower) return true;
+    if (trimmedDigits.length < 7) return false;
     const phones = allStudentPhones(s);
     return phones.some((tel) => {
       const digits = tel.replace(/\D/g, '');

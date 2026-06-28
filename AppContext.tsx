@@ -4,9 +4,11 @@ import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAs
 import { MOCK_STUDENTS } from './constants';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
 import { homeworkAssigneesOverlap } from './lib/homeworkPanelUtils';
+import { homeworkAssignmentCategory } from './lib/homeworkStatsBuilders';
 import { looksLikeLichessPuzzleId } from './lib/puzzlePlayUtils';
 import { insertHomeworkAttemptSupabase, detectHomeworkAttemptPayloadStyle, setCachedHomeworkAttemptPayloadStyle } from './lib/homeworkAttemptDb.mjs';
 import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentAuth.ts';
+import { apiLocalAuthParentLogin } from './services/backendApi';
 import { findClubForLogin } from './lib/clubLoginUtils';
 import { createStudentLoginCredentials } from './lib/studentCredentials';
 import {
@@ -46,7 +48,10 @@ import {
   slugifyRoleName,
   ROLES_UPDATED_EVENT,
 } from './lib/roleStorage';
-import { AlertCircle, CheckCircle2, Info, XCircle, X } from 'lucide-react';
+import { ToastStack } from './components/ui/ToastStack';
+import { ConfirmDialog, type ConfirmDialogOptions, type AlertDialogOptions, type DialogRequest } from './components/ui/ConfirmDialog';
+
+export type { ConfirmDialogOptions, AlertDialogOptions };
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 export interface Toast {
@@ -201,6 +206,8 @@ interface AppContextType {
   stockfishReady: boolean;
   stockfishLoading: boolean;
   showToast: (message: string, type?: ToastType) => void;
+  confirmDialog: (options: ConfirmDialogOptions) => Promise<boolean>;
+  alertDialog: (options: AlertDialogOptions) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -253,12 +260,12 @@ const STUDENT_DB_SKIP_COLUMNS_KEY = 'netchess_student_db_skip_cols';
 const STUDENT_DB_CORE_SNAKE = new Set<string>([
   'id', 'name', 'level', 'elo', 'ukd', 'last_attendance', 'payment_status', 'group_name',
   'parent_name', 'parent_phone', 'birth_date', 'registration_date', 'branch', 'status',
-  'tc_no', 'branch_office',
+  'tc_no', 'branch_office', 'username', 'password', 'parent_pin',
 ]);
 
 /** İlk insert'ten sonra update ile eklenir (şemada yoksa atlanır). */
 const STUDENT_DB_OPTIONAL_SNAKE = new Set<string>([
-  'fide_id', 'username', 'password', 'photo_url', 'lichess_username', 'lichess_access_token', 'lichess_oauth_connected_at', 'chess_com_username', 'parent_pin',
+  'fide_id', 'photo_url', 'lichess_username', 'lichess_access_token', 'lichess_oauth_connected_at', 'chess_com_username',
   'contact_numbers', 'father_name', 'father_phone', 'father_job', 'mother_name', 'mother_phone', 'mother_job',
   'address', 'health_info', 'school', 'teacher', 'notes', 'branch_group',
   'has_sibling_discount', 'sibling_discount_type', 'sibling_discount_percent', 'sibling_discount_amount',
@@ -1429,6 +1436,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [rolesLoaded, setRolesLoaded] = useState(() => !useSupabase);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null);
+  const dialogQueueRef = useRef<DialogRequest[]>([]);
+  const dialogActiveRef = useRef(false);
 
   const showToast = useCallback((message: string, type: ToastType = 'info') => {
     const id = genId();
@@ -1441,6 +1451,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const removeToast = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
+
+  const pumpDialogQueue = useCallback(() => {
+    if (dialogActiveRef.current) return;
+    const next = dialogQueueRef.current.shift();
+    if (!next) return;
+    dialogActiveRef.current = true;
+    setDialogRequest(next);
+  }, []);
+
+  const closeDialog = useCallback(() => {
+    dialogActiveRef.current = false;
+    setDialogRequest(null);
+    window.setTimeout(() => pumpDialogQueue(), 0);
+  }, [pumpDialogQueue]);
+
+  const enqueueDialog = useCallback((req: DialogRequest) => {
+    dialogQueueRef.current.push(req);
+    pumpDialogQueue();
+  }, [pumpDialogQueue]);
+
+  const confirmDialog = useCallback((options: ConfirmDialogOptions): Promise<boolean> => {
+    return new Promise((resolve) => {
+      enqueueDialog({ kind: 'confirm', ...options, resolve });
+    });
+  }, [enqueueDialog]);
+
+  const alertDialog = useCallback((options: AlertDialogOptions): Promise<void> => {
+    return new Promise((resolve) => {
+      enqueueDialog({ kind: 'alert', ...options, resolve });
+    });
+  }, [enqueueDialog]);
 
   const [auth, setAuth] = useState<AuthUser | null>(() => {
     try {
@@ -1640,7 +1681,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return true;
     };
 
+    const applyApiLogin = (apiResult: { studentId: string; student: Student }) => {
+      setAuth({ role: 'parent', studentId: apiResult.studentId });
+      setStudents((prev) => {
+        const idx = prev.findIndex((s) => s.id === apiResult.studentId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...apiResult.student };
+          return next;
+        }
+        return [...prev, apiResult.student];
+      });
+      return true;
+    };
+
     if (attempt(students)) return true;
+
+    if (useSupabase) {
+      const apiResult = await apiLocalAuthParentLogin(studentIdOrPhone, trimmedPin);
+      if (apiResult) return applyApiLogin(apiResult);
+    }
+
+    const sb = getServiceSupabase();
+    if (useSupabase && sb) {
+      try {
+        const { data, error } = await sb.from('students').select('*').neq('status', 'inactive');
+        if (!error && data?.length) {
+          learnStudentColumnsFromRows(data as Record<string, unknown>[]);
+          const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
+          setStudents(loaded);
+          if (attempt(loaded)) return true;
+        }
+      } catch {
+        /* anon ile devam */
+      }
+    }
 
     if (useSupabase && supabase) {
       try {
@@ -1672,7 +1747,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return true;
     };
 
+    const applyApiLogin = (apiResult: { studentId: string; student: Student }) => {
+      setAuth({ role: 'student', studentId: apiResult.studentId });
+      setStudents((prev) => {
+        const idx = prev.findIndex((s) => s.id === apiResult.studentId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...apiResult.student };
+          return next;
+        }
+        return [...prev, apiResult.student];
+      });
+      return true;
+    };
+
     if (attempt(students)) return true;
+
+    if (useSupabase) {
+      const apiResult = await apiLocalAuthParentLogin(idRaw, trimmedPin);
+      if (apiResult) return applyApiLogin(apiResult);
+    }
+
+    const sb = getServiceSupabase();
+    if (useSupabase && sb) {
+      try {
+        const { data, error } = await sb.from('students').select('*').neq('status', 'inactive');
+        if (!error && data?.length) {
+          learnStudentColumnsFromRows(data as Record<string, unknown>[]);
+          const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
+          setStudents(loaded);
+          if (attempt(loaded)) return true;
+        }
+      } catch {
+        /* anon ile devam */
+      }
+    }
 
     if (useSupabase && supabase) {
       try {
@@ -3013,19 +3122,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addHomework = useCallback(async (hw: Omit<HomeworkAssignment, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
     const newHw = { ...hw, id } as HomeworkAssignment;
+    const incomingCategory = homeworkAssignmentCategory(newHw);
     const supersededIds: string[] = [];
     setHomeworks((prev) => {
       const kept = prev.filter((old) => {
         const overlap = homeworkAssigneesOverlap(old.assignedTo, hw.assignedTo, students);
-        if (overlap) supersededIds.push(old.id);
-        return !overlap;
+        if (!overlap) return true;
+        const oldCategory = homeworkAssignmentCategory(old);
+        if (oldCategory !== incomingCategory || incomingCategory === 'other') return true;
+        supersededIds.push(old.id);
+        return false;
       });
       return [newHw, ...kept];
     });
     for (const oldId of supersededIds) {
+      const label = incomingCategory === 'program' ? 'günlük program' : 'bulmaca ödevi';
       addActivityLog({
         user: CURRENT_USER,
-        action: 'Önceki ödev iptal edildi (yeni atama)',
+        action: `Önceki ${label} iptal edildi (yeni atama)`,
         target: oldId,
         type: 'warning',
       });
@@ -3727,40 +3841,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       initialDataLoaded,
       stockfishReady,
       stockfishLoading,
-      showToast
+      showToast,
+      confirmDialog,
+      alertDialog
     }}>
       {children}
 
-      {/* Toast Portal */}
-      <div className="fixed bottom-6 right-6 z-[9999] flex flex-col gap-3 pointer-events-none">
-        {toasts.map(toast => (
-          <div
-            key={toast.id}
-            className={`pointer-events-auto flex items-center gap-3 px-5 py-4 rounded-2xl shadow-2xl border backdrop-blur-xl animate-in slide-in-from-right-10 duration-300 min-w-[320px] max-w-md ${
-              toast.type === 'success' ? 'bg-emerald-500/15 border-emerald-500/20 text-emerald-300' :
-              toast.type === 'error' ? 'bg-rose-500/15 border-rose-500/20 text-rose-300' :
-              toast.type === 'warning' ? 'bg-amber-500/15 border-amber-500/20 text-amber-300' :
-              'bg-slate-800/80 border-white/5 text-slate-200'
-            }`}
-          >
-            {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 flex-shrink-0" />}
-            {toast.type === 'error' && <XCircle className="w-5 h-5 flex-shrink-0" />}
-            {toast.type === 'warning' && <AlertCircle className="w-5 h-5 flex-shrink-0" />}
-            {toast.type === 'info' && <Info className="w-5 h-5 flex-shrink-0" />}
-            
-            <div className="flex-1 text-sm font-medium leading-relaxed">
-              {toast.message}
-            </div>
-            
-            <button
-              onClick={(e) => { e.stopPropagation(); removeToast(toast.id); }}
-              className="p-1 hover:bg-white/10 rounded-lg transition-colors ml-2"
-            >
-              <X className="w-4 h-4 opacity-50 hover:opacity-100" />
-            </button>
-          </div>
-        ))}
-      </div>
+      <ToastStack toasts={toasts} onDismiss={removeToast} />
+      <ConfirmDialog request={dialogRequest} onClose={closeDialog} />
     </AppContext.Provider>
   );
 };

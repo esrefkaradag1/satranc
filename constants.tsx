@@ -359,7 +359,4 @@ export const MOCK_STUDENTS = [
   { id: '24', name: 'Onur Bayrak',            level: 'İleri',      elo: 1650, ukd: 1720, lastAttendance: '2026-02-18', paymentStatus: 'Unpaid',  group: 'Yetişkin', parentName: '-',                  parentPhone: '5063330044', birthDate: '1988-11-05', registrationDate: '2024-11-20', branch: 'Merkez', status: 'active' },
 ];
 
-/** Yoklama alırken seçilebilecek antrenör/öğretmen listesi */
-export const TEACHERS = ['Ahmet Öğretmen', 'Ayşe Antrenör', 'Mehmet Hoca', 'Fatma Öğretmen', 'Diğer'];
-
 export const INITIAL_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";

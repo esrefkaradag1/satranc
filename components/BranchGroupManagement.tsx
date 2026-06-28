@@ -38,6 +38,8 @@ const BranchGroupManagement: React.FC = () => {
     auth,
     activeClubBranch,
     clubs,
+    showToast,
+    confirmDialog,
   } = useApp();
 
   const isClubUser = auth?.role === 'club';
@@ -125,7 +127,7 @@ const BranchGroupManagement: React.FC = () => {
     const enrolled = countStudentsInGroup(studentModalGroup);
     const capacity = studentModalGroup.capacity || 0;
     if (capacity > 0 && enrolled + selectedStudentIds.length > capacity) {
-      alert(`Kontenjan aşılıyor. Boş yer: ${Math.max(0, capacity - enrolled)}`);
+      showToast(`Kontenjan aşılıyor. Boş yer: ${Math.max(0, capacity - enrolled)}`, 'warning');
       return;
     }
     const defaults = applyGroupDefaultsToStudent(studentModalGroup, disciplineBranches);
@@ -139,9 +141,9 @@ const BranchGroupManagement: React.FC = () => {
 
   const openAddBranch = () => {
     if (officeOptions.length === 0) {
-      alert(isClubUser
+      showToast(isClubUser
         ? 'Ana şube kaydı oluşturuluyor. Sayfayı yenileyip tekrar deneyin.'
-        : 'Önce şube ekleyin veya kulübü + ile şube olarak tanımlayın.');
+        : 'Önce şube ekleyin veya kulübü + ile şube olarak tanımlayın.', 'warning');
       return;
     }
     setEditingBranch(null);
@@ -260,16 +262,15 @@ const BranchGroupManagement: React.FC = () => {
     });
   };
 
-  const importApplicationDefaults = () => {
+  const importApplicationDefaults = async () => {
     if (isClubUser) {
       if (!clubBranch.trim()) return;
-      if (
-        !confirm(
-          `"${clubBranch}" kulübü için Satranç branşı ve varsayılan eğitim grupları oluşturulsun mu?`,
-        )
-      ) {
-        return;
-      }
+      const ok = await confirmDialog({
+        title: 'Varsayılan yapı',
+        message: `"${clubBranch}" kulübü için Satranç branşı ve varsayılan eğitim grupları oluşturulsun mu?`,
+        confirmLabel: 'Oluştur',
+      });
+      if (!ok) return;
       const clubId = resolveClubIdFromAuth(auth, clubs);
       const seeded = buildClubDefaultOrgStructure(clubBranch, clubId);
       if (!branchOffices.some((o) => normalizeClubKey(o) === normalizeClubKey(clubBranch))) {
@@ -292,13 +293,12 @@ const BranchGroupManagement: React.FC = () => {
       return;
     }
 
-    if (
-      !confirm(
-        'Merkez, Çayyolu ve Ümitköy şubeleri ile Satranç branşı ve başvuru formundaki varsayılan gruplar oluşturulsun mu?',
-      )
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: 'Varsayılan yapı',
+      message: 'Merkez, Çayyolu ve Ümitköy şubeleri ile Satranç branşı ve başvuru formundaki varsayılan gruplar oluşturulsun mu?',
+      confirmLabel: 'Oluştur',
+    });
+    if (!ok) return;
     const primaryOffice = officeOptions[0] || DEFAULT_APPLICATION_OFFICES[0];
     const seeded = buildDefaultOrgStructure(primaryOffice);
     for (const office of DEFAULT_APPLICATION_OFFICES) {
@@ -395,9 +395,15 @@ const BranchGroupManagement: React.FC = () => {
                         : 'Şubeyi sil'
                   }
                   disabled={isMainClubOffice}
-                  onClick={() => {
+                  onClick={async () => {
                     if (isMainClubOffice) return;
-                    if (confirm(`"${office}" şubesini silmek istiyor musunuz?`)) removeBranchOffice(office);
+                    const ok = await confirmDialog({
+                      title: 'Şubeyi sil',
+                      message: `"${office}" şubesini silmek istiyor musunuz?`,
+                      confirmLabel: 'Sil',
+                      variant: 'danger',
+                    });
+                    if (ok) removeBranchOffice(office);
                   }}
                   className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30 disabled:cursor-not-allowed"
                 >
@@ -524,14 +530,18 @@ const BranchGroupManagement: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={async () => {
                         if (branchGroups.length > 0) {
-                          alert('Önce bu branştaki grupları silin.');
+                          showToast('Önce bu branştaki grupları silin.', 'warning');
                           return;
                         }
-                        if (confirm(`"${branch.name}" branşını silmek istediğinize emin misiniz?`)) {
-                          removeDisciplineBranch(branch.id);
-                        }
+                        const ok = await confirmDialog({
+                          title: 'Branşı sil',
+                          message: `"${branch.name}" branşını silmek istediğinize emin misiniz?`,
+                          confirmLabel: 'Sil',
+                          variant: 'danger',
+                        });
+                        if (ok) removeDisciplineBranch(branch.id);
                       }}
                       className="p-2 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
                       title="Sil"
@@ -631,15 +641,19 @@ const BranchGroupManagement: React.FC = () => {
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => {
+                                        onClick={async () => {
                                           const count = countStudentsInGroup(group);
                                           if (count > 0) {
-                                            alert(`${group.name} grubunda ${count} öğrenci var. Önce öğrencileri taşıyın.`);
+                                            showToast(`${group.name} grubunda ${count} öğrenci var. Önce öğrencileri taşıyın.`, 'warning');
                                             return;
                                           }
-                                          if (confirm(`"${group.name}" grubunu silmek istediğinize emin misiniz?`)) {
-                                            removeTrainingGroup(group.id);
-                                          }
+                                          const ok = await confirmDialog({
+                                            title: 'Grubu sil',
+                                            message: `"${group.name}" grubunu silmek istediğinize emin misiniz?`,
+                                            confirmLabel: 'Sil',
+                                            variant: 'danger',
+                                          });
+                                          if (ok) removeTrainingGroup(group.id);
                                         }}
                                         className="p-1.5 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
                                       >

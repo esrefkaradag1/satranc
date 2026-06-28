@@ -15,7 +15,7 @@ import {
   ClipboardList,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
-import { TEACHERS } from '../constants';
+import { coachesForClub } from '../lib/orgScope';
 import {
   fetchLichessUser,
   fetchLichessRecentGames,
@@ -192,6 +192,8 @@ function formatMsDate(ms?: number): string {
 const Attendance: React.FC = () => {
   const {
     scopedStudents: students,
+    scopedCoaches: coaches,
+    auth,
     addAttendanceRecord,
     attendanceRecords,
     scopedTrainingGroups: trainingGroups,
@@ -296,6 +298,25 @@ const Attendance: React.FC = () => {
     }
     return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
   }, [trainingGroups, branchOffice, branch]);
+
+  /** Seçili şubeye (kulüp) bağlı antrenörler */
+  const attendanceCoaches = useMemo(() => {
+    const office = branchOffice.trim();
+    if (!office) return [];
+    return coachesForClub(coaches, office).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+  }, [coaches, branchOffice]);
+
+  useEffect(() => {
+    if (auth?.role === 'coach' && auth.coachId) {
+      const me = coaches.find((c) => c.id === auth.coachId);
+      if (me?.name) setTeacherName(me.name);
+    }
+  }, [auth, coaches]);
+
+  useEffect(() => {
+    if (!teacherName) return;
+    if (!attendanceCoaches.some((c) => c.name === teacherName)) setTeacherName('');
+  }, [attendanceCoaches, teacherName]);
 
   useEffect(() => {
     if (group && !groups.includes(group)) setGroup('');
@@ -723,11 +744,16 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  onChange={(e) => setTeacherName(e.target.value)}
  className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  >
- <option value="">Öğretmen Seçiniz</option>
- {TEACHERS.map((t) => (
- <option key={t} value={t}>{t}</option>
+ <option value="">Antrenör Seçiniz</option>
+ {attendanceCoaches.map((c) => (
+ <option key={c.id} value={c.name}>{c.name}{c.title ? ` · ${c.title}` : ''}</option>
  ))}
  </select>
+ {attendanceCoaches.length === 0 && branchOffice && (
+ <p className="mt-2 text-xs text-amber-400/90">
+ Bu kulüpte kayıtlı antrenör yok. Antrenörler sayfasından ekleyin.
+ </p>
+ )}
  </SelectField>
 
  {group ? (

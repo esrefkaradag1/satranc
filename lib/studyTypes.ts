@@ -14,6 +14,9 @@ export interface StudyChapter {
   /** 1 (kolay) → 10 (usta) */
   difficulty?: number;
   comment: string;
+  /** Lichess uyumlu PGN başlıkları: [Event, "..."], [Date, "..."], … */
+  pgnTags?: Array<[string, string]>;
+  /** Serbest bölüm etiketleri (konu/anahtar kelime — eski alan). */
   tags: string[];
   moveComments: Record<number, string>;
   /** Tek sembol (eski) veya birden fazla sembol dizisi */

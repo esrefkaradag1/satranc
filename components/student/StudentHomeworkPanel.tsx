@@ -5,8 +5,14 @@ import {
 } from 'lucide-react';
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../../types';
 import { evaluatePlatformDailyGoals } from '../../lib/homeworkPlatformUtils';
+import { homeworkHasPlatformGoals } from '../../lib/homeworkStatsBuilders';
 import { nextHomeworkPuzzle } from '../../lib/puzzlePlayUtils';
 import { LichessOAuthConnect } from './LichessOAuthConnect';
+import {
+  StudentWeeklyHomeworkGrid,
+  computeStudentWeeklySummary,
+} from './StudentWeeklyHomeworkGrid';
+import type { PlatformDayStats } from '../../lib/homeworkPlatformUtils';
 
 type FilterKey = 'all' | 'todo' | 'progress' | 'done';
 
@@ -28,6 +34,7 @@ type Props = {
   todayExternalGameCount: number;
   todayExternalPuzzleCount: number;
   todayExternalPuzzlePassed: number;
+  weekPlatformStatsByDate?: Record<string, PlatformDayStats | undefined>;
   loadingExternalGameCount: boolean;
   externalStatsNote?: string | null;
   midnightCountdown: string;
@@ -195,6 +202,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
   todayExternalGameCount,
   todayExternalPuzzleCount,
   todayExternalPuzzlePassed,
+  weekPlatformStatsByDate = {},
   loadingExternalGameCount,
   externalStatsNote,
   midnightCountdown,
@@ -294,6 +302,11 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
     const isExpanded = expandedId === item.hw.id || item.hwPuzzles.length <= 4;
     const hasDaily = item.dailyPuzzleTarget > 0 || item.dailyGameTarget > 0;
     const isDailyOnly = item.hwPuzzles.length === 0 && hasDaily;
+    const isPlatformProgram = isDailyOnly || (item.hwPuzzles.length === 0 && homeworkHasPlatformGoals(item.hw));
+    const studentTarget = item.hw.studentDailyTargets?.[student.id];
+    const weeklySummary = isPlatformProgram
+      ? computeStudentWeeklySummary(item.hw, studentTarget, homeworkDayKey, weekPlatformStatsByDate)
+      : null;
 
     return (
       <div
@@ -325,11 +338,18 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               )}
             </div>
             <div className="text-right shrink-0">
-              {isDailyOnly || (hasDaily && item.dailyGoalsMet) ? (
+              {isPlatformProgram && weeklySummary && weeklySummary.totalScheduledDays > 0 ? (
+                <>
+                  <p className="text-2xl font-black text-white tabular-nums">
+                    {weeklySummary.completedDays}/{weeklySummary.dueDays}
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase">haftalık gün</p>
+                </>
+              ) : isDailyOnly || (hasDaily && item.dailyGoalsMet) ? (
                 <>
                   <p className="text-2xl font-black text-white tabular-nums">{item.progressPct}%</p>
                   <p className="text-[10px] text-slate-500 font-bold uppercase">
-                    {isDailyOnly ? 'günlük hedef' : 'günlük hedef tamam'}
+                    {isDailyOnly ? 'bugünkü hedef' : 'bugün tamam'}
                   </p>
                 </>
               ) : (
@@ -346,7 +366,11 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               className={`h-full rounded-full transition-all ${
                 item.status === 'Tamamlandı' ? 'bg-emerald-500' : item.status === 'Devam Ediyor' ? 'bg-indigo-500' : 'bg-slate-600'
               }`}
-              style={{ width: `${item.progressPct}%` }}
+              style={{
+                width: `${isPlatformProgram && weeklySummary && weeklySummary.dueDays > 0
+                  ? weeklySummary.progressPct
+                  : item.progressPct}%`,
+              }}
             />
           </div>
 
@@ -358,7 +382,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
             )}
           </div>
 
-          {hasDaily && (
+          {hasDaily && !isPlatformProgram && (
             <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
               {item.dailyGameTarget > 0 && (
                 <span className={`px-2 py-1 rounded-lg border ${item.gameGoalMet ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
@@ -368,14 +392,24 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               )}
               {item.dailyPuzzleTarget > 0 && (
                 <span className={`px-2 py-1 rounded-lg border ${item.puzzleGoalMet ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
-                  Günlük bulmaca {Math.min(item.todayPuzzleSolved, item.dailyPuzzleTarget)}/{item.dailyPuzzleTarget}
+                  Bugün bulmaca {Math.min(item.todayPuzzleSolved, item.dailyPuzzleTarget)}/{item.dailyPuzzleTarget}
                   {item.todayPuzzleSolved > 0 ? ` · %${Math.round(item.todayPuzzleAccuracy)} doğru` : ''}
                 </span>
               )}
             </div>
           )}
 
-          {hasDaily && item.status !== 'Tamamlandı' && !hasPlatformAccount && (
+          {isPlatformProgram ? (
+            <StudentWeeklyHomeworkGrid
+              homework={item.hw}
+              studentTarget={studentTarget}
+              todayKey={homeworkDayKey}
+              weekStatsByDate={weekPlatformStatsByDate}
+              loading={loadingExternalGameCount}
+            />
+          ) : null}
+
+          {isPlatformProgram && item.status !== 'Tamamlandı' && !hasPlatformAccount && (
             <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
@@ -386,11 +420,11 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
             </div>
           )}
 
-          {isDailyOnly && item.status !== 'Tamamlandı' && (
+          {isPlatformProgram && item.status !== 'Tamamlandı' && (
             <div className="mt-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3 space-y-2">
               <p className="text-xs text-slate-300">
-                Bu ödevde platform bulmacası yok. Bugünkü hedeflerinizi Lichess veya Chess.com üzerinde tamamlayın; ilerleme otomatik güncellenir.
-                Chess.com&apos;da yalnızca <strong className="text-slate-200">Puanlı</strong> bulmacalar günlük hedefe sayılır.
+                Haftalık hedeflerinizi Lichess veya Chess.com üzerinde tamamlayın; her günün ilerlemesi otomatik güncellenir.
+                Chess.com&apos;da yalnızca <strong className="text-slate-200">Puanlı</strong> bulmacalar sayılır.
               </p>
               <div className="flex flex-wrap gap-2">
                 {lichessUsername ? (
@@ -496,12 +530,12 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
             <Grid className="w-5 h-5 text-indigo-400" />
-            Bulmaca ödevleri
+            Ödevlerim
           </h2>
           <p className="text-slate-400 text-sm mt-1">
             {summary.total > 0
-              ? `${summary.remainingPuzzles} bulmaca kaldı · ${summary.earnedPoints} puan kazandın`
-              : 'Öğretmeninizin atadığı bulmacalar burada listelenir.'}
+              ? `${summary.remainingPuzzles} bulmaca kaldı · ${summary.earnedPoints} puan · haftalık programlar aşağıda`
+              : 'Öğretmeninizin atadığı bulmaca ve haftalık programlar burada listelenir.'}
           </p>
         </div>
         <button

@@ -93,7 +93,7 @@ function SectionCard({
 }
 
 const CoachProfilePage: React.FC = () => {
-  const { auth, coaches, updateCoach } = useApp();
+  const { auth, coaches, updateCoach, showToast, confirmDialog } = useApp();
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   const coach = useMemo(() => {
@@ -159,7 +159,7 @@ const CoachProfilePage: React.FC = () => {
   const handlePhotoUpload = async (file: File) => {
     if (!coach) return;
     if (!isSupabaseBackend()) {
-      alert('Fotoğraf yükleme için Supabase bağlantısı gerekir.');
+      showToast('Fotoğraf yükleme için Supabase bağlantısı gerekir.', 'warning');
       return;
     }
     const sb = getServiceSupabase();
@@ -174,14 +174,21 @@ const CoachProfilePage: React.FC = () => {
       const { data } = sb.storage.from('coach-photos').getPublicUrl(fileName);
       updateCoach(coach.id, { photoUrl: data.publicUrl });
     } catch {
-      alert('Fotoğraf yüklenemedi. coach-photos bucket kontrol edin.');
+      showToast('Fotoğraf yüklenemedi. coach-photos bucket kontrol edin.', 'error');
     } finally {
       setPhotoUploading(false);
     }
   };
 
-  const handleRemovePhoto = () => {
-    if (!coach || !window.confirm('Profil fotoğrafını kaldırmak istiyor musunuz?')) return;
+  const handleRemovePhoto = async () => {
+    if (!coach) return;
+    const ok = await confirmDialog({
+      title: 'Fotoğrafı kaldır',
+      message: 'Profil fotoğrafını kaldırmak istiyor musunuz?',
+      confirmLabel: 'Kaldır',
+      variant: 'danger',
+    });
+    if (!ok) return;
     updateCoach(coach.id, { photoUrl: undefined });
   };
 

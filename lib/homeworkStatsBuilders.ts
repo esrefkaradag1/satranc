@@ -44,6 +44,15 @@ export function isPuzzleTrackingAssignment(hw: HomeworkAssignment): boolean {
   return homeworkHasAssignedPuzzles(hw);
 }
 
+/** Ödev türü — aynı gruba atamada yalnızca aynı tür birbirinin yerine geçer. */
+export type HomeworkAssignmentCategory = 'puzzle' | 'program' | 'other';
+
+export function homeworkAssignmentCategory(hw: HomeworkAssignment): HomeworkAssignmentCategory {
+  if (homeworkHasAssignedPuzzles(hw)) return 'puzzle';
+  if (homeworkHasPlatformGoals(hw)) return 'program';
+  return 'other';
+}
+
 function targetFromHwDefaults(hw: HomeworkAssignment): StudentDailyTarget {
   return {
     dailyGameTarget: hw.dailyGameTarget ?? 0,

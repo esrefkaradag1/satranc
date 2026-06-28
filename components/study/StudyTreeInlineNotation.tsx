@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Trash2, ArrowUpRight } from 'lucide-react';
 import type { StudyTree, NodeId } from '../../lib/studySync/types';
 import { pathToNode } from '../../lib/studySync/apply';
+import { variationStartMoveNumber } from '../../lib/studyNotationUtils';
 import { sideToMove } from '../../lib/studyUtils';
 import { formatMoveGlyphs, parseMoveGlyphs } from '../../lib/studyAnnotations';
 import { FigurineSan } from '../chess/FigurineSan';
 import { variationBranchRootId } from './StudyTreeTableNotation';
+import { nodeCommentText } from '../../lib/studySync/apply';
 
 type Props = {
   tree: StudyTree;
@@ -22,10 +24,6 @@ type Props = {
 
 function moveNumberLabel(moveNumber: number, isWhiteTurn: boolean): string {
   return `${moveNumber}${isWhiteTurn ? '.' : '...'}`;
-}
-
-function commentText(node: StudyTree['nodes'][string] | undefined): string {
-  return (node?.comments ?? []).map((c) => c.text).join('\n').trim();
 }
 
 export const StudyTreeInlineNotation: React.FC<Props> = ({
@@ -83,7 +81,7 @@ export const StudyTreeInlineNotation: React.FC<Props> = ({
     if (!node?.san) return null;
     const isActive = nodeId === activeNodeId;
     const annotation = node.glyphs?.length ? node.glyphs : undefined;
-    const com = commentText(node);
+    const com = nodeCommentText(node);
     const canDelete = !!onDeleteFromNode && nodeId !== tree.rootId;
     const canMenu = nodeId !== tree.rootId && (!!onDeleteFromNode || !!onPromoteBranch);
 
@@ -128,7 +126,12 @@ export const StudyTreeInlineNotation: React.FC<Props> = ({
     return siblings.map((sibId) => (
       <React.Fragment key={`var-${nodeId}-${sibId}`}>
         <span className="text-slate-500 mx-0.5">(</span>
-        {renderBranch(sibId, parent.fen ?? startFen, null, true)}
+        {renderBranch(
+          sibId,
+          parent.fen ?? startFen,
+          variationStartMoveNumber(tree, sibId, startMoveNumber, isBlackToMove),
+          true,
+        )}
         <span className="text-slate-500 mx-0.5">)</span>
       </React.Fragment>
     ));

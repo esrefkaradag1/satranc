@@ -802,7 +802,7 @@ const StudentDetail: React.FC<{
   onBack: () => void;
   onNavigate?: (tab: string) => void;
 }> = ({ studentId, onBack, onNavigate }) => {
-  const { students, attendanceRecords, transactions, gallery, updateStudent, deleteStudent, addActivityLog, addTransaction, updateTransaction, removeTransaction, performanceAnalyses, addPerformanceAnalysis, updatePerformanceAnalysis, deletePerformanceAnalysis, disciplines, homeworks, homeworkAttempts, trainingGroups, disciplineBranches } = useApp();
+  const { students, attendanceRecords, transactions, gallery, updateStudent, deleteStudent, addActivityLog, addTransaction, updateTransaction, removeTransaction, performanceAnalyses, addPerformanceAnalysis, updatePerformanceAnalysis, deletePerformanceAnalysis, disciplines, homeworks, homeworkAttempts, trainingGroups, disciplineBranches, confirmDialog, alertDialog, showToast } = useApp();
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDuesModal, setShowDuesModal] = useState(false);
   const [showSaleModal, setShowSaleModal] = useState(false);
@@ -1023,14 +1023,22 @@ const StudentDetail: React.FC<{
         updateStudent(student.id, patch);
         if (student.fideId !== res.fideId && res.fideId) setFideIdInput(res.fideId);
       } else if (res && 'error' in res) {
-        alert(`UKD otomatik çekilemedi.\n${res.error}\n\nTSF sorgu sonucu ekranda varsa "TSF verilerini elle aktar" ile kaydedebilirsiniz.`);
+        void alertDialog({
+          title: 'UKD çekilemedi',
+          message: `UKD otomatik çekilemedi.\n${res.error}\n\nTSF sorgu sonucu ekranda varsa "TSF verilerini elle aktar" ile kaydedebilirsiniz.`,
+          variant: 'warning',
+        });
         setUkdImportUkd(String(student.ukd || ''));
         setUkdImportName(student.name || '');
         setUkdImportBirthYear(student.birthDate ? student.birthDate.slice(0, 4) : '');
         setUkdImportLastVisa('');
         setShowUkdImportModal(true);
       } else {
-        alert('UKD servisi yanıt vermedi. Lütfen Edge Function (fetch-ukd) deploy durumunu kontrol edin veya verileri elle aktarın.');
+        void alertDialog({
+          title: 'UKD servisi yanıt vermedi',
+          message: 'UKD servisi yanıt vermedi. Lütfen Edge Function (fetch-ukd) deploy durumunu kontrol edin veya verileri elle aktarın.',
+          variant: 'warning',
+        });
         setUkdImportUkd(String(student.ukd || ''));
         setUkdImportName(student.name || '');
         setUkdImportBirthYear(student.birthDate ? student.birthDate.slice(0, 4) : '');
@@ -1256,11 +1264,16 @@ const StudentDetail: React.FC<{
          tone="rose"
          icon={<Trash2 className="w-4 h-4" />}
          label="Sil"
-         onClick={() => {
-           if (window.confirm(`${student.name} öğrencisini silmek istediğinize emin misiniz?`)) {
-             deleteStudent(student.id);
-             onBack();
-           }
+         onClick={async () => {
+           const ok = await confirmDialog({
+             title: 'Öğrenciyi sil',
+             message: `${student.name} öğrencisini silmek istediğinize emin misiniz?`,
+             confirmLabel: 'Sil',
+             variant: 'danger',
+           });
+           if (!ok) return;
+           deleteStudent(student.id);
+           onBack();
          }}
        />
      </div>
@@ -1750,7 +1763,15 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <td data-label="İşlem" className="py-3.5 pr-4 text-right">
  <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
  <button type="button" onClick={() => openEditTransaction(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" title="Düzenle"><Edit2 className="w-4 h-4" /></button>
- <button type="button" onClick={() => { if (window.confirm(`"${(t.description || t.category).slice(0, 40)}" satışını silmek istediğinize emin misiniz?`)) removeTransaction(t.id); }} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
+ <button type="button" onClick={async () => {
+ const ok = await confirmDialog({
+ title: 'Satışı sil',
+ message: `"${(t.description || t.category).slice(0, 40)}" satışını silmek istediğinize emin misiniz?`,
+ confirmLabel: 'Sil',
+ variant: 'danger',
+ });
+ if (ok) removeTransaction(t.id);
+}} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
  </div>
  </td>
  </tr>
@@ -1808,7 +1829,15 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <td data-label="İşlem" className="py-3 pr-4 text-right">
  <div className="flex items-center justify-end gap-1">
 <button type="button" onClick={() => openEditTransaction(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" title="Düzenle"><Edit2 className="w-4 h-4" /></button>
- <button type="button" onClick={() => { if (window.confirm('Bu ödemeyi silmek istediğinize emin misiniz?')) removeTransaction(t.id); }} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
+ <button type="button" onClick={async () => {
+ const ok = await confirmDialog({
+ title: 'Ödemeyi sil',
+ message: 'Bu ödemeyi silmek istediğinize emin misiniz?',
+ confirmLabel: 'Sil',
+ variant: 'danger',
+ });
+ if (ok) removeTransaction(t.id);
+}} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
 </div>
 </td>
 </tr>
@@ -1878,7 +1907,15 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <td data-label="İşlem" className="py-3.5 pr-4 text-right">
  <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
  <button type="button" onClick={() => openEditTransaction(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" title="Düzenle"><Edit2 className="w-4 h-4" /></button>
- <button type="button" onClick={() => { if (window.confirm(`"${(t.description || t.category).slice(0, 40)}" satışını silmek istediğinize emin misiniz?`)) removeTransaction(t.id); }} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
+ <button type="button" onClick={async () => {
+ const ok = await confirmDialog({
+ title: 'Satışı sil',
+ message: `"${(t.description || t.category).slice(0, 40)}" satışını silmek istediğinize emin misiniz?`,
+ confirmLabel: 'Sil',
+ variant: 'danger',
+ });
+ if (ok) removeTransaction(t.id);
+}} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
  </div>
  </td>
  </tr>
@@ -1936,7 +1973,15 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <td data-label="İşlem" className="py-3 pr-4 text-right">
  <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
  <button type="button" onClick={() => openEditTransaction(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" title="Düzenle"><Edit2 className="w-4 h-4" /></button>
- <button type="button" onClick={() => { if (window.confirm(`"${(t.description || '').slice(0, 40)}" kaydını silmek istediğinize emin misiniz?`)) removeTransaction(t.id); }} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
+ <button type="button" onClick={async () => {
+ const ok = await confirmDialog({
+ title: 'Kaydı sil',
+ message: `"${(t.description || '').slice(0, 40)}" kaydını silmek istediğinize emin misiniz?`,
+ confirmLabel: 'Sil',
+ variant: 'danger',
+ });
+ if (ok) removeTransaction(t.id);
+}} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
  </div>
  </td>
  </tr>
@@ -1988,7 +2033,18 @@ return (
 <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
 </div>
 <button type="button" onClick={(e) => { e.stopPropagation(); openEditAnalysisModal(a); }} className="p-2 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" title="Düzenle"><Edit2 className="w-4 h-4" /></button>
-<button type="button" onClick={(e) => { e.stopPropagation(); if (window.confirm('Bu performans analizini silmek istediğinize emin misiniz?')) { deletePerformanceAnalysis(a.id); if (expandedAnalysisId === a.id) setExpandedAnalysisId(null); } }} className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
+<button type="button" onClick={async (e) => {
+ e.stopPropagation();
+ const ok = await confirmDialog({
+ title: 'Analizi sil',
+ message: 'Bu performans analizini silmek istediğinize emin misiniz?',
+ confirmLabel: 'Sil',
+ variant: 'danger',
+ });
+ if (!ok) return;
+ deletePerformanceAnalysis(a.id);
+ if (expandedAnalysisId === a.id) setExpandedAnalysisId(null);
+}} className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
 </div>
 </div>
 <div className="mt-4 flex flex-wrap gap-2">
@@ -3057,7 +3113,11 @@ const EditStudentModal: React.FC<{
         payload.username = generated.username;
         if (!payload.password?.trim()) payload.password = generated.password;
       } else if (!payload.password?.trim()) {
-        payload.password = createStudentLoginCredentials(payload.name || student.name, otherUsernames).password;
+        if (student.password?.trim()) {
+          delete payload.password;
+        } else {
+          payload.password = createStudentLoginCredentials(payload.name || student.name, otherUsernames).password;
+        }
       }
       await onSave(payload);
       setToast({ type: 'success', message: 'Değişiklikler başarıyla kaydedildi!' });

@@ -36,10 +36,11 @@ import {
 } from '../lib/agoraVirtualBackground';
 import { DrawingToolbar, type DrawingTool } from '../components/DrawingToolbar';
 import { saveStudyAsync } from '../studyStorage';
-import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES } from '../lib/chessBoardUi';
+import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, pvLineToEvalBarPawns, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES } from '../lib/chessBoardUi';
+import { getTerminalEval, terminalEvalToBarPawns } from '../lib/analysisTerminal';
 import { Study, StudyChapter } from '../lib/studyTypes';
 import type { Puzzle as PuzzleType, Student } from '../types';
-import { makeBuilderGame, applyMove } from '../lib/studyUtils';
+import { makeBuilderGame, applyMove, studyDisplayEmoji } from '../lib/studyUtils';
 import {
   liveLessonFenAt,
   sanitizeLiveVariations,
@@ -265,6 +266,8 @@ export type SessionMediaState = {
   studentAnalysisVisible?: boolean;
   /** Öğrenci tahtasında avantaj çubuğu (antrenör «Avantaj çubuğu» ile senkron) */
   studentEvalBarVisible?: boolean;
+  /** Antrenörün gösterdiği motor devam satırı sayısı (1 veya 3) */
+  engineMultiPvLines?: number;
   /** Söz isteyen öğrenciler (antrenör onayı bekliyor) */
   handRaisedStudentIds?: string[];
   /** Bağımsız tahta kullanan öğrenci kimlikleri */
@@ -515,13 +518,7 @@ function ClassroomAttendancePanel({
   pendingIds,
   focusedId,
   onFocus,
-  onSetMark,
-  onMarkAll,
-  onSave,
   onAdmit,
-  onAdmitAll,
-  saving,
-  saveMessage,
   vbSupported,
   cameraBackgroundBlur,
   onToggleBlur,
@@ -539,6 +536,8 @@ function ClassroomAttendancePanel({
   handRaisedStudentIds = [],
   onGrantSpeakFloor,
   onReleaseSpeakFloor,
+  sessionMedia,
+  onSetStudentPlayPermission,
 }: {
   rosterStudents: Student[];
   tiles: LiveVideoTile[];
@@ -547,13 +546,7 @@ function ClassroomAttendancePanel({
   pendingIds: string[];
   focusedId: string | null;
   onFocus: (id: string) => void;
-  onSetMark: (studentId: string, status: 'present' | 'absent' | 'late' | 'excused') => void;
-  onMarkAll: (status: 'present' | 'absent' | 'late' | 'excused') => void;
-  onSave: () => void;
   onAdmit: (studentId: string) => void;
-  onAdmitAll?: () => void;
-  saving: boolean;
-  saveMessage: string | null;
   vbSupported: boolean;
   cameraBackgroundBlur: boolean;
   onToggleBlur: () => void;
@@ -571,6 +564,8 @@ function ClassroomAttendancePanel({
   handRaisedStudentIds?: string[];
   onGrantSpeakFloor?: (studentId: string) => void;
   onReleaseSpeakFloor?: (studentId: string) => void;
+  sessionMedia?: SessionMediaState;
+  onSetStudentPlayPermission?: (studentId: string, side: PlayBoardSide | null) => void;
 }) {
   const coachTile = tiles.find((t) => t.role === 'coach') ?? null;
   const tileByStudentId = useMemo(() => {
@@ -600,29 +595,6 @@ function ClassroomAttendancePanel({
       return a.name.localeCompare(b.name, 'tr');
     });
   }, [rosterStudents, pendingIds, admittedIds, tileByStudentId]);
-
-  const summary = useMemo(() => {
-    let present = 0;
-    let absent = 0;
-    let waiting = 0;
-    let unset = 0;
-    for (const s of rosterStudents) {
-      const sid = normalizeStudentId(s.id);
-      const tile = tileByStudentId.get(sid);
-      const status = resolveLiveAttendanceStatus(
-        sid,
-        attendanceMarks,
-        admittedIds,
-        pendingIds,
-        !!tile?.stream,
-      );
-      if (status === 'present' || status === 'late' || status === 'excused') present += 1;
-      else if (status === 'absent') absent += 1;
-      else if (status === 'waiting') waiting += 1;
-      else unset += 1;
-    }
-    return { present, absent, waiting, unset, total: rosterStudents.length };
-  }, [rosterStudents, attendanceMarks, admittedIds, pendingIds, tileByStudentId]);
 
   const studentRow = (student: Student, compact: boolean) => {
     const sid = normalizeStudentId(student.id);
@@ -709,6 +681,15 @@ function ClassroomAttendancePanel({
           </p>
           {!isPending ? (
             <>
+              {onSetStudentPlayPermission && sessionMedia ? (
+                <div className="px-1 pt-1">
+                  <StudentPlaySideBar
+                    playSide={getExplicitStudentPlaySide(student.id, sessionMedia)}
+                    onSetPlaySide={(side) => onSetStudentPlayPermission(student.id, side)}
+                    compact
+                  />
+                </div>
+              ) : null}
               {hasFloor && onReleaseSpeakFloor ? (
                 <button
                   type="button"
@@ -770,29 +751,6 @@ function ClassroomAttendancePanel({
                   </button>
                 ) : null}
               </div>
-              <div className="grid grid-cols-4 gap-0.5 px-1 pb-1">
-                {(['present', 'absent', 'late', 'excused'] as const).map((mark) => (
-                  <button
-                    key={mark}
-                    type="button"
-                    title={LIVE_ATTENDANCE_STATUS_LABEL[mark]}
-                    onClick={() => onSetMark(student.id, mark)}
-                    className={`p-0.5 rounded text-[8px] font-bold transition-colors ${
-                      attendanceMarks?.[sid] === mark || (status === mark && !attendanceMarks?.[sid])
-                        ? mark === 'present'
-                          ? 'bg-emerald-600 text-white'
-                          : mark === 'absent'
-                            ? 'bg-rose-600 text-white'
-                            : mark === 'late'
-                              ? 'bg-amber-600 text-white'
-                              : 'bg-sky-600 text-white'
-                        : 'bg-slate-800/80 text-slate-500 hover:bg-slate-700 hover:text-white'
-                    }`}
-                  >
-                    {mark === 'present' ? '✓' : mark === 'absent' ? '✗' : mark === 'late' ? '⏱' : 'İ'}
-                  </button>
-                ))}
-              </div>
             </>
           ) : (
             <div className="space-y-1 px-1.5 pb-1">
@@ -814,70 +772,29 @@ function ClassroomAttendancePanel({
     );
   };
 
-  const header = (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-1">
-        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
-          Yoklama · {summary.present}/{summary.total}
-          {joinedStudents.length > 0 ? (
-            <span className="text-indigo-400/90 normal-case font-semibold"> · {joinedStudents.length} bağlı</span>
-          ) : null}
-        </span>
-        {vbSupported ? (
-          <button
-            type="button"
-            onClick={onToggleBlur}
-            disabled={localCamOff || vbApplying}
-            title={cameraBackgroundBlur ? 'Bulanıklığı kapat' : 'Arka planı bulanıklaştır'}
-            className={`p-1 rounded-md border transition-colors ${
-              cameraBackgroundBlur
-                ? 'bg-indigo-600/80 border-indigo-400/40 text-white'
-                : 'border-white/10 text-slate-400 hover:text-white'
-            } ${localCamOff || vbApplying ? 'opacity-50' : ''}`}
-          >
-            {vbApplying ? <Loader2 className="w-3 h-3 animate-spin" /> : <Focus className="w-3 h-3" />}
-          </button>
-        ) : null}
-      </div>
-      <div className="flex flex-wrap gap-1 text-[8px] font-bold">
-        <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">{summary.present} geldi</span>
-        <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/25">{summary.absent} yok</span>
-        {summary.waiting > 0 ? (
-          <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-200 border border-amber-500/25">{summary.waiting} bekliyor</span>
-        ) : null}
-      </div>
-      {summary.waiting > 0 && onAdmitAll ? (
-        <button
-          type="button"
-          onClick={onAdmitAll}
-          className="w-full py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold shadow-lg shadow-emerald-900/30"
-        >
-          Bekleyen {summary.waiting} öğrenciyi derse al
-        </button>
-      ) : null}
-      <div className="flex flex-wrap gap-1">
-        <button type="button" onClick={() => onMarkAll('present')} className="px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-300 text-[8px] font-bold border border-emerald-500/30 hover:bg-emerald-600/30">Tümü geldi</button>
-        <button type="button" onClick={() => onMarkAll('absent')} className="px-1.5 py-0.5 rounded bg-rose-600/20 text-rose-300 text-[8px] font-bold border border-rose-500/30 hover:bg-rose-600/30">Tümü yok</button>
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={saving || rosterStudents.length === 0}
-          className="ml-auto px-2 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[8px] font-bold"
-        >
-          {saving ? 'Kaydediliyor…' : 'Kaydet'}
-        </button>
-      </div>
-      {saveMessage ? <p className="text-[9px] text-indigo-300">{saveMessage}</p> : null}
-    </div>
-  );
+  const blurButton = vbSupported ? (
+    <button
+      type="button"
+      onClick={onToggleBlur}
+      disabled={localCamOff || vbApplying}
+      title={cameraBackgroundBlur ? 'Bulanıklığı kapat' : 'Arka planı bulanıklaştır'}
+      className={`absolute top-1 right-1 z-10 p-1 rounded-md border transition-colors ${
+        cameraBackgroundBlur
+          ? 'bg-indigo-600/80 border-indigo-400/40 text-white'
+          : 'border-white/10 bg-black/55 text-slate-300 hover:text-white'
+      } ${localCamOff || vbApplying ? 'opacity-50' : ''}`}
+    >
+      {vbApplying ? <Loader2 className="w-3 h-3 animate-spin" /> : <Focus className="w-3 h-3" />}
+    </button>
+  ) : null;
 
   if (variant === 'mobile') {
     return (
       <div className="rounded-xl border border-white/10 bg-slate-900/50 p-2 space-y-2">
-        {header}
         {coachTile ? (
-          <div className="aspect-video max-h-24 rounded-lg overflow-hidden ring-1 ring-white/10">
+          <div className="relative aspect-video max-h-24 rounded-lg overflow-hidden ring-1 ring-white/10">
             <ClassroomVideoTile tile={coachTile} muted={coachTile.isSelf} className="w-full h-full" />
+            {blurButton}
           </div>
         ) : null}
         <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-0.5 min-h-[7.5rem]">
@@ -897,12 +814,12 @@ function ClassroomAttendancePanel({
 
   return (
     <aside className="hidden lg:flex w-[min(13rem,24vw)] xl:w-[min(14.5rem,22vw)] shrink-0 flex-col gap-1.5 sticky top-2 self-start max-h-[min(72vh,560px)]">
-      {header}
       {coachTile ? (
         <div className="relative aspect-video w-full rounded-lg overflow-hidden ring-1 ring-white/10 shrink-0">
           <ClassroomVideoTile tile={coachTile} muted={coachTile.isSelf} className="w-full h-full rounded-lg" labelClassName="text-[8px]" />
+          {blurButton}
           {coachTile.isSelf && mediaLoading ? (
-            <div className="absolute top-1 right-1"><Loader2 className="w-3.5 h-3.5 animate-spin text-white" /></div>
+            <div className="absolute top-1 left-1"><Loader2 className="w-3.5 h-3.5 animate-spin text-white" /></div>
           ) : null}
         </div>
       ) : null}
@@ -1097,6 +1014,66 @@ function isGeneralChatMessage(msg: LiveChatMessage, studentId: string, isStudent
   return false;
 }
 
+type ChatReadCursors = {
+  general: string | null;
+  private: Record<string, string | null>;
+};
+
+const EMPTY_CHAT_READ: ChatReadCursors = { general: null, private: {} };
+
+function activeChatChannelKey(args: {
+  isStudentView: boolean;
+  chatPrivateStudentId: string | null;
+  studentChatPrivate: boolean;
+  studentIdProp?: string;
+}): 'general' | `private:${string}` {
+  if (args.isStudentView) {
+    const sid = normalizeStudentId(args.studentIdProp);
+    return args.studentChatPrivate && sid ? `private:${sid}` : 'general';
+  }
+  if (args.chatPrivateStudentId) {
+    const pid = normalizeStudentId(args.chatPrivateStudentId);
+    if (pid) return `private:${pid}`;
+  }
+  return 'general';
+}
+
+function readCursorForChannel(cursors: ChatReadCursors, channel: string): string | null {
+  if (channel === 'general') return cursors.general;
+  if (channel.startsWith('private:')) {
+    const sid = channel.slice('private:'.length);
+    return cursors.private[sid] ?? null;
+  }
+  return null;
+}
+
+function countUnreadChatMessages(
+  messages: LiveChatMessage[],
+  readAt: string | null,
+  predicate: (msg: LiveChatMessage) => boolean,
+): number {
+  return messages.filter((m) => predicate(m) && (!readAt || m.at > readAt)).length;
+}
+
+function ChatUnreadBadge({
+  count,
+  className = '',
+}: {
+  count: number;
+  className?: string;
+}) {
+  if (count <= 0) return null;
+  const label = count > 9 ? '9+' : String(count);
+  return (
+    <span
+      className={`inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-white ring-2 ring-slate-900 ${className}`}
+      aria-label={`${count} okunmamış mesaj`}
+    >
+      {label}
+    </span>
+  );
+}
+
 /** Agora kanal uid — öğrenci join'de studentId'nin ilk 32 karakteri */
 function agoraUidForStudent(studentId: string): string {
   const sid = normalizeStudentId(studentId);
@@ -1238,17 +1215,26 @@ function parseSessionMedia(raw: unknown): SessionMediaState {
       o.studentEvalBarVisible !== undefined
         ? !!o.studentEvalBarVisible
         : !!o.studentAnalysisVisible,
+    engineMultiPvLines:
+      o.engineMultiPvLines === 1 || o.engineMultiPvLines === 3 ? o.engineMultiPvLines : undefined,
     rosterStudentIds: parseIdList('rosterStudentIds'),
     attendanceMarks: parseAttendanceMarks(o.attendanceMarks),
   };
 }
 
 function isStudentClassroomAnalysisEnabled(sm: SessionMediaState): boolean {
-  return !!(sm.studentAnalysisVisible || sm.studentEvalBarVisible);
+  return !!sm.studentAnalysisVisible;
 }
 
 function isStudentBoardEvalBarEnabled(sm: SessionMediaState): boolean {
-  return !!(sm.studentEvalBarVisible || sm.studentAnalysisVisible);
+  return !!sm.studentEvalBarVisible;
+}
+
+function resolveEngineMultiPvLines(sm: SessionMediaState, coachLinesVisible?: boolean): number {
+  const raw = sm.engineMultiPvLines;
+  if (raw === 1 || raw === 3) return raw;
+  if (coachLinesVisible != null) return coachLinesVisible ? 3 : 1;
+  return 3;
 }
 
 function parseAttendanceMarks(raw: unknown): Record<string, 'present' | 'absent' | 'late' | 'excused'> | undefined {
@@ -1308,6 +1294,173 @@ function liveAttendanceStatusClass(status: LiveAttendanceUiStatus): string {
   }
 }
 
+function LiveAttendanceMarkButtons({
+  studentId,
+  attendanceMarks,
+  resolvedStatus,
+  onSetMark,
+  compact = false,
+}: {
+  studentId: string;
+  attendanceMarks?: Record<string, 'present' | 'absent' | 'late' | 'excused'>;
+  resolvedStatus: LiveAttendanceUiStatus;
+  onSetMark: (studentId: string, status: 'present' | 'absent' | 'late' | 'excused') => void;
+  compact?: boolean;
+}) {
+  const sid = normalizeStudentId(studentId);
+  return (
+    <div className="flex items-center gap-0.5 shrink-0">
+      {(['present', 'absent', 'late', 'excused'] as const).map((mark) => (
+        <button
+          key={mark}
+          type="button"
+          title={LIVE_ATTENDANCE_STATUS_LABEL[mark]}
+          onClick={() => onSetMark(studentId, mark)}
+          className={`${compact ? 'p-1 rounded-md text-[10px]' : 'p-0.5 rounded text-[8px]'} font-bold transition-colors ${
+            attendanceMarks?.[sid] === mark || (resolvedStatus === mark && !attendanceMarks?.[sid])
+              ? mark === 'present'
+                ? 'bg-emerald-600 text-white'
+                : mark === 'absent'
+                  ? 'bg-rose-600 text-white'
+                  : mark === 'late'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-sky-600 text-white'
+              : 'bg-slate-800/80 text-slate-500 hover:bg-slate-700 hover:text-white'
+          }`}
+        >
+          {mark === 'present' ? '✓' : mark === 'absent' ? '✗' : mark === 'late' ? '⏱' : 'İ'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LiveAttendanceSummaryBar({
+  rosterStudents,
+  tiles,
+  attendanceMarks,
+  admittedIds,
+  pendingIds,
+  onMarkAll,
+  onSave,
+  onAdmitAll,
+  saving,
+  saveMessage,
+}: {
+  rosterStudents: Student[];
+  tiles: LiveVideoTile[];
+  attendanceMarks?: Record<string, 'present' | 'absent' | 'late' | 'excused'>;
+  admittedIds: string[];
+  pendingIds: string[];
+  onMarkAll: (status: 'present' | 'absent' | 'late' | 'excused') => void;
+  onSave: () => void;
+  onAdmitAll?: () => void;
+  saving: boolean;
+  saveMessage: string | null;
+}) {
+  const tileByStudentId = useMemo(() => {
+    const map = new Map<string, LiveVideoTile>();
+    for (const t of tiles) {
+      if (t.role === 'student') map.set(t.id.replace(/^student-/, ''), t);
+    }
+    return map;
+  }, [tiles]);
+
+  const joinedCount = useMemo(() => {
+    let count = 0;
+    for (const s of rosterStudents) {
+      const sid = normalizeStudentId(s.id);
+      if (pendingIds.some((k) => idsEqual(k, sid))) count += 1;
+      else if (admittedIds.some((k) => idsEqual(k, sid))) count += 1;
+      else if (tileByStudentId.get(sid)?.stream) count += 1;
+    }
+    return count;
+  }, [rosterStudents, pendingIds, admittedIds, tileByStudentId]);
+
+  const summary = useMemo(() => {
+    let present = 0;
+    let absent = 0;
+    for (const s of rosterStudents) {
+      const sid = normalizeStudentId(s.id);
+      const tile = tileByStudentId.get(sid);
+      const status = resolveLiveAttendanceStatus(
+        sid,
+        attendanceMarks,
+        admittedIds,
+        pendingIds,
+        !!tile?.stream,
+      );
+      if (status === 'present' || status === 'late' || status === 'excused') present += 1;
+      else if (status === 'absent') absent += 1;
+    }
+    const waiting = pendingIds.length;
+    return { present, absent, waiting, total: rosterStudents.length };
+  }, [rosterStudents, attendanceMarks, admittedIds, pendingIds, tileByStudentId]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+          Canlı yoklama
+          <span className="ml-1 normal-case font-semibold text-slate-400">
+            · {summary.present}/{summary.total}
+            {joinedCount > 0 ? (
+              <span className="text-indigo-400/90"> · {joinedCount} bağlı</span>
+            ) : null}
+          </span>
+        </p>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving || rosterStudents.length === 0}
+          className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[10px] font-bold shrink-0"
+        >
+          {saving ? 'Kaydediliyor…' : 'Kaydet'}
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5 text-[10px] font-bold">
+        <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+          {summary.present} geldi
+        </span>
+        <span className="px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/25">
+          {summary.absent} yok
+        </span>
+        {summary.waiting > 0 ? (
+          <span className="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-200 border border-amber-500/25">
+            {summary.waiting} bekliyor
+          </span>
+        ) : null}
+      </div>
+      {summary.waiting > 0 && onAdmitAll ? (
+        <button
+          type="button"
+          onClick={onAdmitAll}
+          className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shadow-lg shadow-emerald-900/30"
+        >
+          Bekleyen {summary.waiting} öğrenciyi derse al
+        </button>
+      ) : null}
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => onMarkAll('present')}
+          className="px-2.5 py-1 rounded-md bg-emerald-600/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30 hover:bg-emerald-600/30"
+        >
+          Tümü geldi
+        </button>
+        <button
+          type="button"
+          onClick={() => onMarkAll('absent')}
+          className="px-2.5 py-1 rounded-md bg-rose-600/20 text-rose-300 text-[10px] font-bold border border-rose-500/30 hover:bg-rose-600/30"
+        >
+          Tümü yok
+        </button>
+      </div>
+      {saveMessage ? <p className="text-[11px] text-indigo-300">{saveMessage}</p> : null}
+    </div>
+  );
+}
+
 /** Antrenörün tahtadaki rolü; öğrenci tarafı ters renk veya both (işbirlik) */
 export type CollaborativeBoardSide = 'w' | 'b' | 'both';
 
@@ -1353,6 +1506,68 @@ function formatCoachSeatLabel(side: CollaborativeBoardSide | null): string {
   if (side === 'b') return 'Siyah';
   if (side === 'both') return 'Her iki taraf';
   return 'Serbest';
+}
+
+function StudentPlaySideBar({
+  playSide,
+  onSetPlaySide,
+  compact = false,
+}: {
+  playSide: PlayBoardSide | null;
+  onSetPlaySide: (side: PlayBoardSide | null) => void;
+  compact?: boolean;
+}) {
+  const options: Array<{ side: PlayBoardSide | null; label: string; title: string }> = [
+    { side: 'w', label: compact ? 'B' : 'Beyaz', title: 'Beyaz oynasın' },
+    { side: 'b', label: compact ? 'S' : 'Siyah', title: 'Siyah oynasın' },
+    { side: 'both', label: compact ? 'İk' : 'İkisi', title: 'Her iki renk oynasın' },
+    { side: null, label: compact ? '✕' : 'Kapalı', title: 'Oynamayı kapat' },
+  ];
+  return (
+    <div
+      className={`rounded-md border border-white/10 bg-slate-950/70 ${
+        compact ? 'p-0.5' : 'p-1.5'
+      }`}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {!compact ? (
+        <p className="text-[8px] font-bold uppercase tracking-wider text-slate-500 mb-1 px-0.5">
+          Öğrenci taşı
+        </p>
+      ) : null}
+      <div className="grid grid-cols-4 gap-0.5">
+        {options.map(({ side, label, title }) => {
+          const active = playSide === side;
+          const isOff = side === null;
+          return (
+            <button
+              key={title}
+              type="button"
+              title={title}
+              aria-pressed={active}
+              onClick={() => onSetPlaySide(side)}
+              className={`rounded font-bold uppercase tracking-wide transition-colors ${
+                compact ? 'px-0.5 py-1 text-[8px]' : 'px-1.5 py-1 text-[9px]'
+              } ${
+                active
+                  ? isOff
+                    ? 'bg-slate-700 text-slate-300 ring-1 ring-white/20'
+                    : side === 'w'
+                      ? 'bg-slate-100 text-slate-900 ring-1 ring-white/30'
+                      : side === 'b'
+                        ? 'bg-slate-900 text-white ring-1 ring-indigo-400/40'
+                        : 'bg-indigo-600 text-white ring-1 ring-indigo-400/50'
+                  : 'bg-slate-800/80 text-slate-400 hover:bg-slate-700 hover:text-white'
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function CoachPlaySideBar({
@@ -1460,20 +1675,6 @@ function formatClassroomEngineScore(line: PvLine | null | undefined, turn: 'w' |
   return x;
 }
 
-/** Dikey avantaj çubuğu (atan eşlemesi StudyPage ile uyumlu) — değer + = beyaz lehine */
-function classroomEvalBarPawns(line: PvLine | null | undefined, turn: 'w' | 'b'): number {
-  if (!line) return 0;
-  const flip = turn === 'b' ? -1 : 1;
-  if (line.mate !== null) {
-    const m = line.mate * flip;
-    if (m > 0) return 8;
-    if (m < 0) return -8;
-    return 0;
-  }
-  const v = line.score * flip;
-  return Math.max(-6, Math.min(6, v));
-}
-
 /** Motor / katılım anahtarı: thumb pist içinde kalır */
 function ClassroomToggle({
   on,
@@ -1514,7 +1715,7 @@ function ClassroomToggle({
 }
 
 const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: roomIdProp, studentId: studentIdProp }) => {
-  const { scopedStudents: students, puzzles, refreshStudentsFromSupabase, addAttendanceRecord, trainingGroups } = useApp();
+  const { scopedStudents: students, puzzles, refreshStudentsFromSupabase, addAttendanceRecord, trainingGroups, showToast, confirmDialog, alertDialog } = useApp();
   /** Admin: seçilen oda (null = sınıf listesi göster) */
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<LiveLessonRoom[]>([]);
@@ -1636,8 +1837,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const [inviteToast, setInviteToast] = useState<string | null>(null);
   const [managePanelOpen, setManagePanelOpen] = useState(false);
   const [participantMenuStudentId, setParticipantMenuStudentId] = useState<string | null>(null);
+  /** Antrenör odayı kapattığında öğrenciyi dersten çıkar */
+  const [lessonRoomClosed, setLessonRoomClosed] = useState(false);
+  const lessonExitTriggeredRef = useRef(false);
   /** Sohbeti Chess.com tarzı altta küçük panelde göster */
   const [showChatDrawer, setShowChatDrawer] = useState(false);
+  /** Kanal bazlı son okunan mesaj zaman damgası (at) */
+  const [chatReadCursors, setChatReadCursors] = useState<ChatReadCursors>(EMPTY_CHAT_READ);
   /** Sağ üst masaüstü saati */
   const [wallClock, setWallClock] = useState(() =>
     typeof window !== 'undefined' ? new Date().toLocaleTimeString('tr-TR') : '');
@@ -1719,6 +1925,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   }, [coachSide]);
 
   const [arrows, setArrows] = useState<Array<{ startSquare: string; endSquare: string; color: string }>>([]);
+  const [boardDrawRevision, setBoardDrawRevision] = useState(0);
   const [boardReady, setBoardReady] = useState(false);
   /** Yerel kamera/mikrofon akışı (önizleme + track.enabled ile aç/kapa) */
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -1796,7 +2003,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const exactGroup = students.filter((s) => s.group?.trim() === roomName);
       if (exactGroup.length > 0) return exactGroup;
     }
-    return students;
+    return [];
   }, [sessionMedia.rosterStudentIds, students, effectiveRoomName]);
 
   const liveVideoTiles = useMemo(() => {
@@ -1837,7 +2044,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       });
     }
 
-    const otherStudents = isStudentView ? visibleStudents : students;
+    const otherStudents = isStudentView ? visibleStudents : classroomRosterStudents;
     for (const s of otherStudents) {
       const sid = normalizeStudentId(s.id);
       if (isStudentView && currentStudent && idsEqual(s.id, currentStudent.id)) continue;
@@ -1858,7 +2065,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
 
     return tiles;
-  }, [isStudentView, localStream, remoteStreamsByUid, sessionMedia, isCameraOff, currentStudent, isMuted, visibleStudents, students]);
+  }, [isStudentView, localStream, remoteStreamsByUid, sessionMedia, isCameraOff, currentStudent, isMuted, visibleStudents, classroomRosterStudents]);
   const [focusedVideoTileId, setFocusedVideoTileId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -2235,7 +2442,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         }
         return;
       }
-      if (!result.data || typeof result.data !== 'object' || Array.isArray(result.data)) return;
+      if (!result.data || typeof result.data !== 'object' || Array.isArray(result.data)) {
+        if (isStudentView && effectiveRoomId) {
+          setLessonRoomClosed(true);
+        }
+        return;
+      }
       const data = result.data as Record<string, unknown>;
       schemaHasSessionMediaRef.current = 'session_media' in data;
       schemaHasChatMessagesRef.current = 'chat_messages' in data;
@@ -2281,6 +2493,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               setVariations(sanitizeLiveVariations(data.variations));
             }
             setCurrentVariation(null);
+            if (isStudentView) {
+              setReplayNavPly(null);
+              setHoverFen(null);
+              setReplayIsPlaying(false);
+            }
           } catch {
             // ignore invalid fen
           }
@@ -2360,6 +2577,22 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     const interval = setInterval(fetchState, SYNC_POLL_MS);
     return () => clearInterval(interval);
   }, [effectiveRoomId, isStudentView, studentIdProp, isPgColumnError]);
+
+  useEffect(() => {
+    setLessonRoomClosed(false);
+    lessonExitTriggeredRef.current = false;
+  }, [effectiveRoomId]);
+
+  useEffect(() => {
+    if (!isStudentView || !lessonRoomClosed || lessonExitTriggeredRef.current) return;
+    lessonExitTriggeredRef.current = true;
+    showToast('Antrenör dersi bitirdi.', 'info');
+    const timer = window.setTimeout(() => {
+      if (onBack) onBack();
+      else window.location.hash = '#/ogrenci';
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [isStudentView, lessonRoomClosed, onBack, showToast]);
 
   /** Admin: Sınıf listesi için odaları yükle */
   useEffect(() => {
@@ -2518,7 +2751,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (studyExportStudyId !== STUDY_EXPORT_NEW_ID && !study) return;
     const fenOk = validateExportFen(studyExportPayload.fen);
     if (!fenOk) {
-      alert('Geçersiz konum; kayıt yapılamadı.');
+      showToast('Geçersiz konum; kayıt yapılamadı.', 'error');
       return;
     }
     const moves = Array.isArray(studyExportPayload.moves) ? studyExportPayload.moves : [];
@@ -2580,7 +2813,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       } else if (studyExportMode === 'update' && studyExportChapterId && study) {
         const exists = study.chapters.some((c) => c.id === studyExportChapterId);
         if (!exists) {
-          alert('Seçili bölüm bulunamadı.');
+          showToast('Seçili bölüm bulunamadı.', 'error');
           return;
         }
         updatedChapters = study.chapters.map((c) =>
@@ -2630,7 +2863,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         study ? `"${study.title}" çalışmasına "${chapterLabel}" kaydedildi.` : 'Kaydedildi.'
       );
     } catch {
-      alert('Çalışma kaydedilemedi. Supabase bağlantınızı kontrol edin.');
+      showToast('Çalışma kaydedilemedi. Supabase bağlantınızı kontrol edin.', 'error');
     } finally {
       setStudyExportSaving(false);
     }
@@ -2711,7 +2944,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         .eq('id', room.id)
         .maybeSingle();
       if (error || !data || typeof data !== 'object') {
-        alert('Tahta verisi alınamadı.');
+        showToast('Tahta verisi alınamadı.', 'error');
         return;
       }
       const rec = data as Record<string, unknown>;
@@ -2761,7 +2994,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setSelectedRoomId(null);
       return;
     }
-    if (!window.confirm('Dersi bitirmek istiyor musunuz? Oda kapatılacak ve öğrenciler çıkarılacak.')) return;
+    const ok = await confirmDialog({
+      title: 'Dersi bitir',
+      message: 'Dersi bitirmek istiyor musunuz? Oda kapatılacak ve öğrenciler çıkarılacak.',
+      confirmLabel: 'Dersi bitir',
+      variant: 'danger',
+    });
+    if (!ok) return;
     const sb = getServiceSupabase();
     if (!sb) {
       setSelectedRoomId(null);
@@ -2774,7 +3013,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
     setRooms((prev) => prev.filter((x) => x.id !== effectiveRoomId));
     setSelectedRoomId(null);
-  }, [isStudentView, effectiveRoomId]);
+  }, [isStudentView, effectiveRoomId, confirmDialog]);
 
   const createRoom = useCallback(async (name: string) => {
     if (!isSupabaseBackend()) return;
@@ -3210,11 +3449,54 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     sessionMedia.pendingStudentIds,
   ]);
 
-  const kickParticipant = useCallback(
-    (studentId: string) => {
+  const sendStudentToWaitingRoom = useCallback(
+    async (studentId: string) => {
       const id = normalizeStudentId(studentId);
       if (!id || isStudentView) return;
-      if (!window.confirm('Bu öğrenciyi dersten çıkarmak istiyor musunuz?')) return;
+      const ok = await confirmDialog({
+        title: 'Bekleme odasına al',
+        message: 'Bu öğrenci dersten çıkarılıp bekleme odasına alınacak. Tekrar derse alabilirsiniz.',
+        confirmLabel: 'Bekleme odasına al',
+        variant: 'danger',
+      });
+      if (!ok) return;
+      const pending = [...new Set([...(sessionMedia.pendingStudentIds ?? []), id])];
+      const nextBlocked = { ...sessionMedia.studentMicBlocked, [id]: true };
+      let floor = sessionMedia.floorStudentId;
+      if (idsEqual(floor, id)) floor = null;
+      void persistSessionMediaOp(effectiveRoomId, 'handLower', id, getServiceSupabase);
+      void pushSessionMediaRemote({
+        ...sessionMedia,
+        kickedStudentIds: (sessionMedia.kickedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        pendingStudentIds: pending,
+        admittedStudentIds: (sessionMedia.admittedStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        independentBoardStudentIds: (sessionMedia.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, id)),
+        studentBoards: Object.fromEntries(
+          Object.entries(sessionMedia.studentBoards ?? {}).filter(([kid]) => !idsEqual(kid, id)),
+        ),
+        studentPlaySides: Object.fromEntries(
+          Object.entries(sessionMedia.studentPlaySides ?? {}).filter(([kid]) => !idsEqual(kid, id)),
+        ),
+        floorStudentId: floor,
+        studentMicBlocked: nextBlocked,
+        studentCamForcedOff: { ...sessionMedia.studentCamForcedOff, [id]: true },
+      });
+      setParticipantMenuStudentId(null);
+    },
+    [sessionMedia, pushSessionMediaRemote, isStudentView, effectiveRoomId, confirmDialog],
+  );
+
+  const banParticipantPermanently = useCallback(
+    async (studentId: string) => {
+      const id = normalizeStudentId(studentId);
+      if (!id || isStudentView) return;
+      const ok = await confirmDialog({
+        title: 'Kalıcı çıkar',
+        message: 'Bu öğrenci dersten kalıcı olarak çıkarılacak. Tekrar katılmak için sizin onayınız gerekir.',
+        confirmLabel: 'Kalıcı çıkar',
+        variant: 'danger',
+      });
+      if (!ok) return;
       const kicks = new Set([...(sessionMedia.kickedStudentIds ?? []), id]);
       const nextBlocked = { ...sessionMedia.studentMicBlocked, [id]: true };
       let floor = sessionMedia.floorStudentId;
@@ -3238,7 +3520,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       });
       setParticipantMenuStudentId(null);
     },
-    [sessionMedia, pushSessionMediaRemote, isStudentView, effectiveRoomId],
+    [sessionMedia, pushSessionMediaRemote, isStudentView, effectiveRoomId, confirmDialog],
   );
 
   const readmitParticipant = useCallback(
@@ -3510,13 +3792,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     return sorted.filter((m) => isGeneralChatMessage(m, '', false));
   }, [chatMessages, isStudentView, studentIdProp, chatPrivateStudentId, studentChatPrivate]);
 
-  const studentHasCoachPrivateThread = useMemo(() => {
-    if (!isStudentView) return false;
-    const sid = normalizeStudentId(studentIdProp);
-    if (!sid) return false;
-    return chatMessages.some((m) => m.role === 'coach' && isPrivateChatMessage(m, sid));
-  }, [chatMessages, isStudentView, studentIdProp]);
-
   const lastAutoPrivateCoachMsgIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!isStudentView) return;
@@ -3533,26 +3808,124 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     setShowChatDrawer(true);
   }, [chatMessages, isStudentView, studentIdProp]);
 
-  const chatStudentStripMeta = useMemo(() => {
-    const writers = new Set<string>();
-    let lastWriter: string | null = null;
-    const relevant = chatMessages.filter((m) => {
-      if (chatPrivateStudentId) {
-        const pid = normalizeStudentId(chatPrivateStudentId);
-        return isPrivateChatMessage(m, pid);
-      }
-      return isGeneralChatMessage(m, '', false);
-    });
-    const sorted = [...relevant].sort((a, b) => a.at.localeCompare(b.at));
-    for (const m of sorted) {
-      if (m.role !== 'student') continue;
-      const sid = normalizeStudentId(m.studentId);
-      if (!sid) continue;
-      writers.add(sid);
-      lastWriter = sid;
+  useEffect(() => {
+    setChatReadCursors(EMPTY_CHAT_READ);
+  }, [effectiveRoomId]);
+
+  const chatUnreadStats = useMemo(() => {
+    const studentSid = normalizeStudentId(studentIdProp);
+    const privateUnreadByStudent: Record<string, number> = {};
+
+    if (isStudentView) {
+      const generalUnread = countUnreadChatMessages(
+        chatMessages,
+        chatReadCursors.general,
+        (m) => m.role === 'coach' && !m.privateWithStudentId,
+      );
+      const privateUnread = studentSid
+        ? countUnreadChatMessages(
+            chatMessages,
+            readCursorForChannel(chatReadCursors, `private:${studentSid}`),
+            (m) => m.role === 'coach' && isPrivateChatMessage(m, studentSid),
+          )
+        : 0;
+      return {
+        generalUnread,
+        privateUnreadByStudent: {} as Record<string, number>,
+        totalUnread: studentChatPrivate ? privateUnread : generalUnread,
+        activeChannelUnread: studentChatPrivate ? privateUnread : generalUnread,
+      };
     }
-    return { writers, lastWriter };
-  }, [chatMessages, chatPrivateStudentId]);
+
+    const generalUnread = countUnreadChatMessages(
+      chatMessages,
+      chatReadCursors.general,
+      (m) => m.role === 'student' && !m.privateWithStudentId,
+    );
+    let privateUnreadTotal = 0;
+    for (const s of classroomRosterStudents) {
+      const sid = normalizeStudentId(s.id);
+      if (!sid) continue;
+      const count = countUnreadChatMessages(
+        chatMessages,
+        readCursorForChannel(chatReadCursors, `private:${sid}`),
+        (m) => m.role === 'student' && isPrivateChatMessage(m, sid),
+      );
+      if (count > 0) {
+        privateUnreadByStudent[sid] = count;
+        privateUnreadTotal += count;
+      }
+    }
+    const activeChannel = activeChatChannelKey({
+      isStudentView,
+      chatPrivateStudentId,
+      studentChatPrivate,
+      studentIdProp,
+    });
+    const activeChannelUnread =
+      activeChannel === 'general'
+        ? generalUnread
+        : privateUnreadByStudent[activeChannel.slice('private:'.length)] ?? 0;
+
+    return {
+      generalUnread,
+      privateUnreadByStudent,
+      totalUnread: generalUnread + privateUnreadTotal,
+      activeChannelUnread,
+    };
+  }, [
+    chatMessages,
+    chatReadCursors,
+    isStudentView,
+    studentIdProp,
+    studentChatPrivate,
+    chatPrivateStudentId,
+    classroomRosterStudents,
+  ]);
+
+  useEffect(() => {
+    if (sidebarTab !== 'sohbet') return;
+    const channel = activeChatChannelKey({
+      isStudentView,
+      chatPrivateStudentId,
+      studentChatPrivate,
+      studentIdProp,
+    });
+    const latestAt = visibleChatMessages.reduce<string | null>((max, m) => {
+      if (!max || m.at > max) return m.at;
+      return max;
+    }, null);
+    if (!latestAt) return;
+    setChatReadCursors((prev) => {
+      if (channel === 'general') {
+        if (prev.general && prev.general >= latestAt) return prev;
+        return { ...prev, general: latestAt };
+      }
+      const sid = channel.slice('private:'.length);
+      const cur = prev.private[sid];
+      if (cur && cur >= latestAt) return prev;
+      return { ...prev, private: { ...prev.private, [sid]: latestAt } };
+    });
+  }, [
+    sidebarTab,
+    visibleChatMessages,
+    isStudentView,
+    chatPrivateStudentId,
+    studentChatPrivate,
+    studentIdProp,
+  ]);
+
+  const chatNotifyCount =
+    sidebarTab === 'sohbet'
+      ? Math.max(0, chatUnreadStats.totalUnread - chatUnreadStats.activeChannelUnread)
+      : chatUnreadStats.totalUnread;
+
+  const openGeneralChat = useCallback(() => {
+    setChatPrivateStudentId(null);
+    setStudentChatPrivate(false);
+    setSidebarTab('sohbet');
+    setShowChatDrawer(true);
+  }, []);
 
   const chatSenderName = useCallback(
     (msg: LiveChatMessage) => {
@@ -3577,19 +3950,25 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     } catch { return fen; }
   }, [displayBaseFen, displayMoveHistory, fen]);
 
-  const mainLinePly = replayNavPly === null ? displayMoveHistory.length : replayNavPly;
-  const liveLessonCurrentPly = currentVariation
-    ? currentVariation[2] + 1
-    : mainLinePly;
-  const activeLineLength = currentVariation
+  const mainLinePly = isStudentView
+    ? displayMoveHistory.length
+    : replayNavPly === null
+      ? displayMoveHistory.length
+      : replayNavPly;
+  const liveLessonCurrentPly = isStudentView
+    ? displayMoveHistory.length
+    : currentVariation
+      ? currentVariation[2] + 1
+      : mainLinePly;
+  const activeLineLength = currentVariation && !isStudentView
     ? (displayVariations[currentVariation[0]]?.[currentVariation[1]]?.length ?? 0)
     : displayMoveHistory.length;
   /** Oynanabilir uç pozisyon (notasyon gezintisinde değiliz) */
-  const atLiveGameHead = liveLessonCurrentPly === activeLineLength;
+  const atLiveGameHead = isStudentView || liveLessonCurrentPly === activeLineLength;
   const studentPlaySideResolved = resolveStudentPlaySide(studentIdProp, sessionMedia);
   /** Analiz sekmesinde veya analiz modunda geçmiş konumdan varyasyon denenebilir */
-  const boardExploreMode = analysisMode || atLiveGameHead || sidebarTab === 'analiz';
-  const replayNavActive = replayNavPly !== null || currentVariation !== null;
+  const boardExploreMode = !isStudentView && (analysisMode || atLiveGameHead || sidebarTab === 'analiz');
+  const replayNavActive = !isStudentView && (replayNavPly !== null || currentVariation !== null);
 
   const boardDisplayFen = useMemo(() => {
     if (hoverFen && !replayNavActive) return hoverFen;
@@ -3629,13 +4008,27 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     return () => window.clearInterval(id);
   }, [replayIsPlaying, moveHistory]);
 
-  /** Tahtadaki avantaj çubuğu — öğrencide sekme değişince de açık kalır */
+  /** Tahtadaki avantaj çubuğu — öğrencide yalnızca antrenör «Avantaj» ile açılır */
   const studentClassroomAnalysisOn = isStudentClassroomAnalysisEnabled(sessionMedia);
   const studentBoardEvalOn = isStudentBoardEvalBarEnabled(sessionMedia);
   const showBoardEvalBar = isStudentView ? studentBoardEvalOn : engineEvalVisible;
   const coachEngineActive = engineEvalVisible && sidebarTab === 'analiz';
   const studentEngineActive = studentClassroomAnalysisOn && sidebarTab === 'analiz';
   const enginePanelActive = isStudentView ? studentEngineActive : coachEngineActive;
+  const engineLineSlotCount = isStudentView
+    ? resolveEngineMultiPvLines(sessionMedia)
+    : engineLinesVisible
+      ? 3
+      : 1;
+  const studentAnalyseBoard = isStudentView && studentEngineActive;
+
+  useEffect(() => {
+    if (isStudentView) return;
+    const remoteLines = sessionMedia.engineMultiPvLines;
+    if (remoteLines === 1 || remoteLines === 3) {
+      setEngineLinesVisible(remoteLines === 3);
+    }
+  }, [isStudentView, sessionMedia.engineMultiPvLines]);
 
   const {
     pvLines: enginePvLines,
@@ -3645,15 +4038,16 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     loading: engineLoading,
     error: engineError,
   } = useStockfish({
-    numPv: engineLinesVisible && enginePanelActive ? 3 : 1,
-    enabled: isStudentView
-      ? studentClassroomAnalysisOn
-      : engineEvalVisible || coachEngineActive,
+    numPv: enginePanelActive ? engineLineSlotCount : 1,
+    enabled: studentAnalyseBoard || (!isStudentView && (engineEvalVisible || coachEngineActive)),
   });
 
   /** Tahta / analiz sekmesi FEN değişince motoru güncelle (tek giriş noktası) */
   useEffect(() => {
-    if (!showBoardEvalBar && !enginePanelActive) return;
+    const shouldAnalyse = isStudentView
+      ? studentAnalyseBoard
+      : showBoardEvalBar || enginePanelActive;
+    if (!shouldAnalyse) return;
     const fen = boardDisplayFen.trim();
     try {
       new Chess(fen);
@@ -3661,7 +4055,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       return;
     }
     analyseEngineFen(fen);
-  }, [showBoardEvalBar, enginePanelActive, boardDisplayFen, analyseEngineFen]);
+  }, [isStudentView, studentAnalyseBoard, showBoardEvalBar, enginePanelActive, boardDisplayFen, analyseEngineFen]);
 
   const onEnginePvHoverPly = useMemo(
     () =>
@@ -3909,7 +4303,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     void pushSessionMediaRemote({
       ...sessionMedia,
       studentAnalysisVisible: next,
-      studentEvalBarVisible: next,
     });
   }, [isStudentView, pushSessionMediaRemote, sessionMedia]);
 
@@ -3920,9 +4313,18 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     void pushSessionMediaRemote({
       ...sessionMedia,
       studentEvalBarVisible: next,
-      studentAnalysisVisible: next ? true : (sessionMedia.studentAnalysisVisible ?? false),
     });
   }, [isStudentView, engineEvalVisible, pushSessionMediaRemote, sessionMedia]);
+
+  const toggleCoachEngineLinesVisible = useCallback(() => {
+    if (isStudentView) return;
+    const next = !engineLinesVisible;
+    setEngineLinesVisible(next);
+    void pushSessionMediaRemote({
+      ...sessionMedia,
+      engineMultiPvLines: next ? 3 : 1,
+    });
+  }, [engineLinesVisible, isStudentView, pushSessionMediaRemote, sessionMedia]);
 
   const recordVariation = useCallback((
     from: string,
@@ -3934,6 +4336,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const result = g.move({ from: from as any, to: to as any, promotion: 'q' });
       if (!result) return null;
       const existingVars = displayVariations[branchMainPly] ?? [];
+      const existingIdx = existingVars.findIndex((line) => line[0] === result.san);
+      if (existingIdx >= 0) {
+        return {
+          nextVars: displayVariations,
+          varRef: [branchMainPly, existingIdx, 0],
+        };
+      }
       const varRef: LiveVariationRef = [branchMainPly, existingVars.length, 0];
       const nextVars = { ...displayVariations, [branchMainPly]: [...existingVars, [result.san]] };
       return { nextVars, varRef };
@@ -3951,6 +4360,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     const currentLine = existingVars[varGroupIdx];
     if (!currentLine) return null;
     const insertAt = Math.min(varMoveIdx + 1, currentLine.length);
+    if (currentLine[insertAt] === san) {
+      return {
+        nextVars: displayVariations,
+        varRef: [mainLinePos, varGroupIdx, insertAt],
+      };
+    }
     const nextLine = [...currentLine.slice(0, insertAt), san, ...currentLine.slice(insertAt)];
     const varRef: LiveVariationRef = [mainLinePos, varGroupIdx, insertAt];
     const nextVars = {
@@ -4000,6 +4415,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   }, [displayBaseFen, displayMoveHistory, displayVariations]);
 
   const selectLiveMove = useCallback((idx: number, varInfo?: LiveVariationRef) => {
+    if (isStudentView) return;
     setReplayIsPlaying(false);
     setHoverFen(null);
     if (varInfo) {
@@ -4009,7 +4425,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
     setCurrentVariation(null);
     setReplayNavPly(Math.max(0, idx));
-  }, []);
+  }, [isStudentView]);
 
   const deleteLiveMoveFromHere = useCallback((idx: number) => {
     if (isStudentView) return;
@@ -4315,6 +4731,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       }
 
       if (displayMoveHistory.length === 0 && !currentVariation) return;
+
+      if (isStudentView) return;
 
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
@@ -4628,15 +5046,21 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         setMoveHintSquare(null);
         return;
       }
-      if (isStudentView) return;
+      if (isStudentView) {
+        applyLiveLessonSquareMarkAt(square, 'circle');
+        return;
+      }
       if (drawingTool === 'mouse') return;
       if (drawingTool === 'eraser') {
-        setMarks((prev) => {
-          const next = { ...prev };
-          delete next[square];
-          pushState(fen, moveHistory, arrows, next, coachSide ?? undefined);
-          return next;
-        });
+        const sq = square.toLowerCase();
+        const nextMarks = { ...marks };
+        delete nextMarks[square];
+        const nextArrows = sanitizedArrows.filter(
+          (a) => a.startSquare !== sq && a.endSquare !== sq,
+        );
+        setMarks(nextMarks);
+        setArrows(nextArrows);
+        pushState(fen, moveHistory, nextArrows, nextMarks, coachSide ?? undefined);
         return;
       }
       setMarks((prev) => {
@@ -4673,20 +5097,26 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       arrowStartOffset: 0,
     },
     onArrowsChange: (payload: unknown) => {
-      const newArrows = Array.isArray(payload)
+      const raw = Array.isArray(payload)
         ? (payload as ArrowItem[])
         : ((payload as { arrows?: ArrowItem[] } | null)?.arrows ?? []);
-      const next = sanitizeArrows(newArrows ?? []);
+      const withoutPreview = raw.filter((a) => !ARROW_PREVIEW_COLORS.has(a.color));
+      const next = sanitizeArrows(withoutPreview);
       if (isStudentView) {
         const engineColors = new Set(['rgba(99,102,241,0.85)', 'rgba(99,102,241,0.4)']);
         const localOnly = next.filter((a) => !engineColors.has(a.color));
         setStudentLocalArrows(persistedArrows(localOnly));
         return;
       }
-      if (next.length > arrows.length) {
-        next[next.length - 1].color = COLOR_VALUES[drawingColor];
-      }
-      const toPersist = persistedArrows(next);
+      const prevKeys = new Set(sanitizedArrows.map((a) => `${a.startSquare}-${a.endSquare}`));
+      const colored = next.map((a) => {
+        const key = `${a.startSquare}-${a.endSquare}`;
+        if (!prevKeys.has(key)) {
+          return { ...a, color: COLOR_VALUES[drawingColor] };
+        }
+        return a;
+      });
+      const toPersist = persistedArrows(colored);
       setArrows(toPersist);
       pushState(fen, moveHistory, toPersist, marks, coachSide ?? undefined);
     },
@@ -4711,13 +5141,23 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       return game.turn();
     }
   }, [boardDisplayFen, game]);
-  const turn = displayTurn === 'w' ? 'Beyaz' : 'Siyah';
 
   const showLiveEvalBar = showBoardEvalBar;
-  const liveEvalBarScore = useMemo(
-    () => classroomEvalBarPawns(enginePvLines[0], displayTurn),
-    [enginePvLines, displayTurn]
-  );
+  const liveEvalBarMeta = useMemo(() => {
+    const terminal = getTerminalEval(boardDisplayFen);
+    if (terminal) {
+      return {
+        score: terminalEvalToBarPawns(terminal),
+        label: terminal.label,
+      };
+    }
+    const line = enginePvLines[0];
+    return {
+      score: pvLineToEvalBarPawns(line, displayTurn),
+      label: formatClassroomEngineScore(line, displayTurn),
+    };
+  }, [boardDisplayFen, enginePvLines, displayTurn]);
+  const liveEvalBarScore = liveEvalBarMeta.score;
 
   const classroomOpenParticipation = sessionMedia.openParticipation ?? false;
 
@@ -4921,6 +5361,18 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     );
   }
 
+  if (!showClassList && isStudentView && lessonRoomClosed) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 h-[calc(100vh-5rem)] bg-[#0f172a] text-center px-8 rounded-2xl lg:rounded-3xl border border-white/[0.06] atmospheric-bg ring-1 ring-indigo-500/10">
+        <Check className="w-14 h-14 text-emerald-400 shrink-0" aria-hidden />
+        <h2 className="text-xl font-bold text-white">Ders sona erdi</h2>
+        <p className="text-sm text-slate-400 max-w-md">
+          Antrenör dersi bitirdi. Ders listesine yönlendiriliyorsunuz…
+        </p>
+      </div>
+    );
+  }
+
   if (!showClassList && isStudentWaitingForAdmission) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 h-[calc(100vh-5rem)] bg-[#0f172a] text-center px-8 rounded-2xl lg:rounded-3xl border border-white/[0.06] atmospheric-bg ring-1 ring-indigo-500/10">
@@ -5091,47 +5543,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           </button>
         </div>
       ) : null}
-      {!isStudentView && (sessionMedia.handRaisedStudentIds ?? []).length > 0 ? (
-        <div
-          className="shrink-0 px-3 py-2.5 bg-indigo-500/25 border-b border-indigo-400/40 space-y-2"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="flex items-center gap-2 text-indigo-50 text-[13px] font-semibold">
-            <Hand className="w-4 h-4 shrink-0 text-indigo-200 animate-pulse" aria-hidden />
-            <span>{(sessionMedia.handRaisedStudentIds ?? []).length} öğrenci söz istiyor</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {(sessionMedia.handRaisedStudentIds ?? []).map((hid) => {
-              const handStudent = students.find((s) => idsEqual(s.id, hid));
-              const hasFloor = idsEqual(sessionMedia.floorStudentId, hid);
-              return (
-                <div
-                  key={hid}
-                  className="flex items-center gap-2 rounded-lg border border-indigo-400/35 bg-slate-900/55 px-2.5 py-1.5"
-                >
-                  <span className="text-[12px] font-semibold text-white truncate max-w-[9rem]">
-                    {handStudent?.name ?? hid}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      hasFloor ? releaseSpeakFloor(hid) : grantFloorToStudent(hid)
-                    }
-                    className={`shrink-0 rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white ${
-                      hasFloor
-                        ? 'bg-rose-600 hover:bg-rose-500'
-                        : 'bg-indigo-600 hover:bg-indigo-500'
-                    }`}
-                  >
-                    {hasFloor ? 'Sözü kes' : 'Söz ver'}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
       {speakRequestNotice &&
       isStudentView &&
       !studentHasRaisedHand &&
@@ -5146,31 +5557,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col lg:flex-row pb-14 lg:pb-0">
         {/* ── Classroom: Tahta (ekrana oturan kare) ── */}
         <section className={`${mobileClassroomPanel === 'board' ? 'flex' : 'hidden'} lg:flex flex-1 lg:flex-[1.85] xl:flex-[2] min-w-0 min-h-0 flex-col bg-gradient-to-b from-slate-900/90 via-[#0f172a] to-slate-950 lg:border-r lg:border-white/10`}>
-          {isStudentView && (
-            <div className="shrink-0 px-3 pt-1.5 pb-0 flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-300 bg-indigo-500/15 border border-indigo-500/30 rounded-full px-3 py-1">
-                Öğrenci görünümü
-              </span>
-              {playSide != null ? (
-                <span className="text-[10px] font-bold uppercase tracking-wide text-teal-200 bg-teal-500/10 border border-teal-500/25 rounded-full px-2.5 py-1">
-                  {formatStudentSeatLabel(playSide)}
-                </span>
-              ) : (
-                <span className="text-[10px] text-slate-500 truncate">Tahtayı antrenör yönetir</span>
-              )}
-            </div>
-          )}
-          {!isStudentView && (
-            <div className="shrink-0 px-3 pt-1.5 pb-0 flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-300 bg-indigo-500/15 border border-indigo-500/30 rounded-full px-3 py-1">
-                Antrenör görünümü
-              </span>
-              <span className="text-[10px] font-bold uppercase tracking-wide text-teal-200 bg-teal-500/10 border border-teal-500/25 rounded-full px-2.5 py-1">
-                {formatCoachSeatLabel(coachSide)}
-              </span>
-            </div>
-          )}
-
           <div
             className={`flex-1 flex flex-col min-h-0 items-stretch px-2 sm:px-3 lg:px-5 py-1 sm:py-2 overflow-x-hidden ${
               isStudentView
@@ -5202,26 +5588,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               }`}
               style={boardColumnStyle}
             >
-              <div className="flex items-center justify-between gap-2 px-0.5 min-h-[20px] shrink-0">
-                <div className="flex items-center gap-1.5 text-slate-300 text-xs font-medium">
-                  <span className="text-[10px] text-slate-500 leading-none" aria-hidden>▲</span>
-                  <span>Siyah</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {turn === 'Siyah' ? (
-                    <span className="text-[9px] font-bold uppercase tracking-wide text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-500/40 bg-indigo-500/15">
-                      Sırada
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-              {!isStudentView ? (
-                <CoachPlaySideBar
-                  coachSide={coachSide}
-                  onSetCoachSide={setCoachPlaySide}
-                  compact
-                />
-              ) : null}
               <div
                 className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 pb-1"
                 aria-label="Tahta boyutu"
@@ -5282,6 +5648,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       onClear={() => {
                         setMarks({});
                         setArrows([]);
+                        setBoardDrawRevision((r) => r + 1);
                         pushState(fen, moveHistory, [], {}, coachSide ?? undefined);
                       }}
                       onCopy={() => {
@@ -5295,6 +5662,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 className="relative mx-auto shrink-0 rounded-2xl border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.45)] bg-slate-900/90 ring-1 ring-indigo-500/15"
                 style={boardShellStyle}
                 onWheel={(e) => {
+                  if (isStudentView) return;
                   // Tahta üstünde mouse wheel ile hamle gez (ArrowLeft/Right gibi).
                   // Ctrl/Cmd + wheel tarayıcı zoom/scroll davranışını bozmasın.
                   if (e.ctrlKey || e.metaKey) return;
@@ -5339,7 +5707,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         label={
                           engineLoading || !engineReady
                             ? '…'
-                            : formatClassroomEngineScore(enginePvLines[0], displayTurn).slice(0, 9)
+                            : liveEvalBarMeta.label.slice(0, 9)
                         }
                         darkClassName="bg-slate-800 border-b border-white/10"
                         lightClassName="bg-slate-200"
@@ -5350,29 +5718,15 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 >
                   <div className="absolute inset-0">
                     <Chessboard
-                      key={effectiveRoomId}
+                      key={`${effectiveRoomId}-${boardDrawRevision}`}
                       options={{
-                        id: `live-lesson-board-${effectiveRoomId}`,
+                        id: `live-lesson-board-${effectiveRoomId}-${boardDrawRevision}`,
                         ...boardOptions,
                       }}
                     />
                   </div>
                 </ChessBoardFrame>
               </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-2 px-0.5 min-h-[20px] shrink-0">
-                <div className="flex items-center gap-1.5 text-slate-300 text-xs font-medium">
-                  <span className="text-[10px] text-slate-500 leading-none" aria-hidden>▲</span>
-                  <span>Beyaz</span>
-                </div>
-                {turn === 'Beyaz' ? (
-                  <span className="text-[9px] font-bold uppercase tracking-wide text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-500/40 bg-indigo-500/15">
-                    Sırada
-                  </span>
-                ) : (
-                  <span className="w-14 shrink-0" aria-hidden />
-                )}
               </div>
             </div>
 
@@ -5386,13 +5740,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               pendingIds={sessionMedia.pendingStudentIds ?? []}
               focusedId={focusedVideoTileId}
               onFocus={setFocusedVideoTileId}
-              onSetMark={setLiveAttendanceMark}
-              onMarkAll={markAllLiveAttendance}
-              onSave={() => void saveLiveAttendance()}
               onAdmit={admitStudentToClass}
-              onAdmitAll={admitAllPendingStudents}
-              saving={attendanceSaving}
-              saveMessage={attendanceSaveToast}
               vbSupported={vbSupported}
               cameraBackgroundBlur={cameraBackgroundBlur}
               onToggleBlur={toggleCameraBackgroundBlur}
@@ -5409,6 +5757,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               handRaisedStudentIds={sessionMedia.handRaisedStudentIds ?? []}
               onGrantSpeakFloor={grantFloorToStudent}
               onReleaseSpeakFloor={releaseSpeakFloor}
+              sessionMedia={sessionMedia}
+              onSetStudentPlayPermission={setStudentPlayPermission}
             />
             ) : (
             <ClassroomStudentVideoPanel
@@ -5451,13 +5801,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 pendingIds={sessionMedia.pendingStudentIds ?? []}
                 focusedId={focusedVideoTileId}
                 onFocus={setFocusedVideoTileId}
-                onSetMark={setLiveAttendanceMark}
-                onMarkAll={markAllLiveAttendance}
-                onSave={() => void saveLiveAttendance()}
                 onAdmit={admitStudentToClass}
-                onAdmitAll={admitAllPendingStudents}
-                saving={attendanceSaving}
-                saveMessage={attendanceSaveToast}
                 vbSupported={vbSupported}
                 cameraBackgroundBlur={cameraBackgroundBlur}
                 onToggleBlur={toggleCameraBackgroundBlur}
@@ -5474,6 +5818,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 handRaisedStudentIds={sessionMedia.handRaisedStudentIds ?? []}
                 onGrantSpeakFloor={grantFloorToStudent}
                 onReleaseSpeakFloor={releaseSpeakFloor}
+                sessionMedia={sessionMedia}
+                onSetStudentPlayPermission={setStudentPlayPermission}
               />
               ) : (
               <div className="lg:hidden">
@@ -5546,13 +5892,25 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 key={id}
                 type="button"
                 onClick={() => setSidebarTab(id)}
-                className={`flex flex-col items-center justify-center gap-0.5 min-h-[44px] min-w-[4.5rem] sm:min-w-0 px-2 py-2 text-[10px] sm:text-[11px] font-semibold transition-colors border-b-2 shrink-0 snap-start sm:shrink ${
+                className={`relative flex flex-col items-center justify-center gap-0.5 min-h-[44px] min-w-[4.5rem] sm:min-w-0 px-2 py-2 text-[10px] sm:text-[11px] font-semibold transition-colors border-b-2 shrink-0 snap-start sm:shrink ${
                   sidebarTab === id
-                    ? 'text-white bg-indigo-500/15 border-indigo-500'
-                    : 'text-slate-500 hover:text-slate-200 border-transparent'
+                    ? id === 'sohbet' && chatNotifyCount > 0
+                      ? 'text-white bg-emerald-500/15 border-emerald-400'
+                      : 'text-white bg-indigo-500/15 border-indigo-500'
+                    : id === 'sohbet' && chatNotifyCount > 0
+                      ? 'text-emerald-200 hover:text-emerald-100 border-transparent'
+                      : 'text-slate-500 hover:text-slate-200 border-transparent'
                 }`}
               >
-                <Ico className="w-3.5 h-3.5 shrink-0" />
+                <span className="relative">
+                  <Ico className="w-3.5 h-3.5 shrink-0" />
+                  {id === 'sohbet' && chatNotifyCount > 0 ? (
+                    <ChatUnreadBadge
+                      count={chatNotifyCount}
+                      className="absolute -top-2 -right-3 min-w-[0.95rem] h-[0.95rem] text-[8px] ring-1"
+                    />
+                  ) : null}
+                </span>
                 <span className="truncate max-w-[4.5rem] sm:max-w-full px-0.5">{label}</span>
               </button>
             ))}
@@ -5562,22 +5920,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             {sidebarTab === 'analiz' && (
               <div className="flex flex-col h-full min-h-0">
                 <section className="shrink-0 border-b border-white/10 px-2 py-1.5 bg-slate-800/30">
-                  {!isStudentView ? (
-                    <div className="mb-1.5">
-                      <CoachPlaySideBar coachSide={coachSide} onSetCoachSide={setCoachPlaySide} compact />
-                    </div>
-                  ) : null}
                   {isStudentView && !studentClassroomAnalysisOn ? (
                     <p className="text-[10px] text-slate-500 leading-snug rounded-lg border border-white/10 bg-slate-800/40 px-2 py-1.5">
-                      Antrenör avantaj çubuğunu veya analiz panelini henüz açmadı.
+                      Antrenör analiz panelini henüz açmadı.
                     </p>
                   ) : (
                   <>
-                  {isStudentView && studentClassroomAnalysisOn && !studentBoardEvalOn ? (
-                    <p className="text-[10px] text-slate-500 leading-snug rounded-lg border border-white/10 bg-slate-800/40 px-2 py-1.5 mb-1.5">
-                      Tahtadaki avantaj çubuğu kapalı; analiz satırları aşağıda görünür.
-                    </p>
-                  ) : null}
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-0.5 border-b border-white/[0.06]">
                     {!isStudentView ? (
                       <label
@@ -5594,25 +5942,21 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                         />
                       </label>
                     ) : null}
-                    <label
-                      htmlFor="live-advantage-bar-toggle"
-                      className="flex items-center gap-1 cursor-pointer text-[8px] text-slate-400 whitespace-nowrap"
-                      title="Tahtanın solunda avantaj çubuğu"
-                    >
-                      <span>Avantaj</span>
-                      <ClassroomToggle
-                        id="live-advantage-bar-toggle"
-                        compact
-                        on={
-                          isStudentView
-                            ? studentBoardEvalOn
-                            : engineEvalVisible
-                        }
-                        onToggle={() => {
-                          if (!isStudentView) toggleCoachEvalBarVisible();
-                        }}
-                      />
-                    </label>
+                    {!isStudentView ? (
+                      <label
+                        htmlFor="live-advantage-bar-toggle"
+                        className="flex items-center gap-1 cursor-pointer text-[8px] text-slate-400 whitespace-nowrap"
+                        title="Tahtanın solunda avantaj çubuğu"
+                      >
+                        <span>Avantaj</span>
+                        <ClassroomToggle
+                          id="live-advantage-bar-toggle"
+                          compact
+                          on={engineEvalVisible}
+                          onToggle={() => toggleCoachEvalBarVisible()}
+                        />
+                      </label>
+                    ) : null}
                     {!isStudentView ? (
                       <label
                         htmlFor="live-engine-lines-toggle"
@@ -5624,7 +5968,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                           id="live-engine-lines-toggle"
                           compact
                           on={engineLinesVisible}
-                          onToggle={() => setEngineLinesVisible(!engineLinesVisible)}
+                          onToggle={() => toggleCoachEngineLinesVisible()}
                         />
                       </label>
                     ) : null}
@@ -5646,9 +5990,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   {enginePanelActive ? (
                     <div
                       className="divide-y divide-white/[0.05] overflow-hidden rounded-md border border-white/[0.06] bg-black/20"
-                      style={{ height: (engineLinesVisible ? 3 : 1) * 26 }}
+                      style={{ height: engineLineSlotCount * 26 }}
                     >
-                      {Array.from({ length: engineLinesVisible ? 3 : 1 }).map((_, slotIdx) => {
+                      {Array.from({ length: engineLineSlotCount }).map((_, slotIdx) => {
                         const line = enginePvLines[slotIdx];
                         return (
                           <div
@@ -5706,7 +6050,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   ) : null}
                 </div>
 
-                <div className="flex-1 min-h-[5.5rem] overflow-y-auto p-2 bg-slate-800/35 text-[11px] custom-scrollbar">
+                <div className="flex-1 min-h-[14rem] overflow-y-auto overflow-x-hidden p-2 bg-slate-800/35 text-[11px] custom-scrollbar">
                   {!liveLessonChapter ? (
                     <div className="flex flex-col items-center justify-center text-slate-600 gap-2 py-6">
                       <Move className="w-9 h-9 opacity-35 text-slate-500" />
@@ -5728,7 +6072,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       compact
                       onDeleteFromHere={!isStudentView ? deleteLiveMoveFromHere : undefined}
                       onPromoteVariation={!isStudentView ? promoteLiveVariation : undefined}
-                      onHoverMove={(idx, varInfo) => {
+                      onHoverMove={
+                        isStudentView
+                          ? undefined
+                          : (idx, varInfo) => {
                         if (varInfo) {
                           setHoverFen(liveLessonFenAt(displayBaseFen, displayMoveHistory, displayVariations, varInfo[0], varInfo));
                         } else if (idx == null) {
@@ -5742,6 +6089,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 </div>
 
                 <div className="flex items-center justify-between gap-2 px-2 py-2 border-t border-white/10 shrink-0 bg-slate-900/50">
+                  {!isStudentView ? (
                   <div className="flex items-center gap-0.5 rounded-lg bg-slate-800/60 p-0.5 border border-white/[0.06]">
                     <button
                       type="button"
@@ -5808,6 +6156,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       {replayIsPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                     </button>
                   </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-500 px-1 leading-snug">
+                      Hamle geçmişi antrenörle senkron kalır.
+                    </p>
+                  )}
+                  {!isStudentView ? (
                   <div className="flex items-center gap-0.5 rounded-lg bg-slate-800/60 p-0.5 border border-white/[0.06]">
                     <button
                       type="button"
@@ -5834,6 +6188,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       <LayoutGrid className="w-5 h-5" />
                     </button>
                   </div>
+                  ) : null}
                 </div>
                 </div>
 
@@ -6018,21 +6373,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 ) : null}
 
                 {!isStudentView ? (
-                  <div className="px-3 py-3 border-b border-white/10 shrink-0 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Canlı yoklama</p>
-                      <button
-                        type="button"
-                        onClick={() => void saveLiveAttendance()}
-                        disabled={attendanceSaving || classroomRosterStudents.length === 0}
-                        className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[10px] font-bold"
-                      >
-                        {attendanceSaving ? 'Kaydediliyor…' : 'Yoklamayı kaydet'}
-                      </button>
-                    </div>
-                    {attendanceSaveToast ? (
-                      <p className="text-[11px] text-indigo-300">{attendanceSaveToast}</p>
-                    ) : null}
+                  <div className="px-3 py-3 border-b border-white/10 shrink-0">
+                    <LiveAttendanceSummaryBar
+                      rosterStudents={classroomRosterStudents}
+                      tiles={liveVideoTiles}
+                      attendanceMarks={sessionMedia.attendanceMarks}
+                      admittedIds={sessionMedia.admittedStudentIds ?? []}
+                      pendingIds={sessionMedia.pendingStudentIds ?? []}
+                      onMarkAll={markAllLiveAttendance}
+                      onSave={() => void saveLiveAttendance()}
+                      onAdmitAll={admitAllPendingStudents}
+                      saving={attendanceSaving}
+                      saveMessage={attendanceSaveToast}
+                    />
                   </div>
                 ) : null}
 
@@ -6097,13 +6450,23 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       const audioCoachOpen = !blocked && hasFloor;
                       const camForcedOffByCoach = !!(sessionMedia.studentCamForcedOff[sid]);
                       const isSpeaking = speakingStudentIds.has(sid);
+                      const isPending = (sessionMedia.pendingStudentIds ?? []).some((k) => idsEqual(k, sid));
+                      const agoraUid = agoraUidForStudent(s.id);
+                      const attStatus = resolveLiveAttendanceStatus(
+                        sid,
+                        sessionMedia.attendanceMarks,
+                        sessionMedia.admittedStudentIds ?? [],
+                        sessionMedia.pendingStudentIds ?? [],
+                        !!(agoraUid && remoteStreamsByUid[agoraUid]),
+                      );
                       return (
                         <div
                           key={s.id}
-                          className={`relative flex items-center justify-between gap-2 px-3 py-2 ${
-                            isSpeaking ? 'bg-emerald-500/10' : ''
-                          }`}
+                          className={`${isSpeaking ? 'bg-emerald-500/10' : ''}`}
                         >
+                          <div
+                            className={`relative flex items-center justify-between gap-2 px-3 py-2`}
+                          >
                           <div className="flex items-center gap-2 min-w-0">
                             {(() => {
                               const studentTile = liveVideoTiles.find((t) => t.id === `student-${sid}`);
@@ -6142,21 +6505,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                               >
                                 {s.name}
                               </button>
-                              {(() => {
-                                const agoraUid = agoraUidForStudent(s.id);
-                                const attStatus = resolveLiveAttendanceStatus(
-                                  sid,
-                                  sessionMedia.attendanceMarks,
-                                  sessionMedia.admittedStudentIds ?? [],
-                                  sessionMedia.pendingStudentIds ?? [],
-                                  !!(agoraUid && remoteStreamsByUid[agoraUid]),
-                                );
-                                return (
-                                  <span className={`inline-flex mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold border ${liveAttendanceStatusClass(attStatus)}`}>
-                                    {LIVE_ATTENDANCE_STATUS_LABEL[attStatus]}
-                                  </span>
-                                );
-                              })()}
+                              <span className={`inline-flex mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold border ${liveAttendanceStatusClass(attStatus)}`}>
+                                {LIVE_ATTENDANCE_STATUS_LABEL[attStatus]}
+                              </span>
                               <p className="text-[11px] text-slate-400 leading-snug">
                                 {handRaised && !hasFloor ? <span className="text-amber-300">Söz istedi · </span> : null}
                                 {hasFloor ? <span className="text-indigo-300">Söz hakkı · </span> : null}
@@ -6192,6 +6543,15 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                                   <Hand className="w-3.5 h-3.5 shrink-0" aria-hidden />
                                   Söz ver
                                 </button>
+                              ) : null}
+                              {!isPending ? (
+                                <LiveAttendanceMarkButtons
+                                  studentId={s.id}
+                                  attendanceMarks={sessionMedia.attendanceMarks}
+                                  resolvedStatus={attStatus}
+                                  onSetMark={setLiveAttendanceMark}
+                                  compact
+                                />
                               ) : null}
                               <button
                                 type="button"
@@ -6254,55 +6614,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                                     >
                                       Analiz paneli
                                     </button>
-                                    <p className="px-3 pt-2 pb-1 text-[9px] font-bold uppercase tracking-widest text-slate-500">
-                                      Öğrenci taşı
-                                    </p>
-                                    <button
-                                      type="button"
-                                      role="menuitem"
-                                      className="w-full text-left px-3 py-2 text-slate-200 hover:bg-indigo-500/15"
-                                      onClick={() => {
-                                        setParticipantMenuStudentId(null);
-                                        setStudentPlayPermission(s.id, 'w');
-                                      }}
-                                    >
-                                      Beyaz oynasın
-                                    </button>
-                                    <button
-                                      type="button"
-                                      role="menuitem"
-                                      className="w-full text-left px-3 py-2 text-slate-200 hover:bg-indigo-500/15"
-                                      onClick={() => {
-                                        setParticipantMenuStudentId(null);
-                                        setStudentPlayPermission(s.id, 'b');
-                                      }}
-                                    >
-                                      Siyah oynasın
-                                    </button>
-                                    <button
-                                      type="button"
-                                      role="menuitem"
-                                      className="w-full text-left px-3 py-2 text-slate-200 hover:bg-indigo-500/15 border-b border-white/10"
-                                      onClick={() => {
-                                        setParticipantMenuStudentId(null);
-                                        setStudentPlayPermission(s.id, 'both');
-                                      }}
-                                    >
-                                      Her iki renk
-                                    </button>
-                                    {getExplicitStudentPlaySide(s.id, sessionMedia) ? (
-                                      <button
-                                        type="button"
-                                        role="menuitem"
-                                        className="w-full text-left px-3 py-2 text-slate-400 hover:bg-white/5 border-b border-white/10"
-                                        onClick={() => {
-                                          setParticipantMenuStudentId(null);
-                                          setStudentPlayPermission(s.id, null);
-                                        }}
-                                      >
-                                        Oynamayı kapat
-                                      </button>
-                                    ) : null}
                                     <div className="border-b border-white/10" />
                                     {(sessionMedia.kickedStudentIds ?? []).some((kid) => idsEqual(kid, s.id)) ? (
                                       <button
@@ -6314,14 +6625,24 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                                         Derse tekrar al
                                       </button>
                                     ) : (
-                                      <button
-                                        type="button"
-                                        role="menuitem"
-                                        className="w-full text-left px-3 py-2 text-red-200/95 hover:bg-red-950/40 border-b border-white/10"
-                                        onClick={() => kickParticipant(s.id)}
-                                      >
-                                        Dersten çıkarın
-                                      </button>
+                                      <>
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className="w-full text-left px-3 py-2 text-amber-200/95 hover:bg-amber-950/30 border-b border-white/10"
+                                          onClick={() => void sendStudentToWaitingRoom(s.id)}
+                                        >
+                                          Bekleme odasına al
+                                        </button>
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className="w-full text-left px-3 py-2 text-red-200/95 hover:bg-red-950/40 border-b border-white/10"
+                                          onClick={() => void banParticipantPermanently(s.id)}
+                                        >
+                                          Kalıcı çıkar
+                                        </button>
+                                      </>
                                     )}
                                     <button
                                       type="button"
@@ -6354,6 +6675,16 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                               <Users className="w-4 h-4" />
                             </div>
                           )}
+                          </div>
+                          {!isStudentView && !isPending ? (
+                            <div className="px-3 pb-2.5">
+                              <StudentPlaySideBar
+                                playSide={getExplicitStudentPlaySide(s.id, sessionMedia)}
+                                onSetPlaySide={(side) => setStudentPlayPermission(s.id, side)}
+                                compact
+                              />
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })}
@@ -6479,44 +6810,57 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                     {!isStudentView && classroomRosterStudents.length > 0 ? (
                       <div className="shrink-0 px-2 py-2 border-b border-white/5">
                         <p className="text-[9px] text-slate-500 px-0.5 mb-1">
-                          {chatPrivateStudentId ? 'Öğrenci değiştir' : 'Özel sohbet · yeşil = yazdı'}
+                          {chatPrivateStudentId ? 'Öğrenci değiştir' : 'Özel sohbet'}
                         </p>
                         <div className="flex flex-nowrap gap-1 overflow-x-auto custom-scrollbar pb-0.5">
+                          <button
+                            type="button"
+                            onClick={openGeneralChat}
+                            title="Genel sınıf sohbeti"
+                            className={`relative shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-colors ${
+                              !chatPrivateStudentId
+                                ? chatUnreadStats.generalUnread > 0
+                                  ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-100'
+                                  : 'bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-900/40'
+                                : chatUnreadStats.generalUnread > 0
+                                  ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-200 hover:bg-emerald-500/20'
+                                  : 'bg-slate-800/80 border-white/10 text-slate-400 hover:bg-slate-700 hover:text-white'
+                            }`}
+                          >
+                            Genel
+                            {chatUnreadStats.generalUnread > 0 ? (
+                              <ChatUnreadBadge count={chatUnreadStats.generalUnread} className="static ring-0 min-w-[1rem] h-4 text-[8px]" />
+                            ) : null}
+                          </button>
                           {classroomRosterStudents.map((s) => {
                             const sid = normalizeStudentId(s.id);
                             const isAdmitted = (sessionMedia.admittedStudentIds ?? []).some((k) => idsEqual(k, sid));
                             const isPending = (sessionMedia.pendingStudentIds ?? []).some((k) => idsEqual(k, sid));
                             const isSelected = chatPrivateStudentId ? idsEqual(chatPrivateStudentId, sid) : false;
-                            const hasWritten = chatStudentStripMeta.writers.has(sid);
-                            const isLastWriter = !!(chatStudentStripMeta.lastWriter && idsEqual(chatStudentStripMeta.lastWriter, sid));
+                            const unreadCount = chatUnreadStats.privateUnreadByStudent[sid] ?? 0;
                             return (
                               <button
                                 key={s.id}
                                 type="button"
                                 onClick={() => openPrivateChatWithStudent(s.id)}
-                                title={`${s.name}${hasWritten ? ' · mesaj yazdı' : ''}`}
-                                className={`relative shrink-0 inline-flex items-center gap-0.5 px-2 py-1 rounded-md text-[10px] font-bold border transition-colors ${
+                                title={`${s.name}${unreadCount > 0 ? ` · ${unreadCount} okunmamış` : ''}`}
+                                className={`relative shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-colors ${
                                   isSelected
-                                    ? 'bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-900/40'
-                                    : isLastWriter
+                                    ? unreadCount > 0
                                       ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-100'
-                                      : hasWritten
-                                        ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-200'
-                                        : isAdmitted
-                                          ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200 hover:bg-indigo-500/20'
-                                          : isPending
-                                            ? 'bg-amber-500/10 border-amber-500/35 text-amber-200'
-                                            : 'bg-slate-800/80 border-white/10 text-slate-400 hover:bg-slate-700 hover:text-white'
+                                      : 'bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-900/40'
+                                    : unreadCount > 0
+                                      ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-200 hover:bg-emerald-500/20'
+                                      : isAdmitted
+                                        ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200 hover:bg-indigo-500/20'
+                                        : isPending
+                                          ? 'bg-amber-500/10 border-amber-500/35 text-amber-200'
+                                          : 'bg-slate-800/80 border-white/10 text-slate-400 hover:bg-slate-700 hover:text-white'
                                 }`}
                               >
                                 <span className="max-w-[4.5rem] truncate">{shortChatStudentName(s.name)}</span>
-                                {hasWritten ? (
-                                  <span
-                                    className={`shrink-0 rounded-full ${
-                                      isLastWriter ? 'w-2 h-2 bg-emerald-400 ring-2 ring-emerald-300/50' : 'w-1.5 h-1.5 bg-emerald-400'
-                                    }`}
-                                    aria-hidden
-                                  />
+                                {unreadCount > 0 ? (
+                                  <ChatUnreadBadge count={unreadCount} className="static ring-0 min-w-[1rem] h-4 text-[8px]" />
                                 ) : null}
                               </button>
                             );
@@ -6641,7 +6985,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                             className="w-full flex items-center justify-between px-3 py-2 text-left text-[13px] text-slate-300 hover:bg-indigo-500/10"
                           >
                             <span className="truncate pr-2">
-                              <span className="mr-2">{sItem.emoji}</span>
+                              <span className="mr-2">{studyDisplayEmoji(sItem)}</span>
                               {sItem.title}
                             </span>
                             <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${expandedStudyId === sItem.id ? 'rotate-180' : ''}`} />
@@ -6859,13 +7203,31 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               ) : null}
               <button
                 type="button"
-                onClick={() => setSidebarTab('sohbet')}
-                className={`relative w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${sidebarTab === 'sohbet' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600/80'}`}
-                title="Sohbet"
+                onClick={() => {
+                  setSidebarTab('sohbet');
+                  setShowChatDrawer(true);
+                }}
+                className={`relative w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
+                  sidebarTab === 'sohbet'
+                    ? chatNotifyCount > 0
+                      ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/25'
+                      : 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25'
+                    : chatNotifyCount > 0
+                      ? 'bg-emerald-600/80 text-white hover:bg-emerald-500'
+                      : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600/80'
+                }`}
+                title={
+                  chatNotifyCount > 0
+                    ? `Sohbet · ${chatNotifyCount} okunmamış mesaj`
+                    : 'Sohbet'
+                }
               >
                 <MessageCircle className="w-4 h-4" />
-                {isStudentView && studentHasCoachPrivateThread && sidebarTab !== 'sohbet' ? (
-                  <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-slate-900" aria-hidden />
+                {chatNotifyCount > 0 ? (
+                  <ChatUnreadBadge
+                    count={chatNotifyCount}
+                    className="absolute -top-1.5 -right-1.5 min-w-[1rem] h-4 text-[9px] ring-2 ring-slate-900"
+                  />
                 ) : null}
               </button>
               <button

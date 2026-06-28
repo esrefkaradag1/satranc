@@ -40,7 +40,7 @@ type ApplicationsAdminProps = {
 };
 
 const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName, clubSlug }) => {
-  const { addStudent, updateStudent, disciplines, students, scopedStudents, clubs } = useApp();
+  const { addStudent, updateStudent, disciplines, students, scopedStudents, clubs, showToast, confirmDialog } = useApp();
   const [list, setList] = useState<StudentApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -167,7 +167,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
     if (app.status === 'approved') return;
     const dup = studentPool.some((s) => (s.tcNo ?? '') === app.tcNo);
     if (dup) {
-      alert('Bu TC Kimlik No ile kayıtlı öğrenci zaten var.');
+      showToast('Bu TC Kimlik No ile kayıtlı öğrenci zaten var.', 'warning');
       return;
     }
     const targetBranch =
@@ -242,14 +242,20 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
       }
     } catch (err) {
       console.error('[Applications] approve failed:', err);
-      alert('Öğrenci kaydı sırasında hata oluştu. Listede görünüyorsa Supabase şemasını güncelleyin (supabase_tables.sql).');
+      showToast('Öğrenci kaydı sırasında hata oluştu. Listede görünüyorsa Supabase şemasını güncelleyin (supabase_tables.sql).', 'error');
     } finally {
       setActionId(null);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Bu başvuruyu silmek istediğinize emin misiniz?')) return;
+    const ok = await confirmDialog({
+      title: 'Başvuruyu sil',
+      message: 'Bu başvuruyu silmek istediğinize emin misiniz?',
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
+    if (!ok) return;
     await deleteApplicationAsync(id);
     setList((prev) => prev.filter((a) => a.id !== id));
     if (detail?.id === id) setDetail(null);

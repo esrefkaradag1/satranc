@@ -97,8 +97,13 @@ import LichessOpeningsSection from './LichessOpeningsSection';
 import { fetchFidePlayer, federationLabel, resolveFideProfileForStudent, type FidePlayer } from '../services/fideService';
 import { fetchUkdFromTsf } from '../services/ukdService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
-import { formatMidnightCountdown, todayDayKey } from '../lib/homeworkDayUtils';
-import { fetchStudentPlatformDayStats, platformSyncSummary } from '../lib/homeworkPlatformUtils';
+import { formatMidnightCountdown, isoDateForWeekday, mondayOfWeek, todayDayKey } from '../lib/homeworkDayUtils';
+import {
+  fetchStudentPlatformDayStats,
+  mergePlatformDayStats,
+  platformSyncSummary,
+  type PlatformDayStats,
+} from '../lib/homeworkPlatformUtils';
 import { nextHomeworkPuzzle } from '../lib/puzzlePlayUtils';
 
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
@@ -276,7 +281,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, getAuthPermissions, rolesLoaded, trainingGroups } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(() =>
@@ -358,6 +363,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const [todayExternalGameCount, setTodayExternalGameCount] = useState(0);
   const [todayExternalPuzzleCount, setTodayExternalPuzzleCount] = useState(0);
   const [todayExternalPuzzlePassed, setTodayExternalPuzzlePassed] = useState(0);
+  const [weekPlatformStatsByDate, setWeekPlatformStatsByDate] = useState<Record<string, PlatformDayStats>>({});
+  const weekPlatformStatsRef = useRef<Record<string, PlatformDayStats>>({});
   const [loadingExternalGameCount, setLoadingExternalGameCount] = useState(false);
   const [externalStatsNote, setExternalStatsNote] = useState<string | null>(null);
   const [platformStatsFetched, setPlatformStatsFetched] = useState(false);
@@ -387,6 +394,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       setTodayExternalGameCount(0);
       setTodayExternalPuzzleCount(0);
       setTodayExternalPuzzlePassed(0);
+      setWeekPlatformStatsByDate({});
+      weekPlatformStatsRef.current = {};
       setExternalStatsNote(null);
       return;
     }
@@ -396,15 +405,33 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       setTodayExternalGameCount(0);
       setTodayExternalPuzzleCount(0);
       setTodayExternalPuzzlePassed(0);
+      setWeekPlatformStatsByDate({});
+      weekPlatformStatsRef.current = {};
       setExternalStatsNote('Lichess veya Chess.com kullanıcı adı profilde tanımlı değil.');
       return;
     }
     setLoadingExternalGameCount(true);
     platformPollEnabledRef.current = true;
     const todayKey = todayDayKey();
+    const monday = mondayOfWeek();
+    const daysToFetch: string[] = [];
+    for (let d = 1; d <= 7; d++) {
+      const iso = isoDateForWeekday(monday, d);
+      if (iso <= todayKey) daysToFetch.push(iso);
+    }
+    const pause = (ms: number) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
     try {
-      const stats = await fetchStudentPlatformDayStats(student, todayKey);
+      const nextWeek: Record<string, PlatformDayStats> = { ...weekPlatformStatsRef.current };
+      for (let i = 0; i < daysToFetch.length; i++) {
+        if (i > 0) await pause(500);
+        const iso = daysToFetch[i];
+        const fresh = await fetchStudentPlatformDayStats(student, iso);
+        nextWeek[iso] = mergePlatformDayStats(nextWeek[iso], fresh);
+      }
+      weekPlatformStatsRef.current = nextWeek;
+      setWeekPlatformStatsByDate(nextWeek);
       setPlatformStatsFetched(true);
+      const stats = nextWeek[todayKey] ?? await fetchStudentPlatformDayStats(student, todayKey);
       setTodayExternalGameCount(stats.games);
       setTodayExternalPuzzleCount(stats.puzzleSolved);
       setTodayExternalPuzzlePassed(stats.puzzlePassed);
@@ -429,6 +456,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   useEffect(() => {
     setPlatformStatsFetched(false);
     platformPollEnabledRef.current = false;
+    weekPlatformStatsRef.current = {};
+    setWeekPlatformStatsByDate({});
   }, [homeworkDayKey, student?.id]);
 
   const handleDailyGoalsComplete = useCallback((homeworkId: string) => {
@@ -571,7 +600,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       .sort((a, b) => b.points - a.points || b.wins - a.wins || a.id.localeCompare(b.id));
   }, [selectedTournament]);
 
-  const panelPermissions = getAuthPermissions();
+  const panelPermissions = authPermissions;
 
   const navCategoriesForView = useMemo(() => {
     let filtered = filterNavByPermissions(STUDENT_NAV_CATEGORIES, panelPermissions);
@@ -1200,6 +1229,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               todayExternalGameCount={todayExternalGameCount}
               todayExternalPuzzleCount={todayExternalPuzzleCount}
               todayExternalPuzzlePassed={todayExternalPuzzlePassed}
+              weekPlatformStatsByDate={weekPlatformStatsByDate}
               loadingExternalGameCount={loadingExternalGameCount}
               externalStatsNote={externalStatsNote}
               midnightCountdown={midnightCountdown}

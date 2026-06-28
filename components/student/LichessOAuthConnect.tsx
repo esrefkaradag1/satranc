@@ -6,6 +6,7 @@ import {
   disconnectLichessOAuth,
   fetchLichessOAuthStatus,
 } from '../../services/lichessOAuthClient';
+import { useApp } from '../../AppContext';
 
 type Props = {
   student: Student;
@@ -20,6 +21,7 @@ export const LichessOAuthConnect: React.FC<Props> = ({
   onDisconnected,
   compact = false,
 }) => {
+  const { confirmDialog } = useApp();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -56,7 +58,13 @@ export const LichessOAuthConnect: React.FC<Props> = ({
   };
 
   const handleDisconnect = async () => {
-    if (!window.confirm('Lichess bağlantısını kaldırmak istiyor musunuz?')) return;
+    const ok = await confirmDialog({
+      title: 'Bağlantıyı kaldır',
+      message: 'Lichess bağlantısını kaldırmak istiyor musunuz?',
+      confirmLabel: 'Kaldır',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {

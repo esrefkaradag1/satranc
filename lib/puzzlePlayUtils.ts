@@ -278,23 +278,124 @@ export function nextHomeworkPuzzle(
   return puzzles.find((p) => p.id === nextId) ?? null;
 }
 
+/**
+ * Lichess çalışma/study PGN: FEN rakip kurulumundan önce veya çözüm UCI formatında.
+ * İlk hamle başlangıç sırasının karşı tarafına aitse Lichess bulmaca desenidir.
+ */
+export function looksLikeLichessStudyPuzzle(chapter: { fen?: string; moves?: string[] }): boolean {
+  const rawSolution = chapter.moves?.filter(Boolean) ?? [];
+  if (rawSolution.length === 0) return false;
+  if (rawSolution.every(looksLikeUciMove)) return true;
+  try {
+    const rawFen = chapter.fen?.trim() || DEFAULT_FEN;
+    const turn = new Chess(rawFen).turn();
+    const first = applyPuzzleMove(new Chess(rawFen), rawSolution[0]!);
+    if (first && first.color !== turn) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/** Öğrenci hamlesinden sonra çözümdeki rakip yanıtlarını otomatik uygula. */
+export function applyPuzzleAutoReplies(
+  fen: string,
+  moves: string[],
+  startIndex: number,
+  studentColor: 'w' | 'b',
+): { fen: string; nextIndex: number; playedSans: string[] } {
+  const game = new Chess(fen);
+  let idx = startIndex;
+  const playedSans: string[] = [];
+  let guard = 0;
+  while (idx < moves.length && game.turn() !== studentColor && guard < 8) {
+    const mv = applyPuzzleMove(game, moves[idx]!);
+    if (!mv) break;
+    playedSans.push(mv.san);
+    idx += 1;
+    guard += 1;
+  }
+  return { fen: game.fen(), nextIndex: idx, playedSans };
+}
+
+export type NormalizedStudyChapterPuzzle = {
+  startFen: string;
+  studentMoves: string[];
+  studentColor: 'w' | 'b';
+  setupMoveSan?: string;
+};
+
+function studentColorFromOrientation(orientation?: 'white' | 'black'): 'w' | 'b' | null {
+  if (orientation === 'black') return 'b';
+  if (orientation === 'white') return 'w';
+  return null;
+}
+
+/** Lichess gamebook: rakip kurulum hamlelerini atlayıp öğrenci sırasına gel. */
+export function stripLeadingOpponentSetup(
+  fen: string,
+  moves: string[],
+  studentColor: 'w' | 'b',
+): { startFen: string; remainingMoves: string[]; setupMoveSan?: string } {
+  const game = new Chess(fen);
+  let idx = 0;
+  let setupMoveSan: string | undefined;
+  while (idx < moves.length && game.turn() !== studentColor) {
+    const mv = applyPuzzleMove(game, moves[idx]!);
+    if (!mv) break;
+    setupMoveSan = mv.san;
+    idx += 1;
+  }
+  return {
+    startFen: game.fen(),
+    remainingMoves: moves.slice(idx),
+    setupMoveSan,
+  };
+}
+
 /** Çalışma bölümü — Bulmaca (Hamle Bul) için öğrenci sorusu pozisyonu. */
 export function normalizeStudyChapterPuzzle(chapter: {
   fen?: string;
   moves?: string[];
-}): { startFen: string; studentMoves: string[]; setupMoveSan?: string } {
-  const normalized = normalizePuzzleForStudentPlay({
-    fen: chapter.fen ?? DEFAULT_FEN,
-    solution: chapter.moves ?? [],
-    source: 'custom',
-  });
+  orientation?: 'white' | 'black';
+}): NormalizedStudyChapterPuzzle {
+  const rawFen = chapter.fen?.trim() || DEFAULT_FEN;
+  const rawSolution = (chapter.moves ?? []).filter(Boolean);
+  const fromOrientation = studentColorFromOrientation(chapter.orientation);
+
+  if (fromOrientation && rawSolution.length > 0) {
+    const stripped = stripLeadingOpponentSetup(rawFen, rawSolution, fromOrientation);
+    return {
+      startFen: stripped.startFen,
+      studentMoves: stripped.remainingMoves,
+      studentColor: fromOrientation,
+      setupMoveSan: stripped.setupMoveSan,
+    };
+  }
+
+  if (rawSolution.length === 0) {
+    const turn = new Chess(rawFen).turn();
+    return {
+      startFen: rawFen,
+      studentMoves: [],
+      studentColor: fromOrientation ?? turn,
+    };
+  }
+
+  const lichessStyle = looksLikeLichessStudyPuzzle(chapter);
+  const puzzleLike = {
+    fen: rawFen,
+    solution: rawSolution,
+    source: lichessStyle ? ('lichess' as const) : ('custom' as const),
+  };
+  const normalized = normalizePuzzleForStudentPlay(puzzleLike);
   const repaired = normalized.dataError
     ? repairPuzzleForStudentPlay({
         id: 'study',
         title: '',
-        fen: chapter.fen ?? DEFAULT_FEN,
-        solution: chapter.moves ?? [],
-        source: 'custom',
+        fen: rawFen,
+        solution: rawSolution,
+        source: puzzleLike.source,
         points: 0,
         difficulty: '',
         theme: '',
@@ -303,6 +404,7 @@ export function normalizeStudyChapterPuzzle(chapter: {
   return {
     startFen: repaired.startFen,
     studentMoves: repaired.studentMoves,
+    studentColor: fromOrientation ?? repaired.studentColor,
     setupMoveSan: repaired.setupMoveSan,
   };
 }

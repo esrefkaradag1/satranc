@@ -44,6 +44,7 @@ const RoleManagement: React.FC = () => {
     deleteAppRole,
     setRolePermissions,
     showToast,
+    confirmDialog,
   } = useApp();
 
   const [selectedId, setSelectedId] = useState<string>('role-admin');
@@ -119,12 +120,18 @@ const RoleManagement: React.FC = () => {
     showToast(`"${name}" rolü oluşturuldu`, 'success');
   };
 
-  const handleDelete = (role: AppRole) => {
+  const handleDelete = async (role: AppRole) => {
     if (role.isSystem) {
       showToast('Sistem rolleri silinemez', 'warning');
       return;
     }
-    if (!window.confirm(`"${role.name}" rolünü silmek istiyor musunuz?`)) return;
+    const ok = await confirmDialog({
+      title: 'Rolü sil',
+      message: `"${role.name}" rolünü silmek istiyor musunuz?`,
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
+    if (!ok) return;
     deleteAppRole(role.id);
     setSelectedId('role-admin');
     showToast('Rol silindi', 'info');

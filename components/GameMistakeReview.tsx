@@ -16,8 +16,8 @@ import {
 import { CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
 
 type GamePick =
-  | { source: 'lichess'; id: string; label: string; playerColor?: 'w' | 'b' }
-  | { source: 'chesscom'; pgn: string; label: string; playerColor?: 'w' | 'b' };
+  | { source: 'lichess'; id: string; label: string; key: string; playerColor?: 'w' | 'b' }
+  | { source: 'chesscom'; pgn: string; label: string; key: string; playerColor?: 'w' | 'b' };
 
 function lichessPlayerColor(game: LichessGame, username: string): 'w' | 'b' | undefined {
   const u = username.trim().toLowerCase();
@@ -43,6 +43,7 @@ interface GameMistakeReviewProps {
   chessComUsername?: string;
   lichessGames: LichessGame[];
   chessComGames: ChessComGame[];
+  gamesLoading?: boolean;
 }
 
 const judgementColor: Record<ReviewedMove['judgement'], string> = {
@@ -58,6 +59,7 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
   chessComUsername,
   lichessGames,
   chessComGames,
+  gamesLoading = false,
 }) => {
   const [selectedGameKey, setSelectedGameKey] = useState('');
   const [reviewing, setReviewing] = useState(false);
@@ -78,6 +80,7 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
       opts.push({
         source: 'lichess',
         id: g.id,
+        key: `lichess:${g.id}`,
         label: `Lichess · ${opening || 'Oyun'} · ${date}`,
         playerColor: lUser ? lichessPlayerColor(g, lUser) : undefined,
       });
@@ -86,19 +89,26 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
     for (const g of chessComGames.slice(0, 10)) {
       if (!g.pgn?.trim() || !cUser || !chessComGameInvolvesUser(g, cUser)) continue;
       const date = g.end_time ? new Date(g.end_time * 1000).toLocaleDateString('tr-TR') : '';
+      const key = `chesscom:${g.url || g.end_time || g.pgn.slice(0, 24)}`;
       opts.push({
         source: 'chesscom',
         pgn: g.pgn,
+        key,
         label: `Chess.com · ${g.time_class || 'oyun'} · ${date}`,
         playerColor: chessComPlayerColor(g, cUser),
       });
     }
 
-    return opts;
+    const seenKeys = new Set<string>();
+    return opts.filter((o) => {
+      if (seenKeys.has(o.key)) return false;
+      seenKeys.add(o.key);
+      return true;
+    });
   }, [lichessGames, chessComGames, lichessUsername, chessComUsername]);
 
   const selectedGame = useMemo(
-    () => gameOptions.find((g) => `${g.source}:${g.source === 'lichess' ? g.id : g.label}` === selectedGameKey) ?? null,
+    () => gameOptions.find((g) => g.key === selectedGameKey) ?? null,
     [gameOptions, selectedGameKey]
   );
 
@@ -141,9 +151,9 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
 
       setProgress('Hamleler analiz ediliyor…');
       const result = await reviewPlayerMovesInPgn(pgn, color, {
-        maxPlies: 160,
-        engineLevel: 12,
-        evalMovetimeMs: 600,
+        maxPlies: 100,
+        engineLevel: 8,
+        evalMovetimeMs: 160,
         onProgress: (done, total) => setProgress(`Stockfish: ${done}/${total} hamle`),
       });
 
@@ -178,6 +188,17 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
     );
   }
 
+  if (gamesLoading && gameOptions.length === 0) {
+    return (
+      <div className="p-6 rounded-[2rem] bg-black/20 border border-white/5 flex flex-col items-center justify-center gap-3 text-center">
+        <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
+        <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">
+          Son oyunlar Lichess / Chess.com üzerinden yükleniyor…
+        </p>
+      </div>
+    );
+  }
+
   if (gameOptions.length === 0) {
     return (
       <div className="p-6 rounded-[2rem] bg-black/20 border border-white/5 text-center">
@@ -197,14 +218,11 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
           className="flex-1 min-w-0 rounded-xl bg-slate-900/80 border border-white/10 text-sm text-white px-3 py-2.5 outline-none focus:border-indigo-500/50"
         >
           <option value="">Son oyunlardan seçin…</option>
-          {gameOptions.map((g) => {
-            const key = `${g.source}:${g.source === 'lichess' ? g.id : g.label}`;
-            return (
-              <option key={key} value={key}>
-                {g.label}
-              </option>
-            );
-          })}
+          {gameOptions.map((g) => (
+            <option key={g.key} value={g.key}>
+              {g.label}
+            </option>
+          ))}
         </select>
         <button
           type="button"

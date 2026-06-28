@@ -65,6 +65,7 @@ export interface StudyChapterState {
     difficulty?: number;
     comment?: string;
     tags?: string[];
+    pgnTags?: Array<[string, string]>;
   };
   currentPath: Path; // client local current path
   serverPath: Path; // last sticky path seen from stream (or own broadcast)

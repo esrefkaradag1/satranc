@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Save, ClipboardList, Link2, Pencil } from 'lucide-react';
+import { Plus, Trash2, ClipboardList, Link2, Pencil } from 'lucide-react';
 import type { StudentLessonLogEntry } from '../../types';
+import { useApp } from '../../AppContext';
 import {
   emptyLessonLogDraft,
   extractLessonLogUrls,
@@ -21,21 +22,26 @@ export const GroupLessonLogPanel: React.FC<Props> = ({
   onSave,
   compact = false,
 }) => {
+  const { confirmDialog } = useApp();
   const [localEntries, setLocalEntries] = useState<StudentLessonLogEntry[]>(() =>
     sortLessonLogEntries(entries),
   );
   const [draft, setDraft] = useState<StudentLessonLogEntry>(emptyLessonLogDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     setLocalEntries(sortLessonLogEntries(entries));
     setDraft(emptyLessonLogDraft());
     setEditingId(null);
-    setDirty(false);
   }, [groupName, entries]);
 
   const sorted = useMemo(() => sortLessonLogEntries(localEntries), [localEntries]);
+
+  const persistEntries = (next: StudentLessonLogEntry[]) => {
+    const sortedNext = sortLessonLogEntries(next);
+    setLocalEntries(sortedNext);
+    onSave(sortedNext);
+  };
 
   const upsertDraft = () => {
     const topic = draft.topic.trim();
@@ -53,13 +59,12 @@ export const GroupLessonLogPanel: React.FC<Props> = ({
     };
 
     if (editingId) {
-      setLocalEntries((prev) => prev.map((e) => (e.id === editingId ? row : e)));
+      persistEntries(localEntries.map((e) => (e.id === editingId ? row : e)));
       setEditingId(null);
     } else {
-      setLocalEntries((prev) => [...prev, row]);
+      persistEntries([...localEntries, row]);
     }
     setDraft(emptyLessonLogDraft());
-    setDirty(true);
   };
 
   const startEdit = (row: StudentLessonLogEntry) => {
@@ -67,19 +72,19 @@ export const GroupLessonLogPanel: React.FC<Props> = ({
     setDraft({ ...row, date: formatLessonDateForInput(row.date) });
   };
 
-  const removeRow = (id: string) => {
-    if (!window.confirm('Bu konu kaydını silmek istiyor musunuz?')) return;
-    setLocalEntries((prev) => prev.filter((e) => e.id !== id));
+  const removeRow = async (id: string) => {
+    const ok = await confirmDialog({
+      title: 'Kaydı sil',
+      message: 'Bu konu kaydını silmek istiyor musunuz?',
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    persistEntries(localEntries.filter((e) => e.id !== id));
     if (editingId === id) {
       setEditingId(null);
       setDraft(emptyLessonLogDraft());
     }
-    setDirty(true);
-  };
-
-  const handleSave = () => {
-    onSave(sortLessonLogEntries(localEntries));
-    setDirty(false);
   };
 
   return (
@@ -94,9 +99,6 @@ export const GroupLessonLogPanel: React.FC<Props> = ({
             <p className="text-[10px] text-slate-500 truncate">{groupName} · {sorted.length} kayıt</p>
           </div>
         </div>
-        {dirty && (
-          <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">Kaydedilmedi</span>
-        )}
       </div>
 
       <div className="p-4 sm:p-5 space-y-4">
@@ -218,17 +220,6 @@ export const GroupLessonLogPanel: React.FC<Props> = ({
           </div>
         )}
 
-        <div className="flex justify-end pt-1">
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!dirty}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl premium-gradient text-white text-sm font-bold shadow-lg shadow-indigo-500/20 hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
-          >
-            <Save className="w-4 h-4" />
-            Konuları Kaydet
-          </button>
-        </div>
       </div>
     </div>
   );

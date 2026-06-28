@@ -41,7 +41,9 @@ export const LeaderboardPreview: React.FC<Props> = ({
     }
     setLoading(true);
     try {
-      const result = await buildClubLeaderboard(peers, homeworkAttempts, 'week', previewMode);
+      const result = await buildClubLeaderboard(peers, homeworkAttempts, 'week', previewMode, (_done, _total, partial) => {
+        if (partial?.length) setEntries(partial);
+      });
       setEntries(result);
     } catch {
       setEntries([]);

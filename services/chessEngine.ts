@@ -192,7 +192,7 @@ function uciToSan(chess: Chess, uci: string): string | null {
 export async function getBestMoveAsync(
   chess: Chess,
   level: EngineLevel = 5,
-  opts?: { strictFallback?: boolean },
+  opts?: { strictFallback?: boolean; movetimeMs?: number },
 ): Promise<string | null> {
   if (!chess || chess.isGameOver()) return null;
   const moves = chess.moves({ verbose: true });
@@ -204,7 +204,7 @@ export async function getBestMoveAsync(
   }
   if (isStockfishReady()) {
     const fen = chess.fen();
-    const movetime = movetimeMsForLevel(level);
+    const movetime = opts?.movetimeMs ?? movetimeMsForLevel(level);
     const uci = await getBestMoveFromStockfish(fen, movetime);
     if (uci) {
       const san = uciToSan(chess, uci);

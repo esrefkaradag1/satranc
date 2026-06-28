@@ -1,4 +1,5 @@
 import React from 'react';
+import { EVAL_BAR_DECISIVE_SCORE, evalBarWhitePercent, formatEvalLabel } from '../../lib/chessBoardUi';
 
 const RANK_SIZE = '1.25rem';
 const FILE_SIZE = '1.25rem';
@@ -6,16 +7,7 @@ const EVAL_WIDTH = '1.375rem';
 
 export type BoardOrientation = 'white' | 'black';
 
-/** Eval çubuğu için beyaz pay (0–100), Lichess benzeri atan eğrisi */
-export function evalBarWhitePercent(score: number): number {
-  return 50 + (50 * (2 / Math.PI)) * Math.atan(Math.max(-3, Math.min(3, score)) * 0.5);
-}
-
-export function formatEvalLabel(score: number): string {
-  if (Math.abs(score) > 20) return 'Mat';
-  const sign = score > 0 ? '+' : '';
-  return `${sign}${score.toFixed(1)}`;
-}
+export { EVAL_BAR_DECISIVE_SCORE, evalBarWhitePercent, formatEvalLabel };
 
 export type EvalBarProps = {
   score: number;

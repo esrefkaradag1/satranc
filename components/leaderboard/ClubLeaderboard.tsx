@@ -144,8 +144,9 @@ export const ClubLeaderboard: React.FC<Props> = ({
     setLoading(true);
     setError('');
     try {
-      const result = await buildClubLeaderboard(peers, homeworkAttempts, period, rankMode, (done, total) => {
+      const result = await buildClubLeaderboard(peers, homeworkAttempts, period, rankMode, (done, total, partial) => {
         setProgress({ done, total });
+        if (partial?.length) setEntries(partial);
       }, pointSettings);
       setEntries(result);
     } catch {

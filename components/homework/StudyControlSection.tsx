@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, Plus, Users, CheckSquare, ExternalLink } from 'lucide-react';
 import type { Student } from '../../types';
 import type { Study } from '../../lib/studyTypes';
+import { studyDisplayEmoji } from '../../lib/studyUtils';
 import { loadStudiesAsync, saveStudyAsync } from '../../studyStorage';
 
 type Props = {
@@ -79,10 +80,10 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
             >
               <option value="">Çalışma seçin</option>
               {unassignedStudies.map((s) => (
-                <option key={s.id} value={s.id}>{s.emoji} {s.title}</option>
+                <option key={s.id} value={s.id}>{studyDisplayEmoji(s)} {s.title}</option>
               ))}
               {studies.map((s) => (
-                <option key={`all-${s.id}`} value={s.id}>{s.emoji} {s.title}</option>
+                <option key={`all-${s.id}`} value={s.id}>{studyDisplayEmoji(s)} {s.title}</option>
               ))}
             </select>
             <button
@@ -114,7 +115,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
               <div key={study.id} className="bg-[#1e293b] rounded-2xl border border-white/5 overflow-hidden">
                 <div className="p-4 border-b border-white/5 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-xl">{study.emoji}</span>
+                    <span className="text-xl">{studyDisplayEmoji(study)}</span>
                     <div className="min-w-0">
                       <h4 className="text-sm font-bold text-white truncate">{study.title}</h4>
                       <p className="text-[10px] text-slate-500">{study.chapters.length} bölüm · {members.length} üye</p>

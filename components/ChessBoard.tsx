@@ -148,7 +148,7 @@ function validateBoardForSave(fen: string): string | null {
 }
 
 const ChessBoard: React.FC = () => {
-  const { puzzles, addPuzzle, importPuzzles, clearPuzzles, deletePuzzle, students, homeworks, addHomework, updateHomework, deleteHomework, showToast } = useApp();
+  const { puzzles, addPuzzle, importPuzzles, clearPuzzles, deletePuzzle, students, homeworks, addHomework, updateHomework, deleteHomework, showToast, confirmDialog } = useApp();
   const [activeTab, setActiveTab] = useState<'editor' | 'puzzles' | 'assign' | 'analysis'>('editor');
   
   const [showImportModal, setShowImportModal] = useState(false);
@@ -1101,7 +1101,12 @@ const ChessBoard: React.FC = () => {
   const deleteSelectedPuzzles = useCallback(async () => {
     const ids = selectedPuzzleIds;
     if (ids.length === 0) return;
-    const ok = window.confirm(`${ids.length} bulmaca silinecek. Emin misiniz?`);
+    const ok = await confirmDialog({
+      title: 'Bulmacaları sil',
+      message: `${ids.length} bulmaca silinecek. Emin misiniz?`,
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
     if (!ok) return;
     // Silme işlemi AppContext'te tekli; burada batch çalıştırıyoruz.
     for (const id of ids) {
@@ -1109,7 +1114,7 @@ const ChessBoard: React.FC = () => {
     }
     setSelectedPuzzleIds([]);
     showToast?.(`${ids.length} bulmaca silindi.`, 'success');
-  }, [selectedPuzzleIds, deletePuzzle, showToast]);
+  }, [selectedPuzzleIds, deletePuzzle, showToast, confirmDialog]);
 
   // Homework helpers
   const studentGroups: string[] = [...new Set<string>(students.map(s => s.group).filter((g): g is string => Boolean(g)))].sort();
@@ -1772,7 +1777,15 @@ const ChessBoard: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => { if (window.confirm(`"${puzzle.title}" bulmacasını silmek istediğinize emin misiniz?`)) deletePuzzle(puzzle.id); }}
+                    onClick={async () => {
+                      const ok = await confirmDialog({
+                        title: 'Bulmacayı sil',
+                        message: `"${puzzle.title}" bulmacasını silmek istediğinize emin misiniz?`,
+                        confirmLabel: 'Sil',
+                        variant: 'danger',
+                      });
+                      if (ok) deletePuzzle(puzzle.id);
+                    }}
                     className="absolute top-3 right-3 z-10 p-2 rounded-lg bg-rose-500/20 text-rose-400 hover:bg-rose-500/40 border border-rose-500/30 transition-colors"
                     title="Bulmacayı sil"
                   >
@@ -1942,7 +1955,20 @@ const ChessBoard: React.FC = () => {
                 {puzzles.length > 0 && (
                   <div className="flex items-center justify-between pt-1 border-t border-white/5">
                     <span className="text-xs text-slate-500">{puzzles.length} bulmaca mevcut</span>
-                    <button onClick={() => { if (confirm(`${puzzles.length} bulmaca silinecek. Emin misiniz?`)) { clearPuzzles(); setImportProgress({ loading: false, message: 'Tüm bulmacalar silindi.', count: 0, total: 0 }); }}} className="text-xs text-rose-400 hover:text-rose-300 font-bold transition-colors">
+                    <button
+                      onClick={async () => {
+                        const ok = await confirmDialog({
+                          title: 'Tüm bulmacaları sil',
+                          message: `${puzzles.length} bulmaca silinecek. Emin misiniz?`,
+                          confirmLabel: 'Sil',
+                          variant: 'danger',
+                        });
+                        if (!ok) return;
+                        clearPuzzles();
+                        setImportProgress({ loading: false, message: 'Tüm bulmacalar silindi.', count: 0, total: 0 });
+                      }}
+                      className="text-xs text-rose-400 hover:text-rose-300 font-bold transition-colors"
+                    >
                       Tümünü Sil
                     </button>
                   </div>
@@ -2201,7 +2227,18 @@ const ChessBoard: React.FC = () => {
 
                           {/* Actions */}
                           <div className="flex gap-3 pt-3 border-t border-white/5">
-                            <button onClick={() => { if (confirm('Bu ödev silinecek. Emin misiniz?')) deleteHomework(hw.id); }} className="flex items-center gap-2 px-4 py-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-lg text-xs font-bold hover:bg-rose-500/20 transition-colors">
+                            <button
+                              onClick={async () => {
+                                const ok = await confirmDialog({
+                                  title: 'Ödevi sil',
+                                  message: 'Bu ödev silinecek. Emin misiniz?',
+                                  confirmLabel: 'Sil',
+                                  variant: 'danger',
+                                });
+                                if (ok) deleteHomework(hw.id);
+                              }}
+                              className="flex items-center gap-2 px-4 py-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-lg text-xs font-bold hover:bg-rose-500/20 transition-colors"
+                            >
                               <Trash className="w-3.5 h-3.5" /> Sil
                             </button>
                           </div>

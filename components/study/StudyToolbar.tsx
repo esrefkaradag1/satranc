@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowLeft, Check, Settings2, SkipBack, ChevronLeft, ChevronRight, SkipForward, FlipHorizontal, LayoutGrid } from 'lucide-react';
 import type { Study, StudyChapter } from '../../lib/studyTypes';
+import { studyDisplayEmoji } from '../../lib/studyUtils';
 
 interface StudyToolbarProps {
   study: Study;
@@ -34,7 +35,7 @@ export const StudyToolbar: React.FC<StudyToolbarProps> = ({
         </button>
         <div className="flex flex-col min-w-0">
           <h1 className="text-sm font-bold text-white truncate flex items-center gap-1.5">
-            <span className="text-lg leading-none">{study.emoji}</span>
+            <span className="text-lg leading-none">{studyDisplayEmoji(study)}</span>
             {study.title}
           </h1>
           <p className="text-[10px] text-slate-500 font-medium truncate">{chapter?.title}</p>

@@ -68,3 +68,9 @@ export function buildTerminalPvLines(terminal: TerminalEval, numPv: number): Ter
     multipv: i + 1,
   }));
 }
+
+/** Oyun bittiğinde avantaj çubuğu skoru (beyaz perspektif, ±100 = kesin) */
+export function terminalEvalToBarPawns(terminal: TerminalEval): number {
+  if (terminal.kind === 'checkmate') return terminal.whiteAdvantage ? 100 : -100;
+  return 0;
+}

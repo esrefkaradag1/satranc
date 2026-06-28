@@ -89,9 +89,9 @@ export function applyAction(state: StudyChapterState, action: StudyActionEnvelop
     }
     case 'setComment': {
       const nodeId = String(action.payload?.nodeId || '');
-      const text = String(action.payload?.text || '');
+      const text = String(action.payload?.text ?? '');
       const author = String(action.payload?.author || 'Unknown');
-      if (!nodeId || !text) return next;
+      if (!nodeId) return next;
       next.tree = setNodeComment(next.tree, nodeId, text, author);
       return next;
     }

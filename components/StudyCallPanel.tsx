@@ -9,6 +9,7 @@ import {
   isMediaSupported,
   type StudyCallStatus,
 } from '../services/studyCall';
+import { useApp } from '../AppContext';
 
 export interface StudyCallPanelProps {
   role: 'coach' | 'student';
@@ -35,6 +36,7 @@ const StudyCallPanel: React.FC<StudyCallPanelProps> = ({
   acceptCall,
   endCall,
 }) => {
+  const { showToast } = useApp();
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -101,9 +103,9 @@ const StudyCallPanel: React.FC<StudyCallPanelProps> = ({
       .catch((e) => {
         console.error('[StudyCall] Kamera hatası:', e);
         setMediaRequesting(false);
-        alert(e instanceof Error ? e.message : 'Kamera açılamadı');
+        showToast(e instanceof Error ? e.message : 'Kamera açılamadı', 'error');
       });
-  }, []);
+  }, [showToast]);
 
   const toggleVideo = useCallback(() => {
     internalLocalStream?.getVideoTracks().forEach((t) => { t.enabled = !t.enabled; });

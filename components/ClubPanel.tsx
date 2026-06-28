@@ -75,6 +75,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     createAppRole,
     setRolePermissions,
     showToast,
+    confirmDialog,
     authPermissions,
     rolesLoaded,
     scopedStudents: branchStudents,
@@ -304,7 +305,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     const password = coachForm.password.trim();
     if (!name) return;
     if (!editingCoach && !password) {
-      alert('Yeni antrenör için giriş şifresi zorunludur.');
+      showToast('Yeni antrenör için giriş şifresi zorunludur.', 'warning');
       return;
     }
     const perms = sanitizeCoachGrantPermissions(coachForm.permissions);
@@ -500,8 +501,14 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
-                            if (window.confirm(`"${c.name}" antrenörünü silmek istiyor musunuz?`)) deleteCoach(c.id);
+                          onClick={async () => {
+                            const ok = await confirmDialog({
+                              title: 'Antrenörü sil',
+                              message: `"${c.name}" antrenörünü silmek istiyor musunuz?`,
+                              confirmLabel: 'Sil',
+                              variant: 'danger',
+                            });
+                            if (ok) deleteCoach(c.id);
                           }}
                           className="p-2 rounded-lg text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-all"
                           title="Sil"
