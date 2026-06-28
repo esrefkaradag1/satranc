@@ -52,6 +52,9 @@ import type { Coach, Student } from '../types';
 const inputCls =
   'w-full px-4 py-2.5 rounded-lg text-sm font-medium outline-none bg-slate-900/60 border border-slate-700/60 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50';
 
+/** Tahta / canlı ders — kenar boşluğu olmadan tam genişlik */
+const FULL_BLEED_CLUB_TABS = new Set(['lessons', 'study']);
+
 interface ClubPanelProps {
   branch: string;
   clubId?: string;
@@ -102,6 +105,8 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   const [activeTab, setActiveTabRaw] = useState(() => initialHash.tab);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initialHash.studentId);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarDesktopExpanded, setSidebarDesktopExpanded] = useState(true);
+  const sidebarIconOnlyDefault = activeTab === 'lessons';
 
   const setActiveTab = useCallback(
     (tab: string, studentId?: string | null) => {
@@ -708,8 +713,10 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
         onLogout={onLogout}
         mobileOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        defaultIconOnly={sidebarIconOnlyDefault}
+        onDesktopExpandedChange={setSidebarDesktopExpanded}
       />
-      <main className="flex-1 min-w-0 ml-0 lg:ml-64 min-h-screen flex flex-col relative overflow-x-hidden">
+      <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
         <header className="relative z-10 h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/40 backdrop-blur-xl border-b border-white/5 shrink-0">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
@@ -735,7 +742,13 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
             K
           </div>
         </header>
-        <div className="relative z-10 p-4 sm:p-6 lg:p-8  mx-auto w-full min-w-0 flex-1">
+        <div
+          className={
+            FULL_BLEED_CLUB_TABS.has(activeTab)
+              ? 'relative z-10 flex-1 min-h-0 flex flex-col p-0 overflow-hidden w-full'
+              : 'relative z-10 p-4 sm:p-6 lg:p-8 mx-auto w-full min-w-0 flex-1'
+          }
+        >
           {renderContent()}
         </div>
       </main>

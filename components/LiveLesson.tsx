@@ -5473,9 +5473,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const boardFileRowH = '1.25rem';
   const boardColumnStyle: CSSProperties = { width: '100%', maxWidth: '100%' };
   const boardShellStyle: CSSProperties = {
-    // Ölçek tüm viewport sınırlarına uygulanır; aksi halde %100 iken min() sabit kalır ve küçültme geç etkiler.
-    width: `min(calc(100% * ${boardMul}), calc(96vw * ${boardMul}), calc((100dvh - ${boardViewportDeduction}) * ${boardMul}), calc(${Math.max(280, Math.round(980 * boardMul))}px + ${boardChromeW}))`,
-    maxWidth: `calc(96vw * ${boardMul})`,
+    width: `min(calc(100% * ${boardMul}), calc((100dvh - ${boardViewportDeduction}) * ${boardMul}), calc(${Math.max(280, Math.round(980 * boardMul))}px + ${boardChromeW}))`,
+    maxWidth: '100%',
   };
   const setBoardScalePct = isStudentView ? setStudentBoardScalePct : setCoachBoardScalePct;
   const sidebarTabDefs: { id: ClassroomSidebarTab; Icon: typeof Search; label: string; coachOnly?: boolean }[] = [
@@ -5556,7 +5555,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       ) : null}
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col lg:flex-row pb-14 lg:pb-0">
         {/* ── Classroom: Tahta (ekrana oturan kare) ── */}
-        <section className={`${mobileClassroomPanel === 'board' ? 'flex' : 'hidden'} lg:flex flex-1 lg:flex-[1.85] xl:flex-[2] min-w-0 min-h-0 flex-col bg-gradient-to-b from-slate-900/90 via-[#0f172a] to-slate-950 lg:border-r lg:border-white/10`}>
+        <section className={`${mobileClassroomPanel === 'board' ? 'flex' : 'hidden'} lg:flex flex-1 lg:flex-[2.2] xl:flex-[2.5] min-w-0 min-h-0 flex-col bg-gradient-to-b from-slate-900/90 via-[#0f172a] to-slate-950 lg:border-r lg:border-white/10`}>
           <div
             className={`flex-1 flex flex-col min-h-0 items-stretch px-2 sm:px-3 lg:px-5 py-1 sm:py-2 overflow-x-hidden ${
               isStudentView
