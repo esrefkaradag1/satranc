@@ -1,6 +1,6 @@
-import type { AuthUser, Coach, Student, TrainingGroup, Transaction, Tournament, DisciplineBranch } from '../types';
+import type { AuthUser, Coach, Student, TrainingGroup, Transaction, Tournament, DisciplineBranch, HomeworkAssignment, AttendanceRecord, GalleryItem } from '../types';
 import { filterCoachesByClub, filterStudentsByClub, filterTransactionsByClub, normalizeClubKey, studentBelongsToClub } from './clubScope';
-import { clubOfficeNamesForAuth, orgRecordBelongsToClub, type BranchOfficeRecord } from './orgStructureDb';
+import { clubOfficeNamesForAuth, orgRecordBelongsToClub, resolveClubIdFromAuth, type BranchOfficeRecord } from './orgStructureDb';
 import { findTrainingGroupById, findTrainingGroupByName } from './trainingGroupUtils';
 
 export function getStudentTrainingGroup(
@@ -86,8 +86,9 @@ export function resolveScopedStudents(
     return [];
   }
   if (auth.role === 'club') {
+    const clubId = resolveClubIdFromAuth(auth, clubs);
     const offices = clubOfficeNamesForAuth(auth, branchOfficeRecords, clubs);
-    return filterStudentsByClub(students, auth.branch, coaches, offices);
+    return filterStudentsByClub(students, auth.branch, coaches, offices, clubId);
   }
   if (auth.role === 'student' || auth.role === 'parent') {
     return students.filter((s) => s.id === auth.studentId);
@@ -180,4 +181,68 @@ export function resolveScopedTournaments(auth: AuthUser | null, tournaments: Tou
   const key = clubKeyForAuth(auth);
   if (!key) return tournaments;
   return tournaments.filter((t) => normalizeClubKey(t.branch) === key || (!t.branch && key === 'Merkez'));
+}
+
+function scopedStudentIdSet(scopedStudents: Student[]): Set<string> {
+  return new Set(scopedStudents.map((s) => s.id));
+}
+
+/** Ödevler: atanmış öğrenci veya grup kulüp kapsamındaysa görünür */
+export function resolveScopedHomeworks(
+  auth: AuthUser | null,
+  homeworks: HomeworkAssignment[],
+  scopedStudents: Student[],
+  scopedTrainingGroups: TrainingGroup[],
+): HomeworkAssignment[] {
+  if (!auth || auth.role === 'admin') return homeworks;
+  const studentIds = scopedStudentIdSet(scopedStudents);
+  const groupNames = new Set([
+    ...scopedTrainingGroups.map((g) => g.name.trim()).filter(Boolean),
+    ...scopedStudents.map((s) => (s.group ?? '').trim()).filter(Boolean),
+  ]);
+  return homeworks.filter((hw) => {
+    const targets = hw.assignedTo ?? [];
+    if (targets.some((t) => studentIds.has(t))) return true;
+    if (targets.some((t) => groupNames.has(t))) return true;
+    if (hw.groupName?.trim() && groupNames.has(hw.groupName.trim())) return true;
+    return false;
+  });
+}
+
+/** Yoklama kayıtları: yalnızca kulüp öğrencileri */
+export function resolveScopedAttendanceRecords(
+  auth: AuthUser | null,
+  records: AttendanceRecord[],
+  scopedStudents: Student[],
+): AttendanceRecord[] {
+  if (!auth || auth.role === 'admin') return records;
+  const studentIds = scopedStudentIdSet(scopedStudents);
+  return records.filter((r) => studentIds.has(r.studentId));
+}
+
+/** Galeri: öğrenciye özel veya kulüp grubuna ait görseller */
+export function resolveScopedGallery(
+  auth: AuthUser | null,
+  gallery: GalleryItem[],
+  scopedStudents: Student[],
+): GalleryItem[] {
+  if (!auth || auth.role === 'admin') return gallery;
+  const studentIds = scopedStudentIdSet(scopedStudents);
+  const groupNames = new Set(scopedStudents.map((s) => (s.group ?? '').trim()).filter(Boolean));
+  return gallery.filter((item) => {
+    if (item.studentId?.trim()) return studentIds.has(item.studentId.trim());
+    const g = (item.group ?? '').trim();
+    if (!g || g === 'Hepsi') return false;
+    return groupNames.has(g);
+  });
+}
+
+/** Öğrenci ID'si mevcut oturum kapsamında mı? */
+export function isStudentIdInScope(
+  auth: AuthUser | null,
+  studentId: string,
+  scopedStudents: Student[],
+): boolean {
+  if (!auth || auth.role === 'admin') return true;
+  return scopedStudentIdSet(scopedStudents).has(studentId);
 }

@@ -26,6 +26,8 @@ export interface Student {
   branch?: string;
   branchGroup?: string;
   branchOffice?: string;
+  /** Kulüp kaydı (clubs.id) — çok kiracılı izolasyon */
+  clubId?: string;
   tcNo?: string;
   lichessUsername?: string;
   /** OAuth bağlantı zamanı (token istemciye gönderilmez; yalnızca bağlı mı kontrolü için) */
@@ -127,7 +129,7 @@ export interface StudentLessonLogEntry {
 /** Giriş yapan kullanıcı: admin, antrenör, veli, öğrenci veya kulüp */
 export type AuthUser =
   | { role: 'admin' }
-  | { role: 'coach'; coachId?: string; branch?: string; roleId?: string }
+  | { role: 'coach'; coachId?: string; branch?: string; clubId?: string; roleId?: string }
   | { role: 'parent'; studentId: string }
   | { role: 'student'; studentId: string }
   | { role: 'club'; branch: string; clubId?: string; roleId?: string };
@@ -185,6 +187,8 @@ export interface Coach {
   lichessUsername?: string;
   /** Atanan özel rol (app_roles.id); boşsa varsayılan antrenör rolü */
   roleId?: string;
+  /** Bağlı kulüp (clubs.id) */
+  clubId?: string;
 }
 
 export interface Transaction {

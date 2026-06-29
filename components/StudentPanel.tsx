@@ -1005,11 +1005,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            {viewAs === 'student' && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/50 text-[11px] font-medium text-slate-400" title={`Öğrenci no (giriş için): ${getDisplayStudentNo(student, students)}`}>
-                No <span className="font-mono font-bold text-slate-300">#{getDisplayStudentNo(student, students)}</span>
-              </span>
-            )}
             <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-br from-indigo-600/30 to-slate-800 border border-indigo-600/30 flex items-center justify-center text-indigo-300 font-black text-sm overflow-hidden shadow-inner ring-1 ring-white/5">
               {student.photoUrl ? (
                 <img src={student.photoUrl} alt={student.name} className="w-full h-full object-cover" />

@@ -18,7 +18,7 @@ const DAYS_FOR_LESSON: { value: string; label: string }[] = [
 ];
 
 const Curriculum: React.FC = () => {
-  const { lessons, addLesson, students, scopedTrainingGroups } = useApp();
+  const { lessons, addLesson, scopedStudents: students, scopedTrainingGroups } = useApp();
   const [lessonModalOpen, setLessonModalOpen] = useState(false);
   const [scheduleGroupFilter, setScheduleGroupFilter] = useState<string>('');
   const [scheduleStudentFilter, setScheduleStudentFilter] = useState<string>('');

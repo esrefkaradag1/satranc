@@ -36,6 +36,7 @@ import RoleManagement from './components/roles/RoleManagement';
 import { getSessionDisplay } from './lib/sessionDisplayName';
 import { filterNavByPermissions, coachNavForPermissions, isCoachPanelTabAllowed, coachSidebarTabFor } from './lib/rolePermissions';
 import { readPanelHash, writePanelHash, isAdminLoginRoute } from './lib/panelRouting';
+import { getClubApplicationSlug } from './lib/applicationClub';
 
 // ─── Türkçe slug haritası (lib/panelRouting.ts) ───────────────────────────────
 import { readPanelHash as readHash, writePanelHash as writeHash } from './lib/panelRouting';
@@ -421,13 +422,17 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
           />
         );
       case 'student-add': {
-        const coachBranch = auth?.branch || coaches.find((c) => c.id === auth?.coachId)?.branch;
+        const coachBranch =
+          auth?.role === 'coach'
+            ? auth.branch || coaches.find((c) => c.id === auth.coachId)?.branch
+            : undefined;
+        const coachId = auth?.role === 'coach' ? auth.coachId : undefined;
         return (
           <StudentAdd
             defaultBranchOffice={coachBranch}
-            defaultCoachId={auth?.coachId}
+            defaultCoachId={coachId}
             lockBranchOffice={Boolean(coachBranch)}
-            lockCoachId={Boolean(auth?.coachId)}
+            lockCoachId={Boolean(coachId)}
             onCancel={() => setActiveTab('student-list', null)}
             onSaved={() => setActiveTab('student-list', null)}
           />
@@ -463,10 +468,29 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Attendance />;
       case 'groups':
         return <BranchGroupManagement />;
-      case 'applications':
-        return <ApplicationsAdmin />;
-      case 'tournaments':
-        return <Tournaments role="admin" />;
+      case 'applications': {
+        const coachBranch =
+          auth?.role === 'coach'
+            ? auth.branch || coaches.find((c) => c.id === auth.coachId)?.branch
+            : undefined;
+        const coachClub = coachBranch
+          ? clubs.find((c) => c.name.trim().toLowerCase() === coachBranch.trim().toLowerCase())
+          : undefined;
+        return (
+          <ApplicationsAdmin
+            clubId={coachClub?.id}
+            clubName={coachClub?.name ?? coachBranch}
+            clubSlug={coachClub ? getClubApplicationSlug(coachClub) : undefined}
+          />
+        );
+      }
+      case 'tournaments': {
+        const coachBranch =
+          auth?.role === 'coach'
+            ? auth.branch || coaches.find((c) => c.id === auth.coachId)?.branch
+            : undefined;
+        return <Tournaments role="club" branch={coachBranch} />;
+      }
       case 'lessons':
         return <LiveLesson />;
       case 'puzzles':

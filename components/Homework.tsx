@@ -133,7 +133,7 @@ function thinkSecondsBetweenAttempts(
 
 const Homework: React.FC = () => {
   const {
-    scopedStudents: students, homeworks, puzzles, homeworkAttempts, homeworkSubmissions,
+    scopedStudents: students, scopedHomeworks: homeworks, puzzles, homeworkAttempts, homeworkSubmissions,
     addHomework, updateHomework, deleteHomework, refreshFromStorage,
     resetHomeworkAttemptsForStudent, removeHomeworkSubmission,
     branchOffices, disciplineBranches, trainingGroups, showToast, confirmDialog,

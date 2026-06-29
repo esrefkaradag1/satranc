@@ -10,11 +10,13 @@ import { KVKK_TEXT } from '../lib/applicationTypes';
 import {
   deleteApplicationAsync,
   getApplicationFormUrl,
-  loadApplicationsAsync,
+  loadApplicationByIdAsync,
+  loadApplicationsListAsync,
   saveApplicationAsync,
   updateApplicationStatusAsync,
 } from '../services/applicationStorage';
 import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
+import { photoUrlFromApplication } from '../lib/studentPhotoUpload';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { filterApplicationsByClub, getClubApplicationSlug } from '../lib/applicationClub';
 
@@ -46,6 +48,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<ApplicationStatus | 'all'>('all');
   const [detail, setDetail] = useState<StudentApplication | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareTab, setShareTab] = useState<'link' | 'whatsapp' | 'qr'>('whatsapp');
   const [whatsappPhone, setWhatsappPhone] = useState('');
@@ -75,7 +78,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await loadApplicationsAsync();
+      const data = await loadApplicationsListAsync({ clubId: clubId ?? undefined });
       const scoped =
         clubId && clubName ? filterApplicationsByClub(data, clubId, clubName) : data;
       setList(scoped);
@@ -83,6 +86,24 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
       setLoading(false);
     }
   }, [clubId, clubName]);
+
+  const openDetail = useCallback(async (app: StudentApplication) => {
+    setDetail(app);
+    setDetailLoading(true);
+    try {
+      const full = await loadApplicationByIdAsync(app.id);
+      if (full) setDetail(full);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  const ensureFullApplication = useCallback(async (app: StudentApplication) => {
+    if (app.photoDataUrl !== '__HAS_PHOTO__' && app.signatureDataUrl !== '__HAS_SIGNATURE__') {
+      return app;
+    }
+    return (await loadApplicationByIdAsync(app.id)) ?? app;
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -165,49 +186,51 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
 
   const handleApproveToStudent = async (app: StudentApplication) => {
     if (app.status === 'approved') return;
-    const dup = studentPool.some((s) => (s.tcNo ?? '') === app.tcNo);
+    const fullApp = await ensureFullApplication(app);
+    const dup = studentPool.some((s) => (s.tcNo ?? '') === fullApp.tcNo);
     if (dup) {
       showToast('Bu TC Kimlik No ile kayıtlı öğrenci zaten var.', 'warning');
       return;
     }
     const targetBranch =
       clubName?.trim() ||
-      (app.clubId ? clubs.find((c) => c.id === app.clubId)?.name : undefined) ||
-      app.branchOffice;
-    setActionId(app.id);
+      (fullApp.clubId ? clubs.find((c) => c.id === fullApp.clubId)?.name : undefined) ||
+      fullApp.branchOffice;
+    setActionId(fullApp.id);
     try {
-      const parentPhone = app.phones[0] || app.fatherPhone || app.motherPhone || '';
+      const parentPhone = fullApp.phones[0] || fullApp.fatherPhone || fullApp.motherPhone || '';
       const phoneDigits = parentPhone.replace(/\D/g, '');
+      const photoUrl = await photoUrlFromApplication(fullApp.photoDataUrl, fullApp.id);
       const newStudent = await addStudent({
-        name: app.name,
+        name: fullApp.name,
         level: 'Başlangıç',
         elo: 0,
         ukd: 0,
         lastAttendance: new Date().toISOString().slice(0, 10),
         paymentStatus: 'Unpaid',
-        group: app.group || 'A Grubu',
-        parentName: app.fatherName || app.motherName || app.signatureName || 'Veli',
+        group: fullApp.group || 'A Grubu',
+        parentName: fullApp.fatherName || fullApp.motherName || fullApp.signatureName || 'Veli',
         parentPhone: phoneDigits,
-        birthDate: app.birthDate,
+        birthDate: fullApp.birthDate,
         registrationDate: new Date().toISOString().slice(0, 10),
-        tcNo: app.tcNo,
-        lichessUsername: app.lichessUsername || undefined,
-        chessComUsername: app.chessComUsername || undefined,
-        school: app.school || undefined,
-        teacher: app.teacher || undefined,
-        notes: app.notes || undefined,
-        healthInfo: app.healthInfo || undefined,
+        tcNo: fullApp.tcNo,
+        lichessUsername: fullApp.lichessUsername || undefined,
+        chessComUsername: fullApp.chessComUsername || undefined,
+        school: fullApp.school || undefined,
+        teacher: fullApp.teacher || undefined,
+        notes: fullApp.notes || undefined,
+        healthInfo: fullApp.healthInfo || undefined,
         branch: disciplines[0] || 'Satranç',
         branchOffice: targetBranch,
-        fatherName: app.fatherName || undefined,
-        fatherPhone: app.fatherPhone?.replace(/\D/g, '') || undefined,
-        fatherJob: app.fatherJob || undefined,
-        motherName: app.motherName || undefined,
-        motherPhone: app.motherPhone?.replace(/\D/g, '') || undefined,
-        motherJob: app.motherJob || undefined,
-        address: app.address || undefined,
-        contactNumbers: app.phones.length ? app.phones.map((p) => p.replace(/\D/g, '')).filter(Boolean) : undefined,
-        photoUrl: app.photoDataUrl?.startsWith('http') ? app.photoDataUrl : undefined,
+        fatherName: fullApp.fatherName || undefined,
+        fatherPhone: fullApp.fatherPhone?.replace(/\D/g, '') || undefined,
+        fatherJob: fullApp.fatherJob || undefined,
+        motherName: fullApp.motherName || undefined,
+        motherPhone: fullApp.motherPhone?.replace(/\D/g, '') || undefined,
+        motherJob: fullApp.motherJob || undefined,
+        address: fullApp.address || undefined,
+        contactNumbers: fullApp.phones.length ? fullApp.phones.map((p) => p.replace(/\D/g, '')).filter(Boolean) : undefined,
+        photoUrl,
         status: 'active',
       });
       try {
@@ -219,23 +242,23 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
         /* UKD/FIDE arka planda çekilemedi */
       }
       await saveApplicationAsync({
-        ...app,
+        ...fullApp,
         studentId: newStudent.id,
         status: 'approved',
         updatedAt: new Date().toISOString(),
       });
       setList((prev) =>
         prev.map((a) =>
-          a.id === app.id ? { ...a, studentId: newStudent.id, status: 'approved' as const } : a
+          a.id === fullApp.id ? { ...a, studentId: newStudent.id, status: 'approved' as const } : a
         )
       );
-      if (detail?.id === app.id) {
-        setDetail({ ...app, studentId: newStudent.id, status: 'approved' });
+      if (detail?.id === fullApp.id) {
+        setDetail({ ...fullApp, studentId: newStudent.id, status: 'approved' });
       }
       if (newStudent.username && newStudent.password) {
         setApprovedCredentials({
           name: newStudent.name,
-          applicationNo: app.applicationNo,
+          applicationNo: fullApp.applicationNo,
           username: newStudent.username,
           password: newStudent.password,
         });
@@ -360,7 +383,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
                     </td>
                     <td data-label="İşlem" className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        <button type="button" onClick={() => setDetail(app)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white" title="Detay">
+                        <button type="button" onClick={() => void openDetail(app)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white" title="Detay">
                           <Eye className="w-4 h-4" />
                         </button>
                         {app.status === 'pending' && (
@@ -403,8 +426,13 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
               <button type="button" onClick={() => setDetail(null)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-400"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-5 space-y-5 text-sm">
+              {detailLoading ? (
+                <div className="flex items-center justify-center py-8 text-slate-400 gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin" /> Detay yükleniyor...
+                </div>
+              ) : null}
               <div className="flex flex-wrap gap-4">
-                {detail.photoDataUrl ? (
+                {detail.photoDataUrl && detail.photoDataUrl !== '__HAS_PHOTO__' ? (
                   <img src={detail.photoDataUrl} alt="" className="w-24 h-24 rounded-xl object-cover border border-slate-600" />
                 ) : null}
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2 flex-1 min-w-[200px]">
@@ -430,7 +458,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
               </div>
               <div>
                 <p className="text-[10px] font-bold text-slate-500 uppercase mb-2 flex items-center gap-1"><PenLine className="w-3 h-3" /> İmza — {detail.signatureName}</p>
-                {detail.signatureDataUrl ? (
+                {detail.signatureDataUrl && detail.signatureDataUrl !== '__HAS_SIGNATURE__' ? (
                   <img src={detail.signatureDataUrl} alt="İmza" className="max-h-32 rounded-lg border border-slate-600 bg-white p-2" />
                 ) : (
                   <p className="text-slate-500">İmza yok</p>

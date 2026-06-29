@@ -251,13 +251,14 @@ const StudentAdd: React.FC<{
   lockBranchOffice = false,
   lockCoachId = false,
 }) => {
-  const { addStudent, updateStudent, branchOffices, disciplines, groups, students, trainingGroups, disciplineBranches, coaches } = useApp();
+  const { addStudent, updateStudent, branchOffices, students, scopedStudents, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth } = useApp();
+  const tcUniquenessPool = auth?.role === 'admin' ? students : scopedStudents;
   const branchOfficeOptions = useMemo(() => {
-    const base = mergeBranchOffices(branchOffices, disciplineBranches);
+    const base = mergeBranchOffices(branchOffices, scopedDisciplineBranches);
     const office = defaultBranchOffice?.trim();
     const merged = office && !base.includes(office) ? [office, ...base] : base;
     return [PLACEHOLDER_OFFICE, ...merged];
-  }, [branchOffices, disciplineBranches, defaultBranchOffice]);
+  }, [branchOffices, scopedDisciplineBranches, defaultBranchOffice]);
 
   const [lessonSchedule, setLessonSchedule] = useState<GroupLessonSlot[]>([]);
 
@@ -267,8 +268,8 @@ const StudentAdd: React.FC<{
     const loginUsername = suggestStudentUsername(name, students.map((s) => s.username));
     const loginPassword = generateStudentPassword();
     const branch = branchOffices[0] || 'Merkez';
-    const group = groups[0] || 'A Grubu';
-    const discipline = disciplines[0] || 'Satranç';
+    const group = scopedTrainingGroups[0]?.name || 'A Grubu';
+    const discipline = scopedDisciplineBranches[0]?.name || 'Satranç';
     const newStudent = await addStudent({
       name,
       level: 'Başlangıç',
@@ -335,28 +336,24 @@ const StudentAdd: React.FC<{
 
   const disciplineOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
-    const fromDefs = disciplineNamesForOffice(disciplineBranches, office || undefined);
-    const names = fromDefs.length > 0 ? fromDefs : disciplines;
+    const names = disciplineNamesForOffice(scopedDisciplineBranches, office || undefined);
     return [PLACEHOLDER_DISCIPLINE, ...names];
-  }, [disciplineBranches, disciplines, form.branchOffice]);
+  }, [scopedDisciplineBranches, form.branchOffice]);
 
   const groupOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
     const discipline = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : '';
-    if (trainingGroups.length) {
-      const filtered = trainingGroups
-        .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
-        .map((g) => g.name);
-      if (filtered.length) return [PLACEHOLDER_GROUP, ...filtered];
-    }
-    return [PLACEHOLDER_GROUP, ...groups];
-  }, [form.branchOffice, form.branch, trainingGroups, groups]);
+    const filtered = scopedTrainingGroups
+      .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
+      .map((g) => g.name);
+    return [PLACEHOLDER_GROUP, ...filtered];
+  }, [form.branchOffice, form.branch, scopedTrainingGroups]);
 
   const coachOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
-    const list = office ? coachesForClub(coaches, office) : coaches;
+    const list = office ? coachesForClub(scopedCoaches, office) : scopedCoaches;
     return [PLACEHOLDER_COACH, ...list.map((c) => ({ id: c.id, name: c.name }))];
-  }, [coaches, form.branchOffice]);
+  }, [scopedCoaches, form.branchOffice]);
 
   const handleGroupChange = (groupName: string) => {
     setForm((prev) => {
@@ -365,12 +362,12 @@ const StudentAdd: React.FC<{
         setLessonSchedule([]);
         return next;
       }
-      const tg = findTrainingGroupByName(trainingGroups, groupName, {
+      const tg = findTrainingGroupByName(scopedTrainingGroups, groupName, {
         branchOffice: prev.branchOffice !== PLACEHOLDER_OFFICE ? prev.branchOffice : undefined,
         discipline: prev.branch !== PLACEHOLDER_DISCIPLINE ? prev.branch : undefined,
       });
       if (tg) {
-        const defaults = applyGroupDefaultsToStudent(tg, disciplineBranches);
+        const defaults = applyGroupDefaultsToStudent(tg, scopedDisciplineBranches);
         setLessonSchedule(defaults.lessonSchedule ?? []);
         const autoCoach =
           tg.coachIds?.length === 1
@@ -400,7 +397,7 @@ const StudentAdd: React.FC<{
     if (form.branch === PLACEHOLDER_DISCIPLINE) e.branch = 'Branş seçiniz.';
     if (form.group === PLACEHOLDER_GROUP) e.group = 'Grup seçiniz.';
     if (form.tcNo && onlyDigits(form.tcNo).length !== 11) e.tcNo = '11 haneli olmalıdır.';
-    if (form.tcNo && students.some((s) => (s.tcNo ?? '') === onlyDigits(form.tcNo))) e.tcNo = 'Bu T.C. ile kayıtlı öğrenci var.';
+    if (form.tcNo && tcUniquenessPool.some((s) => (s.tcNo ?? '') === onlyDigits(form.tcNo))) e.tcNo = 'Bu T.C. ile kayıtlı öğrenci var.';
     const fatherPhoneFilled = form.fatherPhone.trim().length > 0;
     const motherPhoneFilled = form.motherPhone.trim().length > 0;
     const fatherPhoneValid = isValidTrPhone(form.fatherPhone);
@@ -431,7 +428,7 @@ const StudentAdd: React.FC<{
       }
     }
     return e;
-  }, [form, students]);
+  }, [form, students, tcUniquenessPool]);
 
   const isValid = Object.keys(errors).length === 0;
 
@@ -510,7 +507,7 @@ const StudentAdd: React.FC<{
         ukd: 0,
         lastAttendance: todayIso(),
         paymentStatus: 'Unpaid',
-        group: form.group !== PLACEHOLDER_GROUP ? form.group : (groups[0] || ''),
+        group: form.group !== PLACEHOLDER_GROUP ? form.group : (scopedTrainingGroups[0]?.name || ''),
         parentName: form.fatherName?.trim() || form.motherName?.trim() || 'Veli',
         parentPhone: normalizeTrPhoneDigits(form.fatherPhone) || normalizeTrPhoneDigits(form.motherPhone) || '',
         birthDate: form.birthDate,
@@ -552,7 +549,7 @@ const StudentAdd: React.FC<{
         username: loginUsername,
         password: loginPassword,
         photoUrl: photoUrl,
-        trainingGroupId: findTrainingGroupByName(trainingGroups, form.group, {
+        trainingGroupId: findTrainingGroupByName(scopedTrainingGroups, form.group, {
           branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
           discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
         })?.id,

@@ -195,7 +195,7 @@ const Attendance: React.FC = () => {
     scopedCoaches: coaches,
     auth,
     addAttendanceRecord,
-    attendanceRecords,
+    scopedAttendanceRecords: attendanceRecords,
     scopedTrainingGroups: trainingGroups,
     scopedDisciplineBranches: disciplineBranches,
     branchOffices,

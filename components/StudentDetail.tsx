@@ -104,12 +104,14 @@ import { REMINDER_DAY_OPTIONS, DEFAULT_REMINDER_DAY } from '../lib/reminderDays'
 import {
   applyGroupDefaultsToStudent,
   applySiblingDiscount,
+  disciplineNamesForOffice,
   findTrainingGroupByName,
   formatLessonSchedule,
   getBaseMonthlyFeeForStudent,
   getExpectedDueForMonth,
   getExpectedDuesForYear,
   isMonthBeforeRegistration,
+  mergeBranchOffices,
   monthKey,
 } from '../lib/trainingGroupUtils';
 import type { GroupLessonSlot } from '../types';
@@ -802,7 +804,32 @@ const StudentDetail: React.FC<{
   onBack: () => void;
   onNavigate?: (tab: string) => void;
 }> = ({ studentId, onBack, onNavigate }) => {
-  const { students, attendanceRecords, transactions, gallery, updateStudent, deleteStudent, addActivityLog, addTransaction, updateTransaction, removeTransaction, performanceAnalyses, addPerformanceAnalysis, updatePerformanceAnalysis, deletePerformanceAnalysis, disciplines, homeworks, homeworkAttempts, trainingGroups, disciplineBranches, confirmDialog, alertDialog, showToast } = useApp();
+  const {
+    students,
+    scopedStudents,
+    scopedTransactions: transactions,
+    scopedAttendanceRecords: attendanceRecords,
+    scopedGallery: gallery,
+    scopedHomeworks: homeworks,
+    auth,
+    updateStudent,
+    deleteStudent,
+    addActivityLog,
+    addTransaction,
+    updateTransaction,
+    removeTransaction,
+    performanceAnalyses,
+    addPerformanceAnalysis,
+    updatePerformanceAnalysis,
+    deletePerformanceAnalysis,
+    disciplines,
+    homeworkAttempts,
+    scopedTrainingGroups: trainingGroups,
+    scopedDisciplineBranches: disciplineBranches,
+    confirmDialog,
+    alertDialog,
+    showToast,
+  } = useApp();
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDuesModal, setShowDuesModal] = useState(false);
   const [showSaleModal, setShowSaleModal] = useState(false);
@@ -883,10 +910,11 @@ const StudentDetail: React.FC<{
   type DetailTab = 'finans' | 'ukd' | 'lichess' | 'chesscom' | 'analizler' | 'taksitler' | 'ozel-dersler' | 'gecmis' | 'bilgiler';
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('finans');
 
+  const visibleStudents = auth?.role === 'admin' ? students : scopedStudents;
   const student = useMemo<Student | null>(() => {
     if (!studentId) return null;
-    return students.find((s) => s.id === studentId) ?? null;
-  }, [students, studentId]);
+    return visibleStudents.find((s) => s.id === studentId) ?? null;
+  }, [visibleStudents, studentId]);
 
   const saveAnalysisModal = useCallback(() => {
     if (!studentId || !analysisFormMeta.branch.trim() || !analysisFormMeta.analysisDate) return;
@@ -3044,7 +3072,7 @@ const EditStudentModal: React.FC<{
   onSave: (updated: Partial<Student>) => void | Promise<void>;
   onClose: () => void;
 }> = ({ student, onSave, onClose }) => {
-  const { groups, branchOffices, disciplines, trainingGroups, disciplineBranches, students } = useApp();
+  const { branchOffices, scopedTrainingGroups, scopedDisciplineBranches, students } = useApp();
   // Use a single state object for all fields, initialized with student data
   const [fields, setFields] = useState<Partial<Student>>({ ...student });
   const [photo, setPhoto] = useState<File | null>(null);
@@ -3053,24 +3081,32 @@ const EditStudentModal: React.FC<{
   const [showPassword, setShowPassword] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const groupOptions = useMemo(() => {
-    const set = new Set([...groups, fields.group || ''].filter(Boolean));
+  const branchOfficeOptions = useMemo(() => {
+    const merged = mergeBranchOffices(branchOffices, scopedDisciplineBranches);
+    const set = new Set([...merged, fields.branchOffice || ''].filter(Boolean));
     return Array.from(set).sort();
-  }, [groups, fields.group]);
+  }, [branchOffices, scopedDisciplineBranches, fields.branchOffice]);
 
   const branchOptions = useMemo(() => {
-    const set = new Set([...disciplines, fields.branch || ''].filter(Boolean));
+    const office = fields.branchOffice?.trim() || '';
+    const names = disciplineNamesForOffice(scopedDisciplineBranches, office || undefined);
+    const set = new Set([...names, fields.branch || ''].filter(Boolean));
     return Array.from(set).sort();
-  }, [disciplines, fields.branch]);
+  }, [scopedDisciplineBranches, fields.branchOffice, fields.branch]);
 
-  const branchOfficeOptions = useMemo(() => {
-    const set = new Set([...branchOffices, fields.branchOffice || ''].filter(Boolean));
+  const groupOptions = useMemo(() => {
+    const office = fields.branchOffice?.trim() || '';
+    const discipline = fields.branch?.trim() || '';
+    const filtered = scopedTrainingGroups
+      .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
+      .map((g) => g.name);
+    const set = new Set([...filtered, fields.group || ''].filter(Boolean));
     return Array.from(set).sort();
-  }, [branchOffices, fields.branchOffice]);
+  }, [scopedTrainingGroups, fields.branchOffice, fields.branch, fields.group]);
 
   const financeBaseFee = useMemo(() => {
-    return getBaseMonthlyFeeForStudent({ ...student, ...fields } as Student, trainingGroups, disciplineBranches);
-  }, [student, fields, trainingGroups, disciplineBranches]);
+    return getBaseMonthlyFeeForStudent({ ...student, ...fields } as Student, scopedTrainingGroups, scopedDisciplineBranches);
+  }, [student, fields, scopedTrainingGroups, scopedDisciplineBranches]);
 
   const financePreview = useMemo(() => {
     const previewStudent = { ...student, ...fields } as Student;
@@ -3257,14 +3293,14 @@ const EditStudentModal: React.FC<{
                     <label className={labelCls}>Şube</label>
                     <select value={fields.branchOffice || ''} onChange={e => setFields(f => ({ ...f, branchOffice: e.target.value }))} className={inputCls}>
                       <option value="">Seçiniz</option>
-                      {branchOffices.map(o => <option key={o} value={o}>{o}</option>)}
+                      {branchOfficeOptions.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </div>
                   <div>
                     <label className={labelCls}>Branş</label>
                     <select value={fields.branch || ''} onChange={e => setFields(f => ({ ...f, branch: e.target.value }))} className={inputCls}>
                       <option value="">Seçiniz</option>
-                      {disciplines.map(d => <option key={d} value={d}>{d}</option>)}
+                      {branchOptions.map(d => <option key={d} value={d}>{d}</option>)}
                     </select>
                   </div>
                   <div>
@@ -3273,9 +3309,12 @@ const EditStudentModal: React.FC<{
                       value={fields.group || ''}
                       onChange={e => {
                         const groupName = e.target.value;
-                        const tg = findTrainingGroupByName(trainingGroups, groupName);
+                        const tg = findTrainingGroupByName(scopedTrainingGroups, groupName, {
+                          branchOffice: fields.branchOffice,
+                          discipline: fields.branch,
+                        });
                         if (tg) {
-                          const defaults = applyGroupDefaultsToStudent(tg, disciplineBranches);
+                          const defaults = applyGroupDefaultsToStudent(tg, scopedDisciplineBranches);
                           setFields(f => ({
                             ...f,
                             group: groupName,
@@ -3292,7 +3331,7 @@ const EditStudentModal: React.FC<{
                       className={inputCls}
                     >
                       <option value="">Seçiniz</option>
-                      {groups.map(g => <option key={g} value={g}>{g}</option>)}
+                      {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
                     </select>
                   </div>
                   {fields.lessonSchedule?.length ? (

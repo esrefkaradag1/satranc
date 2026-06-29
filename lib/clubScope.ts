@@ -6,13 +6,18 @@ export function normalizeClubKey(name: string | undefined | null): string {
   return (name || 'Merkez').trim().toLocaleLowerCase('tr-TR');
 }
 
-/** Öğrenci kulübe şube (branchOffice) veya atanmış antrenörün kulübü ile bağlı */
+/** Öğrenci kulübe club_id, şube (branchOffice) veya atanmış antrenörün kulübü ile bağlı */
 export function studentBelongsToClub(
   student: Student,
   clubName: string,
   coaches: Coach[] = [],
   clubOffices: string[] = [],
+  clubId?: string,
 ): boolean {
+  const resolvedClubId = clubId?.trim();
+  if (resolvedClubId && student.clubId?.trim()) {
+    return student.clubId.trim() === resolvedClubId;
+  }
   const key = normalizeClubKey(clubName);
   const officeKeys = new Set([key, ...clubOffices.map((o) => normalizeClubKey(o))]);
   if (officeKeys.has(normalizeClubKey(student.branchOffice))) return true;
@@ -28,8 +33,9 @@ export function filterStudentsByClub(
   clubName: string,
   coaches: Coach[] = [],
   clubOffices: string[] = [],
+  clubId?: string,
 ): Student[] {
-  return students.filter((s) => studentBelongsToClub(s, clubName, coaches, clubOffices));
+  return students.filter((s) => studentBelongsToClub(s, clubName, coaches, clubOffices, clubId));
 }
 
 export function coachBelongsToClub(coach: Coach, clubName: string): boolean {

@@ -27,10 +27,11 @@ import {
  findTrainingGroupByName,
  mergeBranchOffices,
 } from '../lib/trainingGroupUtils';
-import type { StudentApplication } from'../lib/applicationTypes';
-import { APPLICATIONS_UPDATED_EVENT, loadApplicationsAsync } from'../services/applicationStorage';
+import { APPLICATIONS_UPDATED_EVENT, loadApplicationListMetaAsync, loadApplicationPhotoMapAsync } from'../services/applicationStorage';
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
 import { StudentLoginQuickInfo, StudentLoginQuickInfoInline } from './student/StudentLoginQuickInfo';
+import StudentAvatar from './student/StudentAvatar';
+import { uploadStudentPhotoDataUrl, isDisplayablePhotoUrl } from '../lib/studentPhotoUpload';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { getCoachNamesForStudent, coachesForClub } from '../lib/orgScope';
 import { normalizeClubKey } from '../lib/clubScope';
@@ -50,7 +51,7 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, disciplines, groups, trainingGroups, disciplineBranches, coaches, auth, confirmDialog, showToast } = useApp();
+ const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast } = useApp();
  const isAdmin = auth?.role === 'admin';
  const isCoach = auth?.role === 'coach';
  const baseStudents = scopedStudents;
@@ -71,38 +72,56 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const [newBulkGroup, setNewBulkGroup] = useState('');
  const [newBulkCoachId, setNewBulkCoachId] = useState('');
  const [signedFormsStudent, setSignedFormsStudent] = useState<Student | null>(null);
- const [applications, setApplications] = useState<StudentApplication[]>([]);
+ const [applicationMeta, setApplicationMeta] = useState<{ studentId: string; signed: boolean }[]>([]);
+ const [applicationPhotos, setApplicationPhotos] = useState<Record<string, string>>({});
+ const syncedPhotoIdsRef = React.useRef<Set<string>>(new Set());
 
  const refreshApplications = useCallback(() => {
-  void loadApplicationsAsync().then(setApplications);
- }, []);
+  const clubId = auth?.role === 'club' && auth.clubId ? auth.clubId : undefined;
+  void loadApplicationListMetaAsync({ clubId }).then(setApplicationMeta);
+  void loadApplicationPhotoMapAsync({ clubId }).then(setApplicationPhotos);
+ }, [auth]);
 
  useEffect(() => {
-  refreshApplications();
+  const t = window.setTimeout(() => refreshApplications(), 0);
   const interval = window.setInterval(refreshApplications, 45_000);
   const onFocus = () => refreshApplications();
   const onAppsUpdated = () => refreshApplications();
   window.addEventListener('focus', onFocus);
   window.addEventListener(APPLICATIONS_UPDATED_EVENT, onAppsUpdated);
   return () => {
+   window.clearTimeout(t);
    window.clearInterval(interval);
    window.removeEventListener('focus', onFocus);
    window.removeEventListener(APPLICATIONS_UPDATED_EVENT, onAppsUpdated);
   };
  }, [refreshApplications]);
 
+ /** Mevcut öğrenciler: başvuru fotoğrafını kalıcı kayda yaz */
+ useEffect(() => {
+  for (const student of baseStudents) {
+   if (student.photoUrl || syncedPhotoIdsRef.current.has(student.id)) continue;
+   const fromApp = applicationPhotos[student.id];
+   if (!isDisplayablePhotoUrl(fromApp)) continue;
+   syncedPhotoIdsRef.current.add(student.id);
+   void (async () => {
+    const url = await uploadStudentPhotoDataUrl(fromApp!, student.id);
+    if (url) updateStudent(student.id, { photoUrl: url });
+   })();
+  }
+ }, [baseStudents, applicationPhotos, updateStudent]);
+
  const formCountByStudentId = useMemo(() => {
   const total = new Map<string, number>();
   const signed = new Map<string, number>();
-  for (const app of applications) {
-   if (!app.studentId) continue;
+  for (const app of applicationMeta) {
    total.set(app.studentId, (total.get(app.studentId) ?? 0) + 1);
-   if (app.signatureDataUrl?.trim()) {
+   if (app.signed) {
     signed.set(app.studentId, (signed.get(app.studentId) ?? 0) + 1);
    }
   }
   return { total, signed };
- }, [applications]);
+ }, [applicationMeta]);
 
  const [formData, setFormData] = useState({
  name: '',
@@ -117,8 +136,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  });
 
  const mergedOffices = useMemo(
-  () => mergeBranchOffices(branchOffices, disciplineBranches),
-  [branchOffices, disciplineBranches],
+  () => mergeBranchOffices(branchOffices, scopedDisciplineBranches),
+  [branchOffices, scopedDisciplineBranches],
  );
 
  const editOfficeOptions = useMemo(
@@ -128,34 +147,30 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
 
  const editDisciplineOptions = useMemo(() => {
   const office = formData.branchOffice !== PLACEHOLDER_OFFICE ? formData.branchOffice : '';
-  const fromDefs = disciplineNamesForOffice(disciplineBranches, office || undefined);
-  const names = fromDefs.length > 0 ? fromDefs : disciplines;
+  const names = disciplineNamesForOffice(scopedDisciplineBranches, office || undefined);
   return [PLACEHOLDER_DISCIPLINE, ...names];
- }, [disciplineBranches, disciplines, formData.branchOffice]);
+ }, [scopedDisciplineBranches, formData.branchOffice]);
 
  const editGroupOptions = useMemo(() => {
   const office = formData.branchOffice !== PLACEHOLDER_OFFICE ? formData.branchOffice : '';
   const discipline = formData.branch !== PLACEHOLDER_DISCIPLINE ? formData.branch : '';
-  if (trainingGroups.length) {
-   const filtered = trainingGroups
-    .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
-    .map((g) => g.name);
-   if (filtered.length) return [PLACEHOLDER_GROUP, ...filtered];
-  }
-  return [PLACEHOLDER_GROUP, ...groups.filter((g) => g !== 'Tüm Gruplar')];
- }, [formData.branchOffice, formData.branch, trainingGroups, groups]);
+  const filtered = scopedTrainingGroups
+   .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
+   .map((g) => g.name);
+  return [PLACEHOLDER_GROUP, ...filtered];
+ }, [formData.branchOffice, formData.branch, scopedTrainingGroups]);
 
  const editCoachOptions = useMemo(() => {
   const office = formData.branchOffice !== PLACEHOLDER_OFFICE ? formData.branchOffice : '';
-  const clubCoaches = office ? coachesForClub(coaches, office) : coaches;
+  const clubCoaches = office ? coachesForClub(scopedCoaches, office) : scopedCoaches;
   const names = clubCoaches.map((c) => ({ id: c.id, name: c.name }));
   return [PLACEHOLDER_COACH, ...names];
- }, [coaches, formData.branchOffice]);
+ }, [scopedCoaches, formData.branchOffice]);
 
  const coachFilterOptions = useMemo(() => {
-  const names = coaches.map((c) => c.name).sort((a, b) => a.localeCompare(b, 'tr'));
+  const names = scopedCoaches.map((c) => c.name).sort((a, b) => a.localeCompare(b, 'tr'));
   return ['Tüm Antrenörler', ...names];
- }, [coaches]);
+ }, [scopedCoaches]);
 
  const filteredStudents = useMemo(() => {
  return baseStudents.filter((s) => {
@@ -180,13 +195,13 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  (filterScholarship === 'no' && !s.isScholarshipStudent);
  const matchCoach =
  filterCoach === 'Tüm Antrenörler' ||
- getCoachNamesForStudent(s, coaches, trainingGroups).includes(filterCoach);
+ getCoachNamesForStudent(s, scopedCoaches, scopedTrainingGroups).includes(filterCoach);
  return matchSearch && matchBranchOffice && matchBranch && matchGroup && matchStatus && matchScholarship && matchCoach;
  });
  }, [
  baseStudents,
- coaches,
- trainingGroups,
+ scopedCoaches,
+ scopedTrainingGroups,
  searchTerm,
  filterBranchOffice,
  filterBranch,
@@ -253,12 +268,12 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const bulkCoachOptions = useMemo(() => {
   const selected = students.filter((s) => selectedIds.includes(s.id));
   const offices = new Set(selected.map((s) => normalizeClubKey(s.branchOffice)));
-  const matched = coaches.filter((c) => offices.has(normalizeClubKey(c.branch)));
-  const list = matched.length > 0 ? matched : coaches;
+  const matched = scopedCoaches.filter((c) => offices.has(normalizeClubKey(c.branch)));
+  const list = matched.length > 0 ? matched : scopedCoaches;
   return [...list].sort(
     (a, b) => a.branch.localeCompare(b.branch, 'tr') || a.name.localeCompare(b.name, 'tr'),
   );
- }, [students, selectedIds, coaches]);
+ }, [students, selectedIds, scopedCoaches]);
 
  const handleBulkUpdateCoach = () => {
   if (!newBulkCoachId) return;
@@ -310,9 +325,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    if (groupName === PLACEHOLDER_GROUP) return next;
    const office = prev.branchOffice !== PLACEHOLDER_OFFICE ? prev.branchOffice : undefined;
    const discipline = prev.branch !== PLACEHOLDER_DISCIPLINE ? prev.branch : undefined;
-   const tg = findTrainingGroupByName(trainingGroups, groupName, { branchOffice: office, discipline });
+   const tg = findTrainingGroupByName(scopedTrainingGroups, groupName, { branchOffice: office, discipline });
    if (!tg) return next;
-   const defaults = applyGroupDefaultsToStudent(tg, disciplineBranches);
+   const defaults = applyGroupDefaultsToStudent(tg, scopedDisciplineBranches);
    const autoCoachId =
     tg.coachIds?.length === 1 ? tg.coachIds[0] : prev.coachId !== PLACEHOLDER_COACH ? prev.coachId : PLACEHOLDER_COACH;
    return {
@@ -331,9 +346,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   const discipline = formData.branch !== PLACEHOLDER_DISCIPLINE ? formData.branch : undefined;
   const groupName = formData.group !== PLACEHOLDER_GROUP ? formData.group : undefined;
   const tg = groupName
-   ? findTrainingGroupByName(trainingGroups, groupName, { branchOffice: office, discipline })
+   ? findTrainingGroupByName(scopedTrainingGroups, groupName, { branchOffice: office, discipline })
    : undefined;
-  const groupDefaults = tg ? applyGroupDefaultsToStudent(tg, disciplineBranches) : null;
+  const groupDefaults = tg ? applyGroupDefaultsToStudent(tg, scopedDisciplineBranches) : null;
   const coachId = formData.coachId !== PLACEHOLDER_COACH ? formData.coachId : undefined;
   updateStudent(editingStudent.id, {
    name: formData.name,
@@ -635,9 +650,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  checked={selectedIds.includes(student.id)}
  onChange={() => toggleSelect(student.id)}
  />
- <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/20 flex items-center justify-center text-indigo-400 font-bold text-sm shrink-0">
- {student.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
- </div>
+ <StudentAvatar student={student} applicationPhotos={applicationPhotos} />
  <div className="flex-1 min-w-0">
  <div className="flex items-start justify-between gap-2">
  <div className="min-w-0">
@@ -665,7 +678,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
  <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t border-white/5">
  <button type="button" title="Detay" onClick={() => onViewDetail?.(student.id)} className="p-2.5 rounded-lg text-slate-400 hover:bg-indigo-500/10 hover:text-indigo-400"><Eye className="w-4 h-4" /></button>
- <button type="button" onClick={() => { void loadApplicationsAsync().then(setApplications); setSignedFormsStudent(student); }} title="Başvuru formu" className="p-2.5 rounded-lg text-slate-400 hover:bg-violet-500/10 hover:text-violet-400"><PenLine className="w-4 h-4" /></button>
+ <button type="button" onClick={() => setSignedFormsStudent(student)} title="Başvuru formu" className="p-2.5 rounded-lg text-slate-400 hover:bg-violet-500/10 hover:text-violet-400"><PenLine className="w-4 h-4" /></button>
  <button type="button" onClick={() => handleOpenModal(student)} title="Düzenle" className="p-2.5 rounded-lg text-slate-400 hover:bg-amber-500/10 hover:text-amber-400"><Edit2 className="w-4 h-4" /></button>
  {!isCoach && (
  <button type="button" onClick={() => deleteStudent(student.id)} title="Sil" className="p-2.5 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-400"><Trash2 className="w-4 h-4" /></button>
@@ -726,9 +739,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <td data-label="#" className="px-6 py-4 text-sm font-medium text-slate-400">{index + 1}</td>
  <td data-label="Öğrenci" className="px-6 py-4">
  <div className="flex items-center gap-3">
- <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/20 flex items-center justify-center text-indigo-600 font-bold text-sm shrink-0">
- {student.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
- </div>
+ <StudentAvatar student={student} applicationPhotos={applicationPhotos} className="w-10 h-10" />
  <div>
  <p className="font-bold text-white text-sm tracking-tight">{student.name}</p>
  <p className="text-[10px] text-slate-400 font-mono mt-0.5">
@@ -746,7 +757,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <td data-label="Kurum / Antrenör" className="px-6 py-4">
  <p className="text-sm text-slate-300">{student.branchOffice || '—'}</p>
  <p className="text-[11px] text-teal-400/90 font-medium mt-0.5">
- {getCoachNamesForStudent(student, coaches, trainingGroups).join(', ') || 'Atanmamış'}
+ {getCoachNamesForStudent(student, scopedCoaches, scopedTrainingGroups).join(', ') || 'Atanmamış'}
  </p>
  </td>
  )}
@@ -791,7 +802,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </button>
  <button
  type="button"
- onClick={() => { void loadApplicationsAsync().then(setApplications); setSignedFormsStudent(student); }}
+ onClick={() => setSignedFormsStudent(student)}
  title={
   (formCountByStudentId.signed.get(student.id) ?? 0) > 0
    ? `Başvuru formu — imzalı (${formCountByStudentId.signed.get(student.id)})`
@@ -1103,7 +1114,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  student={students.find((s) => s.id === signedFormsStudent.id) ?? signedFormsStudent}
  onClose={() => {
   setSignedFormsStudent(null);
-  loadApplicationsAsync().then(setApplications);
+  refreshApplications();
  }}
  />
  ) : null}

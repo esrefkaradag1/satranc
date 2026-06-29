@@ -14,7 +14,7 @@ import { Dashboard3DBackground } from './dashboard/Dashboard3DBackground';
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 
 const Dashboard: React.FC = () => {
-  const { scopedStudents, transactions, homeworks, lessons, auth, coaches, clubs } = useApp();
+  const { scopedStudents, scopedTransactions: transactions, scopedHomeworks: homeworks, lessons, auth, coaches, clubs } = useApp();
   const students = scopedStudents;
   const session = useMemo(
     () => getSessionDisplay(auth, { students, coaches, clubs }),

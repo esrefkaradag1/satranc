@@ -1,5 +1,6 @@
 import type { StudentApplication, ApplicationStatus } from '../lib/applicationTypes';
 import type { Student } from '../types';
+import { isDisplayablePhotoUrl } from '../lib/studentPhotoUpload';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './supabase';
 
 const TABLE = 'student_applications';
@@ -44,10 +45,32 @@ function upsertLocalApplication(app: StudentApplication) {
 }
 
 function rowToApp(row: Record<string, unknown>): StudentApplication {
-  const data =
-    row.data && typeof row.data === 'object' && !Array.isArray(row.data)
+  const listName = row.app_name ?? row.appName;
+  const fromListCols = listName != null && String(listName).trim() !== '';
+  const data = fromListCols
+    ? {
+        name: row.app_name,
+        tcNo: row.app_tc_no,
+        branchOffice: row.app_branch_office,
+        group: row.app_group,
+        birthDate: row.app_birth_date,
+        clubId: row.app_club_id,
+        studentId: row.app_student_id,
+        fatherPhone: row.app_father_phone,
+        motherPhone: row.app_mother_phone,
+        hasPhoto: row.has_photo,
+        hasSignature: row.has_signature,
+      }
+    : row.data && typeof row.data === 'object' && !Array.isArray(row.data)
       ? (row.data as Record<string, unknown>)
       : row;
+  const hasPhoto = data.hasPhoto === true || data.hasPhoto === 'true';
+  const hasSignature = data.hasSignature === true || data.hasSignature === 'true';
+  const fatherPhone = String(data.fatherPhone ?? '');
+  const motherPhone = String(data.motherPhone ?? '');
+  const phones = Array.isArray(data.phones)
+    ? (data.phones as string[])
+    : [fatherPhone, motherPhone].map((p) => p.trim()).filter(Boolean);
   return {
     id: String(row.id ?? data.id ?? ''),
     applicationNo: String(row.application_no ?? data.applicationNo ?? ''),
@@ -57,7 +80,12 @@ function rowToApp(row: Record<string, unknown>): StudentApplication {
     tcNo: String(data.tcNo ?? ''),
     name: String(data.name ?? ''),
     birthDate: String(data.birthDate ?? ''),
-    photoDataUrl: data.photoDataUrl != null ? String(data.photoDataUrl) : null,
+    photoDataUrl:
+      data.photoDataUrl != null
+        ? String(data.photoDataUrl)
+        : hasPhoto
+          ? '__HAS_PHOTO__'
+          : null,
     lichessUsername: String(data.lichessUsername ?? ''),
     chessComUsername: String(data.chessComUsername ?? ''),
     school: String(data.school ?? ''),
@@ -65,17 +93,22 @@ function rowToApp(row: Record<string, unknown>): StudentApplication {
     notes: String(data.notes ?? ''),
     healthInfo: String(data.healthInfo ?? ''),
     fatherName: String(data.fatherName ?? ''),
-    fatherPhone: String(data.fatherPhone ?? ''),
+    fatherPhone,
     fatherJob: String(data.fatherJob ?? ''),
     motherName: String(data.motherName ?? ''),
-    motherPhone: String(data.motherPhone ?? ''),
+    motherPhone,
     motherJob: String(data.motherJob ?? ''),
     address: String(data.address ?? ''),
-    phones: Array.isArray(data.phones) ? (data.phones as string[]) : [],
+    phones,
     kvkkAccepted: Boolean(data.kvkkAccepted),
     kvkkAcceptedAt: String(data.kvkkAcceptedAt ?? ''),
     clientIp: String(data.clientIp ?? ''),
-    signatureDataUrl: String(data.signatureDataUrl ?? ''),
+    signatureDataUrl:
+      data.signatureDataUrl != null
+        ? String(data.signatureDataUrl)
+        : hasSignature
+          ? '__HAS_SIGNATURE__'
+          : '',
     signatureName: String(data.signatureName ?? ''),
     signedAt: String(data.signedAt ?? ''),
     registrarSignatureDataUrl: data.registrarSignatureDataUrl != null ? String(data.registrarSignatureDataUrl) : undefined,
@@ -90,7 +123,45 @@ function rowToApp(row: Record<string, unknown>): StudentApplication {
   };
 }
 
+function isApplicationSummary(app: StudentApplication): boolean {
+  return (
+    app.photoDataUrl === '__HAS_PHOTO__' ||
+    app.signatureDataUrl === '__HAS_SIGNATURE__'
+  );
+}
+
+async function fetchApplicationByIdFromSupabase(id: string): Promise<StudentApplication | null> {
+  const client = getServiceSupabase() ?? supabase;
+  const { data, error } = await client.from(TABLE).select('*').eq('id', id).maybeSingle();
+  if (error || !data) return null;
+  const app = rowToApp(data as Record<string, unknown>);
+  upsertLocalApplication(app);
+  return app;
+}
+
+async function countApplicationsForYear(year: number): Promise<number> {
+  if (!isSupabaseBackend()) {
+    return readLocal().filter((a) => a.applicationNo.startsWith(`B-${year}-`)).length;
+  }
+  try {
+    const client = getServiceSupabase() ?? supabase;
+    const { count, error } = await client
+      .from(TABLE)
+      .select('id', { count: 'exact', head: true })
+      .like('application_no', `B-${year}-%`);
+    if (!error && count != null) return count;
+  } catch {
+    /* yedek */
+  }
+  return readLocal().filter((a) => a.applicationNo.startsWith(`B-${year}-`)).length;
+}
+
 function appToRow(app: StudentApplication): Record<string, unknown> {
+  const hasPhoto =
+    app.photoDataUrl === '__HAS_PHOTO__' || isDisplayablePhotoUrl(app.photoDataUrl);
+  const hasSignature =
+    app.signatureDataUrl === '__HAS_SIGNATURE__' ||
+    Boolean(app.signatureDataUrl?.trim() && app.signatureDataUrl !== '__HAS_SIGNATURE__');
   return {
     id: app.id,
     application_no: app.applicationNo,
@@ -98,6 +169,17 @@ function appToRow(app: StudentApplication): Record<string, unknown> {
     data: app,
     created_at: app.createdAt,
     updated_at: app.updatedAt,
+    app_name: app.name || null,
+    app_tc_no: app.tcNo || null,
+    app_branch_office: app.branchOffice || null,
+    app_group: app.group || null,
+    app_club_id: app.clubId ?? null,
+    app_student_id: app.studentId ?? null,
+    app_birth_date: app.birthDate || null,
+    app_father_phone: app.fatherPhone || null,
+    app_mother_phone: app.motherPhone || null,
+    has_photo: hasPhoto,
+    has_signature: hasSignature,
   };
 }
 
@@ -195,7 +277,7 @@ export async function createSignedApplicationFromAdminAsync(
 export async function getOrCreateParentConsentInviteAsync(
   student: Student
 ): Promise<{ token: string; url: string; application: StudentApplication }> {
-  const list = await loadApplicationsAsync();
+  const list = await loadApplicationsListAsync();
   const pending = list.find(
     (a) =>
       a.studentId === student.id &&
@@ -203,10 +285,13 @@ export async function getOrCreateParentConsentInviteAsync(
       !a.signatureDataUrl?.trim()
   );
   if (pending?.inviteToken) {
+    const application = isApplicationSummary(pending)
+      ? (await loadApplicationByIdAsync(pending.id)) ?? pending
+      : pending;
     return {
       token: pending.inviteToken,
       url: getParentConsentFormUrl(pending.inviteToken),
-      application: pending,
+      application,
     };
   }
   const token =
@@ -237,7 +322,24 @@ export async function loadApplicationByInviteToken(
       /* API yoksa yerel/anon yedek */
     }
   }
-  const list = await loadApplicationsAsync();
+  if (isSupabaseBackend()) {
+    try {
+      const client = getServiceSupabase() ?? supabase;
+      const { data, error } = await client
+        .from(TABLE)
+        .select('*')
+        .eq('data->>inviteToken', token)
+        .maybeSingle();
+      if (!error && data) {
+        const app = rowToApp(data as Record<string, unknown>);
+        upsertLocalApplication(app);
+        return app;
+      }
+    } catch {
+      /* yedek */
+    }
+  }
+  const list = await loadApplicationsListAsync();
   return list.find((a) => a.inviteToken === token) ?? null;
 }
 
@@ -303,7 +405,22 @@ export async function loadSignedApplicationsByStudentId(
 export async function loadApplicationsByStudentId(
   studentId: string
 ): Promise<StudentApplication[]> {
-  const list = await loadApplicationsAsync();
+  if (isSupabaseBackend()) {
+    try {
+      const client = getServiceSupabase() ?? supabase;
+      const { data, error } = await client
+        .from(TABLE)
+        .select('*')
+        .eq('data->>studentId', studentId)
+        .order('created_at', { ascending: false });
+      if (!error && data?.length) {
+        return data.map((r) => rowToApp(r as Record<string, unknown>));
+      }
+    } catch {
+      /* yedek */
+    }
+  }
+  const list = await loadApplicationsListAsync();
   return list
     .filter((a) => a.studentId === studentId)
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
@@ -323,27 +440,158 @@ export function buildApplicationPreviewFromStudent(student: Student): StudentApp
   };
 }
 
-export async function loadApplicationsAsync(): Promise<StudentApplication[]> {
+export async function loadApplicationListMetaAsync(options?: {
+  clubId?: string;
+}): Promise<{ studentId: string; signed: boolean }[]> {
+  const clubId = options?.clubId?.trim();
+  const fromLocal = () =>
+    readLocal()
+      .filter((a) => a.studentId && (!clubId || a.clubId === clubId))
+      .map((a) => ({
+        studentId: a.studentId!,
+        signed: a.status === 'signed' || a.status === 'approved' || !!a.signatureDataUrl?.trim(),
+      }));
+
   if (isSupabaseBackend()) {
     try {
       const client = getServiceSupabase() ?? supabase;
-      const { data, error } = await client
-        .from(TABLE)
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (error) {
-        console.warn('[Applications] load error:', error.message);
-        return readLocal();
+      const { data, error } = await client.rpc('netchess_application_list_meta', {
+        p_club_id: clubId ?? null,
+      });
+      if (!error && Array.isArray(data)) {
+        const out: { studentId: string; signed: boolean }[] = [];
+        for (const row of data) {
+          const r = row as Record<string, unknown>;
+          const studentId = String(r.student_id ?? r.studentId ?? '').trim();
+          if (!studentId) continue;
+          out.push({ studentId, signed: Boolean(r.signed) });
+        }
+        return out;
       }
-      const list = (data ?? []).map((r) => rowToApp(r as Record<string, unknown>));
-      writeLocal(list);
-      return list;
+      if (error) {
+        const missingRpc =
+          error.code === '42883' ||
+          error.code === 'PGRST202' ||
+          /netchess_application_list_meta/i.test(error.message ?? '');
+        if (!missingRpc) {
+          console.warn('[Applications] list meta RPC error:', error.message);
+        }
+      }
     } catch (e) {
-      console.warn('[Applications] load failed:', e);
-      return readLocal();
+      console.warn('[Applications] list meta RPC failed:', e);
+    }
+    return fromLocal();
+  }
+  return fromLocal();
+}
+
+/** Başvurudaki fotoğraflar — öğrenci kaydında photoUrl yoksa liste için */
+export async function loadApplicationPhotoMapAsync(options?: {
+  clubId?: string;
+}): Promise<Record<string, string>> {
+  const clubId = options?.clubId?.trim();
+  const map: Record<string, string> = {};
+
+  if (isSupabaseBackend()) {
+    try {
+      const client = getServiceSupabase() ?? supabase;
+      const { data, error } = await client.rpc('netchess_application_student_photos', {
+        p_club_id: clubId ?? null,
+      });
+      if (!error && Array.isArray(data)) {
+        for (const row of data) {
+          const r = row as Record<string, unknown>;
+          const studentId = String(r.student_id ?? r.studentId ?? '').trim();
+          const photoUrl = String(r.photo_url ?? r.photoUrl ?? '').trim();
+          if (studentId && isDisplayablePhotoUrl(photoUrl)) {
+            map[studentId] = photoUrl;
+          }
+        }
+        return map;
+      }
+    } catch {
+      /* RPC yoksa yerel yedek */
     }
   }
-  return readLocal();
+
+  for (const app of readLocal()) {
+    if (!app.studentId || (clubId && app.clubId !== clubId)) continue;
+    if (isDisplayablePhotoUrl(app.photoDataUrl)) {
+      map[app.studentId] = app.photoDataUrl!.trim();
+    }
+  }
+  return map;
+}
+
+export async function loadApplicationByIdAsync(id: string): Promise<StudentApplication | null> {
+  const local = readLocal().find((a) => a.id === id);
+  if (local && !isApplicationSummary(local)) return local;
+  if (!isSupabaseBackend()) return local ?? null;
+  return fetchApplicationByIdFromSupabase(id) ?? local ?? null;
+}
+
+async function fetchApplicationsListFromColumns(
+  clubId?: string,
+): Promise<StudentApplication[] | null> {
+  const client = getServiceSupabase() ?? supabase;
+  const listSelect =
+    'id, application_no, status, created_at, updated_at, app_name, app_tc_no, app_branch_office, app_group, app_club_id, app_student_id, app_birth_date, app_father_phone, app_mother_phone, has_photo, has_signature';
+  let query = client.from(TABLE).select(listSelect).order('created_at', { ascending: false });
+  if (clubId) query = query.eq('app_club_id', clubId);
+  const { data, error } = await query;
+  if (error) {
+    if (error.code === '42703' || /app_name|has_photo/i.test(error.message ?? '')) return null;
+    throw error;
+  }
+  return (data ?? []).map((row) => rowToApp(row as Record<string, unknown>));
+}
+
+/** Admin listesi — büyük imza/foto jsonb olmadan */
+export async function loadApplicationsListAsync(options?: {
+  clubId?: string;
+}): Promise<StudentApplication[]> {
+  const clubId = options?.clubId?.trim();
+
+  if (isSupabaseBackend()) {
+    try {
+      const fromColumns = await fetchApplicationsListFromColumns(clubId);
+      if (fromColumns != null) {
+        writeLocal(fromColumns);
+        return fromColumns;
+      }
+    } catch (e) {
+      console.warn('[Applications] list columns query failed:', e);
+    }
+
+    try {
+      const client = getServiceSupabase() ?? supabase;
+      const { data, error } = await client.rpc('netchess_list_applications', {
+        p_club_id: clubId ?? null,
+      });
+      if (!error && Array.isArray(data)) {
+        const list = data.map((row) => rowToApp(row as Record<string, unknown>));
+        writeLocal(list);
+        return list;
+      }
+      if (error) {
+        const missingRpc =
+          error.code === '42883' ||
+          error.code === 'PGRST202' ||
+          /netchess_list_applications/i.test(error.message ?? '');
+        if (!missingRpc) {
+          console.warn('[Applications] list RPC error:', error.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[Applications] list RPC failed:', e);
+    }
+  }
+
+  return readLocal().filter((a) => !clubId || a.clubId === clubId);
+}
+
+export async function loadApplicationsAsync(): Promise<StudentApplication[]> {
+  return loadApplicationsListAsync();
 }
 
 export async function saveApplicationAsync(app: StudentApplication): Promise<boolean> {
@@ -380,9 +628,8 @@ export async function deleteApplicationAsync(id: string): Promise<void> {
 export async function createApplicationAsync(
   input: Omit<StudentApplication, 'id' | 'applicationNo' | 'status' | 'createdAt' | 'updatedAt'>
 ): Promise<StudentApplication> {
-  const existing = await loadApplicationsAsync();
   const year = new Date().getFullYear();
-  const seq = existing.filter((a) => a.applicationNo.startsWith(`B-${year}-`)).length + 1;
+  const seq = (await countApplicationsForYear(year)) + 1;
   const now = new Date().toISOString();
   const app: StudentApplication = {
     ...input,
@@ -400,8 +647,7 @@ export async function updateApplicationStatusAsync(
   id: string,
   status: ApplicationStatus
 ): Promise<StudentApplication | null> {
-  const list = await loadApplicationsAsync();
-  const found = list.find((a) => a.id === id);
+  const found = await loadApplicationByIdAsync(id);
   if (!found) return null;
   const updated: StudentApplication = {
     ...found,

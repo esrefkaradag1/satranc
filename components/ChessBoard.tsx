@@ -148,7 +148,7 @@ function validateBoardForSave(fen: string): string | null {
 }
 
 const ChessBoard: React.FC = () => {
-  const { puzzles, addPuzzle, importPuzzles, clearPuzzles, deletePuzzle, students, homeworks, addHomework, updateHomework, deleteHomework, showToast, confirmDialog } = useApp();
+  const { puzzles, addPuzzle, importPuzzles, clearPuzzles, deletePuzzle, scopedStudents: students, scopedHomeworks: homeworks, addHomework, updateHomework, deleteHomework, showToast, confirmDialog } = useApp();
   const [activeTab, setActiveTab] = useState<'editor' | 'puzzles' | 'assign' | 'analysis'>('editor');
   
   const [showImportModal, setShowImportModal] = useState(false);

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { resolveScopedStudents, resolveScopedTransactions, resolveScopedCoaches, resolveScopedTrainingGroups, resolveScopedDisciplineBranches, resolveScopedTournaments, resolveClubBranch } from './lib/orgScope';
+import { resolveScopedStudents, resolveScopedTransactions, resolveScopedCoaches, resolveScopedTrainingGroups, resolveScopedDisciplineBranches, resolveScopedTournaments, resolveScopedHomeworks, resolveScopedAttendanceRecords, resolveScopedGallery, isStudentIdInScope, resolveClubBranch } from './lib/orgScope';
 import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, TrainingGroup, AppRole } from './types';
 import { MOCK_STUDENTS } from './constants';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
@@ -25,6 +25,7 @@ import {
   clubIdForOrgRecord,
   resolveClubIdFromAuth,
 } from './lib/orgStructureDb';
+import { resolveAuthClubId, syncSupabaseClubContext } from './lib/supabaseClubContext';
 import { normalizeClubKey } from './lib/clubScope';
 import { normalizeLeaderboardPointSettings } from './lib/leaderboardPointSettings';
 import {
@@ -74,6 +75,12 @@ interface AppContextType {
   scopedDisciplineBranches: DisciplineBranch[];
   /** Kulüp şubesine göre filtrelenmiş turnuvalar */
   scopedTournaments: Tournament[];
+  /** Kulüp kapsamındaki ödevler */
+  scopedHomeworks: HomeworkAssignment[];
+  /** Kulüp öğrencilerine ait yoklama kayıtları */
+  scopedAttendanceRecords: AttendanceRecord[];
+  /** Kulüp kapsamındaki galeri öğeleri */
+  scopedGallery: GalleryItem[];
   /** Kulüp girişinde aktif şube adı */
   activeClubBranch?: string;
   addStudent: (student: Omit<Student, 'id'>) => Promise<Student>;
@@ -236,18 +243,25 @@ function applyStudentScopeFromAuth(
   student: Omit<Student, 'id'>,
   auth: AuthUser | null,
   coaches: Coach[],
+  clubs: { id: string; name: string }[] = [],
 ): Omit<Student, 'id'> {
   if (!auth) return student;
   const next = { ...student };
-  if (auth.role === 'club' && auth.branch?.trim()) {
-    next.branchOffice = auth.branch.trim();
+  if (auth.role === 'club') {
+    const clubId = resolveClubIdFromAuth(auth, clubs);
+    if (clubId) next.clubId = clubId;
+    if (auth.branch?.trim()) next.branchOffice = auth.branch.trim();
   }
   if (auth.role === 'coach') {
     if (auth.coachId?.trim()) next.coachId = auth.coachId.trim();
     const branch =
       auth.branch?.trim() ||
       coaches.find((c) => c.id === auth.coachId)?.branch?.trim();
-    if (branch) next.branchOffice = branch;
+    if (branch) {
+      next.branchOffice = branch;
+      const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(branch));
+      if (club) next.clubId = club.id;
+    }
   }
   return next;
 }
@@ -272,7 +286,7 @@ const STUDENT_DB_OPTIONAL_SNAKE = new Set<string>([
   'registration_type', 'monthly_fee',
   'payment_reminder_day', 'late_payment_reminder_day', 'is_scholarship_student', 'parent_job',
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
-  'coach_id', 'branch_office',
+  'coach_id', 'branch_office', 'club_id',
 ]);
 
 let _knownStudentColumns: Set<string> | null = null;
@@ -1250,6 +1264,7 @@ function coachToDb(coach: Coach): Record<string, unknown> {
     fide_id: coach.fideId ?? null,
     lichess_username: coach.lichessUsername ?? null,
     role_id: coach.roleId ?? null,
+    club_id: coach.clubId ?? null,
   };
 }
 
@@ -1275,6 +1290,7 @@ function dbToCoach(row: Record<string, unknown>): Coach {
           ? String(r.lichessUsername)
           : undefined,
     roleId: r.role_id != null ? String(r.role_id) : r.roleId != null ? String(r.roleId) : undefined,
+    clubId: r.club_id != null ? String(r.club_id) : r.clubId != null ? String(r.clubId) : undefined,
   };
 }
 
@@ -1544,6 +1560,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [auth, tournaments],
   );
 
+  const scopedHomeworks = useMemo(
+    () => resolveScopedHomeworks(auth, homeworks, scopedStudents, scopedTrainingGroups),
+    [auth, homeworks, scopedStudents, scopedTrainingGroups],
+  );
+
+  const scopedAttendanceRecords = useMemo(
+    () => resolveScopedAttendanceRecords(auth, attendanceRecords, scopedStudents),
+    [auth, attendanceRecords, scopedStudents],
+  );
+
+  const scopedGallery = useMemo(
+    () => resolveScopedGallery(auth, gallery, scopedStudents),
+    [auth, gallery, scopedStudents],
+  );
+
   const activeClubBranch = useMemo(() => resolveClubBranch(auth), [auth]);
 
   const branchOffices = useMemo(
@@ -1614,10 +1645,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (coach) {
+      const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(coach.branch || ''));
       setAuth({
         role: 'coach',
         coachId: coach.id,
         branch: coach.branch || 'Merkez',
+        clubId: coach.clubId ?? club?.id,
         roleId: coach.roleId,
       });
       return true;
@@ -1634,7 +1667,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return false;
-  }, [coaches]);
+  }, [coaches, clubs]);
 
   const loginClub = useCallback(async (username: string, password: string): Promise<boolean> => {
     const idRaw = username.trim();
@@ -1991,77 +2024,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
     const loadFromSupabase = async () => {
-      // Reads should work with anon client; service role is only required for unrestricted writes.
       const sb = supabase;
-      try {
-
-        const [
-          hwRes, attRes, subRes, puzRes,
-          stuRes, transRes, lessRes, attenRes,
-          invRes, galRes, actRes, schedRes, coachRes,
-          perfRes, tourRes, clubsRes,
-          officesRes, discBranchesRes, trainGroupsRes,
-        ] = await Promise.all([
-          sb.from('homeworks').select('*'),
-          sb.from('homework_attempts').select('*'),
-          sb.from('homework_submissions').select('*'),
-          sb.from('puzzles').select('*'),
-          sb.from('students').select('*'),
-          sb.from('transactions').select('*'),
-          sb.from('lessons').select('*'),
-          sb.from('attendance_records').select('*'),
-          sb.from('inventory').select('*'),
-          sb.from('gallery').select('*'),
-          sb.from('activity_logs').select('*'),
-          sb.from('schedule_entries').select('*'),
-          sb.from('coaches').select('*'),
-          sb.from('performance_analyses').select('*'),
-          sb.from('tournaments').select('*'),
-          sb.from('clubs').select('*'),
-          sb.from('branch_offices').select('*'),
-          sb.from('discipline_branches').select('*'),
-          sb.from('training_groups').select('*'),
-        ]);
-
-        if (hwRes.data) setHomeworks((hwRes.data as Record<string, unknown>[]).map(dbToHomework));
-        if (attRes.data) {
-          const rawRows = attRes.data as Record<string, unknown>[];
-          if (rawRows[0]) {
-            setCachedHomeworkAttemptPayloadStyle(detectHomeworkAttemptPayloadStyle(rawRows[0]));
-          }
-          setHomeworkAttempts(
-            mergeHomeworkAttemptsFromStorage(rawRows.map(dbToHomeworkAttempt)),
-          );
-        }
-        if (subRes.data) setHomeworkSubmissions((subRes.data as Record<string, unknown>[]).map(dbToSubmission));
-        if (puzRes.error) {
-          console.error('[Supabase] loadFromSupabase puzzles HATA:', puzRes.error.message, puzRes.error.code, puzRes.error.details);
-        }
-        if (puzRes.data) {
-          const fromSupabase = (puzRes.data as Record<string, unknown>[]).map(dbToPuzzle);
-          // If Supabase returns an empty list, don't wipe the local fallback list.
-          if (fromSupabase.length > 0) {
-            setPuzzles(fromSupabase);
-          }
-          console.log('[Supabase] loadFromSupabase puzzles yüklendi:', fromSupabase.length);
-        } else if (!puzRes.error) {
-          console.log('[Supabase] loadFromSupabase puzzles boş.');
-        }
-        if (stuRes.data) {
-          const stuRows = stuRes.data as Record<string, unknown>[];
-          learnStudentColumnsFromRows(stuRows);
-          setStudents(applyLessonLogsToStudents(stuRows.map(dbToStudent)));
-        }
-        if (transRes.data) setTransactions((transRes.data as Record<string, unknown>[]).map(dbToTransaction));
-        if (lessRes.data) setLessons((lessRes.data as Record<string, unknown>[]).map(dbToLesson));
-        if (attenRes.data) setAttendanceRecords((attenRes.data as Record<string, unknown>[]).map(dbToAttendanceRecord));
-        if (invRes.data) setInventory(invRes.data as InventoryItem[]);
-        if (galRes.data) setGallery((galRes.data as Record<string, unknown>[]).map(dbToGalleryItem));
-        if (actRes.data) setActivityLogs(actRes.data as ActivityLog[]);
-        if (schedRes.data) setScheduleEntries((schedRes.data as Record<string, unknown>[]).map(dbToScheduleEntry));
-        if (coachRes.data) setCoaches((coachRes.data as Record<string, unknown>[]).map(dbToCoach));
-        if (perfRes.data) setPerformanceAnalyses((perfRes.data as Record<string, unknown>[]).map(dbToPerformanceAnalysis));
-        if (tourRes.data) setTournaments((tourRes.data as Record<string, unknown>[]).map(dbToTournament));
+      const applyOrgFromResponses = (
+        clubsRes: { data: unknown; error?: unknown },
+        officesRes: { data: unknown; error?: unknown },
+        discBranchesRes: { data: unknown; error?: unknown },
+        trainGroupsRes: { data: unknown; error?: unknown },
+      ) => {
         const loadedClubs = clubsRes.data
           ? (clubsRes.data as Record<string, unknown>[]).map(dbToClub)
           : [];
@@ -2111,32 +2080,106 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             );
           }
         }
+      };
 
-        try {
-          const { data: coachReportData } = await sb.from('coach_ai_reports').select('*');
-          if (coachReportData?.length) {
-            setCoachAiReports((coachReportData as Record<string, unknown>[]).map(dbToCoachAiReport));
-          }
-        } catch {
-          /* tablo yoksa yerel liste kullanılır */
+      try {
+        // Önce panel açılışı için gerekli çekirdek veri (öğrenci listesi vb.)
+        const [stuRes, coachRes, clubsRes, officesRes, discBranchesRes, trainGroupsRes] = await Promise.all([
+          sb.from('students').select('*'),
+          sb.from('coaches').select('*'),
+          sb.from('clubs').select('*'),
+          sb.from('branch_offices').select('*'),
+          sb.from('discipline_branches').select('*'),
+          sb.from('training_groups').select('*'),
+        ]);
+
+        if (stuRes.data) {
+          const stuRows = stuRes.data as Record<string, unknown>[];
+          learnStudentColumnsFromRows(stuRows);
+          setStudents(applyLessonLogsToStudents(stuRows.map(dbToStudent)));
         }
-
-        try {
-          const gllClient = getServiceSupabase() ?? sb;
-          const fromDb = await loadGroupLessonLogsFromSupabase(gllClient);
-          const merged = applyGroupLessonLogsMerge(fromDb);
-          setGroupLessonLogs(merged);
-          const gllWrite = getServiceSupabase();
-          if (gllWrite) void migrateLocalGroupLessonLogsToSupabase(gllWrite, merged);
-        } catch {
-          /* yerel yedek */
-        }
-
+        if (coachRes.data) setCoaches((coachRes.data as Record<string, unknown>[]).map(dbToCoach));
+        applyOrgFromResponses(clubsRes, officesRes, discBranchesRes, trainGroupsRes);
       } catch (e) {
-        console.error('[Supabase] loadFromSupabase exception:', e);
+        console.error('[Supabase] loadFromSupabase core exception:', e);
       } finally {
         setInitialDataLoaded(true);
       }
+
+      // Ağır tablolar arka planda — UI'ı bloklamaz
+      void (async () => {
+        try {
+          const [
+            hwRes, attRes, subRes, puzRes,
+            transRes, lessRes, attenRes,
+            invRes, galRes, actRes, schedRes,
+            perfRes, tourRes,
+          ] = await Promise.all([
+            sb.from('homeworks').select('*'),
+            sb.from('homework_attempts').select('*'),
+            sb.from('homework_submissions').select('*'),
+            sb.from('puzzles').select('*'),
+            sb.from('transactions').select('*'),
+            sb.from('lessons').select('*'),
+            sb.from('attendance_records').select('*'),
+            sb.from('inventory').select('*'),
+            sb.from('gallery').select('*'),
+            sb.from('activity_logs').select('*'),
+            sb.from('schedule_entries').select('*'),
+            sb.from('performance_analyses').select('*'),
+            sb.from('tournaments').select('*'),
+          ]);
+
+          if (hwRes.data) setHomeworks((hwRes.data as Record<string, unknown>[]).map(dbToHomework));
+          if (attRes.data) {
+            const rawRows = attRes.data as Record<string, unknown>[];
+            if (rawRows[0]) {
+              setCachedHomeworkAttemptPayloadStyle(detectHomeworkAttemptPayloadStyle(rawRows[0]));
+            }
+            setHomeworkAttempts(
+              mergeHomeworkAttemptsFromStorage(rawRows.map(dbToHomeworkAttempt)),
+            );
+          }
+          if (subRes.data) setHomeworkSubmissions((subRes.data as Record<string, unknown>[]).map(dbToSubmission));
+          if (puzRes.error) {
+            console.error('[Supabase] loadFromSupabase puzzles HATA:', puzRes.error.message, puzRes.error.code, puzRes.error.details);
+          } else if (puzRes.data) {
+            const fromSupabase = (puzRes.data as Record<string, unknown>[]).map(dbToPuzzle);
+            if (fromSupabase.length > 0) setPuzzles(fromSupabase);
+          }
+          if (transRes.data) setTransactions((transRes.data as Record<string, unknown>[]).map(dbToTransaction));
+          if (lessRes.data) setLessons((lessRes.data as Record<string, unknown>[]).map(dbToLesson));
+          if (attenRes.data) setAttendanceRecords((attenRes.data as Record<string, unknown>[]).map(dbToAttendanceRecord));
+          if (invRes.data) setInventory(invRes.data as InventoryItem[]);
+          if (galRes.data) setGallery((galRes.data as Record<string, unknown>[]).map(dbToGalleryItem));
+          if (actRes.data) setActivityLogs(actRes.data as ActivityLog[]);
+          if (schedRes.data) setScheduleEntries((schedRes.data as Record<string, unknown>[]).map(dbToScheduleEntry));
+          if (perfRes.data) setPerformanceAnalyses((perfRes.data as Record<string, unknown>[]).map(dbToPerformanceAnalysis));
+          if (tourRes.data) setTournaments((tourRes.data as Record<string, unknown>[]).map(dbToTournament));
+
+          try {
+            const { data: coachReportData } = await sb.from('coach_ai_reports').select('*');
+            if (coachReportData?.length) {
+              setCoachAiReports((coachReportData as Record<string, unknown>[]).map(dbToCoachAiReport));
+            }
+          } catch {
+            /* tablo yoksa yerel liste kullanılır */
+          }
+
+          try {
+            const gllClient = getServiceSupabase() ?? sb;
+            const fromDb = await loadGroupLessonLogsFromSupabase(gllClient);
+            const merged = applyGroupLessonLogsMerge(fromDb);
+            setGroupLessonLogs(merged);
+            const gllWrite = getServiceSupabase();
+            if (gllWrite) void migrateLocalGroupLessonLogsToSupabase(gllWrite, merged);
+          } catch {
+            /* yerel yedek */
+          }
+        } catch (e) {
+          console.error('[Supabase] loadFromSupabase secondary exception:', e);
+        }
+      })();
     };
     loadFromSupabase();
   }, [useSupabase]);
@@ -2159,15 +2202,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [auth, clubs]);
 
-  /** Antrenör oturumunda roleId eksikse tamamla */
+  /** Antrenör oturumunda roleId / clubId eksikse tamamla */
   useEffect(() => {
     if (auth?.role !== 'coach' || coaches.length === 0) return;
     const coach =
       (auth.coachId ? coaches.find((c) => c.id === auth.coachId) : undefined) ??
       (auth.branch ? coaches.find((c) => (c.branch || '').trim() === auth.branch.trim()) : undefined);
-    if (!coach?.roleId || auth.roleId === coach.roleId) return;
-    setAuth({ ...auth, coachId: auth.coachId ?? coach.id, roleId: coach.roleId });
-  }, [auth, coaches]);
+    if (!coach) return;
+    const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(coach.branch || ''));
+    const needsRoleId = coach.roleId && auth.roleId !== coach.roleId;
+    const needsClubId = !auth.clubId && (coach.clubId || club?.id);
+    if (!needsRoleId && !needsClubId) return;
+    setAuth({
+      ...auth,
+      coachId: auth.coachId ?? coach.id,
+      roleId: coach.roleId ?? auth.roleId,
+      clubId: auth.clubId ?? coach.clubId ?? club?.id,
+    });
+  }, [auth, coaches, clubs]);
+
+  /** Supabase RLS kulüp bağlamı (katı mod için; RPC yoksa sessizce atlanır) */
+  useEffect(() => {
+    if (!useSupabase || !supabase) return;
+    const clubId = resolveAuthClubId(auth, coaches, clubs);
+    void syncSupabaseClubContext(supabase, clubId);
+  }, [useSupabase, auth, coaches, clubs]);
 
   /** Branş–grup tanımları değişince eski disciplines/groups listelerini güncelle */
   useEffect(() => {
@@ -2734,8 +2793,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [addActivityLog]);
 
   const addStudent = useCallback(async (student: Omit<Student, 'id'>): Promise<Student> => {
-    const scoped = applyStudentScopeFromAuth(student, auth, coaches);
-    const existingUsernames = students.map((s) => s.username);
+    const scoped = applyStudentScopeFromAuth(student, auth, coaches, clubs);
+    const clubId = scoped.clubId;
+    const existingUsernames = (clubId
+      ? students.filter((s) => s.clubId === clubId)
+      : students
+    ).map((s) => s.username);
     const generated = createStudentLoginCredentials(scoped.name, existingUsernames);
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
     const nextNo = 1 + Math.max(0, ...students.map((s) => s.studentNo).filter((n): n is number => typeof n === 'number'));
@@ -2759,9 +2822,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
     return newStudent;
-  }, [addActivityLog, students, showToast, auth, coaches]);
+  }, [addActivityLog, students, showToast, auth, coaches, clubs]);
 
   const updateStudent = useCallback(async (id: string, updatedFields: Partial<Student>) => {
+    if (!isStudentIdInScope(auth, id, scopedStudents)) {
+      showToast('Bu öğrenciye erişim yetkiniz yok.', 'error');
+      return;
+    }
     if (updatedFields.lessonLog !== undefined) {
       persistLessonLogLocal(id, updatedFields.lessonLog);
     }
@@ -2784,9 +2851,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else if (updatedFields.lessonLog !== undefined) {
       showToast('Ders günlüğü kaydedildi.', 'success');
     }
-  }, [showToast]);
+  }, [showToast, auth, scopedStudents]);
 
   const deleteStudent = useCallback(async (id: string) => {
+    if (!isStudentIdInScope(auth, id, scopedStudents)) {
+      showToast('Bu öğrenciye erişim yetkiniz yok.', 'error');
+      return;
+    }
     setStudents(prev => {
       const found = prev.find(s => s.id === id);
       if (found) addActivityLog({ user: CURRENT_USER, action: 'Öğrenci Silindi', target: found.name, type: 'warning' });
@@ -2797,51 +2868,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const { error } = await sb.from('students').delete().eq('id', id);
       if (error) console.error('Supabase students delete error:', error);
     } catch (err) { console.error('Supabase students throw error:', err); }
-  }, [addActivityLog]);
+  }, [addActivityLog, auth, scopedStudents, showToast]);
 
   const bulkDeleteStudents = useCallback(async (ids: string[]) => {
+    const allowed = ids.filter((id) => isStudentIdInScope(auth, id, scopedStudents));
+    if (allowed.length === 0) {
+      showToast('Seçili öğrencilere erişim yetkiniz yok.', 'error');
+      return;
+    }
+    if (allowed.length < ids.length) {
+      showToast('Bazı öğrenciler kulüp kapsamı dışında olduğu için atlandı.', 'warning');
+    }
     setStudents(prev => {
-      const names = prev.filter(s => ids.includes(s.id)).map(s => s.name).join(', ');
-      if (names) addActivityLog({ user: CURRENT_USER, action: 'Toplu Öğrenci Silindi', target: `${ids.length} kişi · ${names.slice(0, 50)}${names.length > 50 ? '…' : ''}`, type: 'warning' });
-      return prev.filter(s => !ids.includes(s.id));
+      const names = prev.filter(s => allowed.includes(s.id)).map(s => s.name).join(', ');
+      if (names) addActivityLog({ user: CURRENT_USER, action: 'Toplu Öğrenci Silindi', target: `${allowed.length} kişi · ${names.slice(0, 50)}${names.length > 50 ? '…' : ''}`, type: 'warning' });
+      return prev.filter(s => !allowed.includes(s.id));
     });
     const sb = getServiceSupabase();
     if (sb) try {
-      const { error } = await sb.from('students').delete().in('id', ids);
+      const { error } = await sb.from('students').delete().in('id', allowed);
       if (error) console.error('Supabase students bulk delete error:', error);
     } catch (err) { console.error('Supabase students bulk throw error:', err); }
-  }, [addActivityLog]);
+  }, [addActivityLog, auth, scopedStudents, showToast]);
 
   const bulkUpdateStudentGroup = useCallback(async (ids: string[], newGroup: string) => {
-    setStudents(prev => prev.map(s => ids.includes(s.id) ? { ...s, group: newGroup } : s));
-    addActivityLog({ user: CURRENT_USER, action: 'Grup Güncellendi', target: `${ids.length} öğrenci → ${newGroup}`, type: 'info' });
+    const allowed = ids.filter((id) => isStudentIdInScope(auth, id, scopedStudents));
+    if (allowed.length === 0) {
+      showToast('Seçili öğrencilere erişim yetkiniz yok.', 'error');
+      return;
+    }
+    setStudents(prev => prev.map(s => allowed.includes(s.id) ? { ...s, group: newGroup } : s));
+    addActivityLog({ user: CURRENT_USER, action: 'Grup Güncellendi', target: `${allowed.length} öğrenci → ${newGroup}`, type: 'info' });
     const sb = getServiceSupabase();
     if (sb) try {
-      const { error } = await sb.from('students').update({ group_name: newGroup }).in('id', ids);
+      const { error } = await sb.from('students').update({ group_name: newGroup }).in('id', allowed);
       if (error) console.error('Supabase students bulk update error:', error);
     } catch (err) { console.error('Supabase students bulk throw error:', err); }
-  }, [addActivityLog]);
+  }, [addActivityLog, auth, scopedStudents, showToast]);
 
   const bulkUpdateStudentCoach = useCallback(async (ids: string[], coachId: string) => {
+    const allowed = ids.filter((id) => isStudentIdInScope(auth, id, scopedStudents));
+    if (allowed.length === 0) {
+      showToast('Seçili öğrencilere erişim yetkiniz yok.', 'error');
+      return;
+    }
     const coach = coaches.find((c) => c.id === coachId);
     const coachLabel = coach?.name ?? coachId;
-    setStudents((prev) => prev.map((s) => (ids.includes(s.id) ? { ...s, coachId } : s)));
+    setStudents((prev) => prev.map((s) => (allowed.includes(s.id) ? { ...s, coachId } : s)));
     addActivityLog({
       user: CURRENT_USER,
       action: 'Antrenör Atandı',
-      target: `${ids.length} öğrenci → ${coachLabel}`,
+      target: `${allowed.length} öğrenci → ${coachLabel}`,
       type: 'info',
     });
     const sb = getServiceSupabase();
     if (sb) {
       try {
-        const { error } = await sb.from('students').update({ coach_id: coachId }).in('id', ids);
+        const { error } = await sb.from('students').update({ coach_id: coachId }).in('id', allowed);
         if (error) console.error('Supabase students bulk coach update error:', error);
       } catch (err) {
         console.error('Supabase students bulk coach throw error:', err);
       }
     }
-  }, [addActivityLog, coaches]);
+  }, [addActivityLog, coaches, auth, scopedStudents, showToast]);
 
   const addTransaction = useCallback(async (transaction: Omit<Transaction, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
@@ -3827,7 +3916,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{ 
-      students, scopedStudents, scopedTransactions, scopedCoaches, scopedTrainingGroups, scopedDisciplineBranches, scopedTournaments, activeClubBranch,
+      students, scopedStudents, scopedTransactions, scopedCoaches, scopedTrainingGroups, scopedDisciplineBranches, scopedTournaments, scopedHomeworks, scopedAttendanceRecords, scopedGallery, activeClubBranch,
       addStudent, updateStudent, deleteStudent,
       bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach,
       transactions, addTransaction, updateTransaction, removeTransaction,

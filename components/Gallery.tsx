@@ -6,7 +6,7 @@ import type { GalleryItem } from '../types';
 const DEFAULT_FORM = { url: '', title: '', group: 'Alt Yapı A', date: new Date().toISOString().slice(0, 10), studentId: '' as string };
 
 const Gallery: React.FC = () => {
-  const { gallery, addGalleryItem, removeGalleryItem, scopedStudents: students } = useApp();
+  const { gallery, addGalleryItem, removeGalleryItem, scopedStudents: students, scopedGallery } = useApp();
   const [selectedGroup, setSelectedGroup] = useState('Hepsi');
   const [searchTerm, setSearchTerm] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -21,14 +21,14 @@ const Gallery: React.FC = () => {
   }, [students]);
 
   const filteredImages = useMemo(() => {
-    let list = gallery;
+    let list = scopedGallery;
     if (selectedGroup !== 'Hepsi') list = list.filter(img => img.group === selectedGroup || img.group === 'Hepsi');
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
       list = list.filter(img => img.title.toLowerCase().includes(q) || img.group.toLowerCase().includes(q));
     }
     return list;
-  }, [gallery, selectedGroup, searchTerm]);
+  }, [scopedGallery, selectedGroup, searchTerm]);
 
   const MAX_FILE_SIZE_MB = 2;
 
