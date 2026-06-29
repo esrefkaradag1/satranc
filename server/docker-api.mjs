@@ -19,6 +19,22 @@ import {
 import { lichessProxyRequest } from '../lib/lichessProxyThrottle.mjs';
 import { parentStudentLoginViaEnv } from '../lib/studentParentAuth.mjs';
 
+function syncServerEnv() {
+  const pairs = [
+    ['SUPABASE_URL', 'VITE_SUPABASE_URL'],
+    ['SUPABASE_ANON_KEY', 'VITE_SUPABASE_ANON_KEY'],
+    ['SUPABASE_SERVICE_ROLE_KEY', 'VITE_SUPABASE_SERVICE_ROLE_KEY'],
+    ['SUPABASE_DB_PASSWORD', 'POSTGRES_PASSWORD'],
+  ];
+  for (const [target, source] of pairs) {
+    if (!process.env[target]?.trim() && process.env[source]?.trim()) {
+      process.env[target] = process.env[source].trim();
+    }
+  }
+}
+
+syncServerEnv();
+
 const PORT = Number(process.env.API_PORT || 3001);
 const HOST = process.env.API_HOST || '127.0.0.1';
 

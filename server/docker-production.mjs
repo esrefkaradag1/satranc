@@ -24,6 +24,21 @@ const RUNTIME_ENV_KEYS = [
   'VITE_API_URL',
 ];
 
+/** VITE_* değerlerini sunucu API handler'ları için SUPABASE_* olarak yansıt */
+function syncServerEnv() {
+  const pairs = [
+    ['SUPABASE_URL', 'VITE_SUPABASE_URL'],
+    ['SUPABASE_ANON_KEY', 'VITE_SUPABASE_ANON_KEY'],
+    ['SUPABASE_SERVICE_ROLE_KEY', 'VITE_SUPABASE_SERVICE_ROLE_KEY'],
+    ['SUPABASE_DB_PASSWORD', 'POSTGRES_PASSWORD'],
+  ];
+  for (const [target, source] of pairs) {
+    if (!process.env[target]?.trim() && process.env[source]?.trim()) {
+      process.env[target] = process.env[source].trim();
+    }
+  }
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -100,6 +115,7 @@ function serveStatic(req, res, url) {
   return sendFile(res, path.join(STATIC_DIR, 'index.html'), 'public, max-age=0, must-revalidate');
 }
 
+syncServerEnv();
 writeEnvConfig();
 
 const server = http.createServer(async (req, res) => {

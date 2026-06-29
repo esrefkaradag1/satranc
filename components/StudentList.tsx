@@ -173,7 +173,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  }, [scopedCoaches]);
 
  const filteredStudents = useMemo(() => {
- return baseStudents.filter((s) => {
+ return baseStudents
+  .filter((s) => {
  const matchSearch =
  !searchTerm ||
  s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -197,7 +198,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  filterCoach === 'Tüm Antrenörler' ||
  getCoachNamesForStudent(s, scopedCoaches, scopedTrainingGroups).includes(filterCoach);
  return matchSearch && matchBranchOffice && matchBranch && matchGroup && matchStatus && matchScholarship && matchCoach;
- });
+ })
+  .sort((a, b) => a.name.localeCompare(b.name, 'tr', { sensitivity: 'base' }));
  }, [
  baseStudents,
  scopedCoaches,
