@@ -13,7 +13,15 @@ import { Study, StudyChapter, StudyChatMessage, BottomTab } from '../lib/studyTy
 import StudyCallPanel from './StudyCallPanel';
 import { createStudyCall } from '../services/studyCall';
 import { loadStudiesAsync, saveStudyAsync, subscribeToStudies } from '../studyStorage';
-import { getBestMove, getBestMoveAsync, getEvaluationPawns, getEvaluationPawnsAsync } from '../services/chessEngine';
+import {
+  getBestMove,
+  getBestMoveAsync,
+  getEvaluationPawns,
+  getEvaluationPawnsAsync,
+  VS_COMPUTER_ENGINE_LEVEL,
+  VS_COMPUTER_MAX_WAIT_MS,
+  VS_COMPUTER_SEARCH_DEPTH,
+} from '../services/chessEngine';
 import { logStudyEvent } from '../studyEvents';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, squareMarksToStyles, SQUARE_MARK_BUTTON_PREVIEW, type SquareMarkColor } from '../lib/chessBoardUi';
@@ -614,6 +622,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   }, [studentTurnCode]);
 
   useEffect(() => {
+    if (vsComputer) {
+      try {
+        setEvalScore(getEvaluationPawns(makeBuilderGame(studyBoardFen)));
+      } catch {
+        setEvalScore(0);
+      }
+      return;
+    }
     let cancelled = false;
     const updateEval = async () => {
       try {
@@ -625,7 +641,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     };
     updateEval();
     return () => { cancelled = true; };
-  }, [studyBoardFen]);
+  }, [studyBoardFen, vsComputer]);
 
   const progressKey = effectiveChapter ? `${selectedStudy?.id}_${effectiveChapter.id}` : null;
   const recordProgress = useCallback((key: string, idx: number) => {
@@ -759,11 +775,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     else if (f === 'wrong') feedbackTimer.current = setTimeout(() => { setFeedback(null); setFeedbackText(null); }, 3500);
   }, []);
 
-  const getBestMoveWithTimeout = useCallback(async (fen: string, level: number, timeoutMs: number) => {
+  const getBestMoveWithTimeout = useCallback(async (
+    fen: string,
+    level: number,
+    timeoutMs: number,
+    opts?: { movetimeMs?: number; searchDepth?: number },
+  ) => {
     const timeout = new Promise<string | null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
     try {
       const g = makeBuilderGame(fen);
-      const best = await Promise.race([getBestMoveAsync(g, level), timeout]);
+      const best = await Promise.race([getBestMoveAsync(g, level, opts), timeout]);
       if (best) return best;
     } catch {}
     try {
@@ -1490,7 +1511,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       }
     }
 
-    setVcLevel(20);
+    setVcLevel(VS_COMPUTER_ENGINE_LEVEL);
   }, [
     selectedChapter?.id,
     selectedChapter?.lessonMode,
@@ -1513,9 +1534,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const doComputerMove = useCallback(async (fen: string) => {
      setVcThinking(true);
      try {
-       const game = makeBuilderGame(fen);
-       const san = await getBestMoveAsync(game, vcLevel);
+       const san = await getBestMoveWithTimeout(
+         fen,
+         vcLevel,
+         VS_COMPUTER_MAX_WAIT_MS + 500,
+         {
+           movetimeMs: VS_COMPUTER_MAX_WAIT_MS,
+           searchDepth: VS_COMPUTER_SEARCH_DEPTH,
+         },
+       );
        if (san) {
+         const game = makeBuilderGame(fen);
          game.move(san);
          const nextFen = game.fen();
          let newHistory: string[] = [];
@@ -1535,7 +1564,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
          });
        }
      } finally { setVcThinking(false); }
-  }, [vcLevel, vcManualGameOver, updatePresencePayload]);
+  }, [vcLevel, vcManualGameOver, updatePresencePayload, getBestMoveWithTimeout]);
 
   useEffect(() => {
     if (!vsComputer || vcThinking) return;
@@ -1546,7 +1575,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (currentTurn !== studentTurn) {
       const timer = setTimeout(() => {
         void doComputerMove(vcFen);
-      }, 600);
+      }, 350);
       return () => clearTimeout(timer);
     }
   }, [vsComputer, vcFen, vcOrientation, vcThinking, doComputerMove]);

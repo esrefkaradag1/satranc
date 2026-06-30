@@ -5,6 +5,7 @@
  */
 
 import { buildTerminalPvLines, getTerminalEval } from '../lib/analysisTerminal';
+import { stockfishWorkerUrl, STOCKFISH_ANALYSIS_CANDIDATES } from '../lib/stockfishWorkerUrl';
 
 export interface PvLine {
   multipv: number;
@@ -53,6 +54,12 @@ const MAX_RECOVERY_RETRIES = 3;
 let subscriberCount = 0;
 let lastMainLineDepth = 0;
 let lastMainLineUpdateMs = 0;
+let activeEngineScript = '';
+
+function usesLegacyDepthSearch(): boolean {
+  // Eski stockfish.js (2019): go infinite info satırı vermez
+  return activeEngineScript.endsWith('/stockfish.js') || activeEngineScript.endsWith('stockfish.js');
+}
 
 function isValidFen(fen: string): boolean {
   const parts = fen.trim().split(/\s+/);
@@ -90,7 +97,6 @@ function parseInfoLine(line: string): PvLine | null {
   if (!depthMatch || !pvMatch) return null;
   const cpMatch = line.match(/\bscore cp (-?\d+)/);
   const mateMatch = line.match(/\bscore mate (-?\d+)/);
-  if (!cpMatch && !mateMatch) return null;
   const multipvMatch = line.match(/\bmultipv (\d+)/);
   const nodesMatch = line.match(/\bnodes (\d+)/);
   const npsMatch = line.match(/\bnps (\d+)/);
@@ -165,8 +171,6 @@ function handleMessage(line: string) {
   }
   if (line.startsWith('bestmove ')) {
     log('bestmove:', line);
-    analysisRunning = false;
-    stopInFlight = false;
     const moveToken = line.slice(9).trim().split(/\s+/)[0] ?? '';
     if ((moveToken === '(none)' || !moveToken) && lastFen && pvLines.every((l) => l === null)) {
       const terminal = getTerminalEval(lastFen);
@@ -174,6 +178,15 @@ function handleMessage(line: string) {
         applyTerminalAnalysis(terminal);
       }
     }
+    if (usesLegacyDepthSearch() && lastFen && subscriberCount > 0 && worker && ready) {
+      // Eski stockfish.js: go infinite info vermez; depth/movetime ile yeniden tara
+      worker.postMessage(`position fen ${lastFen}`);
+      worker.postMessage('go depth 18');
+      analysisRunning = true;
+      return;
+    }
+    analysisRunning = false;
+    stopInFlight = false;
   }
 }
 
@@ -211,7 +224,7 @@ function stopEngineAndWait(): Promise<void> {
       }
     };
     worker!.addEventListener('message', stopWaitListener);
-    restartFallbackTimer = setTimeout(finish, 400);
+    restartFallbackTimer = setTimeout(finish, 3000);
 
     try {
       worker!.postMessage('stop');
@@ -244,7 +257,7 @@ async function runAnalysis(generation: number): Promise<void> {
   }
 
   if (!worker || !ready) return;
-  doStartAnalysis(fen);
+  await doStartAnalysis(fen);
 }
 
 function waitReady(timeoutMs = 2000): Promise<void> {
@@ -278,8 +291,23 @@ function waitReady(timeoutMs = 2000): Promise<void> {
   });
 }
 
-function doStartAnalysis(fen: string): void {
+async function applyEngineOptions(): Promise<void> {
   if (!worker || !ready) return;
+  // 2019 wasm/js: Threads zaten 1 (min=max=1); setoption Threads motoru kilitler
+  if (currentHash !== 16) {
+    try { worker.postMessage(`setoption name Hash value ${currentHash}`); } catch {}
+  }
+  try { worker.postMessage(`setoption name MultiPV value ${currentNumPv}`); } catch {}
+  await waitReady(3000);
+}
+
+async function doStartAnalysis(fen: string): Promise<void> {
+  if (!worker || !ready) return;
+
+  if (analysisRunning) {
+    await stopEngineAndWait();
+    await waitReady(2000);
+  }
 
   pvLines = new Array(currentNumPv).fill(null);
   lastMainLineDepth = 0;
@@ -287,24 +315,21 @@ function doStartAnalysis(fen: string): void {
   emitLines();
   emitDepth(0);
 
-  log('Starting analysis fen=', fen, 'numPv=', currentNumPv, 'threads=', currentThreads, 'hash=', currentHash);
-  try { worker.postMessage(`setoption name Threads value ${currentThreads}`); } catch {}
-  try { worker.postMessage(`setoption name Hash value ${currentHash}`); } catch {}
-  try { worker.postMessage(`setoption name MultiPV value ${currentNumPv}`); } catch {}
-  try { worker.postMessage('setoption name UCI_AnalyseMode value true'); } catch {}
+  log('Starting analysis fen=', fen, 'numPv=', currentNumPv);
   worker.postMessage(`position fen ${fen}`);
-  worker.postMessage('go infinite');
+  worker.postMessage(usesLegacyDepthSearch() ? 'go depth 18' : 'go infinite');
   analysisRunning = true;
 }
 
-function tryCreate(url: string, timeoutMs = 8000): Promise<Worker> {
+function tryCreate(url: string, timeoutMs = 12000): Promise<Worker> {
   return new Promise((resolve, reject) => {
-    log('Trying worker at', url);
+    const workerUrl = stockfishWorkerUrl(url);
+    log('Trying worker at', workerUrl);
     let w: Worker;
     try {
-      w = new Worker(url);
+      w = new Worker(workerUrl);
     } catch (e) {
-      reject(new Error(`new Worker(${url}) failed: ${(e as Error).message}`));
+      reject(new Error(`new Worker(${workerUrl}) failed: ${(e as Error).message}`));
       return;
     }
     let settled = false;
@@ -384,17 +409,20 @@ export async function initAnalysis(): Promise<boolean> {
   initPromise = (async () => {
     const candidates =
       currentEngine === 'lite'
-        ? ['/stockfish/stockfish-18-lite-single.js', '/stockfish/stockfish.wasm.js', '/stockfish/stockfish.js']
+        ? [...STOCKFISH_ANALYSIS_CANDIDATES]
         : currentEngine === 'wasm'
-          ? ['/stockfish/stockfish.wasm.js', '/stockfish/stockfish.js', '/stockfish/stockfish-18-lite-single.js']
-          : ['/stockfish/stockfish.js', '/stockfish/stockfish.wasm.js', '/stockfish/stockfish-18-lite-single.js'];
+          ? ['/stockfish/stockfish.wasm.js', ...STOCKFISH_ANALYSIS_CANDIDATES]
+          : [...STOCKFISH_ANALYSIS_CANDIDATES];
     for (const url of candidates) {
       try {
-        const w = await tryCreate(url, 8000);
+        const timeout = url.includes('lite') ? 25000 : 15000;
+        const w = await tryCreate(url, timeout);
         worker = w;
+        activeEngineScript = url;
         ready = true;
         initializing = false;
-        recoveryRetryCount = 0; // Başarıyla açılırsa sıfırla
+        recoveryRetryCount = 0;
+        await applyEngineOptions();
         log('Initialized with', url);
         emitReady();
         // Bekleyen analiz varsa başlat
@@ -419,7 +447,15 @@ export function startAnalysis(fen: string, force = false): void {
   const trimmed = fen.trim();
   if (!isValidFen(trimmed)) return;
 
-  if (!force && trimmed === lastFen && (analysisRunning || pendingFen === trimmed)) {
+  const filledLines = pvLines.filter((l): l is PvLine => l !== null).length;
+  const staleMs = lastMainLineUpdateMs > 0 ? Date.now() - lastMainLineUpdateMs : Infinity;
+  if (
+    !force
+    && trimmed === lastFen
+    && analysisRunning
+    && filledLines > 0
+    && staleMs < 4000
+  ) {
     return;
   }
 
@@ -473,6 +509,7 @@ function resetEngineState(): void {
   analysisGeneration += 1;
   try { worker?.terminate(); } catch {}
   worker = null;
+  activeEngineScript = '';
   ready = false;
   initializing = false;
   initPromise = null;
@@ -514,9 +551,10 @@ export function setEngineOptions(opts: { numPv?: number; threads?: number; hash?
     return;
   }
 
-  if (changed && worker && ready && lastFen) {
-    // Yeni ayarlarla yeniden başlat
-    setTimeout(() => { if (lastFen) startAnalysis(lastFen, true); }, 30);
+  if (changed && worker && ready) {
+    void applyEngineOptions().then(() => {
+      if (lastFen) startAnalysis(lastFen, true);
+    });
   }
 }
 

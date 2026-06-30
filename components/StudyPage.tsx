@@ -1682,7 +1682,9 @@ const StudyPage: React.FC = () => {
     return null;
   }, [viewingStudentId, viewingStudentPresence, viewingStudentVcHistory]);
 
-  const studentEffectiveFen = viewingStudentPresence?.vsComputer ? viewingStudentPresence.vcFen : viewingStudentPresenceRow?.payload?.fen;
+  const studentEffectiveFen = viewingStudentPresence?.vsComputer
+    ? (viewingStudentPresence.vcFen || selectedChapter?.fen || DEFAULT_FEN)
+    : viewingStudentPresenceRow?.payload?.fen;
 
   const effectiveFen = (viewingStudentId && studentEffectiveFen)
     ? studentEffectiveFen
@@ -1690,6 +1692,14 @@ const StudyPage: React.FC = () => {
       ?? (isInVariation && variationFen ? variationFen : null)
       ?? syncPathFen
       ?? currentFen);
+
+  /** Motor paneli: FEN sık değişince analiz sürekli iptal olmasın */
+  const [engineAnalysisFen, setEngineAnalysisFen] = useState(DEFAULT_FEN);
+  useEffect(() => {
+    const fen = (effectiveFen || DEFAULT_FEN).trim();
+    const timer = setTimeout(() => setEngineAnalysisFen(fen), 250);
+    return () => clearTimeout(timer);
+  }, [effectiveFen]);
 
   const boardDisplayFen = useMemo(() => {
     if (!hoverState || !selectedChapter) return effectiveFen;
@@ -4205,7 +4215,7 @@ const StudyPage: React.FC = () => {
           {/* Engine Analysis Panel — sabit üst bölüm */}
           <div className="shrink-0">
           <EngineAnalysis
-            fen={effectiveFen}
+            fen={engineAnalysisFen}
             boardOrientation={boardOrientation}
             enabled={
               boardSettings.showEngineAnalysis

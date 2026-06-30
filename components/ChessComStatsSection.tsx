@@ -137,6 +137,7 @@ const ChessComStatsSection: React.FC<ChessComStatsSectionProps> = ({
     const puzzleRating =
       memberStats?.tactics?.rating ??
       pubStats?.tactics?.highest?.rating ??
+      pubStats?.tactics?.lowest?.rating ??
       null;
     if (puzzleRating != null && puzzleRating > 0) {
       items.push({

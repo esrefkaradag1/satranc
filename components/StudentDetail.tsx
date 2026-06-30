@@ -58,6 +58,7 @@ import {
   fetchChessComPlayer,
   fetchChessComStats,
   fetchChessComMemberStats,
+  reconcileChessComMemberStats,
   fetchChessComPuzzlesBundle,
   fetchChessComAllUserGames,
   lichessPerfLabel,
@@ -430,8 +431,12 @@ const LichessChessCard: React.FC<{
       return;
     }
     setLoadingChessCom(true);
+    setChessComProfile(null);
+    setChessComStats(null);
+    setChessComMemberStats(null);
     setChessComGames([]);
     setChessComGamesProgress(0);
+    setChessComPuzzlesCount(0);
     try {
       const [profile, stats, memberStats, puzzlesBundle] = await Promise.all([
         fetchChessComPlayer(un),
@@ -441,7 +446,7 @@ const LichessChessCard: React.FC<{
       ]);
       setChessComProfile(profile ?? null);
       setChessComStats(stats ?? null);
-      setChessComMemberStats(memberStats ?? null);
+      setChessComMemberStats(reconcileChessComMemberStats(memberStats, stats, profile));
       setChessComPuzzlesCount(
         (puzzlesBundle?.rated.length ?? 0) +
           (puzzlesBundle?.learning.length ?? 0) +

@@ -252,7 +252,7 @@ const SettingsPopup: React.FC<SettingsPopupProps> = ({
   engine, onEngineChange, numPv, onNumPvChange, threads, onThreadsChange, hash, onHashChange
 }) => {
   const engines: { id: 'lite'; name: string }[] = [
-    { id: 'lite', name: 'Stockfish 18 · lite-single' },
+    { id: 'lite', name: 'Stockfish · WASM (MultiPV)' },
   ];
 
   return (
@@ -645,7 +645,7 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
 
           <div className="flex flex-col min-w-0">
             <span className="text-[10px] text-indigo-400 font-extrabold uppercase tracking-tighter leading-tight truncate">
-              SF 18 · LITE <span className="text-white opacity-40">NNUE</span>
+              STOCKFISH <span className="text-white opacity-40">WASM</span>
             </span>
             <div className="flex items-center gap-1 min-w-0">
               <Plus className="w-2.5 h-2.5 text-[#3b82f6] shrink-0" />

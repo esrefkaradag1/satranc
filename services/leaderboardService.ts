@@ -2,10 +2,12 @@ import type { HomeworkPuzzleAttempt, Student } from '../types';
 import {
   chessComGameInvolvesUser,
   fetchChessComMemberStats,
+  fetchChessComPlayer,
   fetchChessComPuzzlesBundle,
   fetchChessComStats,
   fetchLichessActivity,
   fetchLichessUser,
+  reconcileChessComMemberStats,
   type ChessComGame,
 } from './chessPlatformService';
 import {
@@ -254,11 +256,14 @@ async function studentPlatformSnapshot(student: Student): Promise<LeaderboardPla
   const lichessUsername = student.lichessUsername?.trim();
   const chessComUsername = student.chessComUsername?.trim();
 
-  const [lichessProfile, memberStats, pubStats] = await Promise.all([
+  const [lichessProfile, chessComProfile, memberStatsRaw, pubStats] = await Promise.all([
     lichessUsername ? fetchLichessUser(lichessUsername).catch(() => null) : Promise.resolve(null),
+    chessComUsername ? fetchChessComPlayer(chessComUsername).catch(() => null) : Promise.resolve(null),
     chessComUsername ? fetchChessComMemberStats(chessComUsername).catch(() => null) : Promise.resolve(null),
     chessComUsername ? fetchChessComStats(chessComUsername).catch(() => null) : Promise.resolve(null),
   ]);
+
+  const memberStats = reconcileChessComMemberStats(memberStatsRaw, pubStats, chessComProfile);
 
   const snapshot = buildLeaderboardPlatformSnapshot(student, lichessProfile, memberStats, pubStats);
   platformSnapshotCache.set(cacheKey, { at: Date.now(), snapshot });

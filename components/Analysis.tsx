@@ -19,6 +19,7 @@ import {
   fetchChessComStats,
   fetchChessComGamesPage,
   fetchChessComMemberStats,
+  reconcileChessComMemberStats,
   type LichessUserProfile,
   type LichessGame,
   type LichessActivity,
@@ -424,7 +425,9 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
       }
       if (cUser) {
         void fetchChessComMemberStats(cUser).then((cms) => {
-          if (gen === platformLoadGenRef.current) setChessComMemberStats(cms);
+          if (gen === platformLoadGenRef.current) {
+            setChessComMemberStats(reconcileChessComMemberStats(cms, cs, cp));
+          }
         });
       } else {
         setChessComMemberStats(null);

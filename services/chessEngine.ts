@@ -163,12 +163,18 @@ export function getEvaluationPawns(chess: Chess): number {
 // ─── Stockfish entegrasyonu (bulmaca / çalışma alanı) ─────────────────────────
 let stockfishInitStarted = false;
 
-/** Seviye 1–10 için movetime (ms): 1=300, 10=2500 */
+/** Seviye 1–10 için movetime (ms): 1=440, 10=2600 */
 function movetimeMsForLevel(level: number): number {
   const lvl = Math.max(1, Math.min(20, Math.round(level)));
-  // 1-10: 200-2500ms, 11-20: 2750-5000ms
+  // 1-10: 200-2600ms, 11-20: 2840-5000ms
   return 200 + lvl * 240;
 }
+
+/** Bilgisayara karşı mod: Stockfish en yüksek güç */
+export const VS_COMPUTER_ENGINE_LEVEL = 20;
+export const VS_COMPUTER_SEARCH_DEPTH = 20;
+/** depth araması için üst bekleme süresi (ms) */
+export const VS_COMPUTER_MAX_WAIT_MS = 8000;
 
 /** UCI hamlesini (e2e4) SAN'a çevirir; geçersizse null. */
 function uciToSan(chess: Chess, uci: string): string | null {
@@ -192,7 +198,7 @@ function uciToSan(chess: Chess, uci: string): string | null {
 export async function getBestMoveAsync(
   chess: Chess,
   level: EngineLevel = 5,
-  opts?: { strictFallback?: boolean; movetimeMs?: number },
+  opts?: { strictFallback?: boolean; movetimeMs?: number; searchDepth?: number },
 ): Promise<string | null> {
   if (!chess || chess.isGameOver()) return null;
   const moves = chess.moves({ verbose: true });
@@ -205,7 +211,7 @@ export async function getBestMoveAsync(
   if (isStockfishReady()) {
     const fen = chess.fen();
     const movetime = opts?.movetimeMs ?? movetimeMsForLevel(level);
-    const uci = await getBestMoveFromStockfish(fen, movetime);
+    const uci = await getBestMoveFromStockfish(fen, movetime, opts?.searchDepth);
     if (uci) {
       const san = uciToSan(chess, uci);
       if (san) return san;

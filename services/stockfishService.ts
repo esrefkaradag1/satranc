@@ -3,6 +3,8 @@
  * Bulmaca / çalışma alanında en iyi hamle ve değerlendirme için kullanılır.
  */
 
+import { stockfishWorkerUrl, STOCKFISH_MOVE_CANDIDATES } from '../lib/stockfishWorkerUrl';
+
 let worker: Worker | null = null;
 let ready = false;
 let initializing = false;
@@ -44,7 +46,6 @@ function parseInfoLine(line: string): PvLine | null {
   const npsMatch = line.match(/\bnps (\d+)/);
 
   if (!depthMatch || !pvMatch) return null;
-  if (!cpMatch && !mateMatch) return null;
 
   return {
     multipv: multipvMatch ? parseInt(multipvMatch[1], 10) : 1,
@@ -90,6 +91,12 @@ function handleWorkerMessage(line: string): void {
     }
   }
 
+  const cpMatch = line.match(/\bscore cp (-?\d+)/);
+  if (cpMatch) lastScore = parseInt(cpMatch[1], 10) / 100;
+
+  const mateMatchLine = line.match(/\bscore mate (-?\d+)/);
+  if (mateMatchLine) lastScore = parseInt(mateMatchLine[1], 10) > 0 ? 100 : -100;
+
   if (line.startsWith('info ') && line.includes(' pv ') && multiPvCallback) {
     const pvLine = parseInfoLine(line);
     if (pvLine) {
@@ -102,12 +109,6 @@ function handleWorkerMessage(line: string): void {
       }
     }
   }
-
-  const scoreMatch = line.match(/\bscore cp (-?\d+)/);
-  if (scoreMatch) lastScore = parseInt(scoreMatch[1], 10) / 100;
-
-  const mateMatchLine = line.match(/\bscore mate (-?\d+)/);
-  if (mateMatchLine) lastScore = parseInt(mateMatchLine[1], 10) > 0 ? 100 : -100;
 
   if (line.startsWith('bestmove ')) {
     analysisRunning = false;
@@ -147,17 +148,25 @@ async function stopOngoingEngineWork(): Promise<void> {
 
 function tryCreateWorker(url: string): Promise<Worker> {
   return new Promise((resolve, reject) => {
-    log('Trying worker at', url);
-    const w = new Worker(url);
+    const workerUrl = stockfishWorkerUrl(url);
+    log('Trying worker at', workerUrl);
+    let w: Worker;
+    try {
+      w = new Worker(workerUrl);
+    } catch (e) {
+      reject(new Error(`Worker at ${url} failed: ${(e as Error).message}`));
+      return;
+    }
     let settled = false;
 
+    const timeoutMs = url.includes('lite') ? 20000 : 12000;
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
         w.terminate();
         reject(new Error(`Worker at ${url} did not respond in time`));
       }
-    }, 8000);
+    }, timeoutMs);
 
     w.onmessage = (e: MessageEvent<string>) => {
       for (const line of uciIncomingLines(e.data)) {
@@ -206,9 +215,7 @@ export async function initStockfish(): Promise<boolean> {
 
   initializing = true;
 
-  const urls = ['/stockfish/stockfish-18-lite-single.js', '/stockfish/stockfish.js', '/stockfish/stockfish.wasm.js'];
-
-  for (const url of urls) {
+  for (const url of STOCKFISH_MOVE_CANDIDATES) {
     try {
       const w = await tryCreateWorker(url);
       worker = w;
@@ -224,17 +231,45 @@ export async function initStockfish(): Promise<boolean> {
   return false;
 }
 
-export function getBestMoveFromStockfish(fen: string, movetimeMs: number): Promise<string | null> {
+export function getBestMoveFromStockfish(
+  fen: string,
+  movetimeMs: number,
+  searchDepth?: number,
+): Promise<string | null> {
   if (!worker || !ready) return Promise.resolve(null);
+  const depth = searchDepth != null && searchDepth > 0 ? Math.round(searchDepth) : 0;
+  const maxWait = depth > 0 ? Math.max(movetimeMs, 6000) + 800 : movetimeMs + 800;
   return runOnEngineQueue(async () => {
     await stopOngoingEngineWork();
     return new Promise<string | null>((resolve, reject) => {
-      pending = { resolve, reject };
+      let settled = false;
+      const finish = (move: string | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(hardTimeout);
+        pending = null;
+        resolve(move);
+      };
+      pending = {
+        resolve: (move) => finish(move),
+        reject: (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(hardTimeout);
+          pending = null;
+          reject(err);
+        },
+      };
       worker!.postMessage(`position fen ${fen}`);
-      worker!.postMessage(`go movetime ${Math.max(100, movetimeMs)}`);
-      setTimeout(() => {
-        if (pending) worker?.postMessage('stop');
-      }, movetimeMs + 2000);
+      if (depth > 0) {
+        worker!.postMessage(`go depth ${depth}`);
+      } else {
+        worker!.postMessage(`go movetime ${Math.max(100, movetimeMs)}`);
+      }
+      const hardTimeout = setTimeout(() => {
+        if (!settled) worker?.postMessage('stop');
+        finish(null);
+      }, maxWait);
     });
   });
 }

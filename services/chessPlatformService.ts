@@ -777,6 +777,90 @@ export function parseChessComMemberStatsPayload(data: unknown): ChessComMemberSt
   return result;
 }
 
+function chessComStatDateMs(value: string | number | undefined): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? t : null;
+}
+
+function pubChessComModeRating(
+  pub: ChessComStats | null | undefined,
+  key: 'chess_rapid' | 'chess_blitz' | 'chess_bullet' | 'chess_daily',
+): number | null {
+  const r = pub?.[key]?.last?.rating;
+  return r != null && r > 0 ? r : null;
+}
+
+function chessComModeMatchesPublic(
+  mode: ChessComModeStat | undefined,
+  pubKey: 'chess_rapid' | 'chess_blitz' | 'chess_bullet' | 'chess_daily',
+  pub: ChessComStats | null,
+  joinedSec?: number,
+): boolean {
+  if (!mode?.rating) return false;
+  const pubRating = pubChessComModeRating(pub, pubKey);
+  if (pubRating == null) return false;
+  if (Math.abs(mode.rating - pubRating) > 150) return false;
+  if (joinedSec) {
+    const joinedMs = joinedSec * 1000;
+    const lastMs = chessComStatDateMs(mode.lastDate);
+    if (lastMs != null && lastMs < joinedMs - 12 * 3600 * 1000) return false;
+    const highMs = chessComStatDateMs(mode.highestRatingDate);
+    if (highMs != null && highMs < joinedMs - 12 * 3600 * 1000) return false;
+  }
+  return true;
+}
+
+function chessComTacticsMatchesPublic(
+  tactics: ChessComMemberStats['tactics'] | undefined,
+  pub: ChessComStats | null,
+  joinedSec?: number,
+): boolean {
+  if (!tactics?.rating) return false;
+  const pubHigh = pub?.tactics?.highest?.rating ?? 0;
+  if (pubHigh <= 0) return false;
+  if (tactics.rating > pubHigh + 80) return false;
+  const pubLow = pub?.tactics?.lowest?.rating ?? 0;
+  if (pubLow > 0 && tactics.rating < pubLow - 80) return false;
+  if (joinedSec && tactics.lastDate) {
+    const lastMs = chessComStatDateMs(tactics.lastDate);
+    if (lastMs != null && lastMs < joinedSec * 1000 - 12 * 3600 * 1000) return false;
+  }
+  return true;
+}
+
+/**
+ * Chess.com callback/member istatistikleri yeni veya yeniden kullanılan kullanıcı
+ * adlarında eski hesap verisini döndürebilir. Resmi pub/stats ile doğrulanmayan
+ * modları atar (Oyunlar sekmesi pub API kullanır — tutarlılık için).
+ */
+export function reconcileChessComMemberStats(
+  member: ChessComMemberStats | null,
+  pub: ChessComStats | null,
+  profile: ChessComPlayer | null,
+): ChessComMemberStats | null {
+  if (!member) return null;
+  const joined = profile?.joined;
+  const out: ChessComMemberStats = {};
+
+  if (chessComModeMatchesPublic(member.rapid, 'chess_rapid', pub, joined)) out.rapid = member.rapid;
+  if (chessComModeMatchesPublic(member.blitz, 'chess_blitz', pub, joined)) out.blitz = member.blitz;
+  if (chessComModeMatchesPublic(member.bullet, 'chess_bullet', pub, joined)) out.bullet = member.bullet;
+  if (chessComModeMatchesPublic(member.daily, 'chess_daily', pub, joined)) out.daily = member.daily;
+
+  if (chessComTacticsMatchesPublic(member.tactics, pub, joined)) out.tactics = member.tactics;
+
+  const pubRushBest = pub?.puzzle_rush?.best?.score;
+  if (member.puzzleRush?.highestScore && pubRushBest != null && pubRushBest > 0) {
+    if (member.puzzleRush.highestScore <= pubRushBest + 50) {
+      out.puzzleRush = member.puzzleRush;
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 /**
  * Chess.com callback endpoint'inden mod + bulmaca istatistikleri çeker.
  * Tarayıcı CORS nedeniyle yalnızca /api/chesscom-member-stats proxy üzerinden.

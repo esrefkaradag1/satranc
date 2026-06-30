@@ -74,6 +74,7 @@ import {
   fetchChessComPlayer,
   fetchChessComStats,
   fetchChessComMemberStats,
+  reconcileChessComMemberStats,
   fetchChessComPuzzlesBundle,
   fetchChessComGamesForDay,
   fetchChessComGamesPage,
@@ -757,6 +758,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if (append && (!chessComHasMoreRef.current || chessComNextBeforeEndTimeRef.current == null)) return;
     if (!append) {
       setLoadingChessCom(true);
+      setChessComProfile(null);
+      setChessComStats(null);
+      setChessComMemberStats(null);
       setChessComGames([]);
       setChessComGamesProgress(0);
       setChessComNextBeforeEndTime(null);
@@ -770,7 +774,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         ]);
         setChessComProfile(profile ?? null);
         setChessComStats(stats ?? null);
-        setChessComMemberStats(memberStats ?? null);
+        setChessComMemberStats(reconcileChessComMemberStats(memberStats, stats, profile));
         setChessComPuzzlesCount(
           (puzzlesBundle?.rated.length ?? 0) +
             (puzzlesBundle?.learning.length ?? 0) +
