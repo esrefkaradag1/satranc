@@ -234,6 +234,62 @@ export function describeGameOutcomeFromFen(fen: string): GameOutcomeDescription 
   }
 }
 
+/** Oyun bittiyse (mat, pat, beraberlik, üç konum tekrarı) hamle geçmişini oynatarak Türkçe kısa açıklama. */
+export function describeGameOutcome(startFen: string, moves: string[]): GameOutcomeDescription | null {
+  try {
+    const g = makeBuilderGame(startFen);
+    for (const move of moves) {
+      g.move(move);
+    }
+    if (!g.isGameOver()) return null;
+    if (g.isCheckmate()) {
+      const winner = g.turn() === 'w' ? 'Siyah' : 'Beyaz';
+      const loser = g.turn() === 'w' ? 'Beyaz' : 'Siyah';
+      return {
+        kind: 'checkmate',
+        title: 'Şah mat',
+        subtitle: `${winner} kazandı. ${loser} mat oldu.`,
+      };
+    }
+    if (g.isStalemate()) {
+      return {
+        kind: 'stalemate',
+        title: 'Pat',
+        subtitle: 'Hamle yok; oyun berabere (pat).',
+      };
+    }
+    if (g.isInsufficientMaterial()) {
+      return {
+        kind: 'draw_insufficient',
+        title: 'Beraberlik',
+        subtitle: 'Yetersiz taş materyali — berabere.',
+      };
+    }
+    if (g.isThreefoldRepetition()) {
+      return {
+        kind: 'draw_threefold',
+        title: 'Beraberlik',
+        subtitle: 'Üç konum tekrarı — berabere.',
+      };
+    }
+    if (g.isDrawByFiftyMoves()) {
+      return {
+        kind: 'draw_fifty',
+        title: 'Beraberlik',
+        subtitle: '50 hamle kuralı — berabere.',
+      };
+    }
+    return {
+      kind: 'draw_other',
+      title: 'Beraberlik',
+      subtitle: 'Oyun kurallarına göre berabere.',
+    };
+  } catch {
+    return null;
+  }
+}
+
+
 /** Şah mat pozisyonunda mat olan tarafın kral karesi (tahta vurgusu için). */
 export function matedKingSquareFromFen(fen: string): Square | null {
   try {

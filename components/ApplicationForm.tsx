@@ -203,6 +203,7 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
 
   const handleSubmit = async (ev: React.FormEvent) => {
     ev.preventDefault();
+    if (submitting) return;
     if (!validate()) return;
     setSubmitting(true);
     try {

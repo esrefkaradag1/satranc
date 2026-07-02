@@ -963,6 +963,12 @@ const StudentDetail: React.FC<{
   }, [studentId, homeworks, homeworkAttempts]);
 
   React.useEffect(() => {
+    if (studentId) {
+      window.scrollTo(0, 0);
+    }
+  }, [studentId]);
+
+  React.useEffect(() => {
     if (student) {
       setLichessInput(student.lichessUsername ?? '');
       setChessComInput(student.chessComUsername ?? '');
@@ -1167,7 +1173,23 @@ const StudentDetail: React.FC<{
                 : 'unpaid';
     const duesDebt = expectedThisYear > 0 ? Math.max(0, expectedThisYear - totalPaidThisYear) : 0;
 
-    return { status, duesState, monthlyFee, year, totalAttendance, attendanceRate, totalPaidThisYear, expectedThisYear, duesDebt, paidMonthsSummary };
+    // Calculate active dues debt up to current month (excluding future months)
+    const currentMonth = new Date().getMonth() + 1; // 1-indexed
+    let activeDuesDebt = 0;
+    if (student.registrationType !== 'package' && !student.isScholarshipStudent) {
+      for (let m = 1; m <= 12; m++) {
+        if (m > currentMonth) continue; // Exclude future months
+        if (isMonthBeforeRegistration(student, calendarYearForDerived, m)) continue;
+
+        const dueInfo = getExpectedDueForMonth(student, calendarYearForDerived, m, trainingGroups, disciplineBranches);
+        const paidForMonth = monthPayments[m] ?? 0;
+        if (paidForMonth < dueInfo.expected) {
+          activeDuesDebt += (dueInfo.expected - paidForMonth);
+        }
+      }
+    }
+
+    return { status, duesState, monthlyFee, year, totalAttendance, attendanceRate, totalPaidThisYear, expectedThisYear, duesDebt, paidMonthsSummary, activeDuesDebt };
   }, [student, studentAttendances, studentTransactions, calendarYearForDerived, trainingGroups, disciplineBranches]);
 
   /** Takvimde gösterilen yıl (mevcut yıl); aidat takvimi bu yıla göre doldurulur */
@@ -1240,55 +1262,100 @@ const StudentDetail: React.FC<{
    </div>
 
    {/* Profile content */}
-   <div className="relative z-10 px-4 sm:px-8 pb-4 sm:pb-6 pt-1 sm:pt-2">
-     <div className="flex flex-col gap-3 sm:gap-4 lg:flex-row lg:gap-6 items-start">
-       {/* Avatar + Info */}
-       <div className="flex items-center gap-3 sm:gap-5 flex-1 min-w-0 w-full">
-         <div className="w-14 h-14 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-xl sm:rounded-2xl bg-gradient-to-br from-indigo-500/30 to-violet-500/30 border-2 border-white/20 flex items-center justify-center text-base sm:text-3xl font-black text-white shadow-xl sm:shadow-2xl shadow-indigo-500/20 overflow-hidden shrink-0 backdrop-blur-sm">
-           {student.photoUrl ? (
-             <img src={student.photoUrl} alt={student.name} className="w-full h-full object-cover" />
-           ) : (
-             <span className="bg-gradient-to-br from-indigo-400 to-violet-400 bg-clip-text text-transparent">{initials(student.name)}</span>
-           )}
-         </div>
-         <div className="min-w-0 flex-1">
-           <h1 className="text-base sm:text-2xl md:text-3xl font-black tracking-tight text-white drop-shadow-lg leading-tight line-clamp-2">{student.name}</h1>
-           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-1.5 sm:mt-2">
-             <span className="inline-flex items-center px-2 py-0.5 sm:px-3 sm:py-1 rounded-md sm:rounded-lg bg-white/10 backdrop-blur-sm text-white/80 text-[10px] sm:text-xs font-semibold border border-white/10">
-               {student.branch || 'Branş yok'}
-             </span>
-             <span className="inline-flex items-center px-2 py-0.5 sm:px-3 sm:py-1 rounded-md sm:rounded-lg bg-white/10 backdrop-blur-sm text-white/80 text-[10px] sm:text-xs font-semibold border border-white/10">
-               {student.group || 'Grup yok'}
-             </span>
-             <span className="sm:hidden">{statusBadge}</span>
-           </div>
-           <div className="hidden sm:block mt-2 sm:mt-3">{statusBadge}</div>
-         </div>
-       </div>
+    <div className="relative z-10 px-4 sm:px-8 pb-4 sm:pb-6 pt-1 sm:pt-2">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-center">
+        {/* Left side: Avatar + Info */}
+        <div className="lg:col-span-2 flex items-center gap-4 sm:gap-6 min-w-0 w-full">
+          <div className="relative shrink-0">
+            <div className="w-16 h-16 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl bg-gradient-to-br from-indigo-500/30 to-violet-500/30 border-2 border-white/20 flex items-center justify-center text-lg sm:text-3xl font-black text-white shadow-2xl overflow-hidden backdrop-blur-sm">
+              {student.photoUrl ? (
+                <img src={student.photoUrl} alt={student.name} className="w-full h-full object-cover" />
+              ) : (
+                <span className="bg-gradient-to-br from-indigo-400 to-violet-400 bg-clip-text text-transparent">{initials(student.name)}</span>
+              )}
+            </div>
+            {/* Status dot on Avatar */}
+            <span className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-4 border-slate-900 flex items-center justify-center ${derived.status === 'active' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                derived.status === 'active' 
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+              }`}>
+                {derived.status === 'active' ? 'Aktif' : 'Pasif'}
+              </span>
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-[9px] font-black uppercase tracking-wider">
+                {student.registrationType === 'package' ? 'Paket' : 'Aylık Aidat'}
+              </span>
+            </div>
+            <h1 className="text-xl sm:text-2xl md:text-3.5xl font-extrabold tracking-tight text-white drop-shadow-md leading-tight break-words">
+              {student.name}
+            </h1>
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <span className="inline-flex items-center px-3 py-1 rounded-xl bg-white/5 backdrop-blur-sm text-slate-300 text-xs font-semibold border border-white/[0.05]">
+                {student.branch || 'Branş Belirtilmemiş'}
+              </span>
+              <span className="inline-flex items-center px-3 py-1 rounded-xl bg-white/5 backdrop-blur-sm text-slate-300 text-xs font-semibold border border-white/[0.05]">
+                {student.group || 'Grup Belirtilmemiş'}
+              </span>
+            </div>
+          </div>
+        </div>
 
-       {/* Quick info chips — mobilde yatay kaydırma */}
-       <div className="flex sm:grid sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 w-full lg:w-auto overflow-x-auto scrollbar-none snap-x snap-mandatory -mx-1 px-1 pb-0.5 sm:overflow-visible sm:mx-0 sm:px-0 sm:pb-0">
-         <div className="shrink-0 snap-start min-w-[7.25rem] sm:min-w-0 rounded-lg sm:rounded-xl bg-white/[0.08] backdrop-blur-lg border border-white/10 px-3 py-2 sm:px-4 sm:py-3 sm:hover:bg-white/[0.12] transition-colors">
-           <div className="text-[8px] sm:text-[9px] font-bold text-white/50 uppercase tracking-widest">Öğrenci No</div>
-           <div className="text-xs sm:text-sm font-bold text-indigo-300 mt-0.5 font-mono">#{getDisplayStudentNo(student, students)}</div>
-           <button type="button" onClick={() => navigator.clipboard.writeText(String(getDisplayStudentNo(student, students)))} className="text-[8px] sm:text-[9px] text-white/40 mt-0.5 hover:text-indigo-300 transition-colors text-left">Kopyala</button>
-         </div>
-         <div className="shrink-0 snap-start min-w-[7.25rem] sm:min-w-0 rounded-lg sm:rounded-xl bg-white/[0.08] backdrop-blur-lg border border-white/10 px-3 py-2 sm:px-4 sm:py-3 sm:hover:bg-white/[0.12] transition-colors">
-           <div className="text-[8px] sm:text-[9px] font-bold text-white/50 uppercase tracking-widest">TC</div>
-           <div className="text-xs sm:text-sm font-bold text-white mt-0.5 truncate">{student.tcNo || '—'}</div>
-         </div>
-         <div className="shrink-0 snap-start min-w-[7.25rem] sm:min-w-0 rounded-lg sm:rounded-xl bg-white/[0.08] backdrop-blur-lg border border-white/10 px-3 py-2 sm:px-4 sm:py-3 sm:hover:bg-white/[0.12] transition-colors">
-           <div className="text-[8px] sm:text-[9px] font-bold text-white/50 uppercase tracking-widest">Yaş</div>
-           <div className="text-xs sm:text-sm font-bold text-white mt-0.5">{ageFromBirthDate(student.birthDate) ?? '—'}</div>
-         </div>
-         <div className="shrink-0 snap-start min-w-[7.25rem] sm:min-w-0 rounded-lg sm:rounded-xl bg-white/[0.08] backdrop-blur-lg border border-white/10 px-3 py-2 sm:px-4 sm:py-3 sm:hover:bg-white/[0.12] transition-colors">
-           <div className="text-[8px] sm:text-[9px] font-bold text-white/50 uppercase tracking-widest">Şube</div>
-           <div className="text-xs sm:text-sm font-bold text-white mt-0.5 truncate">{student.branchOffice || '—'}</div>
-         </div>
-       </div>
-     </div>
+        {/* Right side: 2x2 Grid of Stats */}
+        <div className="lg:col-span-1 grid grid-cols-2 gap-3 w-full shrink-0 lg:max-w-md">
+          {/* Card 1: Öğrenci No */}
+          <div className="rounded-2xl bg-white/[0.03] backdrop-blur-lg border border-white/[0.06] p-3 hover:bg-white/[0.06] transition-all duration-300 group relative">
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">Öğrenci No</span>
+                <span className="text-sm font-extrabold text-indigo-300 mt-1 block font-mono">
+                  #{getDisplayStudentNo(student, students)}
+                </span>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => {
+                  navigator.clipboard.writeText(String(getDisplayStudentNo(student, students)));
+                  showToast('Öğrenci numarası kopyalandı!', 'success');
+                }} 
+                className="p-1 rounded-lg bg-white/5 hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-300 transition-all opacity-0 group-hover:opacity-100"
+                title="Kopyala"
+              >
+                <Copy className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
 
-     {/* Actions */}
+          {/* Card 2: TC No */}
+          <div className="rounded-2xl bg-white/[0.03] backdrop-blur-lg border border-white/[0.06] p-3 hover:bg-white/[0.06] transition-all duration-300">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">T.C. Kimlik</span>
+            <span className="text-sm font-extrabold text-white mt-1 block truncate" title={student.tcNo || ''}>
+              {student.tcNo || '—'}
+            </span>
+          </div>
+
+          {/* Card 3: Yaş */}
+          <div className="rounded-2xl bg-white/[0.03] backdrop-blur-lg border border-white/[0.06] p-3 hover:bg-white/[0.06] transition-all duration-300">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">Yaş</span>
+            <span className="text-sm font-extrabold text-white mt-1 block">
+              {ageFromBirthDate(student.birthDate) ?? '—'} <span className="text-[10px] text-slate-500 font-normal">Yaş</span>
+            </span>
+          </div>
+
+          {/* Card 4: Şube */}
+          <div className="rounded-2xl bg-white/[0.03] backdrop-blur-lg border border-white/[0.06] p-3 hover:bg-white/[0.06] transition-all duration-300">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">Şube</span>
+            <span className="text-sm font-extrabold text-white mt-1 block truncate" title={student.branchOffice || ''}>
+              {student.branchOffice || '—'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+{/* Actions */}
      <div className="mt-3 sm:mt-6 grid grid-cols-4 sm:flex sm:flex-wrap gap-1.5 sm:gap-2.5">
        <ActionPill tone="outline" icon={<Edit2 className="w-4 h-4" />} label="Düzenle" onClick={() => setShowEditModal(true)} />
        <ActionPill tone="outline" icon={<Power className="w-4 h-4" />} label="Durum" onClick={() => { setStatusModalValue(student.status === 'inactive' ? 'inactive' : 'active'); setShowStatusModal(true); }} />
@@ -1563,27 +1630,29 @@ const StudentDetail: React.FC<{
  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
  <StatTile icon={<CalendarCheck className="w-5 h-5" />} title="Devam Oranı (30 Gün)" value={derived.attendanceRate} accent="indigo" />
 <StatTile
- icon={<BadgeCheck className="w-5 h-5" />}
- title="Aidat Durumu"
- value={
-   derived.duesState === 'scholarship'
-     ? 'Burslu'
-     : derived.duesState === 'package'
-       ? 'Paket'
-       : `₺${Number(derived.totalPaidThisYear).toLocaleString('tr-TR')}`
- }
- subtitle={
-   derived.duesState === 'scholarship'
-     ? 'Aidat ödemesi yok'
-     : derived.duesState === 'package'
-       ? 'Paket kaydı'
-       : derived.totalPaidThisYear > 0
-         ? `${derived.paidMonthsSummary}${derived.duesDebt > 0 ? ` · Kalan ₺${Number(derived.duesDebt).toLocaleString('tr-TR')}` : ''}`
-         : derived.expectedThisYear > 0
-           ? `Beklenen: ₺${Number(derived.expectedThisYear).toLocaleString('tr-TR')}`
-           : 'Henüz ödeme yok'
- }
- accent="emerald"
+  icon={derived.activeDuesDebt > 0 ? <XCircle className="w-5 h-5" /> : <BadgeCheck className="w-5 h-5" />}
+  title="Aidat Durumu"
+  value={
+    derived.duesState === 'scholarship'
+      ? 'Burslu'
+      : derived.duesState === 'package'
+        ? 'Paket'
+        : derived.activeDuesDebt > 0
+          ? `₺${Number(derived.activeDuesDebt).toLocaleString('tr-TR')}`
+          : `₺${Number(derived.totalPaidThisYear).toLocaleString('tr-TR')}`
+  }
+  subtitle={
+    derived.duesState === 'scholarship'
+      ? 'Aidat ödemesi yok'
+      : derived.duesState === 'package'
+        ? 'Paket kaydı'
+        : derived.activeDuesDebt > 0
+          ? `Ödenmemiş Borç · Kalan: ₺${Number(derived.activeDuesDebt).toLocaleString('tr-TR')}`
+          : derived.totalPaidThisYear > 0
+            ? `Ödemeler tamamlandı · Toplam: ₺${Number(derived.totalPaidThisYear).toLocaleString('tr-TR')}`
+            : 'Ödeme bulunmamaktadır'
+  }
+  accent={derived.activeDuesDebt > 0 ? 'rose' : 'emerald'}
 />
  <StatTile icon={<Users className="w-5 h-5" />} title="Toplam Devam" value={derived.totalAttendance} accent="violet" />
  <StatTile icon={<Calendar className="w-5 h-5" />} title="Kayıt Tarihi" value={formatDateTR(student.registrationDate)} accent="amber" />

@@ -26,6 +26,9 @@ import {
  disciplineNamesForOffice,
  findTrainingGroupByName,
  mergeBranchOffices,
+ getExpectedDuesForYear,
+ isMonthBeforeRegistration,
+ getExpectedDueForMonth,
 } from '../lib/trainingGroupUtils';
 import { APPLICATIONS_UPDATED_EVENT, loadApplicationListMetaAsync, loadApplicationPhotoMapAsync } from'../services/applicationStorage';
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
@@ -51,7 +54,7 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast } = useApp();
+ const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast, scopedTransactions: transactions } = useApp();
  const isAdmin = auth?.role === 'admin';
  const isCoach = auth?.role === 'coach';
  const baseStudents = scopedStudents;
@@ -378,18 +381,52 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setIsModalOpen(false);
  };
 
- const formatDues = (s: Student) => {
- if (s.registrationType === 'package') return 'Ders paketi';
- if (s.isScholarshipStudent) return <span className="text-emerald-400 font-semibold">Burslu</span>;
- let fee = '—';
- if (s.monthlyFee != null) {
-   const net = applySiblingDiscount(Number(s.monthlyFee), s).finalFee;
-   fee = `₺${Number(net).toLocaleString('tr-TR')}`;
- }
- if (s.paymentStatus === 'Unpaid') return <span>{fee} <span className="text-rose-400 font-semibold">Borç</span></span>;
- if (s.paymentStatus === 'Partial') return <span className="text-amber-400">{fee} Kısmi</span>;
- return <span className="text-emerald-400">{fee} Ödendi</span>;
- };
+  const formatDues = (s: Student) => {
+    if (s.registrationType === 'package') return 'Ders paketi';
+    if (s.isScholarshipStudent) return <span className="text-emerald-400 font-semibold">Burslu</span>;
+
+    // Calculate dynamic dues debt matching the calendar up to current month (excluding future months)
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1; // 1-indexed (July is 7)
+    
+    const studentTransactions = transactions.filter(
+      (t) => t.studentId === s.id && t.type === 'income'
+    );
+    let totalPaidThisYear = 0;
+    studentTransactions.forEach((t) => {
+      const d = t.date || '';
+      if (d.slice(0, 4) === String(currentYear)) {
+        totalPaidThisYear += t.amount || 0;
+      }
+    });
+
+    let expectedUpToNow = 0;
+    for (let m = 1; m <= 12; m++) {
+      if (m > currentMonth) continue; // Exclude future months
+      if (isMonthBeforeRegistration(s, currentYear, m)) continue;
+
+      const dueInfo = getExpectedDueForMonth(s, currentYear, m, scopedTrainingGroups, scopedDisciplineBranches);
+      expectedUpToNow += dueInfo.expected;
+    }
+
+    const duesDebt = expectedUpToNow > 0 ? Math.max(0, expectedUpToNow - totalPaidThisYear) : 0;
+
+    if (duesDebt > 0) {
+      return (
+        <span>
+          ₺{Number(duesDebt).toLocaleString('tr-TR')}{' '}
+          <span className="text-rose-400 font-semibold">Borç</span>
+        </span>
+      );
+    }
+
+    let fee = '—';
+    if (s.monthlyFee != null) {
+      const net = applySiblingDiscount(Number(s.monthlyFee), s).finalFee;
+      fee = `₺${Number(net).toLocaleString('tr-TR')}`;
+    }
+    return <span className="text-emerald-400">{fee} Ödendi</span>;
+  };
 
  return (
  <div className="space-y-4 sm:space-y-6 min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20 lg:pb-0">

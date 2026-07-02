@@ -47,23 +47,24 @@ function upsertLocalApplication(app: StudentApplication) {
 function rowToApp(row: Record<string, unknown>): StudentApplication {
   const listName = row.app_name ?? row.appName;
   const fromListCols = listName != null && String(listName).trim() !== '';
-  const data = fromListCols
-    ? {
-        name: row.app_name,
-        tcNo: row.app_tc_no,
-        branchOffice: row.app_branch_office,
-        group: row.app_group,
-        birthDate: row.app_birth_date,
-        clubId: row.app_club_id,
-        studentId: row.app_student_id,
-        fatherPhone: row.app_father_phone,
-        motherPhone: row.app_mother_phone,
-        hasPhoto: row.has_photo,
-        hasSignature: row.has_signature,
-      }
-    : row.data && typeof row.data === 'object' && !Array.isArray(row.data)
+  const data =
+    row.data && typeof row.data === 'object' && !Array.isArray(row.data)
       ? (row.data as Record<string, unknown>)
-      : row;
+      : fromListCols
+        ? {
+            name: row.app_name,
+            tcNo: row.app_tc_no,
+            branchOffice: row.app_branch_office,
+            group: row.app_group,
+            birthDate: row.app_birth_date,
+            clubId: row.app_club_id,
+            studentId: row.app_student_id,
+            fatherPhone: row.app_father_phone,
+            motherPhone: row.app_mother_phone,
+            hasPhoto: row.has_photo,
+            hasSignature: row.has_signature,
+          }
+        : row;
   const hasPhoto = data.hasPhoto === true || data.hasPhoto === 'true';
   const hasSignature = data.hasSignature === true || data.hasSignature === 'true';
   const fatherPhone = String(data.fatherPhone ?? '');
@@ -401,7 +402,6 @@ export async function loadSignedApplicationsByStudentId(
   );
 }
 
-/** Öğrenciye bağlı tüm başvurular (imzalı + bekleyen) */
 export async function loadApplicationsByStudentId(
   studentId: string
 ): Promise<StudentApplication[]> {
@@ -411,7 +411,7 @@ export async function loadApplicationsByStudentId(
       const { data, error } = await client
         .from(TABLE)
         .select('*')
-        .eq('data->>studentId', studentId)
+        .or(`app_student_id.eq.${studentId},data->>studentId.eq.${studentId}`)
         .order('created_at', { ascending: false });
       if (!error && data?.length) {
         return data.map((r) => rowToApp(r as Record<string, unknown>));
@@ -421,9 +421,26 @@ export async function loadApplicationsByStudentId(
     }
   }
   const list = await loadApplicationsListAsync();
-  return list
+  const filtered = list
     .filter((a) => a.studentId === studentId)
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+  if (filtered.length > 0 && isSupabaseBackend()) {
+    try {
+      const fullList = await Promise.all(
+        filtered.map(async (app) => {
+          if (app.photoDataUrl === '__HAS_PHOTO__' || app.signatureDataUrl === '__HAS_SIGNATURE__') {
+            return (await loadApplicationByIdAsync(app.id)) ?? app;
+          }
+          return app;
+        })
+      );
+      return fullList;
+    } catch {
+      // ignore and return filtered
+    }
+  }
+  return filtered;
 }
 
 /** Kayıtlı başvuru yoksa öğrenci bilgilerinden form önizlemesi */
@@ -628,6 +645,66 @@ export async function deleteApplicationAsync(id: string): Promise<void> {
 export async function createApplicationAsync(
   input: Omit<StudentApplication, 'id' | 'applicationNo' | 'status' | 'createdAt' | 'updatedAt'>
 ): Promise<StudentApplication> {
+  const cleanTc = input.tcNo?.replace(/\D/g, '') || '';
+  const cleanName = input.name?.trim() || '';
+
+  // 1. Local duplicate check (instantly catches double-submits and page refreshes)
+  const localList = readLocal();
+  const localDup = localList.find((a) => {
+    if (cleanTc && a.tcNo?.replace(/\D/g, '') === cleanTc) return true;
+    if (cleanName && a.name?.trim().toLowerCase() === cleanName.toLowerCase()) {
+      const inputPhone = input.phones?.[0]?.replace(/\D/g, '');
+      const existingPhone = a.phones?.[0]?.replace(/\D/g, '');
+      if (inputPhone && existingPhone && inputPhone === existingPhone) return true;
+    }
+    return false;
+  });
+
+  if (localDup) {
+    console.log('[Applications] Duplicate found in local storage:', localDup.applicationNo);
+    return localDup;
+  }
+
+  // 2. Supabase duplicate check (catches cross-browser/cross-device duplicates)
+  if (isSupabaseBackend()) {
+    try {
+      const client = getServiceSupabase() ?? supabase;
+      if (cleanTc) {
+        const { data } = await client
+          .from(TABLE)
+          .select('data')
+          .eq('app_tc_no', cleanTc)
+          .limit(1);
+        if (data && data.length > 0) {
+          const app = rowToApp(data[0].data as Record<string, unknown>);
+          console.log('[Applications] Duplicate TC found in Supabase:', app.applicationNo);
+          upsertLocalApplication(app);
+          return app;
+        }
+      }
+
+      if (cleanName) {
+        const phone = input.phones?.[0]?.replace(/\D/g, '') || '';
+        if (phone) {
+          const { data } = await client
+            .from(TABLE)
+            .select('data')
+            .eq('app_name', cleanName)
+            .or(`app_father_phone.eq.${phone},app_mother_phone.eq.${phone}`)
+            .limit(1);
+          if (data && data.length > 0) {
+            const app = rowToApp(data[0].data as Record<string, unknown>);
+            console.log('[Applications] Duplicate Name+Phone found in Supabase:', app.applicationNo);
+            upsertLocalApplication(app);
+            return app;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Applications] Duplicate check failed, creating new:', e);
+    }
+  }
+
   const year = new Date().getFullYear();
   const seq = (await countApplicationsForYear(year)) + 1;
   const now = new Date().toISOString();

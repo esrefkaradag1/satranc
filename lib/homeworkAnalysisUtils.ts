@@ -27,10 +27,11 @@ export function countPerPuzzleResults(
     const forPuzzle = attempts.filter((a) => a.puzzleId === puzzleId);
     if (forPuzzle.length === 0) {
       skipped += 1;
-    } else if (forPuzzle.some((a) => a.correct)) {
-      correct += 1;
     } else {
-      wrong += 1;
+      if (forPuzzle.some((a) => a.correct)) {
+        correct += 1;
+      }
+      wrong += forPuzzle.filter((a) => !a.correct).length;
     }
   }
   return { correct, wrong, skipped };

@@ -381,6 +381,32 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     return null;
   }, [students, studentId, apiStudent]);
 
+  const studentWeeklyLessons = useMemo(() => {
+    if (!student) return [];
+    
+    // If student has a customized lessonSchedule, use it
+    if (student.lessonSchedule && student.lessonSchedule.length > 0) {
+      const customLessons = student.lessonSchedule.map((slot, idx) => ({
+        id: `custom-slot-${student.id}-${idx}`,
+        day: slot.dayLabel || (slot.dayOfWeek === 1 ? 'Pazartesi' : slot.dayOfWeek === 2 ? 'Salı' : slot.dayOfWeek === 3 ? 'Çarşamba' : slot.dayOfWeek === 4 ? 'Perşembe' : slot.dayOfWeek === 5 ? 'Cuma' : slot.dayOfWeek === 6 ? 'Cumartesi' : 'Pazar'),
+        startTime: slot.startTime || '13:00',
+        endTime: slot.endTime || '18:30',
+        group: student.group || '',
+        topic: student.group || 'Ders',
+      }));
+      
+      // Combine with private lessons for this student
+      const privateLessons = lessons.filter((l) => String(l.studentId ?? '') === String(student.id));
+      return [...customLessons, ...privateLessons];
+    }
+    
+    // Otherwise, fallback to the group's default lessons
+    return filterLessonsToActiveGroups(lessons, trainingGroups).filter((l) => {
+      if (l.studentId) return String(l.studentId) === String(studentId);
+      return (l.group || '').trim().toLowerCase() === (student.group || '').trim().toLowerCase();
+    });
+  }, [student, lessons, trainingGroups, studentId]);
+
   const refreshTodayExternalStats = useCallback(async () => {
     if (!student) {
       setTodayExternalGameCount(0);
@@ -1062,10 +1088,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         {activeTab === 'schedule' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <ScheduleWeeklyView
-              lessons={filterLessonsToActiveGroups(lessons, trainingGroups).filter((l) => {
-                if (l.studentId) return String(l.studentId) === String(studentId);
-                return (l.group || '').trim().toLowerCase() === (student.group || '').trim().toLowerCase();
-              })}
+              lessons={studentWeeklyLessons}
               readOnly
               title="Ders Programı"
               subtitle="Haftalık antrenman çizelgesi"

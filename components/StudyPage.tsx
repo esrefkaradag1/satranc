@@ -29,7 +29,7 @@ import {
   DEFAULT_FEN, genId, migrateChapter, migrateStudy, setFenTurn, makeBuilderGame, applyMove,
   buildPgn, parsePgnBlockToMoves, engineLevelFromDifficulty, 
   cpLossThresholdForDifficulty, chapterModeBadge, formatChapterListLabel, chapterListLabelMatches,
-  loadEditorSelection, saveEditorSelection, EMOJIS, LICHESS_PIECE, studyDisplayEmoji
+  loadEditorSelection, saveEditorSelection, EMOJIS, LICHESS_PIECE, studyDisplayEmoji, describeGameOutcome
 } from '../lib/studyUtils';
 import { parsePgnBlockToChapter } from '../lib/pgnChapterParse';
 import { defaultChapterPgnTags, setPgnTagValue, buildStudyBoardPgnDisplay } from '../lib/studyPgnTags';
@@ -239,6 +239,7 @@ const StudyPage: React.FC = () => {
   // Bottom toolbar
   const [bottomTab, setBottomTab] = useState<BottomTab>('tags');
   const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
+  const [viewingStudentHistoryIdx, setViewingStudentHistoryIdx] = useState<number | null>(null);
 
   // REC mode
   const [recording, setRecording] = useState(true);
@@ -495,6 +496,11 @@ const StudyPage: React.FC = () => {
       }
     }
   }, [auth, viewingStudentId, selectedStudy?.practiceLogs]);
+
+  // Reset spectator history index when viewing student changes
+  useEffect(() => {
+    setViewingStudentHistoryIdx(null);
+  }, [viewingStudentId]);
 
   const chatMessages = selectedStudy?.chatMessages ?? [];
 
@@ -939,8 +945,20 @@ const StudyPage: React.FC = () => {
   const availableStudentsToAdd = useMemo(() => {
     if (!selectedStudy) return [];
     const memberSet = new Set(selectedStudy.memberIds.map(String));
-    return students.filter((s) => !memberSet.has(String(s.id)));
+    return students
+      .filter((s) => !memberSet.has(String(s.id)))
+      .sort((a, b) => a.name.localeCompare(b.name, 'tr'));
   }, [selectedStudy, students]);
+
+  const studentsByGroup = useMemo(() => {
+    const map: Record<string, Student[]> = {};
+    for (const s of availableStudentsToAdd) {
+      const g = s.group || 'Diğer / Grupsuz';
+      if (!map[g]) map[g] = [];
+      map[g].push(s);
+    }
+    return map;
+  }, [availableStudentsToAdd]);
 
   const availableCoachesToAdd = useMemo(() => {
     if (!selectedStudy) return [];
@@ -992,17 +1010,99 @@ const StudyPage: React.FC = () => {
     };
   }, [getVsComputerHistory, selectedStudy?.chapters]);
 
+  const viewingStudentPresenceRow = useMemo(() => {
+    return viewingStudentId ? presenceByUserId[String(viewingStudentId)] : null;
+  }, [viewingStudentId, presenceByUserId]);
+
+  const viewingStudentPresence = useMemo(() => {
+    return formatPresence(viewingStudentPresenceRow);
+  }, [formatPresence, viewingStudentPresenceRow]);
+
+  const viewingStudent = useMemo(() => {
+    return viewingStudentId ? students.find(s => String(s.id) === String(viewingStudentId)) : null;
+  }, [students, viewingStudentId]);
+
+  const viewingStudentVcHistory = useMemo(() => viewingStudentPresence?.vcHistory ?? [], [viewingStudentPresence]);
+
+  const viewingStudentMovePairs = useMemo(() => {
+    return Array.from({ length: Math.ceil(viewingStudentVcHistory.length / 2) }, (_, i) => ({
+      moveNo: i + 1,
+      white: viewingStudentVcHistory[i * 2] || '',
+      black: viewingStudentVcHistory[i * 2 + 1] || '',
+    }));
+  }, [viewingStudentVcHistory]);
+
+  const isViewingStudentGameOver = !!viewingStudentPresence?.gameOver;
+
+  const viewingStudentOutcome = useMemo(() => {
+    if (!isViewingStudentGameOver || !viewingStudentPresence?.vsComputer) return null;
+    const startFen = selectedChapter?.fen || DEFAULT_FEN;
+    return describeGameOutcome(startFen, viewingStudentVcHistory);
+  }, [isViewingStudentGameOver, viewingStudentPresence?.vsComputer, selectedChapter?.fen, viewingStudentVcHistory]);
+
+  const isViewingStudentThinking = !!viewingStudentPresence?.vcThinking;
+  const viewingStudentStatusLabel = isViewingStudentGameOver
+    ? 'Tamamlandı'
+    : isViewingStudentThinking
+      ? 'Bilgisayar düşünüyor'
+      : 'Canlı takip';
+
+  const viewingStudentVcPreviewFens = useMemo(() => {
+    if (!viewingStudentPresence?.vsComputer) return [] as string[];
+    const startFen = selectedChapter?.fen || DEFAULT_FEN;
+    const game = makeBuilderGame(startFen);
+    const fens: string[] = [];
+    for (let i = 0; i < viewingStudentVcHistory.length; i++) {
+      try {
+        if (!applyMove(game, viewingStudentVcHistory[i])) break;
+        fens[i] = game.fen();
+      } catch {
+        break;
+      }
+    }
+    return fens;
+  }, [viewingStudentPresence?.vsComputer, viewingStudentVcHistory, selectedChapter?.fen]);
+
+  const viewingStudentChapter = useMemo(() => {
+    if (!viewingStudentId || !viewingStudentPresence) return null;
+    if (viewingStudentPresence.vsComputer) {
+      return {
+        id: 'viewing-student',
+        title: 'Bilgisayara Karşı',
+        moves: viewingStudentVcHistory,
+        fen: viewingStudentPresence.vcFen || DEFAULT_FEN,
+      } as any;
+    }
+    return null;
+  }, [viewingStudentId, viewingStudentPresence, viewingStudentVcHistory]);
+
+  const studentEffectiveFen = viewingStudentPresence?.vsComputer
+    ? (viewingStudentHistoryIdx !== null
+        ? (viewingStudentHistoryIdx === -1 ? (selectedChapter?.fen || DEFAULT_FEN) : (viewingStudentVcPreviewFens[viewingStudentHistoryIdx] || DEFAULT_FEN))
+        : (viewingStudentPresence.vcFen || selectedChapter?.fen || DEFAULT_FEN))
+    : viewingStudentPresenceRow?.payload?.fen;
+
   // ── Navigation ────────────────────────────────────────────────────────────────
   const goStart = useCallback(() => {
     setHoverState(null);
+    if (viewingStudentId && viewingStudentPresence?.vsComputer) {
+      setViewingStudentHistoryIdx(-1);
+      return;
+    }
     setCurrentVariation(null);
     setOptionSquares({});
     setMoveFrom(null);
     setCurrentMoveIndex(0);
     void jumpToMoveIndex(0);
-  }, [jumpToMoveIndex]);
+  }, [jumpToMoveIndex, viewingStudentId, viewingStudentPresence?.vsComputer]);
+
   const goPrev  = useCallback(() => {
     setHoverState(null);
+    if (viewingStudentId && viewingStudentPresence?.vsComputer) {
+      const prevIdx = viewingStudentHistoryIdx === null ? viewingStudentVcHistory.length - 2 : viewingStudentHistoryIdx - 1;
+      setViewingStudentHistoryIdx(Math.max(-1, prevIdx));
+      return;
+    }
     if (currentVariation && selectedChapter) {
       const [mainLinePos, varGroupIdx, varMoveIdx] = currentVariation;
       if (varMoveIdx > 0) {
@@ -1021,9 +1121,21 @@ const StudyPage: React.FC = () => {
     setOptionSquares({});
     setMoveFrom(null);
     void jumpToMoveIndex(next);
-  }, [currentVariation, selectedChapter, currentMoveIndex, jumpToMoveIndex, jumpToVariation]);
+  }, [currentVariation, selectedChapter, currentMoveIndex, jumpToMoveIndex, jumpToVariation, viewingStudentId, viewingStudentPresence?.vsComputer, viewingStudentHistoryIdx, viewingStudentVcHistory.length]);
+
   const goNext  = useCallback(() => {
     setHoverState(null);
+    if (viewingStudentId && viewingStudentPresence?.vsComputer) {
+      if (viewingStudentHistoryIdx !== null) {
+        const nextIdx = viewingStudentHistoryIdx + 1;
+        if (nextIdx >= viewingStudentVcHistory.length) {
+          setViewingStudentHistoryIdx(null);
+        } else {
+          setViewingStudentHistoryIdx(nextIdx);
+        }
+      }
+      return;
+    }
     if (currentVariation && selectedChapter) {
       const [mainLinePos, varGroupIdx, varMoveIdx] = currentVariation;
       const line = selectedChapter.variations?.[mainLinePos]?.[varGroupIdx] ?? [];
@@ -1039,12 +1151,17 @@ const StudyPage: React.FC = () => {
     const next = Math.min(chapterMovesForUi.length, currentMoveIndex + 1);
     setCurrentVariation(null);
     void jumpToMoveIndex(next);
-  }, [selectedChapter, currentVariation, chapterMovesForUi.length, currentMoveIndex, jumpToMoveIndex, jumpToVariation]);
+  }, [selectedChapter, currentVariation, chapterMovesForUi.length, currentMoveIndex, jumpToMoveIndex, jumpToVariation, viewingStudentId, viewingStudentPresence?.vsComputer, viewingStudentHistoryIdx, viewingStudentVcHistory.length]);
+
   const goEnd   = useCallback(() => {
     setHoverState(null);
+    if (viewingStudentId && viewingStudentPresence?.vsComputer) {
+      setViewingStudentHistoryIdx(null);
+      return;
+    }
     setCurrentVariation(null);
     void jumpToMoveIndex(chapterMovesForUi.length);
-  }, [chapterMovesForUi.length, jumpToMoveIndex]);
+  }, [chapterMovesForUi.length, jumpToMoveIndex, viewingStudentId, viewingStudentPresence?.vsComputer]);
 
   const wheelPrev = useCallback(() => { setHoverState(null); goPrev(); }, [goPrev]);
   const wheelNext = useCallback(() => { setHoverState(null); goNext(); }, [goNext]);
@@ -1266,6 +1383,47 @@ const StudyPage: React.FC = () => {
 
   const addChapter = useCallback(() => openNewChapterModal('empty'), [openNewChapterModal]);
 
+  const importStudentGameAsChapter = useCallback(() => {
+    if (!selectedStudy || !viewingStudent || !viewingStudentPresence) return;
+
+    const title = `${viewingStudent.name || 'Öğrenci'} Oyun Sonu Analizi`;
+    const startFen = selectedChapter?.fen || DEFAULT_FEN;
+
+    const ch = migrateChapter({
+      id: genId(),
+      title,
+      fen: startFen,
+      moves: viewingStudentVcHistory,
+      orientation: selectedChapter?.orientation || 'white',
+      lessonMode: 'direct',
+      interactiveType: 'puzzle',
+      pgnTags: defaultChapterPgnTags(selectedStudy.title, title),
+    });
+
+    updateAndSaveStudy(selectedStudy.id, s => ({ ...s, chapters: [...s.chapters, ch] }));
+
+    const newIdx = selectedStudy.chapters.length;
+    setSelectedChapterIndex(newIdx);
+    setViewingStudentId(null);
+    setViewingStudentHistoryIdx(null);
+
+    setCurrentMoveIndex(viewingStudentVcHistory.length);
+    setCurrentVariation(null);
+    setOptionSquares({});
+    setLastMoveSquares({});
+    setMoveFrom(null);
+
+    showToast('Öğrenci oyunu yeni bölüm olarak çalışmaya eklendi. Artık üzerinde varyantlar oluşturup analiz edebilirsiniz.', 'success');
+  }, [
+    selectedStudy,
+    viewingStudent,
+    viewingStudentPresence,
+    selectedChapter,
+    viewingStudentVcHistory,
+    showToast,
+    updateAndSaveStudy,
+  ]);
+
   const handleNcFenFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1398,7 +1556,21 @@ const StudyPage: React.FC = () => {
   const addMember = useCallback((memberId: string) => {
     if (!selectedStudy || selectedStudy.memberIds.includes(memberId)) return;
     updateStudy({ memberIds: [...selectedStudy.memberIds, memberId] });
-    setShowAddMember(false);
+  }, [selectedStudy, updateStudy]);
+
+  const addMembers = useCallback((idsToAdd: string[]) => {
+    if (!selectedStudy || idsToAdd.length === 0) return;
+    const nextIds = [...selectedStudy.memberIds];
+    let changed = false;
+    for (const id of idsToAdd) {
+      if (!nextIds.includes(id)) {
+        nextIds.push(id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      updateStudy({ memberIds: nextIds });
+    }
   }, [selectedStudy, updateStudy]);
 
   const removeMember = useCallback((memberId: string) => {
@@ -1623,68 +1795,6 @@ const StudyPage: React.FC = () => {
     } catch { return null; }
   }, [currentVariation, moveListChapter]);
 
-  const viewingStudentPresenceRow = useMemo(() => {
-    return viewingStudentId ? presenceByUserId[String(viewingStudentId)] : null;
-  }, [viewingStudentId, presenceByUserId]);
-
-  const viewingStudentPresence = useMemo(() => {
-    return formatPresence(viewingStudentPresenceRow);
-  }, [formatPresence, viewingStudentPresenceRow]);
-
-  const viewingStudent = useMemo(() => {
-    return viewingStudentId ? students.find(s => String(s.id) === String(viewingStudentId)) : null;
-  }, [students, viewingStudentId]);
-
-  const viewingStudentVcHistory = useMemo(() => viewingStudentPresence?.vcHistory ?? [], [viewingStudentPresence]);
-
-  const viewingStudentMovePairs = useMemo(() => {
-    return Array.from({ length: Math.ceil(viewingStudentVcHistory.length / 2) }, (_, i) => ({
-      moveNo: i + 1,
-      white: viewingStudentVcHistory[i * 2] || '',
-      black: viewingStudentVcHistory[i * 2 + 1] || '',
-    }));
-  }, [viewingStudentVcHistory]);
-
-  const isViewingStudentGameOver = !!viewingStudentPresence?.gameOver;
-  const isViewingStudentThinking = !!viewingStudentPresence?.vcThinking;
-  const viewingStudentStatusLabel = isViewingStudentGameOver
-    ? 'Tamamlandı'
-    : isViewingStudentThinking
-      ? 'Bilgisayar düşünüyor'
-      : 'Canlı takip';
-
-  const viewingStudentVcPreviewFens = useMemo(() => {
-    if (!viewingStudentPresence?.vsComputer) return [] as string[];
-    const startFen = selectedChapter?.fen || DEFAULT_FEN;
-    const game = makeBuilderGame(startFen);
-    const fens: string[] = [];
-    for (let i = 0; i < viewingStudentVcHistory.length; i++) {
-      try {
-        if (!applyMove(game, viewingStudentVcHistory[i])) break;
-        fens[i] = game.fen();
-      } catch {
-        break;
-      }
-    }
-    return fens;
-  }, [viewingStudentPresence?.vsComputer, viewingStudentVcHistory, selectedChapter?.fen]);
-
-  const viewingStudentChapter = useMemo(() => {
-    if (!viewingStudentId || !viewingStudentPresence) return null;
-    if (viewingStudentPresence.vsComputer) {
-      return {
-        id: 'viewing-student',
-        title: 'Bilgisayara Karşı',
-        moves: viewingStudentVcHistory,
-        fen: viewingStudentPresence.vcFen || DEFAULT_FEN,
-      } as any;
-    }
-    return null;
-  }, [viewingStudentId, viewingStudentPresence, viewingStudentVcHistory]);
-
-  const studentEffectiveFen = viewingStudentPresence?.vsComputer
-    ? (viewingStudentPresence.vcFen || selectedChapter?.fen || DEFAULT_FEN)
-    : viewingStudentPresenceRow?.payload?.fen;
 
   const effectiveFen = (viewingStudentId && studentEffectiveFen)
     ? studentEffectiveFen
@@ -1889,13 +1999,13 @@ const StudyPage: React.FC = () => {
   const syncPathLen = syncState?.currentPath?.length ?? 0;
   /** Antrenör tahtası: motor pratiği hariç son hamleyi geri al (Ctrl+Z). REC kapalıyken hamleler yalnızca yerel silinir. */
   const canStudyUndo =
-    isCoachOrAdmin && !practiceMode && !!syncState && syncPathLen > 1;
+    canEditStudy && !practiceMode && !!syncState && syncPathLen > 1;
 
   const handleSquareClickInner = useCallback((square: string) => {
     if (!selectedChapter) return;
     const allowBoardMoveInput =
       recording ||
-      (ncMode === 'normal' && !practiceMode && !!syncState && isCoachOrAdmin);
+      (ncMode === 'normal' && !practiceMode && !!syncState && canEditStudy);
     if (!allowBoardMoveInput) return;
     const baselineFen = boardDisplayFen;
 
@@ -1955,7 +2065,7 @@ const StudyPage: React.FC = () => {
     const hasMoves = getMoveOptions(square);
     setMoveFrom(hasMoves ? square : null);
     if (!hasMoves) setOptionSquares({});
-  }, [recording, moveFrom, boardDisplayFen, selectedChapter, selectedChapterIndex, canRecordMove, isInVariation, currentVariation, currentMoveIndex, updateChapterAtIndex, getMoveOptions, recordVariation, appendToCurrentVariation, isRecordedMoveStrongEnough, syncState, makeMove, practiceMode, isCoachOrAdmin, ncMode]);
+  }, [recording, moveFrom, boardDisplayFen, selectedChapter, selectedChapterIndex, canRecordMove, isInVariation, currentVariation, currentMoveIndex, updateChapterAtIndex, getMoveOptions, recordVariation, appendToCurrentVariation, isRecordedMoveStrongEnough, syncState, makeMove, practiceMode, canEditStudy, ncMode]);
 
   const handlePieceDrop = useCallback(({ sourceSquare, targetSquare, piece }: { piece?: any; sourceSquare: string; targetSquare: string }) => {
     console.log('[StudyPage] Piece drop:', sourceSquare, targetSquare);
@@ -2105,12 +2215,12 @@ const StudyPage: React.FC = () => {
   }, [drawingColor, selectedChapter, selectedChapterIndex, updateChapterAtIndex]);
 
   const handleBoardSquareRightClick = useCallback((arg: unknown) => {
-    if (!isCoachOrAdmin) return;
+    if (!canEditStudy) return;
     const square = pickSquare(arg);
     if (!square) return;
     const markType = arrowCtrlShortcutHeld ? 'square' : 'circle';
     applySquareMarkAt(square, markType);
-  }, [isCoachOrAdmin, arrowCtrlShortcutHeld, applySquareMarkAt]);
+  }, [canEditStudy, arrowCtrlShortcutHeld, applySquareMarkAt]);
 
   const handleBoardPieceClick = useCallback((arg: unknown) => {
     if (drawingTool !== 'mouse') return;
@@ -2241,7 +2351,7 @@ const StudyPage: React.FC = () => {
   const canPlayBestMove = !!engineTopMove && (
     recording
     || practiceMode
-    || (ncMode === 'normal' && !practiceMode && !!syncState && isCoachOrAdmin)
+    || (ncMode === 'normal' && !practiceMode && !!syncState && canEditStudy)
   );
 
   const playBestMove = useCallback(() => {
@@ -2255,10 +2365,10 @@ const StudyPage: React.FC = () => {
       handlePracticeDrop(dragArgs);
       return;
     }
-    if (ncMode === 'normal' && !practiceMode && syncState && isCoachOrAdmin) {
+    if (ncMode === 'normal' && !practiceMode && syncState && canEditStudy) {
       handlePieceDrop(dragArgs);
     }
-  }, [engineTopMove, canPlayBestMove, recording, practiceMode, ncMode, syncState, isCoachOrAdmin, handlePieceDrop, handlePracticeDrop]);
+  }, [engineTopMove, canPlayBestMove, recording, practiceMode, ncMode, syncState, canEditStudy, handlePieceDrop, handlePracticeDrop]);
 
   useStudyKeyboardShortcuts({
     enabled: view === 'editor' && !!selectedStudy && !!selectedChapter,
@@ -2773,7 +2883,7 @@ const StudyPage: React.FC = () => {
   }, [selectedStudy, selectedChapter, auth, showToast]);
 
   const applyEnginePvLine = useCallback(async ({ uciMoves }: { uciMoves: string[]; plyIndex: number }) => {
-    if (!selectedChapter || !uciMoves.length || viewingStudentId || practiceMode || !isCoachOrAdmin) return;
+    if (!selectedChapter || !uciMoves.length || viewingStudentId || practiceMode || !canEditStudy) return;
 
     const sanMoves: string[] = [];
     try {
@@ -2860,7 +2970,7 @@ const StudyPage: React.FC = () => {
     selectedChapter,
     viewingStudentId,
     practiceMode,
-    isCoachOrAdmin,
+    canEditStudy,
     effectiveFen,
     isInVariation,
     currentVariation,
@@ -3723,7 +3833,7 @@ const StudyPage: React.FC = () => {
                                   {p.vsComputer ? 'VS COMPUTER' : p.sticky ? 'SYNC' : 'FREE'}
                                 </span>
                                 <span className="text-[10px] text-[#787472] truncate">
-                                  {p.chapterTitle} · {p.vsComputer ? `${p.vcHistory.length} hamle` : `ply ${p.ply}`}
+                                  {p.chapterTitle} · {p.vsComputer ? `${Math.ceil(p.vcHistory.length / 2)} hamle` : `ply ${p.ply}`}
                                 </span>
                               </div>
                             </div>
@@ -3909,7 +4019,7 @@ const StudyPage: React.FC = () => {
                           const dragArgs = { sourceSquare, targetSquare, piece: '' };
                           if (recording) return handlePieceDrop(dragArgs);
                           if (practiceMode) return handlePracticeDrop(dragArgs);
-                          if (ncMode === 'normal' && !practiceMode && syncState && isCoachOrAdmin) {
+                          if (ncMode === 'normal' && !practiceMode && syncState && canEditStudy) {
                             return handlePieceDrop(dragArgs);
                           }
                           return false;
@@ -3918,7 +4028,7 @@ const StudyPage: React.FC = () => {
                         onSquareRightClick: (arg: unknown) => handleBoardSquareRightClick(arg),
                         onPieceClick: (arg: unknown) => handleBoardPieceClick(arg),
                         allowDrawingArrows:
-                          isCoachOrAdmin &&
+                          canEditStudy &&
                           (drawingTool === 'mouse' || drawingTool === 'arrow' || arrowCtrlShortcutHeld),
                         arePiecesDraggable: drawingTool === 'mouse',
                         arrows: (() => {
@@ -4030,7 +4140,7 @@ const StudyPage: React.FC = () => {
               </div>
 
               {/* Drawing Toolbar Row (Coach Only) - Outside Board */}
-              {(auth?.role === 'admin' || auth?.role === 'coach') && (
+              {canEditStudy && (
                 <div className="w-full flex justify-center overflow-x-auto scrollbar-none mb-1 sm:mb-3">
                   <div className="inline-flex bg-[#1b1e23]/95 backdrop-blur-xl p-1 sm:p-2 rounded-xl border border-white/10 shadow-2xl">
                     <DrawingToolbar
@@ -4295,7 +4405,7 @@ const StudyPage: React.FC = () => {
                     </p>
                     {viewingStudentPresence?.vsComputer && (
                       <p className="text-[10px] font-bold text-slate-400 mt-0.5 truncate">
-                        {viewingStudentVcHistory.length} hamle · {viewingStudentMovePairs.length} sıra
+                        {Math.ceil(viewingStudentVcHistory.length / 2)} hamle
                       </p>
                     )}
                   </div>
@@ -4331,7 +4441,7 @@ const StudyPage: React.FC = () => {
                          </div>
                          <div className="flex-1 min-w-0">
                            <p className="text-xs font-bold text-slate-300 truncate group-hover:text-white transition-colors">{m.name}</p>
-                           <p className="text-[9px] text-slate-500 uppercase font-black tracking-tighter">{p.vcHistory.length} hamle yapıldı</p>
+                           <p className="text-[9px] text-slate-500 uppercase font-black tracking-tighter">{Math.ceil(p.vcHistory.length / 2)} hamle yapıldı</p>
                          </div>
                          <div className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center group-hover:bg-orange-500 group-hover:text-white text-slate-600 transition-all">
                            <Eye className="w-3.5 h-3.5" />
@@ -4354,9 +4464,23 @@ const StudyPage: React.FC = () => {
               {viewingStudentPresence?.vsComputer ? (
                 <div className="flex-1 overflow-hidden flex flex-col p-4 bg-[#1e293b]/50">
                   {isViewingStudentGameOver && (
-                    <div className="mb-4 bg-emerald-500/20 border border-emerald-500/50 rounded-lg p-3 text-center shadow-lg">
-                      <span className="text-emerald-400 font-bold text-sm tracking-wide">Oyun Bitti!</span>
-                      <p className="text-[10px] text-emerald-500/70 mt-1">Stockfish analizleri artık aktif.</p>
+                    <div className="mb-4 bg-emerald-500/20 border border-emerald-500/50 rounded-lg p-3 text-center shadow-lg space-y-2">
+                      <div>
+                        <span className="text-emerald-400 font-bold text-sm tracking-wide">
+                          {viewingStudentOutcome ? viewingStudentOutcome.title : 'Oyun Bitti!'}
+                        </span>
+                        <p className="text-[10px] text-emerald-400/80 mt-1">
+                          {viewingStudentOutcome ? viewingStudentOutcome.subtitle : 'Stockfish analizleri artık aktif.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={importStudentGameAsChapter}
+                        className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Import className="w-3.5 h-3.5" />
+                        Oyunu Bölüm Olarak Kaydet (Analiz)
+                      </button>
                     </div>
                   )}
 
@@ -4382,7 +4506,14 @@ const StudyPage: React.FC = () => {
                               <td data-label="#" className="py-2.5 pl-2 text-slate-600 font-bold bg-white/[0.02] rounded-l-lg group-hover:text-slate-400 transition-colors">{i + 1}.</td>
                               <td
                                 data-label="BEYAZ"
-                                className="py-2.5 px-2 font-bold text-slate-200 bg-white/[0.02] group-hover:bg-white/[0.04] transition-colors"
+                                className={`py-2.5 px-2 font-bold bg-white/[0.02] hover:bg-white/[0.1] hover:text-white cursor-pointer transition-colors ${
+                                  viewingStudentHistoryIdx === i * 2
+                                    ? 'bg-indigo-500/30 text-white font-black ring-1 ring-indigo-500/50'
+                                    : 'text-slate-200'
+                                }`}
+                                onClick={() => {
+                                  setViewingStudentHistoryIdx(i * 2);
+                                }}
                                 onMouseEnter={() => {
                                   const plyIdx = i * 2;
                                   const fen = viewingStudentVcPreviewFens[plyIdx];
@@ -4393,7 +4524,14 @@ const StudyPage: React.FC = () => {
                               </td>
                               <td
                                 data-label="SİYAH"
-                                className="py-2.5 px-2 font-bold text-indigo-400 bg-white/[0.02] rounded-r-lg group-hover:bg-white/[0.04] transition-colors"
+                                className={`py-2.5 px-2 font-bold bg-white/[0.02] rounded-r-lg hover:bg-white/[0.1] hover:text-white cursor-pointer transition-colors ${
+                                  viewingStudentHistoryIdx === i * 2 + 1
+                                    ? 'bg-indigo-500/30 text-white font-black ring-1 ring-indigo-500/50'
+                                    : 'text-indigo-400'
+                                }`}
+                                onClick={() => {
+                                  setViewingStudentHistoryIdx(i * 2 + 1);
+                                }}
                                 onMouseEnter={() => {
                                   const plyIdx = i * 2 + 1;
                                   const fen = viewingStudentVcPreviewFens[plyIdx];
@@ -5192,14 +5330,44 @@ const StudyPage: React.FC = () => {
                 </div>
               ) : null}
               <div>
-                <p className="px-2 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">Öğrenciler</p>
-                {availableStudentsToAdd.map(s => (
-                  <button key={s.id} type="button" onClick={() => addMember(s.id)} className="w-full flex items-center gap-4 p-4 rounded-2xl hover:bg-teal-500/10 group transition-all text-left">
-                    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center font-black text-slate-400 group-hover:bg-teal-500 group-hover:text-black transition-all">{s.name.charAt(0)}</div>
-                    <div className="flex-1"><p className="text-sm font-bold text-white leading-none mb-1">{s.name}</p><p className="text-[10px] text-slate-600 font-mono">#{s.id}</p></div>
-                    <Plus className="w-4 h-4 text-slate-700 group-hover:text-teal-400" />
-                  </button>
-                ))}
+                <p className="px-2 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">Öğrenciler (Gruplara Göre)</p>
+                <div className="space-y-3">
+                  {Object.entries(studentsByGroup).map(([groupName, groupStudents]) => (
+                    <div key={groupName} className="border border-white/5 rounded-2xl p-2.5 bg-slate-900/30">
+                      <div className="flex items-center justify-between px-1.5 pb-2 border-b border-white/5">
+                        <span className="text-[11px] font-black text-teal-400 uppercase tracking-wider truncate max-w-[180px]">
+                          {groupName} ({groupStudents.length})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => addMembers(groupStudents.map(s => s.id))}
+                          className="px-2.5 py-1 rounded bg-teal-500/20 text-teal-300 text-[9px] font-black uppercase hover:bg-teal-500 hover:text-black transition-all active:scale-95 shadow-sm"
+                        >
+                          Hepsini Ekle
+                        </button>
+                      </div>
+                      <div className="space-y-1 mt-2">
+                        {groupStudents.map((s) => (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => addMember(s.id)}
+                            className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-teal-500/10 group transition-all text-left"
+                          >
+                            <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-black text-slate-400 group-hover:bg-teal-500 group-hover:text-black transition-all text-xs shrink-0">
+                              {s.name.charAt(0)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-white leading-tight truncate">{s.name}</p>
+                              <p className="text-[9px] text-slate-600 font-mono leading-none mt-0.5">#{s.id}</p>
+                            </div>
+                            <Plus className="w-3.5 h-3.5 text-slate-700 group-hover:text-teal-400 shrink-0" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
                 {availableStudentsToAdd.length === 0 && availableCoachesToAdd.length === 0 && (
                   <p className="text-center py-12 text-[11px] text-slate-600 italic">Eklenebilecek üye kalmadı.</p>
                 )}

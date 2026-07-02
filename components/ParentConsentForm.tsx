@@ -82,6 +82,7 @@ const ParentConsentForm: React.FC<Props> = ({ token }) => {
 
   const handleSubmit = async (ev: React.FormEvent) => {
     ev.preventDefault();
+    if (submitting) return;
     if (!validate()) return;
     setSubmitting(true);
     try {

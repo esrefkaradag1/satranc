@@ -273,6 +273,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   }, [status, game, flushAttemptIfNeeded, onClose]);
 
   const tryAgain = useCallback(() => {
+    reportedRef.current = false;
     resetPlay({ keepHint: true });
   }, [resetPlay]);
 
@@ -312,6 +313,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
 
       if (ply >= solutionMoves.length) {
         setStatus('wrong');
+        reportAttempt(false, game.fen());
         return false;
       }
 
@@ -326,6 +328,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
           setMovesPlayed([...movesPlayedRef.current]);
         }
         setStatus('wrong');
+        reportAttempt(false, game.fen());
         return false;
       }
 
@@ -333,6 +336,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
         ?? copy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
       if (!played) {
         setStatus('wrong');
+        reportAttempt(false, game.fen());
         return false;
       }
 
@@ -342,7 +346,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       setGame(makeGameFromFen(copy.fen()));
       return true;
     },
-    [game, solutionMoves, solutionPly, status, autoPlaying, studentColor]
+    [game, solutionMoves, solutionPly, status, autoPlaying, studentColor, reportAttempt]
   );
 
   const handleDrop = useCallback(
@@ -351,10 +355,11 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
         return onPieceDrop(args.sourceSquare, args.targetSquare);
       } catch {
         setStatus('wrong');
+        reportAttempt(false, game.fen());
         return false;
       }
     },
-    [onPieceDrop]
+    [onPieceDrop, reportAttempt]
   );
 
   useEffect(() => {
