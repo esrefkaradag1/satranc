@@ -1,0 +1,49 @@
+{
+  "name": "netchess-academy",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run sync:stockfish && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit",
+    "sync:stockfish": "node scripts/sync-stockfish.mjs",
+    "postinstall": "node scripts/sync-stockfish.mjs",
+    "check:supabase": "node check-supabase.mjs",
+    "setup:selfhosted": "node scripts/setup-selfhosted-supabase.mjs"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
+    "@supabase/supabase-js": "^2.98.0",
+    "@tailwindcss/vite": "^4.2.0",
+    "agora-extension-virtual-background": "^2.1.0",
+    "agora-rtc-sdk-ng": "^4.24.3",
+    "chess.js": "^1.4.0",
+    "gsap": "^3.15.0",
+    "lucide-react": "^0.563.0",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.5.207",
+    "react": "^19.2.4",
+    "react-chessboard": "^5.10.0",
+    "react-dom": "^19.2.4",
+    "recharts": "^3.7.0",
+    "stockfish": "^18.0.7",
+    "stockfish.js": "^10.0.2",
+    "tailwindcss": "^4.2.0",
+    "three": "^0.184.0",
+    "zstd-codec": "^0.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "playwright": "^1.60.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}
