@@ -22,7 +22,8 @@ import {
   VS_COMPUTER_MAX_WAIT_MS,
   VS_COMPUTER_SEARCH_DEPTH,
 } from '../services/chessEngine';
-import { logStudyEvent } from '../studyEvents';
+import { logStudyEvent, loadStudyEvents } from '../studyEvents';
+import { studyEventsToMoveAnalysis } from '../lib/studyAnalysisEvents';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, squareMarksToStyles, SQUARE_MARK_BUTTON_PREVIEW, type SquareMarkColor } from '../lib/chessBoardUi';
 import { useStudyCall } from '../hooks/useStudyCall';
@@ -700,7 +701,31 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setChapterMoveAnalysis([]);
     if (!effectiveChapter) { setCurrentMoveIndex(0); return; }
     setCurrentMoveIndex(isLiveAnalysis ? totalMoves : 0);
-  }, [effectiveChapter?.id, totalMoves, studentPlaysColor, isLiveAnalysis]);
+
+    if (previewMode || !selectedStudy?.id || !effectiveChapter.id || !studentId) return;
+    let cancelled = false;
+    void loadStudyEvents(selectedStudy.id).then((events) => {
+      if (cancelled) return;
+      const rows = studyEventsToMoveAnalysis(
+        events.filter(
+          (event) =>
+            String(event.studentId) === String(studentId)
+            && event.chapterId === effectiveChapter.id,
+        ),
+      );
+      if (rows.length === 0) return;
+      setChapterMoveAnalysis(rows.map((row) => ({
+        id: row.id,
+        moveNo: row.moveNo,
+        played: row.playedSan,
+        expected: row.expectedSan,
+        isCorrect: row.isCorrect,
+        thinkMs: row.thinkMs,
+        atIso: row.atIso,
+      })));
+    });
+    return () => { cancelled = true; };
+  }, [effectiveChapter?.id, totalMoves, studentPlaysColor, isLiveAnalysis, previewMode, selectedStudy?.id, studentId]);
 
   /** Bulmacada sıra rakipteyse otomatik ilerle (Lichess çözüm hattı). */
   useEffect(() => {
@@ -1224,6 +1249,18 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           }
           return true;
         } else {
+          setChapterMoveAnalysis((prev) => [
+            ...prev,
+            {
+              id: `${now}-${prev.length}`,
+              moveNo: Math.floor(currentMoveIndex / 2) + 1,
+              played: result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
+              expected: expectedSan || '—',
+              isCorrect: false,
+              thinkMs,
+              atIso: new Date(now).toISOString(),
+            },
+          ]);
           showFeedback('wrong');
           logStudyEvent({
             studyId: selectedStudy?.id,
@@ -1701,8 +1738,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
            <h1 className="text-3xl font-black text-white uppercase tracking-tighter">Çalışmalar</h1>
            <div className="flex flex-wrap items-center gap-2">
              <div className="inline-flex rounded-xl border border-white/10 bg-slate-900/80 p-0.5">
-               <button type="button" onClick={() => setStudyListCategory('mine')} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${studyListCategory === 'mine' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}>Çalışmalarım ({myStudies.length})</button>
                <button type="button" onClick={() => setStudyListCategory('teacher')} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${studyListCategory === 'teacher' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}>Öğretmenin paylaştıkları ({teacherStudies.length})</button>
+               <button type="button" onClick={() => setStudyListCategory('mine')} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${studyListCategory === 'mine' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}>Çalışmalarım ({myStudies.length})</button>
              </div>
              {studyListCategory === 'mine' ? (
                <button type="button" onClick={createStudentStudy} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold uppercase tracking-wide"><Plus className="w-4 h-4" /> Yeni çalışma</button>

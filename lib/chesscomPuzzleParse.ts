@@ -162,8 +162,7 @@ export function selectHomeworkGoalPuzzles(
   const sorted = [...unique].sort(
     (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
   );
-  const passed = sorted.filter((a) => a.passed);
-  if (passed.length > 0) return passed.slice(0, puzzleTarget);
+  // Günlük hedef: kronolojik sırayla doğru + yanlış tüm denemeler (yalnızca doğrular değil).
   return sorted.slice(0, puzzleTarget);
 }
 

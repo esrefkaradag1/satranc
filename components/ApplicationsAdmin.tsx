@@ -19,6 +19,7 @@ import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
 import { photoUrlFromApplication } from '../lib/studentPhotoUpload';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { filterApplicationsByClub, getClubApplicationSlug } from '../lib/applicationClub';
+import ApplicationApproveModal, { type ApplicationApproveFormData } from './ApplicationApproveModal';
 
 const STATUS_LABEL: Record<ApplicationStatus, string> = {
   pending: 'Beklemede',
@@ -42,7 +43,7 @@ type ApplicationsAdminProps = {
 };
 
 const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName, clubSlug }) => {
-  const { addStudent, updateStudent, disciplines, students, scopedStudents, clubs, showToast, confirmDialog } = useApp();
+  const { addStudent, updateStudent, students, scopedStudents, clubs, showToast, confirmDialog } = useApp();
   const [list, setList] = useState<StudentApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -62,6 +63,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
     password: string;
   } | null>(null);
   const [credsCopied, setCredsCopied] = useState(false);
+  const [approveTarget, setApproveTarget] = useState<StudentApplication | null>(null);
 
   const resolvedClubSlug = useMemo(() => {
     if (clubSlug?.trim()) return clubSlug.trim().toLowerCase();
@@ -110,16 +112,17 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
   }, [refresh]);
 
   useEffect(() => {
-    if (!detail && !shareOpen) return;
+    if (!detail && !shareOpen && !approveTarget) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (detail) setDetail(null);
+        if (approveTarget) setApproveTarget(null);
+        else if (detail) setDetail(null);
         else if (shareOpen) setShareOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [detail, shareOpen]);
+  }, [detail, shareOpen, approveTarget]);
 
   const stats = useMemo(() => ({
     total: list.length,
@@ -184,7 +187,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
     }
   };
 
-  const handleApproveToStudent = async (app: StudentApplication) => {
+  const handleApproveToStudent = async (app: StudentApplication, form: ApplicationApproveFormData) => {
     if (app.status === 'approved') return;
     const fullApp = await ensureFullApplication(app);
     const dup = studentPool.some((s) => (s.tcNo ?? '') === fullApp.tcNo);
@@ -192,10 +195,6 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
       showToast('Bu TC Kimlik No ile kayıtlı öğrenci zaten var.', 'warning');
       return;
     }
-    const targetBranch =
-      clubName?.trim() ||
-      (fullApp.clubId ? clubs.find((c) => c.id === fullApp.clubId)?.name : undefined) ||
-      fullApp.branchOffice;
     setActionId(fullApp.id);
     try {
       const parentPhone = fullApp.phones[0] || fullApp.fatherPhone || fullApp.motherPhone || '';
@@ -207,8 +206,8 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
         elo: 0,
         ukd: 0,
         lastAttendance: new Date().toISOString().slice(0, 10),
-        paymentStatus: 'Unpaid',
-        group: fullApp.group || 'A Grubu',
+        paymentStatus: form.isScholarshipStudent ? 'Paid' : 'Unpaid',
+        group: form.group,
         parentName: fullApp.fatherName || fullApp.motherName || fullApp.signatureName || 'Veli',
         parentPhone: phoneDigits,
         birthDate: fullApp.birthDate,
@@ -220,8 +219,17 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
         teacher: fullApp.teacher || undefined,
         notes: fullApp.notes || undefined,
         healthInfo: fullApp.healthInfo || undefined,
-        branch: disciplines[0] || 'Satranç',
-        branchOffice: targetBranch,
+        branch: form.branch,
+        branchOffice: form.branchOffice,
+        registrationType: 'monthly',
+        monthlyFee: form.monthlyFee,
+        paymentReminderDay: form.paymentReminderDay,
+        latePaymentReminderDay: form.latePaymentReminderDay,
+        isScholarshipStudent: form.isScholarshipStudent || undefined,
+        hasSiblingDiscount: form.hasSiblingDiscount || undefined,
+        siblingDiscountType: form.siblingDiscountType,
+        siblingDiscountPercent: form.siblingDiscountPercent,
+        siblingDiscountAmount: form.siblingDiscountAmount,
         fatherName: fullApp.fatherName || undefined,
         fatherPhone: fullApp.fatherPhone?.replace(/\D/g, '') || undefined,
         fatherJob: fullApp.fatherJob || undefined,
@@ -232,6 +240,9 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
         contactNumbers: fullApp.phones.length ? fullApp.phones.map((p) => p.replace(/\D/g, '')).filter(Boolean) : undefined,
         photoUrl,
         status: 'active',
+        trainingGroupId: form.trainingGroupId,
+        coachId: form.coachId,
+        lessonSchedule: form.lessonSchedule,
       });
       try {
         const sync = await syncStudentRatingsFromExternal(newStudent);
@@ -263,6 +274,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
           password: newStudent.password,
         });
       }
+      setApproveTarget(null);
     } catch (err) {
       console.error('[Applications] approve failed:', err);
       showToast('Öğrenci kaydı sırasında hata oluştu. Listede görünüyorsa Supabase şemasını güncelleyin (supabase_tables.sql).', 'error');
@@ -391,7 +403,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
                             <button
                               type="button"
                               disabled={actionId === app.id}
-                              onClick={() => handleApproveToStudent(app)}
+                              onClick={() => setApproveTarget(app)}
                               className="p-2 rounded-lg hover:bg-emerald-500/20 text-emerald-400"
                               title="Onayla ve öğrenci ekle"
                             >
@@ -470,7 +482,10 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
                   <button
                     type="button"
                     disabled={actionId === detail.id}
-                    onClick={() => handleApproveToStudent(detail)}
+                    onClick={() => {
+                      setDetail(null);
+                      setApproveTarget(detail);
+                    }}
                     className="flex-1 min-w-[140px] py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm inline-flex items-center justify-center gap-2"
                   >
                     <UserPlus className="w-4 h-4" /> Onayla ve öğrenci ekle
@@ -629,6 +644,21 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
           </div>
         </div>
       ) : null}
+
+      <ApplicationApproveModal
+        app={approveTarget}
+        clubName={clubName}
+        lockBranchOffice={!!clubName?.trim()}
+        loading={!!approveTarget && actionId === approveTarget.id}
+        onClose={() => {
+          if (actionId) return;
+          setApproveTarget(null);
+        }}
+        onConfirm={async (form) => {
+          if (!approveTarget) return;
+          await handleApproveToStudent(approveTarget, form);
+        }}
+      />
 
       {approvedCredentials ? (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setApprovedCredentials(null)}>

@@ -1,4 +1,5 @@
 import type { StudentApplication, ApplicationStatus } from '../lib/applicationTypes';
+import { normalizeApplicationPersonNames, formatPersonName } from '../lib/personNameUtils';
 import type { Student } from '../types';
 import { isDisplayablePhotoUrl } from '../lib/studentPhotoUpload';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './supabase';
@@ -23,7 +24,9 @@ function readLocal(): StudentApplication[] {
     const raw = localStorage.getItem(LOCAL_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as StudentApplication[]) : [];
+    return Array.isArray(parsed)
+      ? (parsed as StudentApplication[]).map(normalizeApplicationPersonNames)
+      : [];
   } catch {
     return [];
   }
@@ -72,7 +75,7 @@ function rowToApp(row: Record<string, unknown>): StudentApplication {
   const phones = Array.isArray(data.phones)
     ? (data.phones as string[])
     : [fatherPhone, motherPhone].map((p) => p.trim()).filter(Boolean);
-  return {
+  return normalizeApplicationPersonNames({
     id: String(row.id ?? data.id ?? ''),
     applicationNo: String(row.application_no ?? data.applicationNo ?? ''),
     status: (row.status ?? data.status ?? 'pending') as ApplicationStatus,
@@ -121,7 +124,7 @@ function rowToApp(row: Record<string, unknown>): StudentApplication {
     clubSlug: data.clubSlug != null ? String(data.clubSlug) : undefined,
     createdAt: String(row.created_at ?? data.createdAt ?? ''),
     updatedAt: String(row.updated_at ?? data.updatedAt ?? ''),
-  };
+  });
 }
 
 function isApplicationSummary(app: StudentApplication): boolean {
@@ -612,12 +615,13 @@ export async function loadApplicationsAsync(): Promise<StudentApplication[]> {
 }
 
 export async function saveApplicationAsync(app: StudentApplication): Promise<boolean> {
-  upsertLocalApplication(app);
+  const normalized = normalizeApplicationPersonNames(app);
+  upsertLocalApplication(normalized);
 
   if (!isSupabaseBackend()) return true;
   try {
     const client = getServiceSupabase() ?? supabase;
-    const { error } = await client.from(TABLE).upsert(appToRow(app), { onConflict: 'id' });
+    const { error } = await client.from(TABLE).upsert(appToRow(normalized), { onConflict: 'id' });
     if (error) {
       console.warn('[Applications] save error:', error.message);
       return !canWriteSupabase();
@@ -646,7 +650,17 @@ export async function createApplicationAsync(
   input: Omit<StudentApplication, 'id' | 'applicationNo' | 'status' | 'createdAt' | 'updatedAt'>
 ): Promise<StudentApplication> {
   const cleanTc = input.tcNo?.replace(/\D/g, '') || '';
-  const cleanName = input.name?.trim() || '';
+  const cleanName = formatPersonName(input.name);
+  const normalizedInput = {
+    ...input,
+    name: cleanName,
+    fatherName: formatPersonName(input.fatherName),
+    motherName: formatPersonName(input.motherName),
+    signatureName: formatPersonName(input.signatureName),
+    registrarSignatureName: input.registrarSignatureName
+      ? formatPersonName(input.registrarSignatureName)
+      : input.registrarSignatureName,
+  };
 
   // 1. Local duplicate check (instantly catches double-submits and page refreshes)
   const localList = readLocal();
@@ -709,7 +723,7 @@ export async function createApplicationAsync(
   const seq = (await countApplicationsForYear(year)) + 1;
   const now = new Date().toISOString();
   const app: StudentApplication = {
-    ...input,
+    ...normalizedInput,
     id: genId(),
     applicationNo: `B-${year}-${String(seq).padStart(4, '0')}`,
     status: 'pending',

@@ -42,11 +42,76 @@ export function eventMatchesChapter(
   orphanMap: Map<string, string>,
 ): boolean {
   if (!chapterId) return true;
+  if (!event.chapterId?.trim()) return false;
   const resolved = resolveEventChapterId(event.chapterId, study, orphanMap);
-  if (resolved === chapterId) return true;
-  // practiceLogs kayıtlarında chapterId yoksa mevcut bölümde göster
-  if (!event.chapterId) return true;
-  return false;
+  return resolved === chapterId;
+}
+
+export type MoveAnalysisLogEntry = {
+  id: string;
+  chapterId?: string;
+  moveNo: number;
+  playedSan: string;
+  expectedSan: string;
+  isCorrect: boolean;
+  thinkMs: number;
+  atIso: string;
+  userName?: string;
+};
+
+function normalizePracticeLogEntry(raw: unknown): MoveAnalysisLogEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const e = raw as Record<string, unknown>;
+  return {
+    id: String(e.id ?? e.atIso ?? Date.now()),
+    chapterId: e.chapterId != null ? String(e.chapterId) : undefined,
+    moveNo: Number(e.moveNo) || 1,
+    playedSan: String(e.playedSan ?? e.played ?? ''),
+    expectedSan: String(e.expectedSan ?? e.expected ?? ''),
+    isCorrect: e.isCorrect !== false,
+    thinkMs: Number(e.thinkMs) || 0,
+    atIso: String(e.atIso ?? e.createdAt ?? new Date().toISOString()),
+    userName: e.userName != null ? String(e.userName) : undefined,
+  };
+}
+
+/** Öğrenci + bölüm bazında practiceLogs birleştirir (son bölümün diğerlerinin üzerine yazılmasını önler). */
+export function mergePracticeLogEntries(
+  existing: unknown[] | undefined,
+  chapterId: string,
+  chapterEntries: MoveAnalysisLogEntry[],
+): MoveAnalysisLogEntry[] {
+  const prev = Array.isArray(existing) ? existing : [];
+  const rest = prev
+    .map(normalizePracticeLogEntry)
+    .filter((item): item is MoveAnalysisLogEntry => !!item)
+    .filter((item) => (item.chapterId ?? '') !== chapterId);
+  const tagged = chapterEntries.map((entry) => ({ ...entry, chapterId }));
+  return [...rest, ...tagged];
+}
+
+export function practiceLogsForChapter(
+  logs: unknown[] | undefined,
+  chapterId: string,
+): MoveAnalysisLogEntry[] {
+  if (!Array.isArray(logs) || !chapterId) return [];
+  return logs
+    .map(normalizePracticeLogEntry)
+    .filter((item): item is MoveAnalysisLogEntry => !!item)
+    .filter((item) => item.chapterId === chapterId);
+}
+
+export function studyEventsToMoveAnalysis(events: StudyEvent[]): MoveAnalysisLogEntry[] {
+  return events.map((event) => ({
+    id: event.id,
+    chapterId: event.chapterId,
+    moveNo: Math.floor(event.moveIndex / 2) + 1,
+    playedSan: event.playedMove ?? '',
+    expectedSan: event.expectedMove ?? '',
+    isCorrect: event.result !== 'wrong',
+    thinkMs: event.thinkMs ?? 0,
+    atIso: event.createdAt,
+  }));
 }
 
 /** study.practiceLogs → StudyEvent (Supabase yedeği / eski kayıtlar). */
@@ -89,7 +154,7 @@ export function mergeStudyAnalysisEvents(
 
   for (const e of [...fromDb, ...fromLogs]) {
     const key = e.id.startsWith('practice-')
-      ? `${e.studentId}|${e.moveIndex}|${e.playedMove}|${e.thinkMs}`
+      ? `${e.studentId}|${e.chapterId}|${e.moveIndex}|${e.playedMove}|${e.thinkMs}`
       : e.id;
     if (seen.has(key)) continue;
     seen.add(key);

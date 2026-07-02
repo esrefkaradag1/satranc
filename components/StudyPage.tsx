@@ -36,6 +36,7 @@ import { defaultChapterPgnTags, setPgnTagValue, buildStudyBoardPgnDisplay } from
 import { chapterFromParsedPgnBlock, splitLichessStudyPgnBlocks } from '../lib/studyChapterImport';
 import { normalizeStudyChapterPuzzle } from '../lib/puzzlePlayUtils';
 import { loadStudyEvents, type StudyEvent } from '../studyEvents';
+import { mergePracticeLogEntries, practiceLogsForChapter } from '../lib/studyAnalysisEvents';
 import { useApp } from '../AppContext';
 import { resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
@@ -83,6 +84,7 @@ type StudyListSidebar =
 
 type MoveAnalysisEntry = {
   id: string;
+  chapterId?: string;
   moveNo: number;
   playedSan: string;
   expectedSan: string;
@@ -841,8 +843,14 @@ const StudyPage: React.FC = () => {
     const now = Date.now();
     setChapterStartedAtMs(now);
     setLastMoveActionAtMs(now);
+
+    const studentId = auth?.role === 'student' ? String((auth as { studentId?: string }).studentId ?? '') : '';
+    if (studentId && selectedStudy && selectedChapter) {
+      setMoveAnalysisEntries(practiceLogsForChapter(selectedStudy.practiceLogs?.[studentId], selectedChapter.id));
+      return;
+    }
     setMoveAnalysisEntries([]);
-  }, [selectedStudy?.id, selectedChapter?.id]);
+  }, [selectedStudy?.id, selectedStudy?.practiceLogs, selectedChapter?.id, auth?.role, auth]);
 
   // Load study events from Supabase for admin/coach
   const refreshStudyEvents = useCallback(() => {
@@ -2285,6 +2293,7 @@ const StudyPage: React.FC = () => {
       const isCorrect = expectedSan ? (mv.san === expectedSan || mv.lan === expectedSan) : true;
       const newEntry: MoveAnalysisEntry = {
         id: `${now}-${moveAnalysisEntries.length}`,
+        chapterId: selectedChapter.id,
         moveNo: Math.floor((expectedSan ? currentMoveIndex : practicePly) / 2) + 1,
         playedSan: mv.san ?? mv.lan ?? `${sourceSquare}-${targetSquare}`,
         expectedSan: expectedSan ?? '',
@@ -2294,21 +2303,23 @@ const StudyPage: React.FC = () => {
         userName: currentUserName,
       };
 
-      setMoveAnalysisEntries((prev) => [...prev, newEntry]);
-      setLastMoveActionAtMs(now);
-
-      // Sync to study if role is student
-      if (auth?.role === 'student' && selectedStudy) {
-        const sid = (auth as any).studentId;
-        if (sid) {
-          updateStudy({
-            practiceLogs: {
-              ...(selectedStudy.practiceLogs || {}),
-              [sid]: [...moveAnalysisEntries, newEntry]
-            }
-          });
+      setMoveAnalysisEntries((prev) => {
+        const next = [...prev, newEntry];
+        if (auth?.role === 'student' && selectedStudy) {
+          const sid = String((auth as { studentId?: string }).studentId ?? '');
+          if (sid) {
+            updateAndSaveStudy(selectedStudy.id, (study) => ({
+              ...study,
+              practiceLogs: {
+                ...(study.practiceLogs ?? {}),
+                [sid]: mergePracticeLogEntries(study.practiceLogs?.[sid], selectedChapter.id, next),
+              },
+            }));
+          }
         }
-      }
+        return next;
+      });
+      setLastMoveActionAtMs(now);
 
       // Local practice fen ilerlet
       setPracticeFen(g.fen());
@@ -2324,7 +2335,7 @@ const StudyPage: React.FC = () => {
         return false;
       }
     } catch { setPracticeFeedback('wrong'); return false; }
-  }, [selectedChapter, chapterMovesForUi, recording, practiceMode, isInVariation, currentMoveIndex, effectiveFen, practiceActiveFen, practicePly, lastMoveActionAtMs, currentUserName, auth, selectedStudy, moveAnalysisEntries, updateStudy]);
+  }, [selectedChapter, chapterMovesForUi, recording, practiceMode, isInVariation, currentMoveIndex, effectiveFen, practiceActiveFen, practicePly, lastMoveActionAtMs, currentUserName, auth, selectedStudy, moveAnalysisEntries.length, updateAndSaveStudy]);
 
   const flipBoard = useCallback(() => {
     if (!selectedChapter) return;

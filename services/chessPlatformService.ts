@@ -1382,10 +1382,11 @@ export async function fetchChessComDailyPuzzleStats(
   const ratedToday = bundle.rated.filter((a) => puzzleAttemptOnDay(a.date, target));
   const unique = dedupeChessComPuzzleAttempts(ratedToday);
   const passed = unique.filter((a) => a.passed).length;
+  const failed = unique.filter((a) => !a.passed).length;
   return {
-    count: passed,
+    count: unique.length,
     passed,
-    failed: unique.filter((a) => !a.passed).length,
+    failed,
   };
 }
 

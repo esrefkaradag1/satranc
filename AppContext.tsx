@@ -28,6 +28,7 @@ import {
 import { resolveAuthClubId, syncSupabaseClubContext } from './lib/supabaseClubContext';
 import { normalizeClubKey } from './lib/clubScope';
 import { normalizeLeaderboardPointSettings } from './lib/leaderboardPointSettings';
+import { normalizeStudentPersonNames } from './lib/personNameUtils';
 import {
   lessonsFromTrainingGroup,
   mergeTrainingGroupLessons,
@@ -713,7 +714,7 @@ function dbToStudent(row: Record<string, unknown>): Student {
   }
   if (!('group' in out) && 'groupId' in out) out.group = out.groupId ?? '';
   else if (!('group' in out)) out.group = '';
-  return out as unknown as Student;
+  return normalizeStudentPersonNames(out as unknown as Student);
 }
 
 /** Öğrenci no gösterimi: studentNo varsa onu, yoksa kayıt tarihi/sıraya göre 1 tabanlı sıra numarası döner. */
@@ -1342,9 +1343,11 @@ function loadStudents(): Student[] {
   if (savedVersion < MOCK_DATA_VERSION) {
     localStorage.removeItem('netchess_students');
     localStorage.setItem('netchess_data_version', String(MOCK_DATA_VERSION));
-    return MOCK_STUDENTS as Student[];
+    return MOCK_STUDENTS.map((s) => normalizeStudentPersonNames(s as Student));
   }
-  return loadJSON<Student[]>('netchess_students', MOCK_STUDENTS as Student[]);
+  return loadJSON<Student[]>('netchess_students', MOCK_STUDENTS as Student[]).map((s) =>
+    normalizeStudentPersonNames(s),
+  );
 }
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -2793,7 +2796,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [addActivityLog]);
 
   const addStudent = useCallback(async (student: Omit<Student, 'id'>): Promise<Student> => {
-    const scoped = applyStudentScopeFromAuth(student, auth, coaches, clubs);
+    const normalizedStudent = normalizeStudentPersonNames(student) as Omit<Student, 'id'>;
+    const scoped = applyStudentScopeFromAuth(normalizedStudent, auth, coaches, clubs);
     const clubId = scoped.clubId;
     const existingUsernames = (clubId
       ? students.filter((s) => s.clubId === clubId)
@@ -2810,7 +2814,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       password: scoped.password?.trim() ? scoped.password.trim() : generated.password,
     } as Student;
     setStudents(prev => [...prev, newStudent]);
-    addActivityLog({ user: CURRENT_USER, action: 'Öğrenci Eklendi', target: student.name, type: 'success' });
+    addActivityLog({ user: CURRENT_USER, action: 'Öğrenci Eklendi', target: normalizedStudent.name, type: 'success' });
     const sb = getServiceSupabase();
     if (sb) {
       const result = await studentInsertWithRetry(sb, newStudent as unknown as Record<string, unknown>);
@@ -2832,10 +2836,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (updatedFields.lessonLog !== undefined) {
       persistLessonLogLocal(id, updatedFields.lessonLog);
     }
-    setStudents(prev => prev.map(s => s.id === id ? { ...s, ...updatedFields } : s));
+    const normalizedFields = normalizeStudentPersonNames(updatedFields);
+    setStudents(prev => prev.map(s => s.id === id ? { ...s, ...normalizedFields } : s));
     const sb = getServiceSupabase();
     if (sb) {
-      const result = await studentUpdateWithRetry(sb, id, updatedFields as Record<string, unknown>);
+      const result = await studentUpdateWithRetry(sb, id, normalizedFields as Record<string, unknown>);
       if (updatedFields.lessonLog !== undefined) {
         if (result.ok) {
           showToast('Ders günlüğü kaydedildi.', 'success');
