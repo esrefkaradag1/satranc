@@ -1037,7 +1037,7 @@ const StudentDetail: React.FC<{
       setLoadingFide(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [student.id, student.name, student.birthDate, student.fideId, student.elo, fideIdInput, updateStudent]);
+  }, [student, fideIdInput, updateStudent]);
 
   React.useEffect(() => {
     if (activeDetailTab === 'ukd' && student?.fideId) loadFide();
