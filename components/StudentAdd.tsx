@@ -26,6 +26,7 @@ import { DEFAULT_REMINDER_DAY, REMINDER_DAY_OPTIONS } from '../lib/reminderDays'
 import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
 import { getOrCreateParentConsentInviteAsync } from '../services/applicationStorage';
 import { openWhatsAppSend } from '../lib/whatsappUtils';
+import { triggerWhatsAppAuto } from '../services/whatsappClient';
 import type { GroupLessonSlot, Student } from '../types';
 import {
   applyGroupDefaultsToStudent,
@@ -589,11 +590,23 @@ const StudentAdd: React.FC<{
           newStudent.parentPhone ||
           contacts[0] ||
           '';
-        const msg = `Merhaba,\n\n${newStudent.name} için kulüp kayıt formunu onaylamanız ve dijital imzanızı eklemeniz gerekmektedir.\n\nForm linki:\n${signed.url}\n\nTeşekkürler.`;
         if (phone) {
-          openWhatsAppSend(phone, msg);
-          setWhatsAppSent(true);
+          const consentCount = await triggerWhatsAppAuto('parent_consent', {
+            student: newStudent,
+            formUrl: signed.url,
+            branchOffice: newStudent.branchOffice,
+          });
+          setWhatsAppSent(consentCount > 0);
+          if (consentCount === 0) {
+            const msg = `Merhaba,\n\n${newStudent.name} için kulüp kayıt formunu onaylamanız ve dijital imzanızı eklemeniz gerekmektedir.\n\nForm linki:\n${signed.url}\n\nTeşekkürler.`;
+            openWhatsAppSend(phone, msg);
+            setWhatsAppSent(true);
+          }
         }
+        void triggerWhatsAppAuto('parent_login', {
+          student: { ...newStudent, username: newStudent.username ?? loginUsername, password: newStudent.password ?? loginPassword },
+          branchOffice: newStudent.branchOffice,
+        });
       } catch {
         setSavedStudent(newStudent);
         setParentFormUrl('');

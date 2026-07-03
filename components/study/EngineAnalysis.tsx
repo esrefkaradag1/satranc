@@ -4,7 +4,8 @@ import { Chessboard } from 'react-chessboard';
 import { Settings2, ChevronDown, Plus, FlipHorizontal, BarChart2, Info, Menu, Share2, Download, Highlighter, Hand } from 'lucide-react';
 import { Chess } from 'chess.js';
 import { useStockfish, type PvLine } from '../../hooks/useStockfish';
-import { CHESSBOARD_NO_NOTATION, pvLineToEvalBarPawns } from '../../lib/chessBoardUi';
+import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
+import { useStableEvalDisplay, type EvalBarDisplay } from '../../hooks/useStableEvalDisplay';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
 import type { StudentPlaysColor } from '../../lib/studyTypes';
 import { studentPlaysColorLabel } from '../../lib/studyUtils';
@@ -49,7 +50,7 @@ interface EngineAnalysisProps {
   /** En iyi hamle (PV[0]) değiştiğinde bildirim */
   onTopMoveUpdate?: (move: { from: string; to: string } | null) => void;
   /** Tahta solundaki avantaj çubuğu — sidebar motor skoru ile senkron */
-  onEvalScoreChange?: (scorePawns: number) => void;
+  onEvalBarChange?: (display: EvalBarDisplay) => void;
   /** StudyPage "tahta/çalışma" ayarları için dış panel kontrolleri */
   boardSettings?: {
     showEvalBar: boolean;
@@ -459,7 +460,7 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   onHoverMove,
   onPvMoveClick,
   onTopMoveUpdate,
-  onEvalScoreChange,
+  onEvalBarChange,
   boardSettings,
   onOpenBoardPrefs,
 }) => {
@@ -584,6 +585,13 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   const hasFreshLines = !!mainLine && depth > 0;
   const filledPvCount = pvLines.filter((l): l is PvLine => l !== null).length;
 
+  const evalBarDisplay = useStableEvalDisplay(
+    fen,
+    enabled && hasFreshLines ? mainLine : null,
+    turn,
+    enabled && !!onEvalBarChange,
+  );
+
   useEffect(() => {
     if (!ready || !hasFreshLines || !mainLine?.pv || mainLine.pv.length === 0) {
       onTopMoveUpdate?.(null);
@@ -598,19 +606,20 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   }, [ready, fen, mainLine, mainLine?.pv?.[0], hasFreshLines, onTopMoveUpdate]);
 
   useEffect(() => {
+    if (!onEvalBarChange) return;
     if (!enabled) {
       setEvalHistory([]);
-      onEvalScoreChange?.(0);
+      onEvalBarChange({ whitePercent: 50, label: '—', winningChances: 0, pending: false });
       return;
     }
-    if (!ready || !hasFreshLines || !mainLine) return;
-    const score = pvLineToEvalBarPawns(mainLine, turn);
-    setEvalHistory((prev) => {
-      const next = [...prev, score];
-      return next.length > 48 ? next.slice(-48) : next;
-    });
-    onEvalScoreChange?.(score);
-  }, [enabled, ready, fen, mainLine, turn, hasFreshLines, onEvalScoreChange]);
+    onEvalBarChange(evalBarDisplay);
+    if (!evalBarDisplay.pending) {
+      setEvalHistory((prev) => {
+        const next = [...prev, evalBarDisplay.winningChances];
+        return next.length > 48 ? next.slice(-48) : next;
+      });
+    }
+  }, [enabled, evalBarDisplay, onEvalBarChange]);
 
   return (
     <div className="shrink-0 border-b border-white/5 bg-[#0f172a]">

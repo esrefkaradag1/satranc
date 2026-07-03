@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, FileText, CheckSquare, BarChart3, 
   Wallet, MessageCircle, Video, Image, ExternalLink, Trophy,
   CalendarCheck, BookOpen, ShieldCheck, Box, CalendarDays, Grid, CreditCard, User, Building2,
-  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog
+  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone
 } from 'lucide-react';
 
 /** Menü öğesi ikon kutusu rengi: Tailwind sınıfı (bg-* veya gradient) */
@@ -51,6 +51,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'lessons', label: 'Canlı Ders & Video', icon: <Video className="w-5 h-5" /> },
   { id: 'curriculum', label: 'Ders Programı & Müfredat', icon: <BookOpen className="w-5 h-5" /> },
   { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" /> },
+  { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" /> },
   { id: 'security', label: 'Kullanıcı & Güvenlik', icon: <ShieldCheck className="w-5 h-5" /> },
 ];
 
@@ -105,6 +106,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     items: [
       { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
       { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+      { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'emerald' },
     ],
   },
   {
@@ -145,6 +147,7 @@ export const COACH_NAV_ITEMS: NavItem[] = [
   { id: 'curriculum', label: 'Ders Programı & Müfredat', icon: <BookOpen className="w-5 h-5" />, iconColor: 'indigo' },
   { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
   { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+  { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'green' },
   { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
   { id: 'analysis', label: 'Analiz & Performans', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'rose' },
 ];
@@ -184,6 +187,7 @@ export const COACH_NAV_CATEGORIES: NavCategory[] = [
     items: [
       { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
       { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+      { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'emerald' },
     ],
   },
   {

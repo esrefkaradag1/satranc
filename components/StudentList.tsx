@@ -30,6 +30,7 @@ import {
  isMonthBeforeRegistration,
  getExpectedDueForMonth,
 } from '../lib/trainingGroupUtils';
+import { filterDuesTransactions } from '../lib/transactionUtils';
 import { APPLICATIONS_UPDATED_EVENT, loadApplicationListMetaAsync, loadApplicationPhotoMapAsync } from'../services/applicationStorage';
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
 import { StudentLoginQuickInfo, StudentLoginQuickInfoInline } from './student/StudentLoginQuickInfo';
@@ -389,8 +390,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
     const currentYear = new Date().getFullYear();
     const currentMonth = new Date().getMonth() + 1; // 1-indexed (July is 7)
     
-    const studentTransactions = transactions.filter(
-      (t) => t.studentId === s.id && t.type === 'income'
+    const studentTransactions = filterDuesTransactions(
+      transactions.filter((t) => t.studentId === s.id),
     );
     let totalPaidThisYear = 0;
     studentTransactions.forEach((t) => {

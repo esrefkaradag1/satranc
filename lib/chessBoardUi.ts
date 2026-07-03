@@ -1,20 +1,40 @@
 import type { CSSProperties } from 'react';
+import {
+  formatEngineEvalLabel,
+  pvLineToWinningChances,
+  winningChancesToBarPercent,
+  type EngineScoreLine,
+} from './winningChances';
 
-/** Mat / kesin kazanç — evalBarWhitePercent bunu %0 veya %100 yapar */
+/** @deprecated Lichess çubuğu artık kazanma şansı kullanır; terminal pozisyonlar için */
 export const EVAL_BAR_DECISIVE_SCORE = 100;
 
-/** Eval çubuğu için beyaz pay (0–100), Lichess benzeri atan eğrisi */
-export function evalBarWhitePercent(score: number): number {
-  if (score >= EVAL_BAR_DECISIVE_SCORE) return 100;
-  if (score <= -EVAL_BAR_DECISIVE_SCORE) return 0;
-  return 50 + (50 * (2 / Math.PI)) * Math.atan(Math.max(-3, Math.min(3, score)) * 0.5);
+/** Kazanma şansı (-1..+1) veya legacy puan skorundan beyaz pay (0–100) */
+export function evalBarWhitePercent(scoreOrChances: number): number {
+  if (Math.abs(scoreOrChances) <= 1) return winningChancesToBarPercent(scoreOrChances);
+  if (scoreOrChances >= EVAL_BAR_DECISIVE_SCORE) return 100;
+  if (scoreOrChances <= -EVAL_BAR_DECISIVE_SCORE) return 0;
+  return 50 + (50 * (2 / Math.PI)) * Math.atan(Math.max(-3, Math.min(3, scoreOrChances)) * 0.5);
 }
 
-export function formatEvalLabel(score: number): string {
-  if (Math.abs(score) >= EVAL_BAR_DECISIVE_SCORE) return 'Mat';
-  const sign = score > 0 ? '+' : '';
-  return `${sign}${score.toFixed(1)}`;
+export function formatEvalLabel(scoreOrChances: number): string {
+  if (Math.abs(scoreOrChances) <= 1) {
+    return scoreOrChances > 0.98 ? '#1' : scoreOrChances < -0.98 ? '-#1' : `${scoreOrChances >= 0 ? '+' : ''}${(scoreOrChances * 10).toFixed(1)}`;
+  }
+  if (Math.abs(scoreOrChances) >= EVAL_BAR_DECISIVE_SCORE) return 'Mat';
+  const sign = scoreOrChances > 0 ? '+' : '';
+  return `${sign}${scoreOrChances.toFixed(1)}`;
 }
+
+/** Stockfish PV satırından beyaz perspektif kazanma şansı (-1..+1) */
+export function pvLineToEvalBarPawns(
+  line: EngineScoreLine | null | undefined,
+  turn: 'w' | 'b',
+): number {
+  return pvLineToWinningChances(line, turn);
+}
+
+export { formatEngineEvalLabel, winningChancesToBarPercent };
 
 /** react-chessboard: taş hareket geçişleri (Lichess benzeri) */
 export const CHESSBOARD_ANIMATION = {
@@ -26,23 +46,6 @@ export const CHESSBOARD_ANIMATION = {
 export const CHESSBOARD_NO_NOTATION = {
   showNotation: false as const,
 };
-
-/** Stockfish PV satırından ChessEvalBar skoru (piyon, beyaz perspektif) */
-export function pvLineToEvalBarPawns(
-  line: { score: number; mate: number | null } | null | undefined,
-  turn: 'w' | 'b',
-): number {
-  if (!line) return 0;
-  const flip = turn === 'b' ? -1 : 1;
-  if (line.mate !== null) {
-    const m = line.mate * flip;
-    if (m > 0) return EVAL_BAR_DECISIVE_SCORE;
-    if (m < 0) return -EVAL_BAR_DECISIVE_SCORE;
-    return 0;
-  }
-  const v = line.score * flip;
-  return Math.max(-6, Math.min(6, v));
-}
 
 export type SquareMarkColor = 'yellow' | 'red' | 'green' | 'blue' | 'orange' | 'purple' | 'cyan' | 'lime';
 

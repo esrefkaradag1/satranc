@@ -9,6 +9,104 @@ export const EMOJIS = ['♟️','👾','🏆','⭐','🎯','🔬','📚','🎓',
 export const PROGRESS_KEY = 'netchess_student_progress';
 export const STUDY_SELECTION_KEY_PREFIX = 'netchess_student_selection';
 export const VC_PROGRESS_KEY_PREFIX = 'netchess_vc_progress';
+export const LIVE_ANALYSIS_KEY_PREFIX = 'netchess_live_analysis';
+
+export type LiveAnalysisSession = {
+  moves: string[];
+  savedAt: string;
+};
+
+export type LiveAnalysisChapterState = {
+  /** Aktif oturum (henüz bitmemiş veya son oynanan) */
+  current: LiveAnalysisSession;
+  /** Tamamlanan / yeniden başlatılmış önceki denemeler */
+  attempts: LiveAnalysisSession[];
+};
+
+function liveAnalysisStorageKey(studentId: string | null): string {
+  return `${LIVE_ANALYSIS_KEY_PREFIX}:${studentId ? String(studentId) : 'anon'}`;
+}
+
+function liveAnalysisChapterKey(studyId: string, chapterId: string): string {
+  return `${studyId}:${chapterId}`;
+}
+
+export function loadLiveAnalysisState(studentId: string | null): Record<string, LiveAnalysisChapterState> {
+  try {
+    const raw = localStorage.getItem(liveAnalysisStorageKey(studentId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, LiveAnalysisChapterState>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function readLiveAnalysisChapter(
+  studentId: string | null,
+  studyId: string,
+  chapterId: string,
+): LiveAnalysisChapterState {
+  const all = loadLiveAnalysisState(studentId);
+  const key = liveAnalysisChapterKey(studyId, chapterId);
+  return all[key] ?? { current: { moves: [], savedAt: new Date().toISOString() }, attempts: [] };
+}
+
+export function writeLiveAnalysisChapter(
+  studentId: string | null,
+  studyId: string,
+  chapterId: string,
+  state: LiveAnalysisChapterState,
+): void {
+  try {
+    const all = loadLiveAnalysisState(studentId);
+    all[liveAnalysisChapterKey(studyId, chapterId)] = state;
+    localStorage.setItem(liveAnalysisStorageKey(studentId), JSON.stringify(all));
+  } catch { /* ignore */ }
+}
+
+/** Yeni deneme başlat: mevcut oturumu attempts'e taşır. */
+export function startNewLiveAnalysisAttempt(
+  studentId: string | null,
+  studyId: string,
+  chapterId: string,
+): LiveAnalysisChapterState {
+  const prev = readLiveAnalysisChapter(studentId, studyId, chapterId);
+  const attempts = [...prev.attempts];
+  if (prev.current.moves.length > 0) {
+    attempts.push({ ...prev.current, savedAt: new Date().toISOString() });
+  }
+  const next: LiveAnalysisChapterState = {
+    current: { moves: [], savedAt: new Date().toISOString() },
+    attempts,
+  };
+  writeLiveAnalysisChapter(studentId, studyId, chapterId, next);
+  return next;
+}
+
+export function appendLiveAnalysisMove(
+  studentId: string | null,
+  studyId: string,
+  chapterId: string,
+  san: string,
+  /** Bu indeksten sonrasını kes (tahtada geri dönüp yeni hamle) */
+  truncateFromIndex?: number,
+): LiveAnalysisChapterState {
+  const prev = readLiveAnalysisChapter(studentId, studyId, chapterId);
+  const base =
+    truncateFromIndex !== undefined && truncateFromIndex >= 0
+      ? prev.current.moves.slice(0, truncateFromIndex)
+      : prev.current.moves;
+  const next: LiveAnalysisChapterState = {
+    ...prev,
+    current: {
+      moves: [...base, san],
+      savedAt: new Date().toISOString(),
+    },
+  };
+  writeLiveAnalysisChapter(studentId, studyId, chapterId, next);
+  return next;
+}
 
 export function loadEditorSelection(): { studyId: string | null; chapterIndex: number; moveIndex: number } {
   try {

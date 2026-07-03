@@ -1,4 +1,4 @@
-import type { AuthUser, Coach, Student, TrainingGroup, Transaction, Tournament, DisciplineBranch, HomeworkAssignment, AttendanceRecord, GalleryItem } from '../types';
+import type { AuthUser, Coach, Student, TrainingGroup, Transaction, Tournament, DisciplineBranch, LessonPackage, HomeworkAssignment, AttendanceRecord, GalleryItem } from '../types';
 import { filterCoachesByClub, filterStudentsByClub, filterTransactionsByClub, normalizeClubKey, studentBelongsToClub } from './clubScope';
 import { clubOfficeNamesForAuth, orgRecordBelongsToClub, resolveClubIdFromAuth, type BranchOfficeRecord } from './orgStructureDb';
 import { findTrainingGroupById, findTrainingGroupByName } from './trainingGroupUtils';
@@ -174,6 +174,22 @@ export function resolveScopedDisciplineBranches(
   const key = clubKeyForAuth(auth);
   if (!key) return branches;
   return branches.filter((b) => normalizeClubKey(b.branchOffice) === key);
+}
+
+export function resolveScopedLessonPackages(
+  auth: AuthUser | null,
+  packages: LessonPackage[],
+  branchOfficeRecords: BranchOfficeRecord[] = [],
+  clubs: { id: string; name: string }[] = [],
+): LessonPackage[] {
+  if (!auth || auth.role === 'admin') return packages;
+  if (auth.role === 'club') {
+    const offices = clubOfficeNamesForAuth(auth, branchOfficeRecords, clubs);
+    return packages.filter((p) => orgRecordBelongsToClub(p, auth, offices, clubs));
+  }
+  const key = clubKeyForAuth(auth);
+  if (!key) return packages;
+  return packages.filter((p) => normalizeClubKey(p.branchOffice) === key);
 }
 
 export function resolveScopedTournaments(auth: AuthUser | null, tournaments: Tournament[]): Tournament[] {

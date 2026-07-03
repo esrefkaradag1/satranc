@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import {
   TrendingUp, Users, Calendar, ClipboardCheck, Box,
-  MessageSquare, CheckCircle2, Clock, Target,
+  MessageSquare, MessageCircle, CheckCircle2, Clock, Target,
   Image as ImageIcon, Video, Wallet, AlertTriangle, UserPlus, Activity, FileText,
   ChevronRight, GraduationCap, QrCode,
 } from 'lucide-react';
@@ -394,7 +394,8 @@ const Dashboard: React.FC = () => {
               <ActionButton icon={<Wallet className="w-4 h-4" />} label="Kasa" href="#/kasa-finans" accent="rose" />
               <ActionButton icon={<ImageIcon className="w-4 h-4" />} label="Galeri" href="#/galeri" accent="pink" />
               <ActionButton icon={<Video className="w-4 h-4" />} label="Canlı Ders" href="#/canli-ders" accent="cyan" />
-              <ActionButton icon={<MessageSquare className="w-4 h-4" />} label="Mesajlar" href="#/mesajlar" accent="green" className="col-span-2" />
+              <ActionButton icon={<MessageSquare className="w-4 h-4" />} label="Mesajlar" href="#/mesajlar" accent="green" />
+              <ActionButton icon={<MessageCircle className="w-4 h-4" />} label="WhatsApp" href="#/whatsapp-yonetimi" accent="green" className="col-span-2" />
             </div>
           </div>
 

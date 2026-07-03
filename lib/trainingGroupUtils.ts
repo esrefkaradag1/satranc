@@ -139,6 +139,19 @@ export function isMonthBeforeRegistration(student: Student, year: number, month:
   return false;
 }
 
+/** Beklenen aidat 0 olan ay (manuel override); kayıt öncesi gibi gösterilir, borç sayılmaz. */
+export function isMonthDuesWaived(
+  student: Student,
+  year: number,
+  month: number,
+  trainingGroups: TrainingGroup[],
+  disciplineBranches: DisciplineBranch[],
+): boolean {
+  if (student.registrationType === 'package' || student.isScholarshipStudent) return false;
+  if (isMonthBeforeRegistration(student, year, month)) return false;
+  return getExpectedDueForMonth(student, year, month, trainingGroups, disciplineBranches).expected === 0;
+}
+
 export function getExpectedDueForMonth(
   student: Student,
   year: number,

@@ -34,6 +34,8 @@ import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
   chapterModeBadge, formatChapterListLabel, chapterListLabelMatches, loadStudySelection, saveStudySelection,
   loadProgress, saveProgress, fenToCurrentFen,
   loadVcProgress, saveVcProgress,
+  readLiveAnalysisChapter, appendLiveAnalysisMove, startNewLiveAnalysisAttempt,
+  type LiveAnalysisChapterState,
   describeGameOutcomeFromFen, matedKingSquareFromFen, describeGameOutcome,
   genId, migrateStudy, migrateChapter, studyDisplayEmoji,
   normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
@@ -48,6 +50,8 @@ import { loadStudyPresence, subscribeStudyPresence } from '../services/studyActi
 import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, mergeMainlineMoves } from '../lib/studySync/moveList';
 import { liveLessonFenAt } from '../lib/liveLessonVariations';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
+import type { EvalBarDisplay } from '../hooks/useStableEvalDisplay';
+import { cpWinningChances, winningChancesToBarPercent } from '../lib/winningChances';
 import { useStudyBoardSettings } from '../hooks/useStudyBoardSettings';
 import { useStudyKeyboardShortcuts } from '../hooks/useStudyKeyboardShortcuts';
 import { StudyKeyboardHelpModal } from './study/StudyKeyboardHelpModal';
@@ -55,6 +59,18 @@ import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
 import { computeThreatOverlay } from '../lib/chessThreats';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
+
+const OFF_EVAL_BAR: EvalBarDisplay = { whitePercent: 50, label: '—', winningChances: 0, pending: false };
+
+function materialEvalToBarDisplay(pawns: number): EvalBarDisplay {
+  const chances = cpWinningChances(Math.round(pawns * 100));
+  return {
+    whitePercent: winningChancesToBarPercent(chances),
+    label: `${pawns >= 0 ? '+' : ''}${pawns.toFixed(1)}`,
+    winningChances: chances,
+    pending: false,
+  };
+}
 
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -142,9 +158,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [laHintThinking, setLaHintThinking] = useState(false);
   const [laMoveQuality, setLaMoveQuality] = useState<{ label: string; bestSan: string; color: string } | null>(null);
   const [laHint, setLaHint] = useState<string | null>(null);
-  const [evalScore, setEvalScore] = useState(0);
+  const [evalBar, setEvalBar] = useState<EvalBarDisplay>(OFF_EVAL_BAR);
   const [replyToCoach, setReplyToCoach] = useState('');
   const [chapterMoveAnalysis, setChapterMoveAnalysis] = useState<ChapterMoveAnalysisItem[]>([]);
+  /** Canlı analiz: öğrenciye özel hamleler (paylaşılan chapter.moves'a yazılmaz) */
+  const [liveSessionMoves, setLiveSessionMoves] = useState<string[]>([]);
+  const [liveAttemptHistory, setLiveAttemptHistory] = useState<LiveAnalysisChapterState['attempts']>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>('comments');
   const [leftTab, setLeftTab] = useState<'chapters' | 'members'>('chapters');
   const [chapterSearch, setChapterSearch] = useState('');
@@ -333,6 +352,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   /** Tahta = sync ana hat; liste eski chapter.moves'ta kaldığında burada birleştirilir. */
   const chapterMovesForUi = useMemo(() => {
+    if (isLiveAnalysis) return liveSessionMoves;
     if (isInteractivePuzzle && puzzlePlayNorm) return puzzlePlayNorm.studentMoves;
     if (vsComputer) return effectiveChapter?.moves ?? [];
     if (!syncState?.tree?.mainline || syncState.tree.mainline.length <= 1) {
@@ -342,7 +362,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     const fromTree = mainlineSansFromTree(syncState.tree, rootFen);
     const legacy = effectiveChapter?.moves ?? [];
     return mergeMainlineMoves(legacy, fromTree);
-  }, [isInteractivePuzzle, puzzlePlayNorm, vsComputer, syncState, effectiveChapter?.moves, effectiveChapter?.id]);
+  }, [isLiveAnalysis, liveSessionMoves, isInteractivePuzzle, puzzlePlayNorm, vsComputer, syncState, effectiveChapter?.moves, effectiveChapter?.id]);
 
   const moveListChapter = useMemo(() => {
     if (!effectiveChapter) return null;
@@ -571,11 +591,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const syncPathFen = useMemo(() => fenAtSyncPath(syncState), [syncState]);
 
   const currentFen = useMemo(() => {
+    if (isLiveAnalysis && moveListChapter) {
+      return fenToCurrentFen(moveListChapter, currentMoveIndex);
+    }
     // Bulmacada sync ağacı PGN sonuna gidebilir — tahta pozisyonu yerel ply ile hesaplanmalı.
     if (!isInteractivePuzzle && syncPathFen) return syncPathFen;
     if (!moveListChapter) return DEFAULT_FEN;
     return fenToCurrentFen(moveListChapter, currentMoveIndex);
-  }, [isInteractivePuzzle, syncPathFen, moveListChapter, currentMoveIndex]);
+  }, [isLiveAnalysis, moveListChapter, currentMoveIndex, isInteractivePuzzle, syncPathFen]);
 
   const totalMoves = chapterMovesForUi.length;
   const isComplete = isLiveAnalysis ? false : totalMoves > 0 && currentMoveIndex >= totalMoves;
@@ -590,14 +613,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [puzzleSetupPreviewFen, setPuzzleSetupPreviewFen] = useState<string | null>(null);
 
   useEffect(() => {
+    if (hideEngineForStudentPuzzle || vsComputer || isLiveAnalysis) return;
     const now = Date.now();
-    // Uzaktan path ile yerel ply'i eşitle (öğretmen ileri/geri). Bulmaca ve bilgisayar oyununda
-    // öğrencinin tahtası geri sıçramasın diye bu çekmeyi yapma.
-    if (hideEngineForStudentPuzzle || vsComputer) return;
     if (sticky && currentMoveIndexFromSync !== currentMoveIndex && (now - lastActionMs > 1000)) {
       setCurrentMoveIndex(currentMoveIndexFromSync);
     }
-  }, [hideEngineForStudentPuzzle, vsComputer, sticky, currentMoveIndexFromSync, currentMoveIndex, lastActionMs]);
+  }, [hideEngineForStudentPuzzle, vsComputer, isLiveAnalysis, sticky, currentMoveIndexFromSync, currentMoveIndex, lastActionMs]);
 
   useEffect(() => {
     if (!hideEngineForStudentPuzzle) return;
@@ -632,11 +653,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   }, []);
 
   const [freePlayFen, setFreePlayFen] = useState<string | null>(null);
-  useEffect(() => {
-    const ch = moveListChapter ?? effectiveChapter;
-    if (ch && (totalMoves === 0 || isLiveAnalysis)) setFreePlayFen(fenToCurrentFen(ch, totalMoves));
-    else setFreePlayFen(null);
-  }, [effectiveChapter?.id, totalMoves, effectiveChapter?.fen, isLiveAnalysis, moveListChapter]);
 
   const studyBoardFen = useMemo(() => {
     if (vsComputer) return vcFen;
@@ -657,12 +673,22 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     return null;
   }, [studentTurnCode]);
 
+  const engineDrivesEvalBar =
+    !vsComputer
+    && (
+      boardSettings.showEngineAnalysis
+      || boardSettings.showEvalBar
+      || boardSettings.showBestMoveArrows
+      || boardSettings.showVariationArrows
+    );
+
   useEffect(() => {
+    if (engineDrivesEvalBar) return;
     if (vsComputer) {
       try {
-        setEvalScore(getEvaluationPawns(makeBuilderGame(studyBoardFen)));
+        setEvalBar(materialEvalToBarDisplay(getEvaluationPawns(makeBuilderGame(studyBoardFen))));
       } catch {
-        setEvalScore(0);
+        setEvalBar(OFF_EVAL_BAR);
       }
       return;
     }
@@ -670,14 +696,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     const updateEval = async () => {
       try {
         const score = await getEvaluationPawnsAsync(makeBuilderGame(studyBoardFen));
-        if (!cancelled) setEvalScore(score);
+        if (!cancelled) setEvalBar(materialEvalToBarDisplay(score));
       } catch {
-        if (!cancelled) setEvalScore(0);
+        if (!cancelled) setEvalBar(OFF_EVAL_BAR);
       }
     };
     updateEval();
     return () => { cancelled = true; };
-  }, [studyBoardFen, vsComputer]);
+  }, [studyBoardFen, vsComputer, engineDrivesEvalBar]);
 
   const progressKey = effectiveChapter ? `${selectedStudy?.id}_${effectiveChapter.id}` : null;
   const recordProgress = useCallback((key: string, idx: number) => {
@@ -700,7 +726,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setLastActionMs(now);
     setChapterMoveAnalysis([]);
     if (!effectiveChapter) { setCurrentMoveIndex(0); return; }
-    setCurrentMoveIndex(isLiveAnalysis ? totalMoves : 0);
+    setCurrentMoveIndex(0);
+    setFreePlayFen(null);
+
+    if (isLiveAnalysis && selectedStudy?.id && effectiveChapter.id && studentId) {
+      const saved = readLiveAnalysisChapter(studentId, selectedStudy.id, effectiveChapter.id);
+      setLiveSessionMoves(saved.current.moves);
+      setLiveAttemptHistory(saved.attempts);
+    } else {
+      setLiveSessionMoves([]);
+      setLiveAttemptHistory([]);
+    }
 
     if (previewMode || !selectedStudy?.id || !effectiveChapter.id || !studentId) return;
     let cancelled = false;
@@ -1029,23 +1065,36 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setTimeout(() => setLiveAnalysisNote(null), 2500);
   }, [selectedStudy, effectiveChapter, selectedChapterIndex, pushStudyChatMessage, studentName]);
 
-  const appendLiveMoveToChapter = useCallback((sid: string, cid: string, san: string) => {
-    setStudies(prev => {
-      const next = prev.map(s => {
-        if (s.id !== sid) return s;
-        return {
-          ...s,
-          chapters: s.chapters.map(ch => {
-            if (ch.id !== cid) return ch;
-            return { ...ch, moves: [...(ch.moves ?? []), san] };
-          }),
-        };
-      });
-      const updated = next.find(s => s.id === sid);
-      if (updated) void saveStudyAsync(updated);
-      return next;
-    });
-  }, []);
+  const pushLiveSessionMove = useCallback((san: string, truncateFromIndex?: number) => {
+    if (!selectedStudy?.id || !effectiveChapter?.id || !studentId) return;
+    const next = appendLiveAnalysisMove(
+      studentId,
+      selectedStudy.id,
+      effectiveChapter.id,
+      san,
+      truncateFromIndex,
+    );
+    setLiveSessionMoves(next.current.moves);
+    setLiveAttemptHistory(next.attempts);
+  }, [selectedStudy?.id, effectiveChapter?.id, studentId]);
+
+  const restartLiveAnalysis = useCallback(() => {
+    if (!selectedStudy?.id || !effectiveChapter?.id || !studentId) {
+      setLiveSessionMoves([]);
+      setCurrentMoveIndex(0);
+      setFreePlayFen(null);
+      return;
+    }
+    const next = startNewLiveAnalysisAttempt(studentId, selectedStudy.id, effectiveChapter.id);
+    setLiveSessionMoves(next.current.moves);
+    setLiveAttemptHistory(next.attempts);
+    setCurrentMoveIndex(0);
+    setFreePlayFen(null);
+    setFeedback(null);
+    setFeedbackText(null);
+    setLaHint(null);
+    setChapterMoveAnalysis([]);
+  }, [selectedStudy?.id, effectiveChapter?.id, studentId]);
 
   useEffect(() => {
     if (!isLiveAnalysis || vsComputer) return;
@@ -1068,11 +1117,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           const mv = g2.move(best);
           if (!mv) return;
           setFreePlayFen(g2.fen());
-          if (sid && cid) {
-            appendLiveMoveToChapter(sid, cid, mv.san);
-            setCurrentMoveIndex(i => i + 1);
-            setLastActionMs(Date.now());
-          }
+          pushLiveSessionMove(mv.san, liveSessionMoves.length);
+          setCurrentMoveIndex(i => i + 1);
+          setLastActionMs(Date.now());
           setLaHint(`En iyi hamle: ${best}`);
         } finally {
           setLaReplyThinking(false);
@@ -1090,7 +1137,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         laAutoReplyTimer.current = null;
       }
     };
-  }, [isLiveAnalysis, vsComputer, effectiveStudentTurnCode, studyBoardFen, laReplyThinking, selectedStudy?.id, effectiveChapter?.id, appendLiveMoveToChapter, getBestMoveWithTimeout]);
+  }, [isLiveAnalysis, vsComputer, effectiveStudentTurnCode, studyBoardFen, laReplyThinking, pushLiveSessionMove, liveSessionMoves.length, getBestMoveWithTimeout]);
 
   const handlePieceDrop = useCallback(({ sourceSquare, targetSquare, piece }: { piece?: any; sourceSquare: string; targetSquare: string | null }) => {
     if (!sourceSquare || !targetSquare) return false;
@@ -1122,15 +1169,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         setLastActionMs(now);
         void estimateMoveQuality(beforeFen, result.san);
 
-        if (syncState) {
-          const parentId = mainlineNodeIdForFen(syncState.tree, beforeFen);
-          void makeMove(parentId, result.san);
-        } else if (selectedStudy?.id && effectiveChapter?.id) {
-          appendLiveMoveToChapter(selectedStudy.id, effectiveChapter.id, result.san);
-          setFreePlayFen(game.fen());
-        } else {
-          setFreePlayFen(game.fen());
-        }
+        setFreePlayFen(game.fen());
+        pushLiveSessionMove(
+          result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
+          currentMoveIndex,
+        );
 
         setCurrentMoveIndex(i => i + 1);
         logStudyEvent({
@@ -1299,7 +1342,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, appendLiveMoveToChapter, syncState, progressKey, makeMove, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle]);
+  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, pushLiveSessionMove, syncState, progressKey, makeMove, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle]);
 
   const puzzleBranchChoices = useMemo(() => {
     if (!hideEngineForStudentPuzzle || !syncState?.tree || isComplete) return [];
@@ -1389,15 +1432,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (hideEngineForStudentPuzzle) {
       target = target <= 0 ? 0 : Math.min(target, currentMoveIndex);
     }
-    if (ch && (totalMoves === 0 || isLiveAnalysis)) {
+    const nextIdx = Math.max(0, Math.min(totalMoves, target));
+    if (ch && isLiveAnalysis) {
+      setFreePlayFen(fenToCurrentFen(ch, nextIdx));
+    } else if (ch && totalMoves === 0) {
       setFreePlayFen(fenToCurrentFen(ch, totalMoves));
     } else {
       setFreePlayFen(null);
     }
-    const nextIdx = Math.max(0, Math.min(totalMoves, target));
     setCurrentVariation(null);
     setCurrentMoveIndex(nextIdx);
-    void jumpToMoveIndex(nextIdx);
+    if (!isLiveAnalysis) void jumpToMoveIndex(nextIdx);
     setFeedback(null);
     setFeedbackText(null);
   }, [vsComputer, effectiveChapter, vcHistory, moveListChapter, totalMoves, isLiveAnalysis, jumpToMoveIndex, hideEngineForStudentPuzzle, currentMoveIndex]);
@@ -2146,7 +2191,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   boardClassName="rounded-sm overflow-hidden ring-1 ring-[rgba(255,255,255,0.05)]"
                   evalBar={
                     showEvalBar ? (
-                      <ChessEvalBar score={evalScore} orientation={studentBoardOrientation} />
+                      <ChessEvalBar
+                        whitePercent={evalBar.whitePercent}
+                        label={evalBar.label}
+                        pending={evalBar.pending}
+                        orientation={studentBoardOrientation}
+                      />
                     ) : undefined
                   }
                 >
@@ -2358,7 +2408,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
               onToggle={() => toggleBoardSetting('showEngineAnalysis')}
               onHoverMove={setEngineHoverMove}
               onTopMoveUpdate={setEngineTopMove}
-              onEvalScoreChange={setEvalScore}
+              onEvalBarChange={boardSettings.showEvalBar ? setEvalBar : undefined}
               onOpenBoardPrefs={() => setShowStudySettings(true)}
             />
           ))}
@@ -2655,6 +2705,24 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
               {isLiveAnalysis && (
                 <div className="space-y-2 mt-2 pt-4 border-t border-white/5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                      Canlı analiz oturumu
+                      {liveAttemptHistory.length > 0 ? (
+                        <span className="ml-2 text-teal-500/80 normal-case tracking-normal">
+                          · {liveAttemptHistory.length} önceki deneme kayıtlı
+                        </span>
+                      ) : null}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={restartLiveAnalysis}
+                      className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-bold text-slate-300 uppercase tracking-wide"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Yeniden başla
+                    </button>
+                  </div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Antrenöre Not</p>
                   <div className="flex gap-2">
                     <input

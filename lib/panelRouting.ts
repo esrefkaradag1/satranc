@@ -24,6 +24,7 @@ export const TAB_TO_SLUG: Record<string, string> = {
   lessons: 'canli-ders',
   curriculum: 'ders-programi',
   messages: 'mesajlar',
+  whatsapp: 'whatsapp-yonetimi',
   security: 'kullanici-guvenlik',
   roles: 'rol-yonetimi',
   profile: 'profil',
@@ -32,7 +33,6 @@ export const TAB_TO_SLUG: Record<string, string> = {
 
 export const SLUG_TO_TAB: Record<string, string> = {
   ...Object.fromEntries(Object.entries(TAB_TO_SLUG).map(([tab, slug]) => [slug, tab])),
-  whatsapp: 'messages',
 };
 
 const LAST_PANEL_HASH_KEY = 'netchess_last_panel_hash';

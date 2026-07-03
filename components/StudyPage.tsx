@@ -51,6 +51,7 @@ import { nodeCommentText } from '../lib/studySync/apply';
 import { mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, promoteVariationLines, mergeMainlineMoves, mergeVariationRecords, findVariationNodeAtMoveIndex } from '../lib/studySync/moveList';
 import { exportLegacyFromTree } from '../lib/studySync/treeModel';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
+import type { EvalBarDisplay } from '../hooks/useStableEvalDisplay';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
@@ -282,7 +283,8 @@ const StudyPage: React.FC = () => {
   const { settings: boardSettings, toggleSetting: toggleBoardSetting } = useStudyBoardSettings();
   const [showStudyHelp, setShowStudyHelp] = useState(false);
   const [showStudyBoardSettings, setShowStudyBoardSettings] = useState(false);
-  const [evalScore, setEvalScore] = useState(0);
+  const OFF_EVAL_BAR: EvalBarDisplay = { whitePercent: 50, label: '—', winningChances: 0, pending: false };
+  const [evalBar, setEvalBar] = useState<EvalBarDisplay>(OFF_EVAL_BAR);
   const [isDraggingPiece, setIsDraggingPiece] = useState(false);
   const [dragFrozenFen, setDragFrozenFen] = useState<string | null>(null);
 
@@ -1852,7 +1854,7 @@ const StudyPage: React.FC = () => {
 
 
   useEffect(() => {
-    if (!boardSettings.showEvalBar) setEvalScore(0);
+    if (!boardSettings.showEvalBar) setEvalBar(OFF_EVAL_BAR);
   }, [boardSettings.showEvalBar]);
 
   // Practice Mode (vs computer): Sıra kullanıcıda değilse motor veya bulmaca otomatik oynasın.
@@ -3991,7 +3993,12 @@ const StudyPage: React.FC = () => {
                   shellClassName="bg-[#0f172a] border-r border-white/5 shadow-inner"
                   evalBar={
                     boardSettings.showEvalBar ? (
-                      <ChessEvalBar score={evalScore} orientation={boardOrientation} />
+                      <ChessEvalBar
+                        whitePercent={evalBar.whitePercent}
+                        label={evalBar.label}
+                        pending={evalBar.pending}
+                        orientation={boardOrientation}
+                      />
                     ) : undefined
                   }
                   boardClassName={`overflow-hidden shadow-lg transition-all duration-300 ${recording ? 'ring-2 ring-rose-500/40' : ''}`}
@@ -4345,7 +4352,7 @@ const StudyPage: React.FC = () => {
               || boardSettings.showVariationArrows
             }
             onToggle={() => toggleBoardSetting('showEngineAnalysis')}
-            onEvalScoreChange={boardSettings.showEvalBar ? setEvalScore : undefined}
+            onEvalBarChange={boardSettings.showEvalBar ? setEvalBar : undefined}
             boardSettings={{
               showEvalBar: boardSettings.showEvalBar,
               onToggleEvalBar: () => toggleBoardSetting('showEvalBar'),

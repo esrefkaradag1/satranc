@@ -37,6 +37,7 @@ import BranchGroupManagement from './BranchGroupManagement';
 import Analysis from './Analysis';
 import Gallery from './Gallery';
 import Messages from './Messages';
+import WhatsAppManagement from './WhatsAppManagement';
 import LeaderboardPage from './leaderboard/LeaderboardPage';
 import Homework from './Homework';
 import ChessBoard from './ChessBoard';
@@ -678,6 +679,8 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
         return <Gallery />;
       case 'messages':
         return <Messages />;
+      case 'whatsapp':
+        return <WhatsAppManagement />;
       case 'leaderboard':
         return <LeaderboardPage />;
       case 'homework':

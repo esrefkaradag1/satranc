@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { EVAL_BAR_DECISIVE_SCORE, evalBarWhitePercent, formatEvalLabel } from '../../lib/chessBoardUi';
 
 const RANK_SIZE = '1.25rem';
@@ -10,26 +10,66 @@ export type BoardOrientation = 'white' | 'black';
 export { EVAL_BAR_DECISIVE_SCORE, evalBarWhitePercent, formatEvalLabel };
 
 export type EvalBarProps = {
-  score: number;
+  /** 0–100 beyaz pay (Lichess kazanma şansı çubuğu) */
+  whitePercent?: number;
+  /** Legacy: kazanma şansı (-1..1) veya eski puan skoru */
+  score?: number;
   orientation?: BoardOrientation;
   label?: string;
   className?: string;
   darkClassName?: string;
   lightClassName?: string;
   labelClassName?: string;
+  pending?: boolean;
 };
 
 /** Tahta yüksekliğiyle hizalı dikey eval çubuğu (üst etiket + iki segment) */
 export function ChessEvalBar({
-  score,
+  whitePercent,
+  score = 0,
   orientation = 'white',
   label,
   className = '',
   darkClassName = 'bg-[#334155]',
   lightClassName = 'bg-[#f8fafc]',
   labelClassName = 'text-[9px] font-extrabold text-white bg-indigo-600',
+  pending = false,
 }: EvalBarProps) {
-  const whiteH = evalBarWhitePercent(score);
+  const targetH = whitePercent ?? evalBarWhitePercent(score);
+  const [smoothH, setSmoothH] = useState(targetH);
+  const smoothRef = useRef(targetH);
+
+  useEffect(() => {
+    smoothRef.current = smoothH;
+  }, [smoothH]);
+
+  useEffect(() => {
+    if (pending) return;
+    let frame = 0;
+    let cancelled = false;
+
+    const step = () => {
+      if (cancelled) return;
+      const diff = targetH - smoothRef.current;
+      if (Math.abs(diff) < 0.12) {
+        smoothRef.current = targetH;
+        setSmoothH(targetH);
+        return;
+      }
+      const next = smoothRef.current + diff * 0.12;
+      smoothRef.current = next;
+      setSmoothH(next);
+      frame = requestAnimationFrame(step);
+    };
+
+    frame = requestAnimationFrame(step);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [targetH, pending]);
+
+  const whiteH = pending ? targetH : smoothH;
   const blackH = 100 - whiteH;
   const flipped = orientation === 'black';
   const display = label ?? formatEvalLabel(score);
@@ -43,12 +83,16 @@ export function ChessEvalBar({
       </span>
       <div className={`flex-1 min-h-0 w-full flex ${flipped ? 'flex-col-reverse' : 'flex-col'}`}>
         <div
-          className={`${darkClassName} transition-[height] duration-200 ease-out shrink-0`}
+          className={`${darkClassName} shrink-0`}
           style={{ height: `${blackH}%` }}
           title="Siyah avantajı"
           aria-hidden
         />
-        <div className={`${lightClassName} transition-[height] duration-200 ease-out flex-1 min-h-0`} title="Beyaz avantajı" aria-hidden />
+        <div
+          className={`${lightClassName} flex-1 min-h-0`}
+          title="Beyaz avantajı"
+          aria-hidden
+        />
       </div>
     </div>
   );

@@ -99,6 +99,7 @@ import {
 } from '../lib/performanceAnalysisUtils';
 import { DATE_INPUT_MAX, DATE_INPUT_MIN, normalizeDateInputYear } from '../lib/dateInputUtils';
 import { isPackageSaleCategory } from '../lib/salePaymentUtils';
+import { filterDuesTransactions, isDuesPaymentTransaction } from '../lib/transactionUtils';
 import SalePaymentCell from './SalePaymentCell';
 
 import { REMINDER_DAY_OPTIONS, DEFAULT_REMINDER_DAY } from '../lib/reminderDays';
@@ -112,6 +113,7 @@ import {
   getExpectedDueForMonth,
   getExpectedDuesForYear,
   isMonthBeforeRegistration,
+  isMonthDuesWaived,
   mergeBranchOffices,
   monthKey,
 } from '../lib/trainingGroupUtils';
@@ -1144,7 +1146,7 @@ const StudentDetail: React.FC<{
     const monthPayments: Record<number, number> = {};
     for (let m = 1; m <= 12; m++) monthPayments[m] = 0;
     let totalPaidThisYear = 0;
-    studentTransactions.forEach((t) => {
+    filterDuesTransactions(studentTransactions).forEach((t) => {
       const d = t.date || '';
       if (d.slice(0, 4) === yearStr) {
         totalPaidThisYear += t.amount || 0;
@@ -1200,7 +1202,7 @@ const StudentDetail: React.FC<{
     const yearStr = String(calendarYear);
     const map: Record<number, number> = {};
     for (let m = 1; m <= 12; m++) map[m] = 0;
-    studentTransactions.forEach((t) => {
+    filterDuesTransactions(studentTransactions).forEach((t) => {
       const d = t.date;
       const y = d.length >= 4 ? d.slice(0, 4) : '';
       const monthStr = d.length >= 7 ? d.slice(5, 7) : '';
@@ -1691,14 +1693,18 @@ const StudentDetail: React.FC<{
  const monthNum = idx + 1;
  const paid = duesByMonth[monthNum] ?? 0;
  const beforeRegistration = isMonthBeforeRegistration(student, calendarYear, monthNum);
+ const waivedMonth = isMonthDuesWaived(student, calendarYear, monthNum, trainingGroups, disciplineBranches);
+ const inactiveMonth = beforeRegistration || waivedMonth;
  const dueInfo = getExpectedDueForMonth(student, calendarYear, monthNum, trainingGroups, disciplineBranches);
- const expected = beforeRegistration ? 0 : (student.registrationType === 'package' ? 0 : dueInfo.expected);
+ const expected = inactiveMonth ? 0 : (student.registrationType === 'package' ? 0 : dueInfo.expected);
  const nowMonth = new Date().getMonth() + 1;
  const nowYear = new Date().getFullYear();
  const isFuture = calendarYear > nowYear || (calendarYear === nowYear && monthNum > nowMonth);
  const state =
    beforeRegistration
      ? 'Kayıt öncesi'
+     : waivedMonth
+       ? 'Muaf'
      : student.registrationType === 'package'
      ? (paid > 0 ? 'Ödendi' : 'Paket')
      : dueInfo.isScholarship
@@ -1711,7 +1717,7 @@ const StudentDetail: React.FC<{
              ? 'Kısmi'
              : 'Ödenmedi';
  const tone =
-   beforeRegistration
+   inactiveMonth
      ? 'bg-slate-900/50 border-slate-700/40 opacity-60'
      : student.registrationType === 'package'
      ? paid > 0
@@ -1727,7 +1733,7 @@ const StudentDetail: React.FC<{
              ? 'bg-amber-500/30 border-amber-400/55 shadow-sm shadow-amber-500/15'
              : 'bg-rose-500/30 border-rose-400/55 shadow-sm shadow-rose-500/15';
  const stateColor =
-   state === 'Kayıt öncesi' ? 'text-slate-500' :
+   state === 'Kayıt öncesi' || state === 'Muaf' ? 'text-slate-500' :
    state === 'Ödendi' ? 'text-emerald-200' :
    state === 'Burslu' ? 'text-emerald-300' :
    state === 'Kısmi' ? 'text-amber-200' :
@@ -1762,7 +1768,7 @@ const StudentDetail: React.FC<{
      >
        <div className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 text-center">{m}</div>
        <div className="mt-1 sm:mt-2 text-center">
-         {beforeRegistration ? (
+         {inactiveMonth ? (
            <div className="text-sm sm:text-lg font-black text-slate-600">—</div>
          ) : student.registrationType !== 'package' && dueInfo.isScholarship ? (
            <div className="text-sm sm:text-lg font-black text-emerald-300">Burslu</div>

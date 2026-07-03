@@ -6,6 +6,7 @@ import { insertHomeworkAttemptViaEnv } from './lib/homeworkAttemptDb.mjs';
 import { appendLiveLessonChatViaEnv } from './lib/liveLessonChatDb.mjs';
 import { replaceSessionMediaViaEnv, sessionMediaOpViaEnv } from './lib/liveLessonSessionMediaDb.mjs';
 import { insertSiteMessageViaEnv, listSiteMessagesViaEnv } from './lib/siteMessagesDb.mjs';
+import { whatsappApiGetHandler, whatsappApiPostHandler } from './lib/whatsappApi.mjs';
 import {
   lichessOAuthDisconnectViaEnv,
   lichessOAuthStatusViaEnv,
@@ -19,6 +20,7 @@ import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
 
 const DEV_GET_ROUTES = new Set([
   '/api/site-messages',
+  '/api/whatsapp',
   '/api/lichess-oauth-status',
   '/api/lichess-puzzle-activity',
   '/api/lichess-puzzle-dashboard',
@@ -29,6 +31,7 @@ const DEV_POST_ROUTES = new Set([
   '/api/live-lesson-chat',
   '/api/live-lesson-session-media',
   '/api/site-messages',
+  '/api/whatsapp',
   '/api/fetch-ukd',
   '/api/auth-parent',
   '/api/lichess-oauth-token',
@@ -51,6 +54,8 @@ function devApiPlugin(env: Record<string, string>): Plugin {
               if (route === '/api/site-messages') {
                 const conversationId = parsed.searchParams.get('conversationId')?.trim() ?? '';
                 result = await listSiteMessagesViaEnv(conversationId || undefined, env);
+              } else if (route === '/api/whatsapp') {
+                result = await whatsappApiGetHandler(fullUrl, env);
               } else if (route === '/api/lichess-oauth-status') {
                 result = await lichessOAuthStatusViaEnv(parsed.searchParams.get('studentId'), env);
               } else if (route === '/api/lichess-puzzle-activity') {
@@ -107,6 +112,8 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 result = await appendLiveLessonChatViaEnv(body, env);
               } else if (route === '/api/site-messages') {
                 result = await insertSiteMessageViaEnv(body, env);
+              } else if (route === '/api/whatsapp') {
+                result = await whatsappApiPostHandler(body, env);
               } else if (route === '/api/lichess-oauth-token') {
                 result = await lichessOAuthTokenViaEnv(body, env, req.headers as Record<string, string | string[] | undefined>);
               } else if (route === '/api/lichess-oauth-disconnect') {

@@ -69,7 +69,13 @@ export function buildTerminalPvLines(terminal: TerminalEval, numPv: number): Ter
   }));
 }
 
-/** Oyun bittiğinde avantaj çubuğu skoru (beyaz perspektif, ±100 = kesin) */
+/** Oyun bittiğinde avantaj çubuğu doluluk oranı (0–100) */
+export function terminalEvalToBarPercent(terminal: TerminalEval): number {
+  if (terminal.kind === 'checkmate') return terminal.whiteAdvantage ? 100 : 0;
+  return 50;
+}
+
+/** @deprecated terminalEvalToBarPercent kullanın */
 export function terminalEvalToBarPawns(terminal: TerminalEval): number {
   if (terminal.kind === 'checkmate') return terminal.whiteAdvantage ? 100 : -100;
   return 0;

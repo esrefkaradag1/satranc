@@ -1,20 +1,22 @@
 import React, { useMemo, useState } from 'react';
 import {
   Building2, BookOpen, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Clock, UserCircle,
-  UserPlus, Search, Check, X,
+  UserPlus, Search, Check, X, Package, Briefcase, Calendar,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
-import type { DisciplineBranch, GroupLessonSlot, TrainingGroup } from '../types';
+import type { DisciplineBranch, GroupLessonSlot, LessonPackage, TrainingGroup } from '../types';
 import {
   WEEKDAY_OPTIONS, applyGroupDefaultsToStudent, emptyLessonSlot, formatLessonSchedule, getGroupMonthlyFee,
   studentsInTrainingGroup,
 } from '../lib/trainingGroupUtils';
 import { coachesForClub } from '../lib/orgScope';
 import { normalizeClubKey } from '../lib/clubScope';
-import { resolveClubIdFromAuth } from '../lib/orgStructureDb';
+import { resolveClubIdFromAuth, resolveBranchOfficeNames, clubIdForOfficeRecord } from '../lib/orgStructureDb';
 import { DEFAULT_APPLICATION_GROUPS, DEFAULT_APPLICATION_OFFICES } from '../lib/applicationFormOptions';
 import { buildDefaultOrgStructure, buildClubDefaultOrgStructure } from '../lib/seedDefaultOrgStructure';
 import { ResponsiveTable } from './ui/ResponsiveTable';
+
+const LESSON_COUNT_OPTIONS = [1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 48];
 
 const BranchGroupManagement: React.FC = () => {
   const {
@@ -33,6 +35,10 @@ const BranchGroupManagement: React.FC = () => {
     scopedStudents: students,
     scopedDisciplineBranches: disciplineBranches,
     scopedTrainingGroups: trainingGroups,
+    scopedLessonPackages: lessonPackages,
+    addLessonPackage,
+    updateLessonPackage,
+    removeLessonPackage,
     scopedCoaches: coaches,
     updateStudent,
     auth,
@@ -52,6 +58,10 @@ const BranchGroupManagement: React.FC = () => {
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [editingGroup, setEditingGroup] = useState<TrainingGroup | null>(null);
   const [groupParentBranch, setGroupParentBranch] = useState<DisciplineBranch | null>(null);
+  const [showPackageModal, setShowPackageModal] = useState(false);
+  const [editingPackage, setEditingPackage] = useState<LessonPackage | null>(null);
+  const [packageParentBranch, setPackageParentBranch] = useState<DisciplineBranch | null>(null);
+  const [showGroupBranchPicker, setShowGroupBranchPicker] = useState(false);
 
   const [branchForm, setBranchForm] = useState({ name: '', branchOffice: '', monthlyFee: '' });
   const [groupForm, setGroupForm] = useState({
@@ -60,6 +70,16 @@ const BranchGroupManagement: React.FC = () => {
     capacity: '14',
     lessonSlots: [emptyLessonSlot()] as GroupLessonSlot[],
     coachIds: [] as string[],
+  });
+  const [packageForm, setPackageForm] = useState({
+    disciplineBranchId: '',
+    name: '',
+    lessonCount: '4',
+    validityDays: '30',
+    packageFee: '',
+    capacity: '1',
+    coachIds: [] as string[],
+    createBranchIfMissing: false,
   });
   const [showStudentModal, setShowStudentModal] = useState(false);
   const [studentModalGroup, setStudentModalGroup] = useState<TrainingGroup | null>(null);
@@ -72,15 +92,14 @@ const BranchGroupManagement: React.FC = () => {
   );
 
   const officeOptions = useMemo(() => {
-    const clubId = isClubUser ? resolveClubIdFromAuth(auth, clubs) : undefined;
-    return branchOfficeRecords
-      .filter((r) => {
-        if (!isClubUser) return true;
-        return !r.clubId || r.clubId === clubId;
-      })
-      .map((r) => r.name.trim())
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b, 'tr'));
+    const filtered = isClubUser
+      ? branchOfficeRecords.filter((r) => {
+          const clubId = resolveClubIdFromAuth(auth, clubs);
+          if (!clubId) return true;
+          return !r.clubId || r.clubId === clubId || clubIdForOfficeRecord(r, clubs) === clubId;
+        })
+      : branchOfficeRecords;
+    return resolveBranchOfficeNames(filtered, [], auth, clubs);
   }, [branchOfficeRecords, isClubUser, auth, clubs]);
 
   /** Kurumsal Yapı'daki kulüpler — henüz branch_offices tablosunda şube olarak tanımlı değil */
@@ -89,7 +108,9 @@ const BranchGroupManagement: React.FC = () => {
     return clubs.filter((c) => {
       const name = c.name.trim();
       if (!name) return false;
-      return !branchOfficeRecords.some((r) => normalizeClubKey(r.name) === normalizeClubKey(name));
+      return !branchOfficeRecords.some(
+        (r) => clubIdForOfficeRecord(r, clubs) === c.id || normalizeClubKey(r.name) === normalizeClubKey(name),
+      );
     });
   }, [clubs, branchOfficeRecords, isClubUser]);
 
@@ -168,11 +189,12 @@ const BranchGroupManagement: React.FC = () => {
   const saveBranch = () => {
     const name = branchForm.name.trim();
     const branchOffice = branchForm.branchOffice.trim();
+    const monthlyFee = Number(branchForm.monthlyFee) || 0;
     if (!name || !branchOffice) return;
     if (editingBranch) {
-      updateDisciplineBranch(editingBranch.id, { name, branchOffice, monthlyFee: 0 });
+      updateDisciplineBranch(editingBranch.id, { name, branchOffice, monthlyFee });
     } else {
-      addDisciplineBranch({ name, branchOffice, monthlyFee: 0 });
+      addDisciplineBranch({ name, branchOffice, monthlyFee });
     }
     setShowBranchModal(false);
   };
@@ -188,6 +210,111 @@ const BranchGroupManagement: React.FC = () => {
       coachIds: [],
     });
     setShowGroupModal(true);
+  };
+
+  const openAddGroupFromTop = () => {
+    if (sortedBranches.length === 0) {
+      showToast('Önce en az bir branş tanımlayın.', 'warning');
+      return;
+    }
+    if (sortedBranches.length === 1) {
+      openAddGroup(sortedBranches[0]);
+      return;
+    }
+    setShowGroupBranchPicker(true);
+  };
+
+  const emptyPackageForm = (branch?: DisciplineBranch) => ({
+    disciplineBranchId: branch?.id ?? sortedBranches[0]?.id ?? '',
+    name: '',
+    lessonCount: '4',
+    validityDays: '30',
+    packageFee: '',
+    capacity: '1',
+    coachIds: [] as string[],
+    createBranchIfMissing: false,
+  });
+
+  const openAddPackage = (parent?: DisciplineBranch) => {
+    if (sortedBranches.length === 0) {
+      showToast('Önce en az bir branş tanımlayın.', 'warning');
+      return;
+    }
+    setEditingPackage(null);
+    setPackageParentBranch(parent ?? null);
+    setPackageForm(emptyPackageForm(parent));
+    setShowPackageModal(true);
+  };
+
+  const openEditPackage = (pkg: LessonPackage, parent: DisciplineBranch) => {
+    setEditingPackage(pkg);
+    setPackageParentBranch(parent);
+    setPackageForm({
+      disciplineBranchId: parent.id,
+      name: pkg.name,
+      lessonCount: String(pkg.lessonCount || 4),
+      validityDays: String(pkg.validityDays || 30),
+      packageFee: String(pkg.packageFee || ''),
+      capacity: String(pkg.capacity || 1),
+      coachIds: pkg.coachIds ? [...pkg.coachIds] : [],
+      createBranchIfMissing: false,
+    });
+    setShowPackageModal(true);
+  };
+
+  const savePackage = () => {
+    const branch = disciplineBranches.find((b) => b.id === packageForm.disciplineBranchId);
+    if (!branch) {
+      showToast('Branş seçiniz.', 'warning');
+      return;
+    }
+    const name = packageForm.name.trim();
+    const lessonCount = Number(packageForm.lessonCount) || 0;
+    const validityDays = Number(packageForm.validityDays) || 0;
+    const packageFee = Number(packageForm.packageFee) || 0;
+    const capacity = Number(packageForm.capacity) || 0;
+    if (!name) {
+      showToast('Ders paketi adı zorunludur.', 'warning');
+      return;
+    }
+    if (lessonCount <= 0) {
+      showToast('Ders sayısı seçiniz.', 'warning');
+      return;
+    }
+    if (validityDays <= 0) {
+      showToast('Geçerlilik süresi giriniz.', 'warning');
+      return;
+    }
+
+    if (packageForm.createBranchIfMissing && !editingPackage) {
+      const exists = disciplineBranches.some(
+        (b) => b.name === name && normalizeClubKey(b.branchOffice) === normalizeClubKey(branch.branchOffice),
+      );
+      if (!exists) {
+        addDisciplineBranch({ name, branchOffice: branch.branchOffice, monthlyFee: packageFee });
+      }
+    }
+
+    const disciplineName =
+      packageForm.createBranchIfMissing && !editingPackage ? name : branch.name;
+
+    const payload = {
+      name,
+      branchOffice: branch.branchOffice,
+      discipline: disciplineName,
+      lessonCount,
+      validityDays,
+      packageFee,
+      capacity,
+      coachIds: packageForm.coachIds.length ? packageForm.coachIds : undefined,
+    };
+
+    if (editingPackage) {
+      updateLessonPackage(editingPackage.id, payload);
+    } else {
+      addLessonPackage(payload);
+    }
+    setShowPackageModal(false);
   };
 
   const openEditGroup = (group: TrainingGroup, parent: DisciplineBranch) => {
@@ -254,6 +381,26 @@ const BranchGroupManagement: React.FC = () => {
 
   const toggleGroupCoach = (coachId: string) => {
     setGroupForm((prev) => {
+      const has = prev.coachIds.includes(coachId);
+      return {
+        ...prev,
+        coachIds: has ? prev.coachIds.filter((id) => id !== coachId) : [...prev.coachIds, coachId],
+      };
+    });
+  };
+
+  const packageBranchForForm = useMemo(
+    () => disciplineBranches.find((b) => b.id === packageForm.disciplineBranchId) ?? packageParentBranch,
+    [disciplineBranches, packageForm.disciplineBranchId, packageParentBranch],
+  );
+
+  const packageCoachOptions = useMemo(() => {
+    if (!packageBranchForForm) return coaches;
+    return coachesForClub(coaches, packageBranchForForm.branchOffice);
+  }, [coaches, packageBranchForForm]);
+
+  const togglePackageCoach = (coachId: string) => {
+    setPackageForm((prev) => {
       const has = prev.coachIds.includes(coachId);
       return {
         ...prev,
@@ -347,11 +494,25 @@ const BranchGroupManagement: React.FC = () => {
             </button>
           ) : null}
           <button
-          type="button"
-          onClick={openAddBranch}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold"
-        >
-          <Plus className="w-4 h-4" /> Yeni Branş
+            type="button"
+            onClick={openAddBranch}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold"
+          >
+            <Plus className="w-4 h-4" /> Yeni Branş
+          </button>
+          <button
+            type="button"
+            onClick={openAddGroupFromTop}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold"
+          >
+            <Plus className="w-4 h-4" /> Yeni Grup
+          </button>
+          <button
+            type="button"
+            onClick={() => openAddPackage()}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-sm font-bold"
+          >
+            <Plus className="w-4 h-4" /> Yeni Ders Paketi
           </button>
         </div>
       </div>
@@ -503,10 +664,15 @@ const BranchGroupManagement: React.FC = () => {
                 g.discipline === branch.name &&
                 normalizeClubKey(g.branchOffice) === normalizeClubKey(branch.branchOffice),
             );
+            const branchPackages = lessonPackages.filter(
+              (p) =>
+                p.discipline === branch.name &&
+                normalizeClubKey(p.branchOffice) === normalizeClubKey(branch.branchOffice),
+            );
             const isOpen = expanded[branch.id] !== false;
             return (
               <div key={branch.id} className="rounded-xl border border-white/5 bg-slate-900/60 overflow-hidden">
-                <div className="grid grid-cols-[auto_1fr_auto] sm:grid-cols-[48px_80px_1fr_80px_auto] gap-3 items-center px-4 py-3 border-b border-white/5 bg-slate-800/30">
+                <div className="grid grid-cols-[auto_1fr_auto] sm:grid-cols-[48px_80px_1fr_120px_80px_80px_auto] gap-3 items-center px-4 py-3 border-b border-white/5 bg-slate-800/30">
                   <button
                     type="button"
                     onClick={() => toggleExpand(branch.id)}
@@ -521,18 +687,30 @@ const BranchGroupManagement: React.FC = () => {
                     </span>
                     <div className="mt-1 text-sm font-black text-white truncate">{branch.name}</div>
                   </div>
-                  <span className="hidden sm:inline-flex w-8 h-8 rounded-full bg-sky-500/20 text-sky-300 text-xs font-black items-center justify-center border border-sky-500/30">
+                  <span className="hidden sm:inline-flex px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-bold border border-emerald-500/25">
+                    ₺{Number(branch.monthlyFee || 0).toLocaleString('tr-TR')}
+                  </span>
+                  <span className="hidden sm:inline-flex w-8 h-8 rounded-full bg-sky-500/20 text-sky-300 text-xs font-black items-center justify-center border border-sky-500/30" title="Grup sayısı">
                     {branchGroups.length}
                   </span>
+                  <span className="hidden sm:inline-flex w-8 h-8 rounded-full bg-amber-500/20 text-amber-300 text-xs font-black items-center justify-center border border-amber-500/30" title="Paket sayısı">
+                    {branchPackages.length}
+                  </span>
                   <div className="flex items-center gap-1.5 justify-end">
+                    <button type="button" onClick={() => openAddGroup(branch)} className="p-2 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25" title="Grup ekle">
+                      <UserPlus className="w-4 h-4" />
+                    </button>
+                    <button type="button" onClick={() => openAddPackage(branch)} className="p-2 rounded-lg bg-sky-500/15 text-sky-400 hover:bg-sky-500/25" title="Ders paketi ekle">
+                      <Package className="w-4 h-4" />
+                    </button>
                     <button type="button" onClick={() => openEditBranch(branch)} className="p-2 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25" title="Düzenle">
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button
                       type="button"
                       onClick={async () => {
-                        if (branchGroups.length > 0) {
-                          showToast('Önce bu branştaki grupları silin.', 'warning');
+                        if (branchGroups.length > 0 || branchPackages.length > 0) {
+                          showToast('Önce bu branştaki grupları ve paketleri silin.', 'warning');
                           return;
                         }
                         const ok = await confirmDialog({
@@ -668,6 +846,85 @@ const BranchGroupManagement: React.FC = () => {
                         </table>
                       </ResponsiveTable>
                     )}
+
+                    <div className="flex items-center justify-between mt-6 mb-3">
+                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        {branch.name} — Ders Paketleri
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openAddPackage(branch)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Yeni Paket Ekle
+                      </button>
+                    </div>
+
+                    {branchPackages.length === 0 ? (
+                      <p className="text-slate-500 text-sm py-4 text-center border border-dashed border-white/10 rounded-lg">
+                        Bu branşta henüz ders paketi yok. Özel ders için &quot;Yeni Paket Ekle&quot; kullanın.
+                      </p>
+                    ) : (
+                      <ResponsiveTable minWidth={640}>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500 border-b border-white/5">
+                              <th className="text-left py-2 pr-3">No</th>
+                              <th className="text-left py-2 pr-3">Paket Adı</th>
+                              <th className="text-left py-2 pr-3">Ders</th>
+                              <th className="text-left py-2 pr-3">Geçerlilik</th>
+                              <th className="text-left py-2 pr-3">Ücret</th>
+                              <th className="text-left py-2 pr-3">Kontenjan</th>
+                              <th className="text-left py-2 pr-3">Antrenör</th>
+                              <th className="text-right py-2">İşlemler</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {branchPackages.map((pkg, pIdx) => (
+                              <tr key={pkg.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                                <td data-label="No" className="py-3 pr-3 text-slate-500 font-bold">{pIdx + 1}</td>
+                                <td data-label="Paket Adı" className="py-3 pr-3 font-semibold text-white">{pkg.name}</td>
+                                <td data-label="Ders" className="py-3 pr-3 text-slate-300 text-xs">{pkg.lessonCount} ders</td>
+                                <td data-label="Geçerlilik" className="py-3 pr-3 text-slate-300 text-xs">{pkg.validityDays} gün</td>
+                                <td data-label="Ücret" className="py-3 pr-3">
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-bold">
+                                    ₺{Number(pkg.packageFee).toLocaleString('tr-TR')}
+                                  </span>
+                                </td>
+                                <td data-label="Kontenjan" className="py-3 pr-3 text-slate-300 text-xs">{pkg.capacity} kişi</td>
+                                <td data-label="Antrenör" className="py-3 pr-3 text-slate-400 text-xs">
+                                  {pkg.coachIds?.length
+                                    ? pkg.coachIds.map((id) => coachName(id)).join(', ')
+                                    : 'Atanmamış'}
+                                </td>
+                                <td data-label="İşlemler" className="py-3 text-right">
+                                  <div className="inline-flex gap-1">
+                                    <button type="button" onClick={() => openEditPackage(pkg, branch)} className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25">
+                                      <Pencil className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const ok = await confirmDialog({
+                                          title: 'Paketi sil',
+                                          message: `"${pkg.name}" paketini silmek istediğinize emin misiniz?`,
+                                          confirmLabel: 'Sil',
+                                          variant: 'danger',
+                                        });
+                                        if (ok) removeLessonPackage(pkg.id);
+                                      }}
+                                      className="p-1.5 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </ResponsiveTable>
+                    )}
                   </div>
                 )}
               </div>
@@ -693,10 +950,19 @@ const BranchGroupManagement: React.FC = () => {
               value={branchForm.name}
               onChange={(e) => setBranchForm((f) => ({ ...f, name: e.target.value }))}
               className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
-              placeholder="ALT YAPI GRUPLARI"
+              placeholder="ÖZEL DERS 4 SAAT"
+            />
+            <label className="block text-xs font-bold text-slate-400 uppercase">Aylık Ücret (₺)</label>
+            <input
+              type="number"
+              min={0}
+              value={branchForm.monthlyFee}
+              onChange={(e) => setBranchForm((f) => ({ ...f, monthlyFee: e.target.value }))}
+              className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+              placeholder="4000"
             />
             <p className="text-xs text-slate-500 rounded-lg bg-slate-800/60 border border-slate-700/60 px-3 py-2">
-              Branş ücreti kaldırıldı. Aylık ücreti grup eklerken belirleyin.
+              Özel ders branşları için aylık ücreti burada tanımlayın. Grup ücreti ayrıca grup eklerken belirlenebilir.
             </p>
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setShowBranchModal(false)} className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm">İptal</button>
@@ -813,6 +1079,177 @@ const BranchGroupManagement: React.FC = () => {
                 className="flex-1 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm"
               >
                 {selectedStudentIds.length > 0 ? `${selectedStudentIds.length} öğrenciyi ekle` : 'Öğrenci seçin'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showGroupBranchPicker && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowGroupBranchPicker(false)}>
+          <div className="bg-slate-900 border border-white/10 rounded-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-black text-white">Hangi branşa grup eklenecek?</h3>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {sortedBranches.map((branch) => (
+                <button
+                  key={branch.id}
+                  type="button"
+                  onClick={() => {
+                    setShowGroupBranchPicker(false);
+                    openAddGroup(branch);
+                  }}
+                  className="w-full text-left px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-white/5"
+                >
+                  <span className="text-[10px] text-violet-300 font-bold">{branch.branchOffice}</span>
+                  <div className="text-sm font-semibold text-white">{branch.name}</div>
+                </button>
+              ))}
+            </div>
+            <button type="button" onClick={() => setShowGroupBranchPicker(false)} className="w-full py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm">İptal</button>
+          </div>
+        </div>
+      )}
+
+      {showPackageModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowPackageModal(false)}>
+          <div className="bg-slate-900 border border-white/10 rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-white/5 bg-gradient-to-r from-amber-500/20 to-orange-500/10">
+              <h3 className="text-lg font-black text-white flex items-center gap-2">
+                <Plus className="w-5 h-5 text-amber-400" />
+                {editingPackage ? 'Ders Paketi Düzenle' : 'Yeni Ders Paketi Ekle'}
+              </h3>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Branş *</label>
+                <div className="relative">
+                  <BookOpen className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <select
+                    value={packageForm.disciplineBranchId}
+                    onChange={(e) => setPackageForm((f) => ({ ...f, disciplineBranchId: e.target.value }))}
+                    className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                  >
+                    <option value="">Branş Seçiniz</option>
+                    {sortedBranches.map((b) => (
+                      <option key={b.id} value={b.id}>{b.branchOffice} — {b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Ders Paketi Adı *</label>
+                <div className="relative">
+                  <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <input
+                    value={packageForm.name}
+                    onChange={(e) => setPackageForm((f) => ({ ...f, name: e.target.value }))}
+                    className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                    placeholder="Örn: ÖZEL DERS 4 SAAT"
+                  />
+                </div>
+              </div>
+              {!editingPackage ? (
+                <label className="flex items-start gap-2 text-xs text-slate-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={packageForm.createBranchIfMissing}
+                    onChange={(e) => setPackageForm((f) => ({ ...f, createBranchIfMissing: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Aynı isimle özel ders branşı oluştur (yoksa). Örn. &quot;ÖZEL DERS 4 SAAT&quot; branşı otomatik eklenir.
+                  </span>
+                </label>
+              ) : null}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Ders Sayısı *</label>
+                  <select
+                    value={packageForm.lessonCount}
+                    onChange={(e) => setPackageForm((f) => ({ ...f, lessonCount: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                  >
+                    <option value="">Seçiniz</option>
+                    {LESSON_COUNT_OPTIONS.map((n) => (
+                      <option key={n} value={n}>{n} ders</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Geçerlilik Süresi *</label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                    <input
+                      type="number"
+                      min={1}
+                      value={packageForm.validityDays}
+                      onChange={(e) => setPackageForm((f) => ({ ...f, validityDays: e.target.value }))}
+                      className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                      placeholder="Gün"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Paket Ücreti (₺) *</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={packageForm.packageFee}
+                    onChange={(e) => setPackageForm((f) => ({ ...f, packageFee: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                    placeholder="0.00"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Kontenjan *</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={packageForm.capacity}
+                    onChange={(e) => setPackageForm((f) => ({ ...f, capacity: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                    placeholder="Maksimum öğrenci sayısı"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Antrenör(ler)</label>
+                {!packageBranchForForm ? (
+                  <p className="text-xs text-slate-500">Önce branş seçiniz.</p>
+                ) : packageCoachOptions.length === 0 ? (
+                  <p className="text-xs text-slate-500">Bu şubede antrenör yok.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {packageCoachOptions.map((c) => {
+                      const selected = packageForm.coachIds.includes(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => togglePackageCoach(c.id)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                            selected
+                              ? 'bg-teal-600/20 border-teal-500/40 text-teal-300'
+                              : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-[10px] text-slate-500 mt-1">Birden fazla antrenör seçmek için tıklayın.</p>
+              </div>
+            </div>
+            <div className="p-6 border-t border-white/5 flex gap-2">
+              <button type="button" onClick={() => setShowPackageModal(false)} className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm inline-flex items-center justify-center gap-1">
+                <X className="w-4 h-4" /> İptal
+              </button>
+              <button type="button" onClick={savePackage} className="flex-1 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white font-bold text-sm">
+                Kaydet
               </button>
             </div>
           </div>

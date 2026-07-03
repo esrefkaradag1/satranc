@@ -166,7 +166,11 @@ export function evaluateDayGoals(
   const puzzleSolved = internal.solved + (platform?.puzzleSolved ?? 0);
   const puzzleAccuracy = puzzleSolved > 0 ? (puzzlePassed / puzzleSolved) * 100 : 0;
   const gamesMet = gameTarget <= 0 || (platform?.games ?? 0) >= gameTarget;
-  const puzzlesMet = puzzleTarget <= 0 || (puzzleSolved >= puzzleTarget && puzzleAccuracy >= minAccuracy);
+  const minCorrectRequired =
+    minAccuracy > 0
+      ? Math.max(puzzleTarget, Math.ceil(puzzleTarget * minAccuracy / 100))
+      : puzzleTarget;
+  const puzzlesMet = puzzleTarget <= 0 || puzzlePassed >= minCorrectRequired;
   return {
     gamesMet,
     puzzlesMet,
@@ -226,7 +230,12 @@ export function evaluatePlatformDailyGoals(
 ): { gamesMet: boolean; puzzlesMet: boolean; done: boolean; puzzleAccuracy: number } {
   const puzzleAccuracy = puzzleSolved > 0 ? (puzzlePassed / puzzleSolved) * 100 : 0;
   const gamesMet = gameTarget <= 0 || games >= gameTarget;
-  const puzzlesMet = puzzleTarget <= 0 || (puzzleSolved >= puzzleTarget && puzzleAccuracy >= minAccuracy);
+  // Bulmaca hedefi: doğru çözülen adet (yanlış denemeler hedefi geçtikten sonra tamamlanmayı engellemez).
+  const minCorrectRequired =
+    minAccuracy > 0
+      ? Math.max(puzzleTarget, Math.ceil(puzzleTarget * minAccuracy / 100))
+      : puzzleTarget;
+  const puzzlesMet = puzzleTarget <= 0 || puzzlePassed >= minCorrectRequired;
   const hasTargets = gameTarget > 0 || puzzleTarget > 0;
   return {
     gamesMet,

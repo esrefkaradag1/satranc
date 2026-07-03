@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { resolveScopedStudents, resolveScopedTransactions, resolveScopedCoaches, resolveScopedTrainingGroups, resolveScopedDisciplineBranches, resolveScopedTournaments, resolveScopedHomeworks, resolveScopedAttendanceRecords, resolveScopedGallery, isStudentIdInScope, resolveClubBranch } from './lib/orgScope';
-import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, TrainingGroup, AppRole } from './types';
+import { resolveScopedStudents, resolveScopedTransactions, resolveScopedCoaches, resolveScopedTrainingGroups, resolveScopedDisciplineBranches, resolveScopedLessonPackages, resolveScopedTournaments, resolveScopedHomeworks, resolveScopedAttendanceRecords, resolveScopedGallery, isStudentIdInScope, resolveClubBranch } from './lib/orgScope';
+import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, LessonPackage, TrainingGroup, AppRole } from './types';
 import { MOCK_STUDENTS } from './constants';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
 import { homeworkAssigneesOverlap } from './lib/homeworkPanelUtils';
@@ -17,11 +17,13 @@ import {
   dbToBranchOffice,
   dbToDisciplineBranch,
   dbToTrainingGroup,
+  dbToLessonPackage,
   disciplineBranchToDb,
   findRegisteredBranchOffice,
   resolveBranchOfficeNames,
   syncOrgStructureWithOffices,
   trainingGroupToDb,
+  lessonPackageToDb,
   clubIdForOrgRecord,
   resolveClubIdFromAuth,
 } from './lib/orgStructureDb';
@@ -74,6 +76,8 @@ interface AppContextType {
   scopedTrainingGroups: TrainingGroup[];
   /** Kulüp şubesine göre filtrelenmiş branşlar */
   scopedDisciplineBranches: DisciplineBranch[];
+  /** Kulüp şubesine göre filtrelenmiş ders paketleri */
+  scopedLessonPackages: LessonPackage[];
   /** Kulüp şubesine göre filtrelenmiş turnuvalar */
   scopedTournaments: Tournament[];
   /** Kulüp kapsamındaki ödevler */
@@ -153,6 +157,10 @@ interface AppContextType {
   addTrainingGroup: (group: Omit<TrainingGroup, 'id'>) => void;
   updateTrainingGroup: (id: string, group: Partial<TrainingGroup>) => void;
   removeTrainingGroup: (id: string) => void;
+  lessonPackages: LessonPackage[];
+  addLessonPackage: (pkg: Omit<LessonPackage, 'id'>) => void;
+  updateLessonPackage: (id: string, pkg: Partial<LessonPackage>) => void;
+  removeLessonPackage: (id: string) => void;
   /** Grup bazlı ders konuları (yoklama ekranı) — grup adı → kayıtlar */
   groupLessonLogs: Record<string, StudentLessonLogEntry[]>;
   updateGroupLessonLog: (groupKey: string, entries: StudentLessonLogEntry[]) => void;
@@ -1425,6 +1433,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [trainingGroups, setTrainingGroups] = useState<TrainingGroup[]>(() =>
     useSupabase ? [] : loadJSON<TrainingGroup[]>('netchess_training_groups', []),
   );
+  const [lessonPackages, setLessonPackages] = useState<LessonPackage[]>(() =>
+    useSupabase ? [] : loadJSON<LessonPackage[]>('netchess_lesson_packages', []),
+  );
   const [groupLessonLogs, setGroupLessonLogs] = useState<Record<string, StudentLessonLogEntry[]>>(() =>
     loadGroupLessonLogsMap()
   );
@@ -1556,6 +1567,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const scopedDisciplineBranches = useMemo(
     () => resolveScopedDisciplineBranches(auth, disciplineBranches, branchOfficeRecords, clubs),
     [auth, disciplineBranches, branchOfficeRecords, clubs],
+  );
+  const scopedLessonPackages = useMemo(
+    () => resolveScopedLessonPackages(auth, lessonPackages, branchOfficeRecords, clubs),
+    [auth, lessonPackages, branchOfficeRecords, clubs],
   );
 
   const scopedTournaments = useMemo(
@@ -2062,6 +2077,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setBranchOfficeRecords(synced.offices);
         setDisciplineBranches(synced.branches);
         setTrainingGroups(synced.groups);
+        try {
+          localStorage.setItem('netchess_branch_offices', JSON.stringify(synced.offices));
+        } catch { /* quota */ }
 
         const sbWrite = getServiceSupabase();
         if (sbWrite && (
@@ -2087,13 +2105,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       try {
         // Önce panel açılışı için gerekli çekirdek veri (öğrenci listesi vb.)
-        const [stuRes, coachRes, clubsRes, officesRes, discBranchesRes, trainGroupsRes] = await Promise.all([
+        const [stuRes, coachRes, clubsRes, officesRes, discBranchesRes, trainGroupsRes, lessonPkgsRes] = await Promise.all([
           sb.from('students').select('*'),
           sb.from('coaches').select('*'),
           sb.from('clubs').select('*'),
           sb.from('branch_offices').select('*'),
           sb.from('discipline_branches').select('*'),
           sb.from('training_groups').select('*'),
+          sb.from('lesson_packages').select('*'),
         ]);
 
         if (stuRes.data) {
@@ -2103,6 +2122,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         if (coachRes.data) setCoaches((coachRes.data as Record<string, unknown>[]).map(dbToCoach));
         applyOrgFromResponses(clubsRes, officesRes, discBranchesRes, trainGroupsRes);
+        if (!lessonPkgsRes.error && lessonPkgsRes.data) {
+          setLessonPackages((lessonPkgsRes.data as Record<string, unknown>[]).map(dbToLessonPackage));
+        }
       } catch (e) {
         console.error('[Supabase] loadFromSupabase core exception:', e);
       } finally {
@@ -2337,6 +2359,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('netchess_training_groups', JSON.stringify(trainingGroups));
     }
   }, [trainingGroups, useSupabase]);
+  useEffect(() => {
+    if (hydrated.current && !useSupabase) {
+      localStorage.setItem('netchess_lesson_packages', JSON.stringify(lessonPackages));
+    }
+  }, [lessonPackages, useSupabase]);
   useEffect(() => {
     if (hydrated.current) {
       try {
@@ -2967,6 +2994,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (transaction.description != null) payload.description = transaction.description;
       if (transaction.paymentType != null) payload.payment_type = transaction.paymentType;
       if (transaction.amount != null) payload.amount = transaction.amount;
+      if (transaction.totalAmount !== undefined) payload.total_amount = transaction.totalAmount ?? null;
       if (transaction.processedBy !== undefined) payload.processed_by = transaction.processedBy ?? null;
       if (transaction.branch !== undefined) payload.branch = transaction.branch ?? null;
       if (transaction.studentId !== undefined) payload.student_id = transaction.studentId ?? null;
@@ -3786,6 +3814,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (error) console.error('Supabase discipline_branches delete error:', error);
           });
         }
+        setLessonPackages((pkgs) => {
+          const toRemove = pkgs.filter(
+            (p) => p.discipline === found.name && normalizeClubKey(p.branchOffice) === normalizeClubKey(found.branchOffice),
+          );
+          if (toRemove.length === 0) return pkgs;
+          const remaining = pkgs.filter((p) => !toRemove.some((r) => r.id === p.id));
+          if (sb) {
+            for (const p of toRemove) {
+              void sb.from('lesson_packages').delete().eq('id', p.id);
+            }
+          }
+          return remaining;
+        });
       }
       return next;
     });
@@ -3869,6 +3910,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, [addActivityLog, syncGroupNames, removeTrainingGroupLessons, showToast]);
 
+  const addLessonPackage = useCallback((pkg: Omit<LessonPackage, 'id'>) => {
+    const name = pkg.name.trim();
+    const office = pkg.branchOffice.trim();
+    const discipline = pkg.discipline.trim();
+    if (!name || !office || !discipline) return;
+    const clubId = clubIdForOrgRecord(office, auth, clubs) ?? undefined;
+    const full: LessonPackage = {
+      ...pkg,
+      id: genId(),
+      name,
+      branchOffice: office,
+      discipline,
+      lessonCount: Math.max(0, pkg.lessonCount || 0),
+      validityDays: Math.max(0, pkg.validityDays || 0),
+      packageFee: Math.max(0, pkg.packageFee || 0),
+      capacity: Math.max(0, pkg.capacity || 0),
+      coachIds: pkg.coachIds?.length ? pkg.coachIds : undefined,
+      clubId,
+    };
+    setLessonPackages((prev) => {
+      if (prev.some((p) => p.name === name && p.branchOffice === office && p.discipline === discipline)) {
+        return prev;
+      }
+      return [...prev, full];
+    });
+    addActivityLog({ user: CURRENT_USER, action: 'Ders Paketi Eklendi', target: name, type: 'info' });
+    const sb = getServiceSupabase();
+    if (sb) {
+      void sb.from('lesson_packages').upsert(lessonPackageToDb(full, full.clubId ?? clubId)).then(({ error }) => {
+        if (error) console.error('Supabase lesson_packages insert error:', error);
+      });
+    }
+  }, [addActivityLog, auth, clubs]);
+
+  const updateLessonPackage = useCallback((id: string, pkg: Partial<LessonPackage>) => {
+    setLessonPackages((prev) => {
+      const next = prev.map((p) => (p.id === id ? { ...p, ...pkg } : p));
+      const updated = next.find((p) => p.id === id);
+      const sb = getServiceSupabase();
+      if (sb && updated) {
+        const clubId = clubIdForOrgRecord(updated.branchOffice, auth, clubs);
+        void sb.from('lesson_packages').upsert(lessonPackageToDb(updated, updated.clubId ?? clubId)).then(({ error }) => {
+          if (error) console.error('Supabase lesson_packages update error:', error);
+        });
+      }
+      return next;
+    });
+  }, [auth, clubs]);
+
+  const removeLessonPackage = useCallback((id: string) => {
+    setLessonPackages((prev) => {
+      const found = prev.find((p) => p.id === id);
+      const next = prev.filter((p) => p.id !== id);
+      if (found) {
+        addActivityLog({ user: CURRENT_USER, action: 'Ders Paketi Silindi', target: found.name, type: 'warning' });
+        const sb = getServiceSupabase();
+        if (sb) {
+          void sb.from('lesson_packages').delete().eq('id', id).then(({ error }) => {
+            if (error) console.error('Supabase lesson_packages delete error:', error);
+          });
+        }
+      }
+      return next;
+    });
+  }, [addActivityLog]);
+
   const updateGroupLessonLog = useCallback(async (groupKey: string, entries: StudentLessonLogEntry[]) => {
     const key = groupKey.trim();
     if (!key) return;
@@ -3921,7 +4028,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{ 
-      students, scopedStudents, scopedTransactions, scopedCoaches, scopedTrainingGroups, scopedDisciplineBranches, scopedTournaments, scopedHomeworks, scopedAttendanceRecords, scopedGallery, activeClubBranch,
+      students, scopedStudents, scopedTransactions, scopedCoaches, scopedTrainingGroups, scopedDisciplineBranches, scopedLessonPackages, scopedTournaments, scopedHomeworks, scopedAttendanceRecords, scopedGallery, activeClubBranch,
       addStudent, updateStudent, deleteStudent,
       bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach,
       transactions, addTransaction, updateTransaction, removeTransaction,
@@ -3939,6 +4046,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       groups, addGroup, removeGroup,
       disciplineBranches, addDisciplineBranch, updateDisciplineBranch, removeDisciplineBranch,
       trainingGroups, addTrainingGroup, updateTrainingGroup, removeTrainingGroup,
+      lessonPackages, addLessonPackage, updateLessonPackage, removeLessonPackage,
       groupLessonLogs, updateGroupLessonLog,
       activityLogs, addActivityLog,
       scheduleEntries, addScheduleEntry, updateScheduleEntry, deleteScheduleEntry,

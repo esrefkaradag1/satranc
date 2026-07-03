@@ -18,6 +18,7 @@ import Analysis from './components/Analysis';
 import LiveLesson from './components/LiveLesson';
 import Curriculum from './components/Curriculum';
 import Messages from './components/Messages';
+import WhatsAppManagement from './components/WhatsAppManagement';
 import Security from './components/Security';
 import Inventory from './components/Inventory';
 import StudyPage from './components/StudyPage';
@@ -239,6 +240,8 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Gallery />;
       case 'messages':
         return <Messages />;
+      case 'whatsapp':
+        return <WhatsAppManagement />;
       case 'security':
         return <Security />;
       case 'roles':
@@ -513,6 +516,8 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Gallery />;
       case 'messages':
         return <Messages />;
+      case 'whatsapp':
+        return <WhatsAppManagement />;
       case 'security':
         return <Security />;
       case 'roles':

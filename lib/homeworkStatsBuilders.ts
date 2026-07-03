@@ -226,11 +226,12 @@ export function buildPlatformHomeworkStats(
     if (hasTargets && dailyGoalDone) status = 'Tamamlandı';
     else if (hasActivity) status = 'Devam Ediyor';
 
-    const progressParts: number[] = [];
-    if (dailyGameTarget > 0) progressParts.push(Math.min(100, (todayGames / dailyGameTarget) * 100));
-    if (dailyPuzzleTarget > 0) progressParts.push(Math.min(100, (todayPuzzleSolved / dailyPuzzleTarget) * 100));
-    const progress = progressParts.length
-      ? Math.round(progressParts.reduce((a, b) => a + b, 0) / progressParts.length)
+    const goalCount = (dailyGameTarget > 0 ? 1 : 0) + (dailyPuzzleTarget > 0 ? 1 : 0);
+    const goalDoneCount =
+      (dailyGameTarget > 0 && goalEval.gamesMet ? 1 : 0)
+      + (dailyPuzzleTarget > 0 && goalEval.puzzlesMet ? 1 : 0);
+    const progress = goalCount > 0
+      ? Math.round((goalDoneCount / goalCount) * 100)
       : dailyGoalDone ? 100 : 0;
 
     return {

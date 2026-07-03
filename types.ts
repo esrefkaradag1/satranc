@@ -100,6 +100,20 @@ export interface DisciplineBranch {
   clubId?: string;
 }
 
+/** Ders paketi: branş altında satılabilir paket (ör. özel ders 4/8 saat) */
+export interface LessonPackage {
+  id: string;
+  name: string;
+  branchOffice: string;
+  discipline: string;
+  lessonCount: number;
+  validityDays: number;
+  packageFee: number;
+  capacity: number;
+  coachIds?: string[];
+  clubId?: string;
+}
+
 /** Eğitim grubu: branş altında kontenjan, ücret ve ders programı */
 export interface TrainingGroup {
   id: string;
@@ -513,4 +527,59 @@ export interface TournamentStanding {
   draws: number;
   losses: number;
   points: number;
+}
+
+/** WhatsApp API yapılandırması (Evolution API / benzeri) */
+export interface WhatsAppConfig {
+  apiBaseUrl: string;
+  apiKey: string;
+  instanceName: string;
+  enabled: boolean;
+  /** Şube bazlı ayar — boşsa tüm şubeler */
+  branchOffice?: string;
+}
+
+export type WhatsAppTemplateKey =
+  | 'parent_login'
+  | 'parent_consent'
+  | 'lesson_start'
+  | 'attendance_reminder'
+  | 'manual';
+
+export interface WhatsAppTemplate {
+  id: string;
+  key: WhatsAppTemplateKey;
+  name: string;
+  body: string;
+  enabled: boolean;
+}
+
+export type WhatsAppMessageStatus = 'sent' | 'failed' | 'manual' | 'queued';
+
+export interface WhatsAppMessageLog {
+  id: string;
+  phone: string;
+  message: string;
+  status: WhatsAppMessageStatus;
+  templateKey?: WhatsAppTemplateKey;
+  studentId?: string;
+  studentName?: string;
+  branchOffice?: string;
+  error?: string;
+  createdAt: string;
+}
+
+export type WhatsAppAutoEvent = 'parent_login' | 'parent_consent' | 'lesson_start';
+
+export interface WhatsAppAutoRule {
+  event: WhatsAppAutoEvent;
+  enabled: boolean;
+  templateKey: WhatsAppTemplateKey;
+}
+
+export interface WhatsAppContactGroup {
+  id: string;
+  name: string;
+  phones: string[];
+  branchOffice?: string;
 }

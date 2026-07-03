@@ -312,7 +312,7 @@ async function doStartAnalysis(fen: string): Promise<void> {
   pvLines = new Array(currentNumPv).fill(null);
   lastMainLineDepth = 0;
   lastMainLineUpdateMs = 0;
-  emitLines();
+  // Çubuk zıplamasın diye boş satır yayınlama — yeni info gelince güncellenir
   emitDepth(0);
 
   log('Starting analysis fen=', fen, 'numPv=', currentNumPv);

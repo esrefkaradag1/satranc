@@ -36,8 +36,9 @@ import {
 } from '../lib/agoraVirtualBackground';
 import { DrawingToolbar, type DrawingTool } from '../components/DrawingToolbar';
 import { saveStudyAsync } from '../studyStorage';
-import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, pvLineToEvalBarPawns, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES } from '../lib/chessBoardUi';
-import { getTerminalEval, terminalEvalToBarPawns } from '../lib/analysisTerminal';
+import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES } from '../lib/chessBoardUi';
+import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
+import { useStableEvalDisplay } from '../hooks/useStableEvalDisplay';
 import { Study, StudyChapter } from '../lib/studyTypes';
 import type { Puzzle as PuzzleType, Student } from '../types';
 import { makeBuilderGame, applyMove, studyDisplayEmoji } from '../lib/studyUtils';
@@ -61,6 +62,7 @@ import {
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
 import { promoteVariationLines } from '../lib/studySync/moveList';
 import { studentsInTrainingGroup } from '../lib/trainingGroupUtils';
+import { triggerWhatsAppAuto } from '../services/whatsappClient';
 import type { TrainingGroup } from '../types';
 import Analysis from './Analysis';
 
@@ -3248,8 +3250,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setNewRoomName('');
       setInviteFollowUp({ roomId: id, roomName: String(payload.room_name), invitedStudentIds: invited });
       setInviteStudentIds([]);
+      const lessonUrl = `${window.location.origin}${window.location.pathname}#/canli-ders?room=${encodeURIComponent(id)}`;
+      for (const studentId of invited) {
+        const student = students.find((s) => s.id === studentId);
+        if (!student) continue;
+        void triggerWhatsAppAuto('lesson_start', {
+          student,
+          lessonName: String(payload.room_name),
+          lessonUrl,
+          branchOffice: student.branchOffice,
+        });
+      }
     }
-  }, [inviteStudentIds, isPgColumnError, rooms, selectedRoomId]);
+  }, [inviteStudentIds, isPgColumnError, rooms, selectedRoomId, students]);
 
   const pushSessionMediaRemote = useCallback(
     async (patch: Partial<SessionMediaState>) => {
@@ -5337,21 +5350,34 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   }, [boardDisplayFen, game]);
 
   const showLiveEvalBar = showBoardEvalBar;
+  const terminalEval = useMemo(() => getTerminalEval(boardDisplayFen), [boardDisplayFen]);
+  const stableEngineEval = useStableEvalDisplay(
+    boardDisplayFen,
+    enginePvLines[0],
+    displayTurn,
+    showLiveEvalBar && !terminalEval,
+  );
   const liveEvalBarMeta = useMemo(() => {
-    const terminal = getTerminalEval(boardDisplayFen);
-    if (terminal) {
+    if (terminalEval) {
       return {
-        score: terminalEvalToBarPawns(terminal),
-        label: terminal.label,
+        whitePercent: terminalEvalToBarPercent(terminalEval),
+        label: terminalEval.label,
+        pending: false,
       };
     }
-    const line = enginePvLines[0];
+    if (engineLoading || !engineReady) {
+      return {
+        whitePercent: stableEngineEval.whitePercent,
+        label: '…',
+        pending: true,
+      };
+    }
     return {
-      score: pvLineToEvalBarPawns(line, displayTurn),
-      label: formatClassroomEngineScore(line, displayTurn),
+      whitePercent: stableEngineEval.whitePercent,
+      label: stableEngineEval.label,
+      pending: stableEngineEval.pending,
     };
-  }, [boardDisplayFen, enginePvLines, displayTurn]);
-  const liveEvalBarScore = liveEvalBarMeta.score;
+  }, [terminalEval, engineLoading, engineReady, stableEngineEval]);
 
   const classroomOpenParticipation = sessionMedia.openParticipation ?? false;
   const classroomStudentsCanUnmuteSelf = sessionMedia.studentsCanUnmuteSelf ?? false;
@@ -5837,7 +5863,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   evalBar={
                     showLiveEvalBar ? (
                       <ChessEvalBar
-                        score={liveEvalBarScore}
+                        whitePercent={liveEvalBarMeta.whitePercent}
+                        pending={liveEvalBarMeta.pending}
                         orientation={boardOrientation as 'white' | 'black'}
                         label={
                           engineLoading || !engineReady

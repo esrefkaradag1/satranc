@@ -60,6 +60,7 @@ import ChessComGameViewerModal from './ChessComGameViewerModal';
 import StudentMessagesPanel from './StudentMessagesPanel';
 import PlatformViewTabs, { type PlatformViewTab } from './PlatformViewTabs';
 import Sidebar from './Sidebar';
+import { filterDuesTransactions } from '../lib/transactionUtils';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { STUDENT_NAV_CATEGORIES } from '../constants';
 import { filterNavByPermissions } from '../lib/rolePermissions';
@@ -530,9 +531,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   const paidMonthsSet = useMemo(() => {
     const set = new Set<string>();
-    studentTransactions.forEach((t) => {
-      if (!t.category || t.type !== 'income') return;
-      if (t.category.toLowerCase().includes('aidat') && t.date) {
+    filterDuesTransactions(studentTransactions).forEach((t) => {
+      if (t.date) {
         const d = t.date.slice(0, 7);
         if (d.length === 7) set.add(d);
       }
@@ -545,7 +545,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     const yearStr = String(calendarYear);
     const map: Record<number, number> = {};
     for (let m = 1; m <= 12; m++) map[m] = 0;
-    studentTransactions.forEach((t) => {
+    filterDuesTransactions(studentTransactions).forEach((t) => {
       const d = t.date ?? '';
       const y = d.length >= 4 ? d.slice(0, 4) : '';
       const monthStr = d.length >= 7 ? d.slice(5, 7) : '';

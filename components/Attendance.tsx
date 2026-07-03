@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar,
   CalendarCheck,
@@ -32,6 +32,7 @@ import type { Student, StudentLessonLogEntry } from '../types';
 import { GroupLessonLogPanel } from './attendance/GroupLessonLogPanel';
 import { mergeGroupLessonLogsFromStudents, isoDateToTr } from '../lib/lessonLogUtils';
 import { findTrainingGroupByName, studentsInTrainingGroup } from '../lib/trainingGroupUtils';
+import { normalizeClubKey } from '../lib/clubScope';
 import { StudentLessonLogInline } from './attendance/StudentLessonLogInline';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
@@ -197,7 +198,7 @@ const Attendance: React.FC = () => {
     addAttendanceRecord,
     scopedAttendanceRecords: attendanceRecords,
     scopedTrainingGroups: trainingGroups,
-    scopedDisciplineBranches: disciplineBranches,
+    scopedLessonPackages: lessonPackages,
     branchOffices,
     activeClubBranch,
     refreshFromStorage,
@@ -229,31 +230,48 @@ const Attendance: React.FC = () => {
   const [chessComGames, setChessComGames] = useState<ChessComGame[]>([]);
   const [expandedNoteStudentId, setExpandedNoteStudentId] = useState<string | null>(null);
   const [zoomedPhoto, setZoomedPhoto] = useState<{ url: string; name: string } | null>(null);
+  const prevAttendanceType = useRef(attendanceType);
 
-  /** Yalnızca en az bir eğitim grubu tanımlı şubeler */
+  /** Tanımlı eğitim grubu veya ders paketi olan şubeler */
   const attendanceBranchOffices = useMemo(() => {
     const withGroups = new Set(
       trainingGroups.map((g) => g.branchOffice?.trim()).filter(Boolean) as string[],
     );
-    const registered = branchOffices.filter((o) => withGroups.has(o));
+    const withPackages = new Set(
+      lessonPackages.map((p) => p.branchOffice?.trim()).filter(Boolean) as string[],
+    );
+    const combined = new Set([...withGroups, ...withPackages]);
+    const registered = branchOffices.filter((o) => combined.has(o));
     if (registered.length > 0) return registered;
-    return [...withGroups].sort((a, b) => a.localeCompare(b, 'tr'));
-  }, [branchOffices, trainingGroups]);
+    return [...combined].sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [branchOffices, trainingGroups, lessonPackages]);
 
-  /** Seçili şubedeki branşlar (Branş & Grup kayıtlarından) */
-  const attendanceDisciplines = useMemo(() => {
+  /** Grup bazlı yoklama: eğitim grubu tanımlı branşlar */
+  const groupAttendanceDisciplines = useMemo(() => {
     const office = branchOffice.trim();
     const names = new Set<string>();
-    for (const b of disciplineBranches) {
-      if (office && b.branchOffice?.trim() !== office) continue;
-      if (b.name?.trim()) names.add(b.name.trim());
-    }
     for (const g of trainingGroups) {
-      if (office && g.branchOffice?.trim() !== office) continue;
+      if (office && normalizeClubKey(g.branchOffice ?? '') !== normalizeClubKey(office)) continue;
       if (g.discipline?.trim()) names.add(g.discipline.trim());
     }
     return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
-  }, [disciplineBranches, trainingGroups, branchOffice]);
+  }, [trainingGroups, branchOffice]);
+
+  /** Ders bazlı yoklama: ders paketi tanımlı branşlar (özel ders vb.) */
+  const lessonAttendanceDisciplines = useMemo(() => {
+    const office = branchOffice.trim();
+    const names = new Set<string>();
+    for (const p of lessonPackages) {
+      if (office && normalizeClubKey(p.branchOffice ?? '') !== normalizeClubKey(office)) continue;
+      if (p.discipline?.trim()) names.add(p.discipline.trim());
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [lessonPackages, branchOffice]);
+
+  const attendanceDisciplines = useMemo(
+    () => (attendanceType === 'lesson' ? lessonAttendanceDisciplines : groupAttendanceDisciplines),
+    [attendanceType, lessonAttendanceDisciplines, groupAttendanceDisciplines],
+  );
 
   useEffect(() => {
     if (attendanceBranchOffices.length === 0) {
@@ -277,6 +295,15 @@ const Attendance: React.FC = () => {
     setBranch(attendanceDisciplines[0] ?? '');
   }, [attendanceDisciplines, branch]);
 
+  useEffect(() => {
+    if (prevAttendanceType.current === attendanceType) return;
+    prevAttendanceType.current = attendanceType;
+    setBranch('');
+    setGroup('');
+    setShowStudents(false);
+    setAttendance({});
+  }, [attendanceType]);
+
   /** Tüm tanımlı gruplar (yoklama listesi) */
   const allGroupNames = useMemo(() => {
     const names = new Set<string>();
@@ -286,18 +313,34 @@ const Attendance: React.FC = () => {
     return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
   }, [trainingGroups]);
 
-  /** Seçili şube + branşa göre gruplar (yoklama al) */
+  /** Seçili şube + branşa göre gruplar (grup bazlı yoklama) */
   const groups = useMemo(() => {
     const office = branchOffice.trim();
     const discipline = branch.trim();
     const names = new Set<string>();
     for (const g of trainingGroups) {
-      if (office && g.branchOffice?.trim() !== office) continue;
+      if (office && normalizeClubKey(g.branchOffice ?? '') !== normalizeClubKey(office)) continue;
       if (discipline && g.discipline?.trim() !== discipline) continue;
       if (g.name?.trim()) names.add(g.name.trim());
     }
     return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
   }, [trainingGroups, branchOffice, branch]);
+
+  /** Seçili şube + branşa göre ders paketleri (ders bazlı yoklama) */
+  const lessonPackageOptions = useMemo(() => {
+    const office = branchOffice.trim();
+    const discipline = branch.trim();
+    return lessonPackages
+      .filter((p) => {
+        if (office && normalizeClubKey(p.branchOffice ?? '') !== normalizeClubKey(office)) return false;
+        if (discipline && p.discipline?.trim() !== discipline) return false;
+        return Boolean(p.name?.trim());
+      })
+      .map((p) => p.name.trim())
+      .sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [lessonPackages, branchOffice, branch]);
+
+  const secondaryOptions = attendanceType === 'lesson' ? lessonPackageOptions : groups;
 
   /** Seçili şubeye (kulüp) bağlı antrenörler */
   const attendanceCoaches = useMemo(() => {
@@ -319,19 +362,43 @@ const Attendance: React.FC = () => {
   }, [attendanceCoaches, teacherName]);
 
   useEffect(() => {
-    if (group && !groups.includes(group)) setGroup('');
-  }, [groups, group]);
+    if (group && !secondaryOptions.includes(group)) setGroup('');
+  }, [secondaryOptions, group]);
 
   const selectedTrainingGroup = useMemo(
     () => findTrainingGroupByName(trainingGroups, group, { branchOffice, discipline: branch }),
     [trainingGroups, group, branchOffice, branch],
   );
 
+  const selectedLessonPackage = useMemo(
+    () => lessonPackages.find(
+      (p) =>
+        p.name.trim() === group.trim() &&
+        p.discipline.trim() === branch.trim() &&
+        normalizeClubKey(p.branchOffice) === normalizeClubKey(branchOffice),
+    ),
+    [lessonPackages, group, branch, branchOffice],
+  );
+
   const filteredStudents = useMemo(() => {
     if (!group.trim()) return [];
+    if (attendanceType === 'lesson') {
+      const officeKey = normalizeClubKey(branchOffice);
+      const discipline = branch.trim();
+      return students.filter((s) => {
+        if (officeKey && normalizeClubKey(s.branchOffice ?? '') !== officeKey) return false;
+        if (discipline && (s.branch ?? '').trim() !== discipline) return false;
+        if (s.registrationType === 'package') return true;
+        const tg = findTrainingGroupByName(trainingGroups, s.group ?? '', {
+          branchOffice,
+          discipline,
+        });
+        return Boolean(tg);
+      });
+    }
     if (selectedTrainingGroup) return studentsInTrainingGroup(students, selectedTrainingGroup);
     return students.filter((s) => (s.group ?? '').trim() === group.trim());
-  }, [students, group, selectedTrainingGroup]);
+  }, [students, group, branch, branchOffice, attendanceType, selectedTrainingGroup, trainingGroups]);
 
   const groupLogEntries = useCallback(
     (groupKey: string) =>
@@ -439,9 +506,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
     if (!group) return;
     const dateNorm = date.slice(0, 10);
     const existing: Record<string, AttendanceStatus> = {};
-    const inGroup = selectedTrainingGroup
-      ? studentsInTrainingGroup(students, selectedTrainingGroup)
-      : students.filter((s) => (s.group ?? '').trim() === group.trim());
+    const inGroup = filteredStudents;
     inGroup.forEach((s) => {
       const rec = attendanceRecords.find(
         (r) => r.studentId === s.id && r.date && r.date.slice(0, 10) === dateNorm
@@ -703,26 +768,30 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  </select>
  {branchOffice && attendanceDisciplines.length === 0 && (
  <p className="mt-2 text-xs text-amber-400/90">
- Bu şubede branş tanımı yok. Branş & Grup sayfasından branş ekleyin.
+ {attendanceType === 'lesson'
+   ? 'Bu şubede ders paketi yok. Branş & Grup sayfasından özel ders paketi ekleyin.'
+   : 'Bu şubede grup branşı yok. Branş & Grup sayfasından eğitim grubu ekleyin.'}
  </p>
  )}
  </SelectField>
 
- {/* Grup */}
- <SelectField label="Grup">
+ {/* Grup / Paket */}
+ <SelectField label={attendanceType === 'lesson' ? 'Paket' : 'Grup'}>
  <select
  value={group}
  onChange={(e) => setGroup(e.target.value)}
  className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  >
- <option value="">Grup Seçiniz</option>
- {groups.map((g) => (
+ <option value="">{attendanceType === 'lesson' ? 'Paket Seçiniz' : 'Grup Seçiniz'}</option>
+ {secondaryOptions.map((g) => (
  <option key={g} value={g}>{g}</option>
  ))}
  </select>
- {groups.length === 0 && (
+ {secondaryOptions.length === 0 && branch && (
  <p className="mt-2 text-xs text-amber-400/90">
- Grup görünmüyor. Öğrenci eklerken grup atayın veya Branş & Grup sayfasından grup ekleyin.
+ {attendanceType === 'lesson'
+   ? 'Bu branşta ders paketi tanımı yok. Yeni Ders Paketi ile özel ders ekleyin.'
+   : 'Bu branşta grup görünmüyor. Branş & Grup sayfasından grup ekleyin.'}
  </p>
  )}
  </SelectField>
@@ -756,7 +825,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  )}
  </SelectField>
 
- {group ? (
+ {group && attendanceType === 'group' ? (
    <GroupLessonLogPanel
      groupName={group}
      entries={groupLogEntries(group)}
@@ -789,6 +858,9 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <div className="rounded-xl px-4 sm:px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 premium-gradient shadow-lg shadow-indigo-500/20 ring-1 ring-indigo-500/20">
  <div className="font-bold tracking-tight text-sm sm:text-base text-white min-w-0">
    {branchOffice} · {branch} · {group}
+   {attendanceType === 'lesson' && selectedLessonPackage ? (
+     <span className="text-indigo-200/80 font-medium"> · {selectedLessonPackage.lessonCount} ders</span>
+   ) : null}
  </div>
  <div className="inline-flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-3 py-2">
    <Calendar className="w-4 h-4 text-indigo-200 shrink-0" aria-hidden />
