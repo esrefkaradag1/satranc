@@ -55,6 +55,7 @@ import { LeaderboardPreview } from './leaderboard/LeaderboardPreview';
 import { StudentSummaryDashboard } from './student/StudentSummaryDashboard';
 import { StudentHomeworkPanel } from './student/StudentHomeworkPanel';
 import { StudentAnalysesPanel } from './student/StudentAnalysesPanel';
+import { LichessOAuthConnect } from './student/LichessOAuthConnect';
 import LichessGameViewerModal from './LichessGameViewerModal';
 import ChessComGameViewerModal from './ChessComGameViewerModal';
 import StudentMessagesPanel from './StudentMessagesPanel';
@@ -1008,6 +1009,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         activeTab={activeTab}
         setActiveTab={(id) => setActiveTab(id as PanelTab)}
         navCategories={navCategoriesForView}
+        labelOverrides={{ puzzles: 'Antreman' }}
         onLogout={handleLogout}
         mobileOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -1686,6 +1688,12 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                         <ExternalLink className="w-3.5 h-3.5" /> Profili Aç
                       </a>
                     ) : null}
+                    <LichessOAuthConnect
+                      student={student}
+                      variant="inline"
+                      onConnected={() => { void loadLichess(true); }}
+                      onDisconnected={() => { void loadLichess(true); }}
+                    />
                   </div>
                 </div>
                 {student.lichessUsername ? (

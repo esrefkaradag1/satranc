@@ -44,6 +44,8 @@ interface SidebarProps {
   setActiveTab: (id: string) => void;
   /** Kategorize menü (önerilen); verilmezse navItems kullanılır */
   navCategories?: NavCategory[];
+  /** Belirli menü id'leri için görünen etiket override'ı */
+  labelOverrides?: Partial<Record<string, string>>;
   /** Düz menü listesi (antrenör paneli vb.) */
   navItems?: NavItem[];
   onLogout?: () => void;
@@ -65,7 +67,9 @@ function renderNavItem(
   setExpandedItem: (id: string | null) => void,
   iconOnly: boolean,
   onExpandDesktop: () => void,
+  labelOverrides?: Partial<Record<string, string>>,
 ) {
+  const label = labelOverrides?.[item.id] ?? item.label;
   const isActive = activeTab === item.id;
   const isExpanded = expandedItem === item.id;
   const hasSubItems = !!item.subItems?.length;
@@ -89,7 +93,7 @@ function renderNavItem(
       <button
         type="button"
         onClick={handleClick}
-        title={iconOnly ? item.label : undefined}
+        title={iconOnly ? label : undefined}
         className={`w-full flex items-center rounded-xl transition-all duration-200 group ${
           iconOnly ? "justify-center px-2 py-2.5" : "gap-3 px-3.5 py-2.5"
         } ${
@@ -112,7 +116,7 @@ function renderNavItem(
         {!iconOnly && (
           <>
             <span className="flex-1 text-left text-sm font-semibold tracking-tight truncate">
-              {item.label}
+              {label}
             </span>
             {hasSubItems && (
               <ChevronDown
@@ -156,6 +160,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   setActiveTab,
   navCategories,
+  labelOverrides,
   navItems = NAV_ITEMS,
   onLogout,
   mobileOpen = false,
@@ -366,6 +371,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                           setExpandedItem,
                           iconOnly,
                           expandDesktop,
+                          labelOverrides,
                         ),
                       )}
                     </div>
@@ -392,6 +398,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 setExpandedItem,
                 iconOnly,
                 expandDesktop,
+                labelOverrides,
               )
             )}
           </div>

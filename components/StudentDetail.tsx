@@ -833,6 +833,7 @@ const StudentDetail: React.FC<{
     homeworkAttempts,
     scopedTrainingGroups: trainingGroups,
     scopedDisciplineBranches: disciplineBranches,
+    scopedLessonPackages: lessonPackages,
     confirmDialog,
     alertDialog,
     showToast,
@@ -847,6 +848,9 @@ const StudentDetail: React.FC<{
   const [saleInstallmentCount, setSaleInstallmentCount] = useState(4);
   const [saleStartDate, setSaleStartDate] = useState('');
   const [saleEndDate, setSaleEndDate] = useState('');
+  const [saleBranchOffice, setSaleBranchOffice] = useState('');
+  const [saleDiscipline, setSaleDiscipline] = useState('');
+  const [saleLessonPackageId, setSaleLessonPackageId] = useState('');
   const [saleTotalHours, setSaleTotalHours] = useState('');
   const [saleValidityDays, setSaleValidityDays] = useState('');
   const [salePackageName, setSalePackageName] = useState('');
@@ -951,6 +955,88 @@ const StudentDetail: React.FC<{
     if (received >= total) return { status: 'complete' as const, total, received, remaining: 0 };
     return { status: 'partial' as const, total, received, remaining: total - received };
   }, [saleTotalAmount, saleAmountReceived]);
+
+  const saleBranchOfficeOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          lessonPackages
+            .map((pkg) => pkg.branchOffice.trim())
+            .filter(Boolean),
+        ),
+      ).sort((a, b) => a.localeCompare(b, 'tr')),
+    [lessonPackages],
+  );
+
+  const saleDisciplineOptions = useMemo(() => {
+    const office = saleBranchOffice.trim();
+    return Array.from(
+      new Set(
+        lessonPackages
+          .filter((pkg) => !office || pkg.branchOffice.trim() === office)
+          .map((pkg) => pkg.discipline.trim())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [lessonPackages, saleBranchOffice]);
+
+  const saleLessonPackageOptions = useMemo(() => {
+    const office = saleBranchOffice.trim();
+    const discipline = saleDiscipline.trim();
+    return lessonPackages
+      .filter((pkg) => (!office || pkg.branchOffice.trim() === office) && (!discipline || pkg.discipline.trim() === discipline))
+      .sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+  }, [lessonPackages, saleBranchOffice, saleDiscipline]);
+
+  const selectedSaleLessonPackage = useMemo(
+    () => lessonPackages.find((pkg) => pkg.id === saleLessonPackageId) ?? null,
+    [lessonPackages, saleLessonPackageId],
+  );
+
+  const applySaleLessonPackage = useCallback((pkgId: string) => {
+    setSaleLessonPackageId(pkgId);
+    const pkg = lessonPackages.find((item) => item.id === pkgId);
+    if (!pkg) {
+      setSalePackageName('');
+      setSaleTotalHours('');
+      setSaleValidityDays('');
+      return;
+    }
+    setSaleBranchOffice(pkg.branchOffice);
+    setSaleDiscipline(pkg.discipline);
+    setSalePackageName(pkg.name);
+    setSaleTotalHours(String(pkg.lessonCount));
+    setSaleValidityDays(String(pkg.validityDays));
+    setSaleTotalAmount(String(pkg.packageFee));
+  }, [lessonPackages]);
+
+  const resetSalePackageFields = useCallback(() => {
+    setSaleLessonPackageId('');
+    setSalePackageName('');
+    setSaleTotalHours('');
+    setSaleValidityDays('');
+    setSaleTotalAmount('');
+  }, []);
+
+  const openSaleModal = useCallback((nextType: 'aylik-paket' | 'ozel-ders' = 'aylik-paket') => {
+    const defaultOffice = student?.branchOffice?.trim() || '';
+    const defaultDiscipline = student?.branch?.trim() || '';
+    setSaleType(nextType);
+    setSaleStartDate('');
+    setSaleEndDate('');
+    setSaleBranchOffice(nextType === 'ozel-ders' ? defaultOffice : '');
+    setSaleDiscipline(nextType === 'ozel-ders' ? defaultDiscipline : '');
+    setSaleLessonPackageId('');
+    setSaleTotalHours('');
+    setSaleValidityDays('');
+    setSalePackageName('');
+    setSaleTotalAmount('');
+    setSalePaymentMethod('pesin');
+    setSaleAmountReceived('');
+    setSaleDownPayment('');
+    setSaleInstallmentCount(4);
+    setShowSaleModal(true);
+  }, [student?.branchOffice, student?.branch]);
 
   const studentAnalyses = useMemo(() => {
     if (!studentId) return [];
@@ -1114,6 +1200,27 @@ const StudentDetail: React.FC<{
   const privateLessonTransactions = useMemo(() => {
     return packageTransactions.filter((t) => t.category === 'Özel Ders');
   }, [packageTransactions]);
+
+  const privateLessonUsageById = useMemo(() => {
+    const map = new Map<string, { totalLessons?: number; usedLessons: number; remainingLessons?: number }>();
+    privateLessonTransactions.forEach((t) => {
+      const totalLessons = t.lessonCount;
+      const usedLessons =
+        t.lessonPackageId
+          ? studentAttendances.filter(
+              (record) =>
+                record.lessonId === t.lessonPackageId &&
+                (record.status === 'present' || record.status === 'late'),
+            ).length
+          : 0;
+      map.set(t.id, {
+        totalLessons,
+        usedLessons,
+        remainingLessons: totalLessons != null ? Math.max(0, totalLessons - usedLessons) : undefined,
+      });
+    });
+    return map;
+  }, [privateLessonTransactions, studentAttendances]);
 
   /** Grup galerisi: öğrencinin grubuna veya öğrenciye özel yüklenen görseller */
   const groupGalleryItems = useMemo(() => {
@@ -1361,7 +1468,7 @@ const StudentDetail: React.FC<{
      <div className="mt-3 sm:mt-6 grid grid-cols-4 sm:flex sm:flex-wrap gap-1.5 sm:gap-2.5">
        <ActionPill tone="outline" icon={<Edit2 className="w-4 h-4" />} label="Düzenle" onClick={() => setShowEditModal(true)} />
        <ActionPill tone="outline" icon={<Power className="w-4 h-4" />} label="Durum" onClick={() => { setStatusModalValue(student.status === 'inactive' ? 'inactive' : 'active'); setShowStatusModal(true); }} />
-       <ActionPill tone="emerald" icon={<ShoppingCart className="w-4 h-4" />} label="Paket/Ders" onClick={() => { setSaleType('aylik-paket'); setSaleStartDate(''); setSaleEndDate(''); setSaleTotalHours(''); setSaleValidityDays(''); setSalePackageName(''); setSaleTotalAmount(''); setSaleAmountReceived(''); setSaleDownPayment(''); setShowSaleModal(true); }} />
+      <ActionPill tone="emerald" icon={<ShoppingCart className="w-4 h-4" />} label="Paket/Ders" onClick={() => openSaleModal('aylik-paket')} />
        <ActionPill
          tone="rose"
          icon={<Trash2 className="w-4 h-4" />}
@@ -1832,7 +1939,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <ShoppingCart className="w-4 h-4 text-emerald-600" />
  <div className="text-sm font-black text-white">Paketler & Özel Dersler</div>
  </div>
- <button type="button" onClick={() => { setSaleType('aylik-paket'); setSaleStartDate(''); setSaleEndDate(''); setSaleTotalHours(''); setSaleValidityDays(''); setSalePackageName(''); setSaleTotalAmount(''); setSaleAmountReceived(''); setSaleDownPayment(''); setShowSaleModal(true); }} className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold transition-colors min-h-[40px]">
+<button type="button" onClick={() => openSaleModal('aylik-paket')} className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold transition-colors min-h-[40px]">
  <ShoppingCart className="w-3.5 h-3.5" /> Yeni satış
  </button>
  </div>
@@ -1860,7 +1967,17 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  {packageTransactions.map((t) => (
  <tr key={t.id} className="text-sm group hover:bg-slate-800/40 transition-colors">
  <td data-label="Tarih" className="py-3.5 pl-4 pr-3 font-bold text-white">{formatDateTR(t.date)}</td>
- <td data-label="Paket / Ders Adı" className="py-3.5 pr-3 text-slate-200">{t.description || '—'}</td>
+<td data-label="Paket / Ders Adı" className="py-3.5 pr-3 text-slate-200">
+  <div className="space-y-1">
+    <div>{t.lessonPackageName || t.description || '—'}</div>
+    {t.category === 'Özel Ders' && (t.lessonBranchOffice || t.lessonDiscipline || privateLessonUsageById.get(t.id)?.remainingLessons != null) ? (
+      <div className="text-[11px] text-slate-400">
+        {[t.lessonBranchOffice, t.lessonDiscipline].filter(Boolean).join(' · ')}
+        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}Kalan ${privateLessonUsageById.get(t.id)?.remainingLessons}/${privateLessonUsageById.get(t.id)?.totalLessons} ders` : ''}
+      </div>
+    ) : null}
+  </div>
+</td>
  <td data-label="Tür" className="py-3.5 pr-3">
  <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border ${t.category === 'Paket' ? 'bg-indigo-500/30 text-indigo-200 border-indigo-400/50' : 'bg-amber-500/30 text-amber-200 border-amber-400/50'}`}>{t.category}</span>
  </td>
@@ -1973,7 +2090,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <div className="text-[11px] text-slate-400 mt-0.5">Paket ve özel ders satışları</div>
  </div>
  </div>
- <button type="button" onClick={() => { setSaleType('aylik-paket'); setSaleStartDate(''); setSaleEndDate(''); setSaleTotalHours(''); setSaleValidityDays(''); setSalePackageName(''); setSaleTotalAmount(''); setSaleAmountReceived(''); setSaleDownPayment(''); setShowSaleModal(true); }} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">
+<button type="button" onClick={() => openSaleModal('aylik-paket')} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">
  <ShoppingCart className="w-4 h-4" /> Yeni satış
  </button>
  </div>
@@ -1983,7 +2100,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <CreditCard className="w-14 h-14 text-slate-500 mx-auto mb-4" />
  <p className="text-slate-400 text-sm font-medium">Henüz paket veya özel ders satışı yok.</p>
  <p className="text-slate-500 text-xs mt-2">Yeni satış ile paket veya özel ders ekleyebilirsiniz.</p>
- <button type="button" onClick={() => setShowSaleModal(true)} className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold">
+<button type="button" onClick={() => openSaleModal('aylik-paket')} className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold">
  <ShoppingCart className="w-4 h-4" /> Yeni satış
  </button>
  </div>
@@ -2004,7 +2121,17 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  {packageTransactions.map((t) => (
  <tr key={t.id} className="text-sm group hover:bg-slate-800/40 transition-colors">
  <td data-label="Tarih" className="py-3.5 pl-4 pr-3 font-bold text-white">{formatDateTR(t.date)}</td>
- <td data-label="Paket / Ders Adı" className="py-3.5 pr-3 text-slate-200">{t.description || '—'}</td>
+<td data-label="Paket / Ders Adı" className="py-3.5 pr-3 text-slate-200">
+  <div className="space-y-1">
+    <div>{t.lessonPackageName || t.description || '—'}</div>
+    {t.category === 'Özel Ders' && (t.lessonBranchOffice || t.lessonDiscipline || privateLessonUsageById.get(t.id)?.remainingLessons != null) ? (
+      <div className="text-[11px] text-slate-400">
+        {[t.lessonBranchOffice, t.lessonDiscipline].filter(Boolean).join(' · ')}
+        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}Kalan ${privateLessonUsageById.get(t.id)?.remainingLessons}/${privateLessonUsageById.get(t.id)?.totalLessons} ders` : ''}
+      </div>
+    ) : null}
+  </div>
+</td>
  <td data-label="Tür" className="py-3.5 pr-3">
  <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border ${t.category === 'Paket' ? 'bg-indigo-500/30 text-indigo-200 border-indigo-400/50' : 'bg-amber-500/30 text-amber-200 border-amber-400/50'}`}>{t.category}</span>
  </td>
@@ -2043,7 +2170,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <GraduationCap className="w-5 h-5 text-amber-500" />
  <span className="text-sm font-black text-white">Özel Ders Paketleri</span>
  </div>
- <button type="button" onClick={() => { setSaleType('ozel-ders'); setSalePackageName(''); setSaleTotalAmount(''); setSaleTotalHours(''); setSaleValidityDays(''); setSaleAmountReceived(''); setSaleDownPayment(''); setSaleInstallmentCount(4); setShowSaleModal(true); }} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors">
+<button type="button" onClick={() => openSaleModal('ozel-ders')} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors">
  <ShoppingCart className="w-4 h-4" /> Yeni özel ders
  </button>
  </div>
@@ -2053,7 +2180,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <GraduationCap className="w-14 h-14 text-slate-500 mx-auto mb-4" />
  <p className="text-slate-400 text-sm font-medium">Henüz özel ders kaydı yok.</p>
  <p className="text-slate-500 text-xs mt-2">Yeni özel ders satışı eklediğinizde burada listelenecektir.</p>
- <button type="button" onClick={() => { setSaleType('ozel-ders'); setShowSaleModal(true); }} className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-xs font-bold">
+<button type="button" onClick={() => openSaleModal('ozel-ders')} className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-xs font-bold">
  <ShoppingCart className="w-4 h-4" /> Özel ders ekle
  </button>
  </div>
@@ -2073,7 +2200,17 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  {privateLessonTransactions.map((t) => (
  <tr key={t.id} className="text-sm group hover:bg-slate-800/40 transition-colors">
  <td data-label="Tarih" className="py-3 pr-4 font-bold text-white">{formatDateTR(t.date)}</td>
- <td data-label="Açıklama" className="py-3 pr-4 text-slate-200">{t.description || '—'}</td>
+<td data-label="Açıklama" className="py-3 pr-4 text-slate-200">
+  <div className="space-y-1">
+    <div>{t.lessonPackageName || t.description || '—'}</div>
+    {(t.lessonBranchOffice || t.lessonDiscipline || privateLessonUsageById.get(t.id)?.remainingLessons != null) ? (
+      <div className="text-[11px] text-slate-400">
+        {[t.lessonBranchOffice, t.lessonDiscipline].filter(Boolean).join(' · ')}
+        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}Kalan ${privateLessonUsageById.get(t.id)?.remainingLessons}/${privateLessonUsageById.get(t.id)?.totalLessons} ders` : ''}
+      </div>
+    ) : null}
+  </div>
+</td>
  <td data-label="Ödeme Durumu" className="py-3 pr-4"><SalePaymentCell transaction={t} /></td>
  <td data-label="Ödeme" className="py-3 pr-4">
  <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-violet-500/30 text-violet-200 border border-violet-400/50">{t.paymentType}</span>
@@ -2799,6 +2936,61 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
 
          {saleType === 'ozel-ders' && (
            <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Şube</label>
+                <select
+                  value={saleBranchOffice}
+                  onChange={(e) => {
+                    setSaleBranchOffice(e.target.value);
+                    setSaleDiscipline('');
+                    resetSalePackageFields();
+                  }}
+                  className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium"
+                >
+                  <option value="">Şube seçiniz</option>
+                  {saleBranchOfficeOptions.map((office) => (
+                    <option key={office} value={office}>{office}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Branş</label>
+                <select
+                  value={saleDiscipline}
+                  onChange={(e) => {
+                    setSaleDiscipline(e.target.value);
+                    resetSalePackageFields();
+                  }}
+                  className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium"
+                >
+                  <option value="">Branş seçiniz</option>
+                  {saleDisciplineOptions.map((discipline) => (
+                    <option key={discipline} value={discipline}>{discipline}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Paket</label>
+              <select
+                value={saleLessonPackageId}
+                onChange={(e) => applySaleLessonPackage(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium"
+              >
+                <option value="">Paket seçiniz</option>
+                {saleLessonPackageOptions.map((pkg) => (
+                  <option key={pkg.id} value={pkg.id}>
+                    {pkg.name} · {pkg.lessonCount} ders
+                  </option>
+                ))}
+              </select>
+              {saleBranchOffice && saleDiscipline && saleLessonPackageOptions.length === 0 ? (
+                <p className="mt-2 text-xs text-amber-300">
+                  Bu şube ve branş için kayıtlı özel ders paketi bulunamadı.
+                </p>
+              ) : null}
+            </div>
              <div className="grid grid-cols-2 gap-3">
                <div>
                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Toplam Saat</label>
@@ -2818,7 +3010,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
 
          <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Paket/Ders Adı</label>
-           <input type="text" value={salePackageName} onChange={(e) => setSalePackageName(e.target.value)} placeholder="Örn: 6 Aylık Yaz Kampı" className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium placeholder:text-slate-500" />
+          <input type="text" value={salePackageName} onChange={(e) => setSalePackageName(e.target.value)} placeholder="Örn: 6 Aylık Yaz Kampı" className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium placeholder:text-slate-500" />
          </div>
          <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Toplam Tutar (₺)</label>
@@ -2889,6 +3081,13 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                  paymentType: salePaymentMethod === 'taksit' ? 'Kredi Kartı' : 'Nakit',
                  amount,
                  totalAmount,
+                saleKind: saleType === 'aylik-paket' ? 'monthly_package' : 'private_lesson',
+                lessonPackageId: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.id || undefined) : undefined,
+                lessonPackageName: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.name || salePackageName.trim() || undefined) : undefined,
+                lessonDiscipline: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.discipline || saleDiscipline.trim() || undefined) : undefined,
+                lessonBranchOffice: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.branchOffice || saleBranchOffice.trim() || undefined) : undefined,
+                lessonCount: saleType === 'ozel-ders' && saleTotalHours.trim() ? Number(saleTotalHours) : undefined,
+                validityDays: saleType === 'ozel-ders' && saleValidityDays.trim() ? Number(saleValidityDays) : undefined,
                  studentId: student.id,
                  date: today,
                });
@@ -3152,7 +3351,7 @@ const EditStudentModal: React.FC<{
   onSave: (updated: Partial<Student>) => void | Promise<void>;
   onClose: () => void;
 }> = ({ student, onSave, onClose }) => {
-  const { branchOffices, scopedTrainingGroups, scopedDisciplineBranches, students } = useApp();
+  const { branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedLessonPackages, students } = useApp();
   // Use a single state object for all fields, initialized with student data
   const [fields, setFields] = useState<Partial<Student>>({ ...student });
   const [photo, setPhoto] = useState<File | null>(null);
@@ -3174,7 +3373,18 @@ const EditStudentModal: React.FC<{
     return Array.from(set).sort();
   }, [scopedDisciplineBranches, fields.branchOffice, fields.branch]);
 
+  const lessonPackageOptions = useMemo(() => {
+    const office = fields.branchOffice?.trim() || '';
+    const discipline = fields.branch?.trim() || '';
+    const filtered = scopedLessonPackages
+      .filter((pkg) => (!office || pkg.branchOffice === office) && (!discipline || pkg.discipline === discipline))
+      .map((pkg) => pkg.name);
+    const set = new Set([...filtered, fields.group || ''].filter(Boolean));
+    return Array.from(set).sort();
+  }, [scopedLessonPackages, fields.branchOffice, fields.branch, fields.group]);
+
   const groupOptions = useMemo(() => {
+    if (fields.registrationType === 'package') return lessonPackageOptions;
     const office = fields.branchOffice?.trim() || '';
     const discipline = fields.branch?.trim() || '';
     const filtered = scopedTrainingGroups
@@ -3182,7 +3392,7 @@ const EditStudentModal: React.FC<{
       .map((g) => g.name);
     const set = new Set([...filtered, fields.group || ''].filter(Boolean));
     return Array.from(set).sort();
-  }, [scopedTrainingGroups, fields.branchOffice, fields.branch, fields.group]);
+  }, [fields.registrationType, lessonPackageOptions, scopedTrainingGroups, fields.branchOffice, fields.branch, fields.group]);
 
   const financeBaseFee = useMemo(() => {
     return getBaseMonthlyFeeForStudent({ ...student, ...fields } as Student, scopedTrainingGroups, scopedDisciplineBranches);
@@ -3300,8 +3510,8 @@ const EditStudentModal: React.FC<{
               <div className="p-4 rounded-xl bg-indigo-500/5 border border-indigo-500/10 space-y-4">
                 <div className="text-xs font-bold text-indigo-400 uppercase tracking-widest border-b border-indigo-500/10 pb-2">Kayıt Türü</div>
                 <div className="grid grid-cols-2 gap-2">
-                  <button type="button" onClick={() => setFields(f => ({ ...f, registrationType: 'monthly' }))} className={`py-2 rounded-lg text-xs font-bold transition-all ${fields.registrationType === 'monthly' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>Aylık</button>
-                  <button type="button" onClick={() => setFields(f => ({ ...f, registrationType: 'package' }))} className={`py-2 rounded-lg text-xs font-bold transition-all ${fields.registrationType === 'package' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>Paket</button>
+                  <button type="button" onClick={() => setFields(f => ({ ...f, registrationType: 'monthly', trainingGroupId: f.trainingGroupId, lessonSchedule: f.lessonSchedule }))} className={`py-2 rounded-lg text-xs font-bold transition-all ${fields.registrationType === 'monthly' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>Aylık</button>
+                  <button type="button" onClick={() => setFields(f => ({ ...f, registrationType: 'package', trainingGroupId: undefined, lessonSchedule: undefined }))} className={`py-2 rounded-lg text-xs font-bold transition-all ${fields.registrationType === 'package' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>Paket</button>
                 </div>
               </div>
             </div>
@@ -3384,11 +3594,33 @@ const EditStudentModal: React.FC<{
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>Grup</label>
+                    <label className={labelCls}>{fields.registrationType === 'package' ? 'Ders Paketi' : 'Grup'}</label>
                     <select
                       value={fields.group || ''}
                       onChange={e => {
                         const groupName = e.target.value;
+                        if (fields.registrationType === 'package') {
+                          const selectedPackage = scopedLessonPackages.find(
+                            (pkg) =>
+                              pkg.name === groupName &&
+                              (!fields.branchOffice || pkg.branchOffice === fields.branchOffice) &&
+                              (!fields.branch || pkg.discipline === fields.branch),
+                          );
+                          if (selectedPackage) {
+                            setFields(f => ({
+                              ...f,
+                              group: groupName,
+                              trainingGroupId: undefined,
+                              branch: selectedPackage.discipline || f.branch,
+                              branchOffice: selectedPackage.branchOffice || f.branchOffice,
+                              monthlyFee: selectedPackage.packageFee ?? f.monthlyFee,
+                              lessonSchedule: undefined,
+                            }));
+                          } else {
+                            setFields(f => ({ ...f, group: groupName, trainingGroupId: undefined, lessonSchedule: undefined }));
+                          }
+                          return;
+                        }
                         const tg = findTrainingGroupByName(scopedTrainingGroups, groupName, {
                           branchOffice: fields.branchOffice,
                           discipline: fields.branch,

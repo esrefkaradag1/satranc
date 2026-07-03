@@ -44,6 +44,7 @@ import { generateStudentPassword, suggestStudentUsername } from '../lib/studentC
 const PLACEHOLDER_OFFICE = 'Şube Seçiniz';
 const PLACEHOLDER_DISCIPLINE = 'Branş Seçiniz';
 const PLACEHOLDER_GROUP = 'Grup Seçiniz';
+const PLACEHOLDER_PACKAGE = 'Paket Seçiniz';
 const PLACEHOLDER_COACH = 'Antrenör Seçiniz';
 
 type RegistrationType = 'monthly' | 'package';
@@ -252,7 +253,18 @@ const StudentAdd: React.FC<{
   lockBranchOffice = false,
   lockCoachId = false,
 }) => {
-  const { addStudent, updateStudent, branchOffices, students, scopedStudents, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth } = useApp();
+  const {
+    addStudent,
+    updateStudent,
+    branchOffices,
+    students,
+    scopedStudents,
+    scopedTrainingGroups,
+    scopedDisciplineBranches,
+    scopedLessonPackages,
+    scopedCoaches,
+    auth,
+  } = useApp();
   const tcUniquenessPool = auth?.role === 'admin' ? students : scopedStudents;
   const branchOfficeOptions = useMemo(() => {
     const base = mergeBranchOffices(branchOffices, scopedDisciplineBranches);
@@ -341,14 +353,24 @@ const StudentAdd: React.FC<{
     return [PLACEHOLDER_DISCIPLINE, ...names];
   }, [scopedDisciplineBranches, form.branchOffice]);
 
+  const lessonPackageOptions = useMemo(() => {
+    const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
+    const discipline = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : '';
+    const filtered = scopedLessonPackages
+      .filter((pkg) => (!office || pkg.branchOffice === office) && (!discipline || pkg.discipline === discipline))
+      .map((pkg) => pkg.name);
+    return [PLACEHOLDER_PACKAGE, ...filtered];
+  }, [form.branchOffice, form.branch, scopedLessonPackages]);
+
   const groupOptions = useMemo(() => {
+    if (form.registrationType === 'package') return lessonPackageOptions;
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
     const discipline = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : '';
     const filtered = scopedTrainingGroups
       .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
       .map((g) => g.name);
     return [PLACEHOLDER_GROUP, ...filtered];
-  }, [form.branchOffice, form.branch, scopedTrainingGroups]);
+  }, [form.registrationType, form.branchOffice, form.branch, scopedTrainingGroups, lessonPackageOptions]);
 
   const coachOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
@@ -359,7 +381,33 @@ const StudentAdd: React.FC<{
   const handleGroupChange = (groupName: string) => {
     setForm((prev) => {
       const next = { ...prev, group: groupName };
-      if (groupName === PLACEHOLDER_GROUP) {
+      if (groupName === PLACEHOLDER_GROUP || groupName === PLACEHOLDER_PACKAGE) {
+        setLessonSchedule([]);
+        return next;
+      }
+      if (prev.registrationType === 'package') {
+        const selectedPackage = scopedLessonPackages.find(
+          (pkg) =>
+            pkg.name === groupName &&
+            (prev.branchOffice === PLACEHOLDER_OFFICE || pkg.branchOffice === prev.branchOffice) &&
+            (prev.branch === PLACEHOLDER_DISCIPLINE || pkg.discipline === prev.branch),
+        );
+        if (selectedPackage) {
+          const autoCoach =
+            selectedPackage.coachIds?.length === 1
+              ? selectedPackage.coachIds[0]
+              : prev.coachId !== PLACEHOLDER_COACH
+                ? prev.coachId
+                : PLACEHOLDER_COACH;
+          setLessonSchedule([]);
+          return {
+            ...next,
+            branch: selectedPackage.discipline || prev.branch,
+            branchOffice: selectedPackage.branchOffice || prev.branchOffice,
+            monthlyFee: selectedPackage.packageFee ? String(selectedPackage.packageFee) : prev.monthlyFee,
+            coachId: autoCoach,
+          };
+        }
         setLessonSchedule([]);
         return next;
       }
@@ -396,7 +444,10 @@ const StudentAdd: React.FC<{
     if (!form.registrationDate) e.registrationDate = 'Kayıt tarihi zorunludur.';
     if (form.branchOffice === PLACEHOLDER_OFFICE) e.branchOffice = 'Şube seçiniz.';
     if (form.branch === PLACEHOLDER_DISCIPLINE) e.branch = 'Branş seçiniz.';
-    if (form.group === PLACEHOLDER_GROUP) e.group = 'Grup seçiniz.';
+    if (
+      form.group === PLACEHOLDER_GROUP ||
+      form.group === PLACEHOLDER_PACKAGE
+    ) e.group = form.registrationType === 'package' ? 'Paket seçiniz.' : 'Grup seçiniz.';
     if (form.tcNo && onlyDigits(form.tcNo).length !== 11) e.tcNo = '11 haneli olmalıdır.';
     if (form.tcNo && tcUniquenessPool.some((s) => (s.tcNo ?? '') === onlyDigits(form.tcNo))) e.tcNo = 'Bu T.C. ile kayıtlı öğrenci var.';
     const fatherPhoneFilled = form.fatherPhone.trim().length > 0;
@@ -508,7 +559,10 @@ const StudentAdd: React.FC<{
         ukd: 0,
         lastAttendance: todayIso(),
         paymentStatus: 'Unpaid',
-        group: form.group !== PLACEHOLDER_GROUP ? form.group : (scopedTrainingGroups[0]?.name || ''),
+        group:
+          form.group !== PLACEHOLDER_GROUP && form.group !== PLACEHOLDER_PACKAGE
+            ? form.group
+            : '',
         parentName: form.fatherName?.trim() || form.motherName?.trim() || 'Veli',
         parentPhone: normalizeTrPhoneDigits(form.fatherPhone) || normalizeTrPhoneDigits(form.motherPhone) || '',
         birthDate: form.birthDate,
@@ -550,12 +604,14 @@ const StudentAdd: React.FC<{
         username: loginUsername,
         password: loginPassword,
         photoUrl: photoUrl,
-        trainingGroupId: findTrainingGroupByName(scopedTrainingGroups, form.group, {
-          branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
-          discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
-        })?.id,
+        trainingGroupId: form.registrationType === 'monthly'
+          ? findTrainingGroupByName(scopedTrainingGroups, form.group, {
+              branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
+              discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
+            })?.id
+          : undefined,
         coachId: form.coachId !== PLACEHOLDER_COACH ? form.coachId : undefined,
-        lessonSchedule: lessonSchedule.length ? lessonSchedule : undefined,
+        lessonSchedule: form.registrationType === 'monthly' && lessonSchedule.length ? lessonSchedule : undefined,
       });
       setSavedCredentials({
         username: newStudent.username ?? loginUsername,
@@ -674,7 +730,11 @@ const StudentAdd: React.FC<{
             <div className="flex flex-col sm:flex-row gap-4">
               <TypeCard
                 selected={form.registrationType === 'monthly'}
-                onClick={() => set('registrationType')('monthly')}
+                onClick={() => {
+                  set('registrationType')('monthly');
+                  set('group')(PLACEHOLDER_GROUP);
+                  setLessonSchedule([]);
+                }}
                 icon={<Calendar />}
                 title="Aylık Aidat"
                 subtitle="Düzenli aylık ödeme sistemi"
@@ -682,7 +742,11 @@ const StudentAdd: React.FC<{
               />
               <TypeCard
                 selected={form.registrationType === 'package'}
-                onClick={() => set('registrationType')('package')}
+                onClick={() => {
+                  set('registrationType')('package');
+                  set('group')(PLACEHOLDER_PACKAGE);
+                  setLessonSchedule([]);
+                }}
                 icon={<GraduationCap />}
                 title="Ders Paketi"
                 subtitle="Belirli sayıda ders için ödeme"
@@ -713,7 +777,7 @@ const StudentAdd: React.FC<{
                 {disciplineOptions.map((x) => <option key={x}>{x}</option>)}
               </select>
             </Field>
-            <Field label="Grup" required error={errors.group} className="md:col-span-2">
+            <Field label={form.registrationType === 'package' ? 'Ders Paketi' : 'Grup'} required error={errors.group} className="md:col-span-2">
               <select
                 value={form.group}
                 onChange={(e) => handleGroupChange(e.target.value)}

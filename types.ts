@@ -215,6 +215,20 @@ export interface Transaction {
   amount: number;
   /** Paket / özel ders satışında toplam tutar (amount = alınan) */
   totalAmount?: number;
+  /** Satış tipi: aylık paket veya özel ders */
+  saleKind?: 'monthly_package' | 'private_lesson';
+  /** Özel ders satışında seçilen paket kimliği */
+  lessonPackageId?: string;
+  /** Özel ders satışında görünen paket adı */
+  lessonPackageName?: string;
+  /** Özel ders paketinin branşı */
+  lessonDiscipline?: string;
+  /** Özel ders paketinin şubesi */
+  lessonBranchOffice?: string;
+  /** Özel ders paketindeki toplam ders/saat */
+  lessonCount?: number;
+  /** Özel ders paketi geçerlilik süresi */
+  validityDays?: number;
   branch?: string;
   processedBy?: string;
   /** Öğrenciye ait gelir/gider için öğrenci id */

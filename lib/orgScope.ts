@@ -212,15 +212,22 @@ export function resolveScopedHomeworks(
 ): HomeworkAssignment[] {
   if (!auth || auth.role === 'admin') return homeworks;
   const studentIds = scopedStudentIdSet(scopedStudents);
-  const groupNames = new Set([
+  const groupNames = [
     ...scopedTrainingGroups.map((g) => g.name.trim()).filter(Boolean),
     ...scopedStudents.map((s) => (s.group ?? '').trim()).filter(Boolean),
-  ]);
+  ];
+  const groupNamesSet = new Set(groupNames);
+  const normalizedGroupNames = new Set(groupNames.map((name) => name.toLocaleLowerCase('tr-TR')));
   return homeworks.filter((hw) => {
     const targets = hw.assignedTo ?? [];
-    if (targets.some((t) => studentIds.has(t))) return true;
-    if (targets.some((t) => groupNames.has(t))) return true;
-    if (hw.groupName?.trim() && groupNames.has(hw.groupName.trim())) return true;
+    if (targets.some((t) => studentIds.has(String(t).trim()))) return true;
+    if (targets.some((t) => {
+      const raw = String(t).trim();
+      if (groupNamesSet.has(raw)) return true; // eski düz grup adı kayıtları
+      const groupName = raw.startsWith('group:') ? raw.slice(6).trim() : '';
+      return Boolean(groupName) && normalizedGroupNames.has(groupName.toLocaleLowerCase('tr-TR'));
+    })) return true;
+    if (hw.groupName?.trim() && normalizedGroupNames.has(hw.groupName.trim().toLocaleLowerCase('tr-TR'))) return true;
     return false;
   });
 }

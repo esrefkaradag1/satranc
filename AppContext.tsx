@@ -961,12 +961,13 @@ function dbToLesson(row: Record<string, unknown>): Lesson {
   };
 }
 
-/** attendance_records: Sadece tabloda kesin olan kolonlar gönderilir (id, date, student_id, status). Opsiyonel kolonlar yoksa insert hata verir diye eklenmiyor. */
+/** attendance_records: Paket bazlı yoklamada lesson_id de saklanır. */
 function attendanceRecordToDb(r: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (r.id != null) out.id = r.id;
   if (r.date != null) out.date = r.date;
   if ((r as any).studentId != null) out.student_id = (r as any).studentId;
+  if ((r as any).lessonId != null) out.lesson_id = (r as any).lessonId;
   if (r.status != null) out.status = r.status;
   return out;
 }
@@ -1183,6 +1184,13 @@ function dbToTransaction(row: Record<string, unknown>): Transaction {
     paymentType: (r.payment_type ?? row.paymentType ?? 'Nakit') as Transaction['paymentType'],
     amount: Number(row.amount ?? 0),
     totalAmount: r.total_amount != null ? Number(r.total_amount) : r.totalAmount != null ? Number(r.totalAmount) : undefined,
+    saleKind: r.sale_kind != null ? String(r.sale_kind) as Transaction['saleKind'] : r.saleKind != null ? String(r.saleKind) as Transaction['saleKind'] : undefined,
+    lessonPackageId: r.lesson_package_id != null ? String(r.lesson_package_id) : r.lessonPackageId != null ? String(r.lessonPackageId) : undefined,
+    lessonPackageName: r.lesson_package_name != null ? String(r.lesson_package_name) : r.lessonPackageName != null ? String(r.lessonPackageName) : undefined,
+    lessonDiscipline: r.lesson_discipline != null ? String(r.lesson_discipline) : r.lessonDiscipline != null ? String(r.lessonDiscipline) : undefined,
+    lessonBranchOffice: r.lesson_branch_office != null ? String(r.lesson_branch_office) : r.lessonBranchOffice != null ? String(r.lessonBranchOffice) : undefined,
+    lessonCount: r.lesson_count != null ? Number(r.lesson_count) : r.lessonCount != null ? Number(r.lessonCount) : undefined,
+    validityDays: r.validity_days != null ? Number(r.validity_days) : r.validityDays != null ? Number(r.validityDays) : undefined,
     branch: row.branch != null ? String(row.branch) : undefined,
     processedBy: r.processed_by != null ? String(r.processed_by) : r.processedBy != null ? String(r.processedBy) : undefined,
     studentId: r.student_id != null && r.student_id !== '' ? String(r.student_id) : undefined,
@@ -1198,6 +1206,13 @@ function transactionToDb(t: Transaction): Record<string, unknown> {
     payment_type: t.paymentType ?? 'Nakit',
     amount: t.amount,
     total_amount: t.totalAmount ?? null,
+    sale_kind: t.saleKind ?? null,
+    lesson_package_id: t.lessonPackageId ?? null,
+    lesson_package_name: t.lessonPackageName ?? null,
+    lesson_discipline: t.lessonDiscipline ?? null,
+    lesson_branch_office: t.lessonBranchOffice ?? null,
+    lesson_count: t.lessonCount ?? null,
+    validity_days: t.validityDays ?? null,
     processed_by: t.processedBy ?? null,
     student_id: t.studentId ?? null,
     branch: t.branch ?? null,
@@ -2995,6 +3010,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (transaction.paymentType != null) payload.payment_type = transaction.paymentType;
       if (transaction.amount != null) payload.amount = transaction.amount;
       if (transaction.totalAmount !== undefined) payload.total_amount = transaction.totalAmount ?? null;
+      if (transaction.saleKind !== undefined) payload.sale_kind = transaction.saleKind ?? null;
+      if (transaction.lessonPackageId !== undefined) payload.lesson_package_id = transaction.lessonPackageId ?? null;
+      if (transaction.lessonPackageName !== undefined) payload.lesson_package_name = transaction.lessonPackageName ?? null;
+      if (transaction.lessonDiscipline !== undefined) payload.lesson_discipline = transaction.lessonDiscipline ?? null;
+      if (transaction.lessonBranchOffice !== undefined) payload.lesson_branch_office = transaction.lessonBranchOffice ?? null;
+      if (transaction.lessonCount !== undefined) payload.lesson_count = transaction.lessonCount ?? null;
+      if (transaction.validityDays !== undefined) payload.validity_days = transaction.validityDays ?? null;
       if (transaction.processedBy !== undefined) payload.processed_by = transaction.processedBy ?? null;
       if (transaction.branch !== undefined) payload.branch = transaction.branch ?? null;
       if (transaction.studentId !== undefined) payload.student_id = transaction.studentId ?? null;
@@ -3018,7 +3040,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newRecord = { ...record, id } as AttendanceRecord;
     const day = String(record.date ?? '').slice(0, 10);
     setAttendanceRecords(prev => {
-      const idx = prev.findIndex(r => r.studentId === record.studentId && String(r.date ?? '').slice(0, 10) === day);
+      const idx = prev.findIndex((r) => {
+        if (r.studentId !== record.studentId) return false;
+        if (String(r.date ?? '').slice(0, 10) !== day) return false;
+        return String(r.lessonId ?? '') === String(record.lessonId ?? '');
+      });
       if (idx === -1) return [newRecord, ...prev];
       const next = prev.slice();
       next[idx] = { ...next[idx], ...record };
@@ -3027,13 +3053,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const sb = getServiceSupabase();
     if (sb) try {
       const payload = attendanceRecordToDb(newRecord as unknown as Record<string, unknown>);
-      const { data: existing, error: qErr } = await sb
+      let query = sb
         .from('attendance_records')
         .select('id')
         .eq('student_id', record.studentId)
-        .eq('date', day)
-        .limit(1)
-        .maybeSingle();
+        .eq('date', day);
+      query = record.lessonId ? query.eq('lesson_id', record.lessonId) : query.is('lesson_id', null);
+      const { data: existing, error: qErr } = await query.limit(1).maybeSingle();
       if (qErr) {
         console.error('Supabase attendance_records select error:', qErr);
       } else if (existing?.id) {

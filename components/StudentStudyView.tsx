@@ -117,7 +117,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   selectedStudyIdRef.current = selectedStudyId;
   const [selectedChapterIndex, setSelectedChapterIndex] = useState(0);
   const [listSearch, setListSearch] = useState('');
-  const [studyListCategory, setStudyListCategory] = useState<'mine' | 'teacher'>('mine');
+  const [studyListCategory, setStudyListCategory] = useState<'mine' | 'teacher'>('teacher');
   const [currentMoveIndex, setCurrentMoveIndex] = useState(0);
   const [currentVariation, setCurrentVariation] = useState<[number, number, number] | null>(null);
   const [hoverPly, setHoverPly] = useState<number | null>(null);
@@ -327,6 +327,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const effectiveChapter = legacyChapter;
 
+  const isLiveAnalysis = useMemo(
+    () => !!effectiveChapter && effectiveChapter.lessonMode === 'interactive' && effectiveChapter.interactiveType === 'liveAnalysis',
+    [effectiveChapter?.lessonMode, effectiveChapter?.interactiveType]
+  );
+
   const isInteractivePuzzle = useMemo(
     () =>
       !!effectiveChapter &&
@@ -433,10 +438,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     return () => clearInterval(interval);
   }, [selectedStudy, effectiveChapter, studentId, vsComputer, vcFen, vcHistory, vcThinking, isVcGameOver, syncState, sticky]);
 
-  const isLiveAnalysis = useMemo(
-    () => !!effectiveChapter && effectiveChapter.lessonMode === 'interactive' && effectiveChapter.interactiveType === 'liveAnalysis',
-    [effectiveChapter?.lessonMode, effectiveChapter?.interactiveType]
-  );
   const isVsComputer = useMemo(() => {
     const ch = selectedChapter ?? effectiveChapter;
     return !!ch && ch.lessonMode === 'interactive' && ch.interactiveType === 'vsComputer';

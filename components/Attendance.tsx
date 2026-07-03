@@ -195,6 +195,7 @@ const Attendance: React.FC = () => {
     scopedStudents: students,
     scopedCoaches: coaches,
     auth,
+    scopedTransactions: transactions,
     addAttendanceRecord,
     scopedAttendanceRecords: attendanceRecords,
     scopedTrainingGroups: trainingGroups,
@@ -380,25 +381,93 @@ const Attendance: React.FC = () => {
     [lessonPackages, group, branch, branchOffice],
   );
 
+  const selectedLessonPackageSalesByStudentId = useMemo(() => {
+    const map = new Map<string, (typeof transactions)[number]>();
+    if (!selectedLessonPackage) return map;
+    const packageName = selectedLessonPackage.name.trim().toLocaleLowerCase('tr-TR');
+    students.forEach((student) => {
+      const sale = transactions
+        .filter((t) => t.studentId === student.id && t.category === 'Özel Ders')
+        .filter((t) => {
+          if (t.lessonPackageId) return t.lessonPackageId === selectedLessonPackage.id;
+          const rawName = (t.lessonPackageName ?? '').trim();
+          const rawDescription = (t.description ?? '').trim();
+          const normalizedName = rawName.toLocaleLowerCase('tr-TR');
+          const normalizedDescription = rawDescription.toLocaleLowerCase('tr-TR');
+          const sameName =
+            normalizedName === packageName ||
+            normalizedDescription === packageName ||
+            normalizedDescription.startsWith(`${packageName} |`) ||
+            normalizedDescription.includes(packageName);
+          const sameDiscipline = !t.lessonDiscipline || t.lessonDiscipline.trim() === selectedLessonPackage.discipline.trim();
+          const sameOffice = !t.lessonBranchOffice || t.lessonBranchOffice.trim() === selectedLessonPackage.branchOffice.trim();
+          return sameName && sameDiscipline && sameOffice;
+        })
+        .sort((a, b) => b.date.localeCompare(a.date))[0];
+      if (sale) map.set(student.id, sale);
+    });
+    return map;
+  }, [transactions, students, selectedLessonPackage]);
+
   const filteredStudents = useMemo(() => {
     if (!group.trim()) return [];
     if (attendanceType === 'lesson') {
+      if (!selectedLessonPackage) return [];
       const officeKey = normalizeClubKey(branchOffice);
       const discipline = branch.trim();
       return students.filter((s) => {
+        if (selectedLessonPackageSalesByStudentId.has(s.id)) return true;
+        if ((s.group ?? '').trim() === group.trim()) return true;
         if (officeKey && normalizeClubKey(s.branchOffice ?? '') !== officeKey) return false;
         if (discipline && (s.branch ?? '').trim() !== discipline) return false;
-        if (s.registrationType === 'package') return true;
-        const tg = findTrainingGroupByName(trainingGroups, s.group ?? '', {
-          branchOffice,
-          discipline,
-        });
-        return Boolean(tg);
+        return s.registrationType === 'package';
       });
     }
     if (selectedTrainingGroup) return studentsInTrainingGroup(students, selectedTrainingGroup);
     return students.filter((s) => (s.group ?? '').trim() === group.trim());
-  }, [students, group, branch, branchOffice, attendanceType, selectedTrainingGroup, trainingGroups]);
+  }, [students, group, branch, branchOffice, attendanceType, selectedTrainingGroup, trainingGroups, selectedLessonPackage, selectedLessonPackageSalesByStudentId]);
+
+  const privateLessonBalanceByStudentId = useMemo(() => {
+    const map = new Map<string, { totalLessons: number; usedLessons: number; remainingLessons: number }>();
+    if (attendanceType !== 'lesson' || !selectedLessonPackage) return map;
+    const currentDay = date.slice(0, 10);
+    filteredStudents.forEach((student) => {
+      const sale = selectedLessonPackageSalesByStudentId.get(student.id);
+      if (!sale) return;
+      const totalLessons = sale.lessonCount ?? selectedLessonPackage.lessonCount;
+      const historicalUsed = attendanceRecords.filter(
+        (record) =>
+          record.studentId === student.id &&
+          record.lessonId === selectedLessonPackage.id &&
+          (record.status === 'present' || record.status === 'late') &&
+          String(record.date ?? '').slice(0, 10) !== currentDay,
+      ).length;
+      const existingToday = attendanceRecords.find(
+        (record) =>
+          record.studentId === student.id &&
+          record.lessonId === selectedLessonPackage.id &&
+          String(record.date ?? '').slice(0, 10) === currentDay,
+      );
+      const pendingStatus = attendance[student.id];
+      const todayUsed =
+        pendingStatus === 'Present'
+          ? 1
+          : pendingStatus === 'Late'
+            ? 1
+            : pendingStatus === 'Absent' || pendingStatus === 'Excused'
+              ? 0
+              : existingToday && (existingToday.status === 'present' || existingToday.status === 'late')
+                ? 1
+                : 0;
+      const usedLessons = historicalUsed + todayUsed;
+      map.set(student.id, {
+        totalLessons,
+        usedLessons,
+        remainingLessons: Math.max(0, totalLessons - usedLessons),
+      });
+    });
+    return map;
+  }, [attendanceType, selectedLessonPackage, date, filteredStudents, selectedLessonPackageSalesByStudentId, attendanceRecords, attendance]);
 
   const groupLogEntries = useCallback(
     (groupKey: string) =>
@@ -509,7 +578,11 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
     const inGroup = filteredStudents;
     inGroup.forEach((s) => {
       const rec = attendanceRecords.find(
-        (r) => r.studentId === s.id && r.date && r.date.slice(0, 10) === dateNorm
+        (r) =>
+          r.studentId === s.id &&
+          r.date &&
+          r.date.slice(0, 10) === dateNorm &&
+          String(r.lessonId ?? '') === String(attendanceType === 'lesson' ? selectedLessonPackage?.id ?? '' : '')
       );
       if (rec) {
         if (rec.status === 'present') existing[s.id] = 'Present';
@@ -536,6 +609,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
       addAttendanceRecord({
         date,
         studentId: s.id,
+        lessonId: attendanceType === 'lesson' ? selectedLessonPackage?.id : undefined,
         status: st ? statusMap[st] : 'absent',
         teacherName: teacherName || undefined,
         lessonSummary: lessonSummary.trim() || undefined,
@@ -922,7 +996,12 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <StudentPhoto name={student.name} photoUrl={student.photoUrl} sizeClass="w-10 h-10" onZoom={setZoomedPhoto} />
  <div className="flex-1 min-w-0">
  <div className="font-semibold text-white text-sm leading-tight">{student.name}</div>
- {student.group ? <div className="text-[10px] text-slate-500 mt-0.5">{student.group}</div> : null}
+{student.group ? <div className="text-[10px] text-slate-500 mt-0.5">{student.group}</div> : null}
+{attendanceType === 'lesson' && privateLessonBalanceByStudentId.get(student.id) ? (
+  <div className="mt-1 inline-flex items-center gap-1 rounded-md border border-indigo-500/20 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-bold text-indigo-200">
+    Kalan {privateLessonBalanceByStudentId.get(student.id)?.remainingLessons}/{privateLessonBalanceByStudentId.get(student.id)?.totalLessons} ders
+  </div>
+) : null}
  <div className="mt-2">
  <AnalysisPlatformButtons
  student={student}
@@ -993,8 +1072,13 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  </div>
  </td>
  <td data-label="Öğrenci" className="px-3 py-3">
- <div className="font-semibold text-white text-sm">{student.name}</div>
- {student.group ? <div className="text-[10px] text-slate-500 mt-0.5">{student.group}</div> : null}
+<div className="font-semibold text-white text-sm">{student.name}</div>
+{student.group ? <div className="text-[10px] text-slate-500 mt-0.5">{student.group}</div> : null}
+{attendanceType === 'lesson' && privateLessonBalanceByStudentId.get(student.id) ? (
+  <div className="mt-1 inline-flex items-center gap-1 rounded-md border border-indigo-500/20 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-bold text-indigo-200">
+    Kalan {privateLessonBalanceByStudentId.get(student.id)?.remainingLessons}/{privateLessonBalanceByStudentId.get(student.id)?.totalLessons} ders
+  </div>
+) : null}
  </td>
  <td data-label="Analiz" className="px-3 py-3">
  <AnalysisPlatformButtons
