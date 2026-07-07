@@ -3,6 +3,8 @@ import { Building2, GraduationCap, Users, User, SlidersHorizontal } from 'lucide
 import type { Student, TrainingGroup, DisciplineBranch } from '../../types';
 import type { TargetFilter } from '../../lib/homeworkPanelUtils';
 import { disciplinesForOffice, groupsForDiscipline } from '../../lib/homeworkPanelUtils';
+import { useApp } from '../../AppContext';
+import { canShowStudentCounts } from '../../lib/studentCountVisibility';
 
 type Props = {
   target: TargetFilter;
@@ -41,6 +43,8 @@ export const HomeworkTargetSelector: React.FC<Props> = ({
   trainingGroups,
   filteredStudents,
 }) => {
+  const { auth } = useApp();
+  const showStudentCounts = canShowStudentCounts(auth);
   const disciplines = disciplinesForOffice(disciplineBranches, target.branchOffice);
   const groups = groupsForDiscipline(trainingGroups, target.branchOffice, target.discipline);
   const activeFilters = [
@@ -161,9 +165,13 @@ export const HomeworkTargetSelector: React.FC<Props> = ({
 
       <div className="px-4 py-3 border-t border-white/[0.05] bg-black/20 flex items-center justify-between">
         <span className="text-[10px] text-slate-500">Listelenen öğrenci</span>
-        <span className="px-2.5 py-1 rounded-lg bg-indigo-500/15 text-indigo-300 text-xs font-black tabular-nums">
-          {filteredStudents.length}
-        </span>
+        {showStudentCounts ? (
+          <span className="px-2.5 py-1 rounded-lg bg-indigo-500/15 text-indigo-300 text-xs font-black tabular-nums">
+            {filteredStudents.length}
+          </span>
+        ) : (
+          <span className="text-[10px] text-slate-600">—</span>
+        )}
       </div>
     </div>
   );

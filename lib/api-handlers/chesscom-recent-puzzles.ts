@@ -98,6 +98,29 @@ function parseTactics2Puzzles(data: unknown, type: PuzzleTab): PuzzleAttempt[] {
   return out.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 }
 
+function sendSoftUnavailable(res: Res, type: string, profileUrl: string, error: string, upstreamStatus?: number): void {
+  res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300');
+  if (type === 'all') {
+    res.status(200).json({
+      rated: [],
+      learning: [],
+      rush: [],
+      unavailable: true,
+      profileUrl,
+      upstreamStatus,
+      error,
+    });
+    return;
+  }
+  res.status(200).json({
+    attempts: [],
+    unavailable: true,
+    profileUrl,
+    upstreamStatus,
+    error,
+  });
+}
+
 export default async function handler(req: Req, res: Res) {
   const rawUser = req.query.username;
   const username = (Array.isArray(rawUser) ? rawUser[0] : rawUser)?.trim().toLowerCase() ?? '';
@@ -127,7 +150,7 @@ export default async function handler(req: Req, res: Res) {
       },
     );
     if (!upstream.ok) {
-      res.status(upstream.status).json({ error: 'Chess.com bulmaca listesi alınamadı', profileUrl });
+      sendSoftUnavailable(res, type, profileUrl, 'Chess.com bulmaca listesi alınamadı', upstream.status);
       return;
     }
     const data = await upstream.json();
@@ -152,6 +175,6 @@ export default async function handler(req: Req, res: Res) {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Chess.com bağlantı hatası';
-    res.status(502).json({ error: msg, profileUrl });
+    sendSoftUnavailable(res, type, profileUrl, msg);
   }
 }

@@ -82,6 +82,13 @@ export const WEEKDAY_LABELS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz']
 /** Ödev assignedTo (grup:… veya öğrenci id) → öğrenci kimlikleri */
 export function expandHomeworkAssigneeIds(assignedTo: string[], students: Student[]): Set<string> {
   const ids = new Set<string>();
+  const excludedIds = new Set(
+    assignedTo
+      .map((raw) => (raw || '').trim())
+      .filter((t) => t.startsWith('exclude:'))
+      .map((t) => t.slice(8).trim())
+      .filter(Boolean),
+  );
   for (const raw of assignedTo) {
     const t = (raw || '').trim();
     if (!t) continue;
@@ -89,9 +96,13 @@ export function expandHomeworkAssigneeIds(assignedTo: string[], students: Studen
       const group = t.slice(6).trim();
       students
         .filter((s) => (s.group || '').trim() === group)
-        .forEach((s) => ids.add(s.id));
+        .forEach((s) => {
+          if (!excludedIds.has(String(s.id).trim())) ids.add(s.id);
+        });
+    } else if (!t.startsWith('exclude:')) {
+      if (!excludedIds.has(t)) ids.add(t);
     } else {
-      ids.add(t);
+      ids.delete(t.slice(8).trim());
     }
   }
   return ids;

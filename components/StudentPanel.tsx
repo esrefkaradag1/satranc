@@ -38,7 +38,7 @@ import {
   Camera,
   KeyRound,
 } from 'lucide-react';
-import { useApp, getDisplayStudentNo } from '../AppContext';
+import { useApp } from '../AppContext';
 import { analyzeStudentHomework } from '../services/geminiService';
 import { Student } from '../types';
 import type { PerformanceAnalysis } from '../types';
@@ -53,17 +53,23 @@ import { filterLessonsToActiveGroups } from '../lib/syncGroupLessons';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
 import { LeaderboardPreview } from './leaderboard/LeaderboardPreview';
 import { StudentSummaryDashboard } from './student/StudentSummaryDashboard';
+import { StudentAttendanceHistory } from './student/StudentAttendanceHistory';
 import { StudentHomeworkPanel } from './student/StudentHomeworkPanel';
 import { StudentAnalysesPanel } from './student/StudentAnalysesPanel';
+import { StudentPrivateLessonPanel } from './student/StudentPrivateLessonPanel';
+import { StudentDuesCalendar } from './student/StudentDuesCalendar';
+import { UkdFideRatingsPanel } from './student/UkdFideRatingsPanel';
 import { LichessOAuthConnect } from './student/LichessOAuthConnect';
 import LichessGameViewerModal from './LichessGameViewerModal';
 import ChessComGameViewerModal from './ChessComGameViewerModal';
 import StudentMessagesPanel from './StudentMessagesPanel';
 import PlatformViewTabs, { type PlatformViewTab } from './PlatformViewTabs';
 import Sidebar from './Sidebar';
+import AccountDropdown, { type AccountDropdownItem } from './ui/AccountDropdown';
 import { filterDuesTransactions } from '../lib/transactionUtils';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { STUDENT_NAV_CATEGORIES } from '../constants';
+import { clubDisplayForStudent } from '../lib/clubDisplay';
 import { filterNavByPermissions } from '../lib/rolePermissions';
 import { isServerMode } from '../apiConfig';
 import { apiHomeworksForStudent, apiScheduleForStudent } from '../services/backendApi';
@@ -107,8 +113,21 @@ import {
   type PlatformDayStats,
 } from '../lib/homeworkPlatformUtils';
 import { nextHomeworkPuzzle } from '../lib/puzzlePlayUtils';
+import { attendanceRecordGroupName, attendanceRecordSessionScopeKey, attendanceRecordTime } from '../lib/attendanceSession';
+import { countPrivateLessonAttendanceUsage } from '../lib/privateLessonUsage';
+import { requestTrainingNotifyCheck } from '../services/trainingNotifyClient';
 
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
+const PLATFORM_DAY_FETCH_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => {
+      window.setTimeout(() => resolve(fallback), ms);
+    }),
+  ]);
+}
 
 const MONTHS_TR = [
   'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
@@ -133,13 +152,6 @@ function formatDateTR(iso?: string) {
   return d.toLocaleDateString('tr-TR');
 }
 
-function formatTimeTR(iso?: string) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
 function ageFromBirthDate(iso?: string): number | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -151,15 +163,16 @@ function ageFromBirthDate(iso?: string): number | null {
   return age;
 }
 
-type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'ukd' | 'lichess' | 'chesscom' | 'messages';
+type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages';
 
-/** Veli panelinde gizlenecek eğitim sekmeleri */
+const STUDENT_PANEL_REFRESH_TABS = new Set<PanelTab>(['summary', 'payments', 'dues', 'attendance', 'profile', 'analyses', 'private-lesson']);
+
+/** Veli panelinde sidebar'dan gizlenecek öğrenci eğitim sekmeleri (izin verilse bile) */
 const PARENT_HIDDEN_TAB_IDS = new Set<PanelTab>([
   'live-lesson',
   'puzzles',
   'study',
   'tournaments',
-  'analyses',
   'ukd',
   'lichess',
   'chesscom',
@@ -179,6 +192,7 @@ const PANEL_TAB_TO_SLUG: Record<PanelTab, string> = {
   payments: 'odemeler',
   dues: 'aidat',
   analyses: 'analizler',
+  'private-lesson': 'ozel-ders',
   ukd: 'ukd',
   lichess: 'lichess',
   chesscom: 'chesscom',
@@ -277,7 +291,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, clubs } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(() =>
@@ -383,6 +397,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     return null;
   }, [students, studentId, apiStudent]);
 
+  const studentClubDisplay = useMemo(
+    () => clubDisplayForStudent(student, clubs),
+    [student, clubs],
+  );
+
   const studentWeeklyLessons = useMemo(() => {
     if (!student) return [];
     
@@ -428,6 +447,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       setWeekPlatformStatsByDate({});
       weekPlatformStatsRef.current = {};
       setExternalStatsNote('Lichess veya Chess.com kullanıcı adı profilde tanımlı değil.');
+      setPlatformStatsFetched(true);
       return;
     }
     setLoadingExternalGameCount(true);
@@ -445,12 +465,29 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       for (let i = 0; i < daysToFetch.length; i++) {
         if (i > 0) await pause(500);
         const iso = daysToFetch[i];
-        const fresh = await fetchStudentPlatformDayStats(student, iso);
+        const fresh = await withTimeout(
+          fetchStudentPlatformDayStats(student, iso),
+          PLATFORM_DAY_FETCH_TIMEOUT_MS,
+          mergePlatformDayStats(nextWeek[iso], {
+            games: 0,
+            puzzleSolved: 0,
+            puzzlePassed: 0,
+            puzzleFailed: 0,
+            lichessGames: 0,
+            lichessPuzzles: 0,
+            lichessPuzzlePassed: 0,
+            lichessPuzzleFailed: 0,
+            chessComGames: 0,
+            chessComPuzzles: 0,
+            chessComPuzzlePassed: 0,
+            chessComPuzzleFailed: 0,
+            lichessError: true,
+          }),
+        );
         nextWeek[iso] = mergePlatformDayStats(nextWeek[iso], fresh);
       }
       weekPlatformStatsRef.current = nextWeek;
       setWeekPlatformStatsByDate(nextWeek);
-      setPlatformStatsFetched(true);
       const stats = nextWeek[todayKey] ?? await fetchStudentPlatformDayStats(student, todayKey);
       setTodayExternalGameCount(stats.games);
       setTodayExternalPuzzleCount(stats.puzzleSolved);
@@ -470,6 +507,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       setExternalStatsNote('Platform verisi alınamadı. Biraz sonra yeniden deneyin.');
     } finally {
       setLoadingExternalGameCount(false);
+      setPlatformStatsFetched(true);
     }
   }, [student]);
 
@@ -488,10 +526,16 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [student, homeworkSubmissions, addHomeworkSubmission]);
 
   const studentAttendances = useMemo(() => {
-    return attendanceRecords
+    const sorted = attendanceRecords
       .filter((r) => r.studentId === studentId)
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [studentId, attendanceRecords]);
+    const deduped = new Map<string, typeof sorted[number]>();
+    sorted.forEach((record) => {
+      const key = `${String(record.date ?? '').slice(0, 10)}::${attendanceRecordSessionScopeKey(record, student?.group) || record.id}`;
+      if (!deduped.has(key)) deduped.set(key, record);
+    });
+    return [...deduped.values()];
+  }, [studentId, attendanceRecords, student?.group]);
 
   const visibleGallery = useMemo(() => {
     return gallery.filter((item) => !item.studentId || item.studentId === studentId);
@@ -502,6 +546,53 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       .filter((t) => t.studentId === studentId && t.type === 'income')
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [studentId, transactions]);
+
+  const privateLessonTransactions = useMemo(() => {
+    return studentTransactions.filter((t) => t.category === 'Özel Ders');
+  }, [studentTransactions]);
+
+  const privateLessonUsageById = useMemo(() => {
+    const map = new Map<string, { totalLessons?: number; usedLessons: number; attendanceUsedLessons: number; startingUsedLessons: number; remainingLessons?: number }>();
+    privateLessonTransactions.forEach((t) => {
+      const totalLessons = t.lessonCount;
+      const attendanceUsedLessons = countPrivateLessonAttendanceUsage(t, studentAttendances, studentId);
+      const rawStartingUsed = Number(t.startingUsedLessons ?? 0);
+      const startingUsedLessons = Number.isFinite(rawStartingUsed)
+        ? Math.max(0, totalLessons != null ? Math.min(rawStartingUsed, totalLessons) : rawStartingUsed)
+        : 0;
+      const usedLessons = attendanceUsedLessons + startingUsedLessons;
+      map.set(t.id, {
+        totalLessons,
+        usedLessons,
+        attendanceUsedLessons,
+        startingUsedLessons,
+        remainingLessons: totalLessons != null ? Math.max(0, totalLessons - usedLessons) : undefined,
+      });
+    });
+    return map;
+  }, [privateLessonTransactions, studentAttendances, studentId]);
+
+  const studentPrivateLessonSummary = useMemo(() => {
+    const latest = privateLessonTransactions[0];
+    if (!latest) return null;
+    const usage = privateLessonUsageById.get(latest.id);
+    const totalLessons = usage?.totalLessons ?? latest.lessonCount;
+    const usedLessons = usage?.usedLessons ?? Math.max(0, Number(latest.startingUsedLessons ?? 0));
+    const remainingLessons =
+      usage?.remainingLessons ??
+      (totalLessons != null ? Math.max(0, totalLessons - usedLessons) : undefined);
+    return {
+      packageName: String(latest.lessonPackageName ?? latest.description ?? 'Özel Ders Paketi').trim() || 'Özel Ders Paketi',
+      branchOffice: String(latest.lessonBranchOffice ?? '').trim(),
+      discipline: String(latest.lessonDiscipline ?? '').trim(),
+      totalLessons,
+      usedLessons,
+      remainingLessons,
+      attendanceUsedLessons: usage?.attendanceUsedLessons ?? 0,
+      startingUsedLessons: usage?.startingUsedLessons ?? 0,
+      saleDate: String(latest.date ?? ''),
+    };
+  }, [privateLessonTransactions, privateLessonUsageById]);
 
   const derived = useMemo(() => {
     if (!student) return null;
@@ -515,20 +606,25 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     const last30 = studentAttendances.filter((r) => r.date >= thirtyDaysAgo && r.status === 'present').length;
     const expected30 = 8;
     const attendanceRate = expected30 > 0 ? `${Math.round((last30 / expected30) * 100)}%` : totalAttendance > 0 ? '100%' : '—';
+    const isPackageRegistration = student.registrationType === 'package';
     const duesLabel =
-      student.isScholarshipStudent || student.registrationType === 'package'
+      student.isScholarshipStudent
         ? 'Burslu'
+        : isPackageRegistration
+          ? 'Özel Ders Paketi'
         : student.paymentStatus === 'Paid'
           ? 'Ödendi'
           : student.paymentStatus === 'Partial'
             ? 'Kısmi'
             : 'Borç';
     const duesSubtitle =
-      student.isScholarshipStudent || student.registrationType === 'package'
+      student.isScholarshipStudent
         ? 'Aidat Ödemesi Yok'
+        : isPackageRegistration
+          ? 'Ders kullanımına göre takip edilir'
         : undefined;
-    return { year, totalAttendance, attendanceRate, duesLabel, duesSubtitle };
-  }, [student, studentAttendances]);
+    return { year, totalAttendance, attendanceRate, duesLabel, duesSubtitle, isPackageRegistration };
+  }, [student, studentAttendances, studentPrivateLessonSummary]);
 
   const paidMonthsSet = useMemo(() => {
     const set = new Set<string>();
@@ -622,17 +718,42 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const panelPermissions = authPermissions;
 
   const navCategoriesForView = useMemo(() => {
-    let filtered = filterNavByPermissions(STUDENT_NAV_CATEGORIES, panelPermissions);
+    const allowedForNav = viewAs === 'parent' && panelPermissions.has('dues') && !panelPermissions.has('payments')
+      ? new Set([...panelPermissions, 'payments'])
+      : panelPermissions;
+    let filtered = filterNavByPermissions(STUDENT_NAV_CATEGORIES, allowedForNav);
     if (viewAs === 'student') {
       filtered = filtered
         .map((cat) => ({
           ...cat,
-          items: cat.items.filter((i) => i.id !== 'payments' && i.id !== 'dues'),
+          items: cat.items.filter((i) => i.id !== 'payments' && i.id !== 'dues' && i.id !== 'private-lesson'),
+        }))
+        .filter((cat) => cat.items.length > 0);
+    }
+    if (viewAs === 'parent') {
+      filtered = filtered
+        .map((cat) => ({
+          ...cat,
+          items: cat.items
+            .filter((i) => {
+              if (PARENT_HIDDEN_TAB_IDS.has(i.id as PanelTab)) return false;
+              if (i.id === 'dues') return false;
+              if (cat.title === 'Eğitim' && i.id === 'analyses') return false;
+              if (i.id === 'private-lesson' && !studentPrivateLessonSummary && privateLessonTransactions.length === 0) {
+                return false;
+              }
+              return true;
+            })
+            .map((i) => {
+              if (i.id === 'attendance') return { ...i, label: 'Yoklama' };
+              if (i.id === 'payments') return { ...i, label: 'Aidat ve Ödemeler' };
+              return i;
+            }),
         }))
         .filter((cat) => cat.items.length > 0);
     }
     return filtered;
-  }, [viewAs, panelPermissions]);
+  }, [viewAs, panelPermissions, studentPrivateLessonSummary, privateLessonTransactions.length]);
 
   const lichessPracticePuzzles = useMemo(
     () => puzzles.filter((p) => p.source === 'lichess').slice(0, 24),
@@ -660,6 +781,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [refreshFromStorage, activeTab, isServerMode]);
 
   useEffect(() => {
+    if (!STUDENT_PANEL_REFRESH_TABS.has(activeTab)) return;
+    refreshFromStorage();
+  }, [activeTab, refreshFromStorage]);
+
+  useEffect(() => {
     if (!window.location.hash.replace(/^#\/?/, '')) writePanelHash('summary');
     const onHash = () => {
       const p = parsePanelHash();
@@ -674,6 +800,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if (!rolesLoaded) return;
     if (!panelPermissions.has(activeTab)) setActiveTab('summary');
   }, [viewAs, activeTab, panelPermissions, rolesLoaded, setActiveTab]);
+
+  useEffect(() => {
+    if (viewAs !== 'parent') return;
+    if (activeTab === 'dues') setActiveTab('payments');
+  }, [viewAs, activeTab, setActiveTab]);
 
   useEffect(() => {
     if (activeTab !== 'lichess') return;
@@ -715,7 +846,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     chessComHasMoreRef.current = chessComHasMore;
   }, [chessComHasMore]);
 
-  const loadLichess = useCallback(async (force = false, append = false) => {
+  const loadLichess = useCallback(async (force = false, append = false, options?: { includeGames?: boolean }) => {
+    const includeGames = options?.includeGames !== false;
     const un = student?.lichessUsername?.trim();
     if (!un) {
       setLichessProfile(null);
@@ -733,10 +865,12 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if (!append) {
       lichessLastLoadRef.current = { username: un, at: now };
       setLoadingLichess(true);
-      setLichessGames([]);
-      setLichessGamesProgress(0);
-      setLichessNextUntil(null);
-      setLichessHasMore(false);
+      if (includeGames) {
+        setLichessGames([]);
+        setLichessGamesProgress(0);
+        setLichessNextUntil(null);
+        setLichessHasMore(false);
+      }
       try {
         const profile = await fetchLichessUser(un);
         setLichessProfile(profile ?? null);
@@ -744,6 +878,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         setLoadingLichess(false);
       }
     }
+    if (!includeGames) return;
     setLoadingLichessGames(true);
     try {
       const page = await fetchLichessGamesPage(un, {
@@ -769,7 +904,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     }
   }, [student?.lichessUsername]);
 
-  const loadChessCom = useCallback(async (append = false) => {
+  const loadChessCom = useCallback(async (append = false, options?: { includeGames?: boolean }) => {
+    const includeGames = options?.includeGames !== false;
     const un = student?.chessComUsername?.trim();
     if (!un) {
       setChessComProfile(null);
@@ -785,13 +921,12 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if (append && (!chessComHasMoreRef.current || chessComNextBeforeEndTimeRef.current == null)) return;
     if (!append) {
       setLoadingChessCom(true);
-      setChessComProfile(null);
-      setChessComStats(null);
-      setChessComMemberStats(null);
-      setChessComGames([]);
-      setChessComGamesProgress(0);
-      setChessComNextBeforeEndTime(null);
-      setChessComHasMore(false);
+      if (includeGames) {
+        setChessComGames([]);
+        setChessComGamesProgress(0);
+        setChessComNextBeforeEndTime(null);
+        setChessComHasMore(false);
+      }
       try {
         const [profile, stats, memberStats, puzzlesBundle] = await Promise.all([
           fetchChessComPlayer(un),
@@ -811,6 +946,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         setLoadingChessCom(false);
       }
     }
+    if (!includeGames) return;
     setLoadingChessComGames(true);
     try {
       const page = await fetchChessComGamesPage(un, {
@@ -838,11 +974,15 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [student?.chessComUsername]);
 
   useEffect(() => {
-    if (activeTab === 'lichess' && student?.lichessUsername) loadLichess(false);
+    if (!student?.lichessUsername) return;
+    if (activeTab === 'lichess') loadLichess(false, false, { includeGames: true });
+    else if (activeTab === 'analyses') loadLichess(false, false, { includeGames: true });
   }, [activeTab, student?.lichessUsername, loadLichess]);
 
   useEffect(() => {
-    if (activeTab === 'chesscom' && student?.chessComUsername) loadChessCom();
+    if (!student?.chessComUsername) return;
+    if (activeTab === 'chesscom') loadChessCom(false, { includeGames: true });
+    else if (activeTab === 'analyses') loadChessCom(false, { includeGames: true });
   }, [activeTab, student?.chessComUsername, loadChessCom]);
 
   const loadFide = useCallback(async () => {
@@ -926,17 +1066,32 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [activeTab, refreshStudentHomeworks]);
 
   useEffect(() => {
-    if (activeTab !== 'puzzles' || !student) return;
+    if ((activeTab !== 'puzzles' && activeTab !== 'analyses') || !student) return;
+    if (viewAs === 'parent' && activeTab === 'analyses') return;
     void refreshTodayExternalStats();
-  }, [activeTab, student?.id, homeworkDayKey, refreshTodayExternalStats]);
+  }, [activeTab, student?.id, homeworkDayKey, refreshTodayExternalStats, viewAs]);
 
   useEffect(() => {
-    if (activeTab !== 'puzzles' || !student) return;
+    if ((activeTab !== 'puzzles' && activeTab !== 'analyses') || !student) return;
+    if (viewAs === 'parent' && activeTab === 'analyses') return;
     const id = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refreshTodayExternalStats();
     }, PLATFORM_AUTO_POLL_MS);
     return () => window.clearInterval(id);
-  }, [activeTab, student?.id, homeworkDayKey, refreshTodayExternalStats]);
+  }, [activeTab, student?.id, homeworkDayKey, refreshTodayExternalStats, viewAs]);
+
+  useEffect(() => {
+    if (!student?.id || !platformStatsFetched || loadingExternalGameCount) return;
+    if (activeTab !== 'puzzles' && activeTab !== 'summary') return;
+    void requestTrainingNotifyCheck(student.id, homeworkDayKey);
+  }, [
+    student?.id,
+    platformStatsFetched,
+    loadingExternalGameCount,
+    homeworkDayKey,
+    activeTab,
+    weekPlatformStatsByDate,
+  ]);
 
   const [apiSchedule, setApiSchedule] = useState<typeof scheduleEntries>([]);
   useEffect(() => {
@@ -1003,6 +1158,31 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       </span>
     );
 
+  const studentAccountMenuItems: AccountDropdownItem[] = [
+    {
+      id: 'summary',
+      label: 'Panelim',
+      icon: <LayoutDashboard className="w-5 h-5" />,
+      onClick: () => setActiveTab('summary'),
+    },
+    {
+      id: 'profile',
+      label: 'Profilim',
+      icon: <User className="w-5 h-5" />,
+      onClick: () => setActiveTab('profile'),
+    },
+    {
+      id: 'account',
+      label: 'Hesap bilgileri',
+      icon: <KeyRound className="w-5 h-5" />,
+      onClick: () => {
+        setLoginPhone(student.parentPhone || '');
+        setLoginPin(student.parentPin || '');
+        setShowLoginInfoModal(true);
+      },
+    },
+  ];
+
   return (
     <div className="flex min-h-screen bg-[#020617] text-slate-100 min-w-0">
       <Sidebar
@@ -1011,6 +1191,13 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         navCategories={navCategoriesForView}
         labelOverrides={{ puzzles: 'Antreman' }}
         onLogout={handleLogout}
+        footerProfile={{
+          name: student.name,
+          subtitle: viewAs === 'student' ? 'Öğrenci hesabı' : `${student?.name ?? 'Öğrenci'} velisi`,
+          photoUrl: student.photoUrl,
+          initials: initials(student.name),
+          menuItems: studentAccountMenuItems,
+        }}
         mobileOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         defaultIconOnly={sidebarIconOnlyDefault}
@@ -1037,13 +1224,17 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-br from-indigo-600/30 to-slate-800 border border-indigo-600/30 flex items-center justify-center text-indigo-300 font-black text-sm overflow-hidden shadow-inner ring-1 ring-white/5">
-              {student.photoUrl ? (
-                <img src={student.photoUrl} alt={student.name} className="w-full h-full object-cover" />
-              ) : (
-                initials(student.name).slice(0, 1)
-              )}
-            </div>
+            <AccountDropdown
+              name={viewAs === 'student' ? student.name : student.parentName || 'Veli'}
+              subtitle={viewAs === 'student' ? 'Öğrenci hesabı' : `Çocuğunuz: ${student.name}`}
+              photoUrl={student.photoUrl}
+              initials={initials(student.name)}
+              items={studentAccountMenuItems}
+              onLogout={handleLogout}
+              accent="indigo"
+              showIdentity={false}
+              avatarClassName="w-10 h-10 sm:w-11 sm:h-11 rounded-xl"
+            />
           </div>
         </header>
 
@@ -1061,6 +1252,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             studentId={studentId}
             viewAs={viewAs}
             derived={{ attendanceRate: derived.attendanceRate, totalAttendance: derived.totalAttendance }}
+            privateLessonSummary={studentPrivateLessonSummary}
             homeworkAttempts={homeworkAttempts}
             studentTransactions={studentTransactions}
             statusBadge={statusBadge}
@@ -1073,6 +1265,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             formatDateTR={formatDateTR}
             ageFromBirthDate={ageFromBirthDate}
             initials={initials}
+            clubDisplay={studentClubDisplay}
           />
         )}
 
@@ -1362,54 +1555,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
         {/* Devam sekmesi — Yoklama geçmişi tablosu */}
         {activeTab === 'attendance' && (
-          <div className="space-y-6 animate-in fade-in duration-300">
-            <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-700/60">
-                <h2 className="text-lg font-bold text-white">Yoklama geçmişi</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Ders katılım kayıtlarınız</p>
-              </div>
-              <ResponsiveTable minWidth={480}>
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-700/50 bg-slate-900/50">
-                      <th className="py-3.5 px-5">Tarih</th>
-                      <th className="py-3.5 px-5">Saat</th>
-                      <th className="py-3.5 px-5">Grup</th>
-                      <th className="py-3.5 px-5">Durum</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-700/40">
-                    {studentAttendances.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-16 text-center text-slate-500 text-sm">
-                          <CalendarCheck className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                          <p className="font-medium">Henüz yoklama kaydı yok.</p>
-                          <p className="text-xs mt-1">Katıldığınız dersler burada listelenecektir.</p>
-                        </td>
-                      </tr>
-                    ) : (
-                      studentAttendances.slice(0, 50).map((r) => {
-                        const statusLabel = r.status === 'present' ? 'Var' : r.status === 'late' ? 'Geç' : r.status === 'excused' ? 'İzinli' : 'Yok';
-                        const statusClass = r.status === 'present' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : r.status === 'late' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : r.status === 'excused' ? 'bg-sky-500/20 text-sky-400 border-sky-500/30' : 'bg-slate-500/20 text-slate-400 border-slate-500/30';
-                        return (
-                          <tr key={r.id} className="bg-slate-800/30 hover:bg-slate-800/50 transition-colors text-sm">
-                            <td data-label="Tarih" className="py-3.5 px-5 font-medium text-white">{formatDateTR(r.date)}</td>
-                            <td data-label="Saat" className="py-3.5 px-5 text-slate-400">{r.date.length > 10 ? formatTimeTR(r.date) : '—'}</td>
-                            <td data-label="Grup" className="py-3.5 px-5 text-slate-300">{student.group || '—'}</td>
-                            <td data-label="Durum" className="py-3.5 px-5">
-                              <span className={`inline-flex px-3 py-1 rounded-lg text-xs font-bold border ${statusClass}`}>
-                                {statusLabel}
-                              </span>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </ResponsiveTable>
-            </div>
-          </div>
+          <StudentAttendanceHistory
+            records={studentAttendances}
+            fallbackGroup={student?.group}
+            formatDateTR={formatDateTR}
+          />
         )}
 
         {activeTab === 'gallery' && (
@@ -1503,6 +1653,17 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               studentHomeworksWithAttempts={studentHomeworksWithAttempts}
               homeworks={homeworks}
               homeworkAttempts={homeworkAttempts}
+              weekPlatformStatsByDate={weekPlatformStatsByDate}
+              platformStatsFetched={platformStatsFetched}
+              externalStatsNote={externalStatsNote}
+              loadingPlatformOverview={loadingExternalGameCount}
+              loadingPlatformProfiles={loadingLichess || loadingChessCom}
+              platformLoading={loadingLichess || loadingChessCom || loadingLichessGames || loadingChessComGames}
+              lichessGames={lichessGames}
+              chessComGames={chessComGames}
+              lichessProfile={lichessProfile}
+              chessComProfile={chessComProfile}
+              chessComStats={chessComStats}
               formatDateTR={formatDateTR}
               onGenerateHomeworkReport={async (homeworkId) => {
                 const hw = homeworks.find((h) => h.id === homeworkId);
@@ -1525,131 +1686,32 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           </div>
         )}
 
-        {/* UKD & FIDE sekmesi — öğrenci/veli: sadece okuma (TC, FIDE ID, UKD puanı düzenlenemez) */}
-        {activeTab === 'ukd' && student && (
-          <div className="space-y-6 animate-in fade-in duration-300">
-            <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-700/60 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Trophy className="w-5 h-5 text-amber-500" />
-                  <span className="text-sm font-black text-white">UKD & FIDE Bilgileri</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => { void loadFide(); void loadTsfUkdSnapshot(); }} disabled={loadingFide || loadingTsfUkd} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 text-xs font-bold disabled:opacity-50">
-                    {(loadingFide || loadingTsfUkd) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Yenile
-                  </button>
-                  <a href="https://ukd.tsf.org.tr/ukdsorgulama.php" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">
-                    <ExternalLink className="w-4 h-4" /> TSF UKD Sorgula
-                  </a>
-                </div>
-              </div>
-              <div className="p-6 space-y-6">
-                {/* UKD — TSF TC sorgusu (sadece görüntüleme) */}
-                <div className="rounded-xl bg-indigo-500/5 border border-indigo-500/20 p-4 space-y-3">
-                  <div className="text-xs font-bold text-indigo-400 uppercase tracking-widest">UKD (TSF TC Sorgusu)</div>
-                  <p className="text-slate-400 text-sm">UKD puanı <a href="https://ukd.tsf.org.tr/ukdsorgulama.php" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">TSF UKD Bilgi Sistemi</a> üzerinden TC Kimlik No ile sorgulanır. Kayıtlı UKD puanı antrenör tarafından güncellenir.</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">TC Kimlik No:</span>
-                    {student.tcNo ? (
-                      <>
-                        <span className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-600 text-white font-mono text-sm">{student.tcNo}</span>
-                        <button type="button" onClick={() => navigator.clipboard.writeText(student.tcNo || '')} className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold">
-                          <Copy className="w-3.5 h-3.5" /> Kopyala
-                        </button>
-                      </>
-                    ) : (
-                      <span className="text-slate-500 text-sm">Kayıtlı TC yok</span>
-                    )}
-                    <a href="https://ukd.tsf.org.tr/ukdsorgulama.php" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">
-                      <ExternalLink className="w-3.5 h-3.5" /> TSF UKD Sorgula
-                    </a>
-                  </div>
-                  <div className="pt-2 border-t border-slate-700/60 flex flex-wrap items-center gap-3">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Kayıtlı UKD puanı:</span>
-                    <span className="text-lg font-black text-white">{student.ukd != null && student.ukd > 0 ? student.ukd : '—'}</span>
-                    {loadingTsfUkd ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> TSF kontrol ediliyor…
-                      </span>
-                    ) : tsfUkdLive != null ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs font-bold">
-                        TSF güncel: {tsfUkdLive}
-                      </span>
-                    ) : tsfUkdError && student.tcNo ? (
-                      <span className="text-[10px] text-slate-500" title={tsfUkdError}>TSF canlı sorgu kullanılamadı</span>
-                    ) : null}
-                  </div>
-                </div>
+        {activeTab === 'private-lesson' && student && (
+          <StudentPrivateLessonPanel
+            studentName={student.name}
+            summary={studentPrivateLessonSummary}
+            transactions={privateLessonTransactions}
+            usageById={privateLessonUsageById}
+            attendanceRecords={studentAttendances}
+            formatDateTR={formatDateTR}
+            onOpenPayments={() => setActiveTab('payments')}
+          />
+        )}
 
-                {/* FIDE — ratings.fide.com (sadece görüntüleme) */}
-                <div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">FIDE (ratings.fide.com)</div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white font-mono text-sm">
-                      {student.fideId || resolvedFideId || '—'}
-                    </span>
-                    {(student.fideId || resolvedFideId) ? (
-                      <a href={`https://ratings.fide.com/profile/${student.fideId || resolvedFideId}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm font-medium hover:bg-amber-500/20 transition-colors">
-                        <ExternalLink className="w-3.5 h-3.5" /> ratings.fide.com Profil
-                      </a>
-                    ) : null}
-                  </div>
-                  {!student.fideId && resolvedFideId && (
-                    <p className="text-[10px] text-slate-500 mt-1.5 italic">FIDE ID ad ve doğum yılıyla otomatik eşleştirildi (kayıtlı profil).</p>
-                  )}
-                </div>
-                {(student.fideId || resolvedFideId || loadingFide) ? (
-                  loadingFide && !fideProfile ? (
-                    <div className="flex items-center gap-2 py-8 text-slate-400">
-                      <Loader2 className="w-5 h-5 animate-spin" /> FIDE verileri çekiliyor...
-                    </div>
-                  ) : fideProfile ? (
-                    <div className="space-y-4">
-                      <div className="rounded-xl bg-slate-800/60 border border-slate-700/60 p-4 flex flex-wrap items-center justify-between gap-4">
-                        <div>
-                          <div className="text-lg font-black text-white">{fideProfile.name}</div>
-                          <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 mt-1 text-xs text-slate-400">
-                            <span>Federasyon: {federationLabel(fideProfile.federation)}</span>
-                            {fideProfile.year != null && <span>Doğum: {fideProfile.year}</span>}
-                            {fideProfile.inactive && <span className="text-amber-400">Pasif</span>}
-                          </div>
-                        </div>
-                        <a href={`https://ratings.fide.com/profile/${fideProfile.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/20 text-amber-400 text-sm font-bold">
-                          <ExternalLink className="w-4 h-4" /> ratings.fide.com Profil
-                        </a>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="rounded-lg border border-l-4 border-l-indigo-500 border-slate-700/60 bg-slate-800/40 px-4 py-3">
-                          <div className="text-[10px] font-bold text-slate-400 uppercase">Standard</div>
-                          <div className="text-2xl font-black text-indigo-400 mt-1">{fideProfile.standard ?? '—'}</div>
-                          <div className="text-xs text-slate-500 mt-0.5">Klasik</div>
-                        </div>
-                        <div className="rounded-lg border border-l-4 border-l-sky-500 border-slate-700/60 bg-slate-800/40 px-4 py-3">
-                          <div className="text-[10px] font-bold text-slate-400 uppercase">Rapid</div>
-                          <div className="text-2xl font-black text-sky-400 mt-1">{fideProfile.rapid ?? '—'}</div>
-                        </div>
-                        <div className="rounded-lg border border-l-4 border-l-amber-500 border-slate-700/60 bg-slate-800/40 px-4 py-3">
-                          <div className="text-[10px] font-bold text-slate-400 uppercase">Blitz</div>
-                          <div className="text-2xl font-black text-amber-400 mt-1">{fideProfile.blitz ?? '—'}</div>
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/5 px-5 py-4">
-                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">UKD Puanı (TSF)</div>
-                        <div className="text-2xl font-black text-indigo-400 mt-1">{student.ukd != null && student.ukd > 0 ? student.ukd : '—'}</div>
-                        <div className="text-xs text-slate-400 mt-1">TSF UKD sorgusu ile güncellenir (FIDE ELO değildir)</div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl bg-slate-800/40 border border-slate-700/60 p-4 text-sm text-slate-500">FIDE ID bulunamadı veya geçersiz.</div>
-                  )
-                ) : (
-                  <div className="p-8 text-center">
-                    <Trophy className="w-12 h-12 text-slate-500 mx-auto mb-3" />
-                    <p className="text-slate-400 text-sm font-medium">FIDE ID antrenör tarafından tanımlandığında bilgiler <a href="https://ratings.fide.com" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline">ratings.fide.com</a> kaynağından burada görüntülenecektir.</p>
-                  </div>
-                )}
-              </div>
-            </div>
+        {activeTab === 'ukd' && student && (
+          <div className="animate-in fade-in duration-300">
+            <UkdFideRatingsPanel
+              mode="viewer"
+              student={student}
+              fideProfile={fideProfile}
+              resolvedFideId={resolvedFideId}
+              loadingFide={loadingFide}
+              tsfUkdLive={tsfUkdLive}
+              loadingTsfUkd={loadingTsfUkd}
+              tsfUkdError={tsfUkdError}
+              onRefresh={() => { void loadFide(); void loadTsfUkdSnapshot(); }}
+              refreshing={loadingFide || loadingTsfUkd}
+            />
           </div>
         )}
 
@@ -1983,45 +2045,64 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           </div>
         )}
 
-        {/* Ödemeler sekmesi */}
-        {activeTab === 'payments' && student && derived && (
+        {/* Aidat ve ödemeler (veli: tek sayfa) */}
+        {(activeTab === 'payments' || activeTab === 'dues') && student && derived && (
           <div className="space-y-6 animate-in fade-in duration-300">
-            <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-5">
-              <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
-                <Wallet className="w-4 h-4 text-emerald-400" /> Ödeme durumu
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-                <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Genel durum</p>
-                  <p className={`mt-1 text-lg font-bold ${student.paymentStatus === 'Paid' ? 'text-emerald-400' : student.paymentStatus === 'Partial' ? 'text-amber-400' : 'text-rose-400'}`}>
-                    {derived.duesLabel}
-                  </p>
-                  {derived.duesSubtitle && <p className="text-xs text-slate-500 mt-0.5">{derived.duesSubtitle}</p>}
+            {derived.isPackageRegistration ? (
+              <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-5">
+                <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+                  <Wallet className="w-4 h-4 text-emerald-400" /> Ödeme durumu
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
+                  <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Genel durum</p>
+                    <p className="mt-1 text-lg font-bold text-indigo-300">{derived.duesLabel}</p>
+                    {derived.duesSubtitle && <p className="text-xs text-slate-500 mt-0.5">{derived.duesSubtitle}</p>}
+                  </div>
+                  {studentPrivateLessonSummary ? (
+                    <>
+                      <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Kalan ders</p>
+                        <p className="mt-1 text-lg font-bold text-emerald-400">{studentPrivateLessonSummary.remainingLessons ?? '—'}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Kullanılan / Toplam</p>
+                        <p className="mt-1 text-lg font-bold text-white">
+                          {studentPrivateLessonSummary.usedLessons}/{studentPrivateLessonSummary.totalLessons ?? '—'}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Aktif paket</p>
+                        <p className="mt-1 text-sm font-bold text-white line-clamp-2">{studentPrivateLessonSummary.packageName}</p>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
-                <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Bu yıl ödenen ({calendarYear})</p>
-                  <p className="mt-1 text-lg font-bold text-white">
-                    ₺{Number(Object.values(duesByMonth).reduce<number>((a, b) => a + b, 0)).toLocaleString('tr-TR')}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Toplam işlem</p>
-                  <p className="mt-1 text-lg font-bold text-white">{studentTransactions.length} kayıt</p>
-                </div>
+                <p className="text-xs text-slate-500">
+                  Paket detayları için <button type="button" onClick={() => setActiveTab('private-lesson')} className="text-indigo-400 hover:text-indigo-300 font-medium underline">Özel Ders</button> sekmesine gidin.
+                </p>
               </div>
-              <p className="text-xs text-slate-500">Aylık detay ve geçmiş için <button type="button" onClick={() => setActiveTab('dues')} className="text-indigo-400 hover:text-indigo-300 font-medium underline">Aidat Geçmişi</button> sekmesine gidin.</p>
-            </div>
-          </div>
-        )}
+            ) : null}
 
-        {/* Aidat geçmişi sekmesi */}
-        {activeTab === 'dues' && (
-          <div className="space-y-6 animate-in fade-in duration-300">
+            <StudentDuesCalendar
+              student={student}
+              calendarYear={calendarYear}
+              duesByMonth={duesByMonth}
+              trainingGroups={trainingGroups}
+              disciplineBranches={scopedDisciplineBranches}
+              privateLessonSummary={derived.isPackageRegistration ? studentPrivateLessonSummary : null}
+              formatDateTR={formatDateTR}
+            />
+
             <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-5">
               <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
-                <CreditCard className="w-4 h-4 text-amber-400" /> Aidat geçmişi
+                <CreditCard className="w-4 h-4 text-amber-400" /> {student.registrationType === 'package' ? 'Ödeme geçmişi' : 'Aidat geçmişi'}
               </h3>
-              <p className="text-xs text-slate-400 mb-4">Öğrencinize ait aidat ve ödeme kayıtları (en yeniden eskiye).</p>
+              <p className="text-xs text-slate-400 mb-4">
+                {student.registrationType === 'package'
+                  ? 'Öğrencinize ait özel ders paketi ve ödeme kayıtları (en yeniden eskiye).'
+                  : 'Öğrencinize ait aidat ve ödeme kayıtları (en yeniden eskiye).'}
+              </p>
               {studentTransactions.length === 0 ? (
                 <div className="py-12 text-center rounded-xl bg-slate-900/50 border border-slate-700/50">
                   <Wallet className="w-12 h-12 text-slate-500 mx-auto mb-3 opacity-50" />
@@ -2040,20 +2121,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                   ))}
                 </div>
               )}
-              <div className="mt-4 pt-4 border-t border-slate-700/50">
-                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">{calendarYear} aylık özet</p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => {
-                    const amount = duesByMonth[m] ?? 0;
-                    return (
-                      <div key={m} className="rounded-lg bg-slate-900/50 px-3 py-2 border border-slate-700/50">
-                        <p className="text-[10px] text-slate-500 font-medium">{MONTHS_TR[m - 1]}</p>
-                        <p className="text-sm font-bold text-white">₺{amount.toLocaleString('tr-TR')}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
           </div>
         )}
@@ -2131,13 +2198,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                 <User className="w-4 h-4 text-indigo-400" /> Öğrenci bilgileri
               </h3>
               <dl className="space-y-2 text-sm">
-                <div className="flex justify-between gap-4 py-2 border-b border-slate-700/30 items-center">
-                  <dt className="text-slate-500 font-medium">Öğrenci No (giriş için)</dt>
-                  <dd className="flex flex-col items-end gap-0.5">
-                    <span className="text-white font-medium font-mono">#{getDisplayStudentNo(student, students)}</span>
-                    <button type="button" onClick={() => { navigator.clipboard.writeText(String(getDisplayStudentNo(student, students))); }} className="text-[10px] text-indigo-400 hover:text-indigo-300">Kopyala</button>
-                  </dd>
-                </div>
                 {[
                   ['Ad Soyad', student.name],
                   ['TC', student.tcNo || '—'],

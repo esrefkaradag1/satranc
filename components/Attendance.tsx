@@ -33,6 +33,17 @@ import { GroupLessonLogPanel } from './attendance/GroupLessonLogPanel';
 import { mergeGroupLessonLogsFromStudents, isoDateToTr } from '../lib/lessonLogUtils';
 import { findTrainingGroupByName, studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { normalizeClubKey } from '../lib/clubScope';
+import {
+  attendanceRecordGroupName,
+  attendanceRecordKind,
+  attendanceRecordSessionScopeKey,
+  attendanceRecordTime,
+  attendanceRecordsShareSession,
+  buildGroupAttendanceSessionId,
+  buildLessonAttendanceSessionId,
+  parseAttendanceSessionId,
+} from '../lib/attendanceSession';
+import { consumeAttendanceEditBridge } from '../lib/attendanceEditBridge';
 import { StudentLessonLogInline } from './attendance/StudentLessonLogInline';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
@@ -47,6 +58,13 @@ function lichessProfileUrl(username: string): string {
 function chessComProfileUrl(username: string): string {
   const u = username.trim();
   return `https://www.chess.com/member/${encodeURIComponent(u)}`;
+}
+
+function normalizePrivateLessonText(value?: string | null): string {
+  return String(value ?? '')
+    .trim()
+    .toLocaleLowerCase('tr-TR')
+    .replace(/\s+/g, ' ');
 }
 
 /* ── Alt bileşenler ─────────────────────────────────────────── */
@@ -85,7 +103,8 @@ const AttendanceStatusButtons: React.FC<{
  onAbsent: () => void;
  onExcused: () => void;
  layout?: 'row' | 'grid';
-}> = ({ status, onPresent, onAbsent, onExcused, layout = 'row' }) => {
+  disablePresent?: boolean;
+}> = ({ status, onPresent, onAbsent, onExcused, layout = 'row', disablePresent = false }) => {
  const wrap = layout === 'grid'
    ? 'grid grid-cols-3 gap-1.5'
    : 'flex flex-wrap items-center justify-center gap-1.5';
@@ -94,7 +113,13 @@ const AttendanceStatusButtons: React.FC<{
    : 'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold transition-all';
  return (
    <div className={wrap}>
-     <button type="button" onClick={onPresent} className={`${btn} ${status === 'Present' ? 'border-emerald-500/50 bg-emerald-500/20 text-emerald-300' : 'border-white/10 bg-white/[0.02] text-slate-400 hover:border-emerald-500/30'}`}>
+    <button
+      type="button"
+      onClick={onPresent}
+      disabled={disablePresent}
+      title={disablePresent ? 'Öğrencinin özel ders hakkı kalmadı.' : undefined}
+      className={`${btn} ${disablePresent ? 'cursor-not-allowed border-amber-500/20 bg-amber-500/10 text-amber-200/60' : status === 'Present' ? 'border-emerald-500/50 bg-emerald-500/20 text-emerald-300' : 'border-white/10 bg-white/[0.02] text-slate-400 hover:border-emerald-500/30'}`}
+    >
        <Check className={layout === 'grid' ? 'w-4 h-4' : 'w-3 h-3'} />
        <span className={layout === 'grid' ? 'mt-0.5 leading-none' : ''}>Katıldı</span>
      </button>
@@ -173,13 +198,6 @@ function attendanceCardAccent(status: AttendanceStatus): string {
 
 type ViewMode = 'take' | 'list';
 
-const STATUS_LABELS: Record<string, string> = {
-  present: 'Geldi',
-  absent: 'Gelmedi',
-  late: 'Geç',
-  excused: 'İzinli',
-};
-
 function formatUnixDate(sec?: number): string {
   if (!sec) return '—';
   return new Date(sec * 1000).toLocaleDateString('tr-TR');
@@ -188,6 +206,22 @@ function formatUnixDate(sec?: number): string {
 function formatMsDate(ms?: number): string {
   if (!ms) return '—';
   return new Date(ms).toLocaleDateString('tr-TR');
+}
+
+function formatNowTimeTR(): string {
+  return new Date().toLocaleTimeString('tr-TR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function statusToUi(status: string): AttendanceStatus {
+  if (status === 'present') return 'Present';
+  if (status === 'late') return 'Late';
+  if (status === 'excused') return 'Excused';
+  if (status === 'absent') return 'Absent';
+  return null;
 }
 
 const Attendance: React.FC = () => {
@@ -215,7 +249,9 @@ const Attendance: React.FC = () => {
   const [group, setGroup] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [teacherName, setTeacherName] = useState('');
+  const [sessionTime, setSessionTime] = useState('');
   const [showStudents, setShowStudents] = useState(false);
+  const [isEditingSession, setIsEditingSession] = useState(false);
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>({});
   const [lessonSummary, setLessonSummary] = useState('');
   const [listDate, setListDate] = useState(new Date().toISOString().slice(0, 10));
@@ -231,6 +267,7 @@ const Attendance: React.FC = () => {
   const [chessComGames, setChessComGames] = useState<ChessComGame[]>([]);
   const [expandedNoteStudentId, setExpandedNoteStudentId] = useState<string | null>(null);
   const [zoomedPhoto, setZoomedPhoto] = useState<{ url: string; name: string } | null>(null);
+  const [pendingEditBridge, setPendingEditBridge] = useState(() => consumeAttendanceEditBridge());
   const prevAttendanceType = useRef(attendanceType);
 
   /** Tanımlı eğitim grubu veya ders paketi olan şubeler */
@@ -301,6 +338,7 @@ const Attendance: React.FC = () => {
     prevAttendanceType.current = attendanceType;
     setBranch('');
     setGroup('');
+    setSessionTime('');
     setShowStudents(false);
     setAttendance({});
   }, [attendanceType]);
@@ -311,8 +349,11 @@ const Attendance: React.FC = () => {
     for (const g of trainingGroups) {
       if (g.name?.trim()) names.add(g.name.trim());
     }
+    for (const p of lessonPackages) {
+      if (p.name?.trim()) names.add(p.name.trim());
+    }
     return [...names].sort((a, b) => a.localeCompare(b, 'tr'));
-  }, [trainingGroups]);
+  }, [trainingGroups, lessonPackages]);
 
   /** Seçili şube + branşa göre gruplar (grup bazlı yoklama) */
   const groups = useMemo(() => {
@@ -381,38 +422,89 @@ const Attendance: React.FC = () => {
     [lessonPackages, group, branch, branchOffice],
   );
 
+  const sessionDayOfWeek = useMemo(() => {
+    const value = new Date(`${date}T00:00:00`);
+    const dayOfWeek = value.getDay();
+    return dayOfWeek === 0 ? 7 : dayOfWeek;
+  }, [date]);
+
+  const derivedSessionTime = useMemo(() => {
+    if (attendanceType === 'group' && selectedTrainingGroup?.lessonSlots?.length) {
+      const slot =
+        selectedTrainingGroup.lessonSlots.find((item) => item.dayOfWeek === sessionDayOfWeek) ??
+        selectedTrainingGroup.lessonSlots[0];
+      if (slot?.startTime?.trim()) return slot.startTime.trim();
+    }
+    return formatNowTimeTR();
+  }, [attendanceType, selectedTrainingGroup, sessionDayOfWeek]);
+
+  const currentSessionId = useMemo(() => {
+    if (!group.trim()) return '';
+    return attendanceType === 'lesson'
+      ? buildLessonAttendanceSessionId(selectedLessonPackage?.id, branchOffice, branch, group)
+      : buildGroupAttendanceSessionId(branchOffice, branch, group);
+  }, [attendanceType, selectedLessonPackage?.id, branchOffice, branch, group]);
+
+  const lessonSessionRecord = useMemo(
+    () => ({
+      lessonId: currentSessionId || undefined,
+      attendanceType: 'lesson' as const,
+      groupName: group.trim() || undefined,
+      branch: branch.trim() || undefined,
+      branchOffice: branchOffice.trim() || undefined,
+    }),
+    [currentSessionId, group, branch, branchOffice],
+  );
+
   const selectedLessonPackageSalesByStudentId = useMemo(() => {
     const map = new Map<string, (typeof transactions)[number]>();
-    if (!selectedLessonPackage) return map;
-    const packageName = selectedLessonPackage.name.trim().toLocaleLowerCase('tr-TR');
-    students.forEach((student) => {
-      const sale = transactions
-        .filter((t) => t.studentId === student.id && t.category === 'Özel Ders')
-        .filter((t) => {
-          if (t.lessonPackageId) return t.lessonPackageId === selectedLessonPackage.id;
-          const rawName = (t.lessonPackageName ?? '').trim();
-          const rawDescription = (t.description ?? '').trim();
-          const normalizedName = rawName.toLocaleLowerCase('tr-TR');
-          const normalizedDescription = rawDescription.toLocaleLowerCase('tr-TR');
-          const sameName =
-            normalizedName === packageName ||
-            normalizedDescription === packageName ||
-            normalizedDescription.startsWith(`${packageName} |`) ||
-            normalizedDescription.includes(packageName);
-          const sameDiscipline = !t.lessonDiscipline || t.lessonDiscipline.trim() === selectedLessonPackage.discipline.trim();
-          const sameOffice = !t.lessonBranchOffice || t.lessonBranchOffice.trim() === selectedLessonPackage.branchOffice.trim();
-          return sameName && sameDiscipline && sameOffice;
-        })
-        .sort((a, b) => b.date.localeCompare(a.date))[0];
-      if (sale) map.set(student.id, sale);
-    });
+    const normalizedGroup = normalizePrivateLessonText(group);
+    const normalizedPackageName = normalizePrivateLessonText(selectedLessonPackage?.name ?? group);
+    const normalizedBranch = normalizePrivateLessonText(selectedLessonPackage?.discipline ?? branch);
+    const normalizedOffice = normalizeClubKey(selectedLessonPackage?.branchOffice ?? branchOffice);
+    const selectedLessonCount = Number(selectedLessonPackage?.lessonCount ?? 0) || 0;
+    transactions
+      .filter((t) => t.category === 'Özel Ders' && t.studentId)
+      .filter((t) => {
+        if (selectedLessonPackage?.id && t.lessonPackageId === selectedLessonPackage.id) return true;
+        const normalizedSaleName = normalizePrivateLessonText(t.lessonPackageName);
+        const normalizedDescription = normalizePrivateLessonText(t.description);
+        const normalizedSaleBranch = normalizePrivateLessonText(t.lessonDiscipline);
+        const normalizedSaleOffice = normalizeClubKey(t.lessonBranchOffice ?? '');
+        const saleLessonCount = Number(t.lessonCount ?? 0) || 0;
+        const sameOffice = !normalizedOffice || !normalizedSaleOffice || normalizedSaleOffice === normalizedOffice;
+        const sameBranch = !normalizedBranch || !normalizedSaleBranch || normalizedSaleBranch === normalizedBranch;
+        const nameMatches =
+          !!normalizedPackageName &&
+          (!!normalizedSaleName && normalizedPackageName.includes(normalizedSaleName) ||
+            normalizedSaleName.includes(normalizedPackageName) ||
+            normalizedDescription.includes(normalizedPackageName) ||
+            normalizedDescription === normalizedPackageName);
+        const groupMatches =
+          !!normalizedGroup &&
+          (normalizedSaleName.includes(normalizedGroup) ||
+            normalizedDescription.includes(normalizedGroup) ||
+            normalizedDescription === normalizedGroup);
+        const countMatches = selectedLessonCount > 0 && saleLessonCount > 0 && saleLessonCount === selectedLessonCount;
+        return sameOffice && sameBranch && (nameMatches || groupMatches || countMatches);
+      })
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .forEach((sale) => {
+        if (!sale.studentId || map.has(sale.studentId)) return;
+        map.set(sale.studentId, sale);
+      });
     return map;
-  }, [transactions, students, selectedLessonPackage]);
+  }, [transactions, selectedLessonPackage, group, branch, branchOffice]);
 
   const filteredStudents = useMemo(() => {
     if (!group.trim()) return [];
     if (attendanceType === 'lesson') {
-      if (!selectedLessonPackage) return [];
+      if (!selectedLessonPackage) {
+        return students.filter((s) => {
+          if (selectedLessonPackageSalesByStudentId.has(s.id)) return true;
+          return (s.group ?? '').trim() === group.trim();
+        });
+      }
       const officeKey = normalizeClubKey(branchOffice);
       const discipline = branch.trim();
       return students.filter((s) => {
@@ -429,23 +521,23 @@ const Attendance: React.FC = () => {
 
   const privateLessonBalanceByStudentId = useMemo(() => {
     const map = new Map<string, { totalLessons: number; usedLessons: number; remainingLessons: number }>();
-    if (attendanceType !== 'lesson' || !selectedLessonPackage) return map;
+    if (attendanceType !== 'lesson') return map;
     const currentDay = date.slice(0, 10);
     filteredStudents.forEach((student) => {
       const sale = selectedLessonPackageSalesByStudentId.get(student.id);
       if (!sale) return;
-      const totalLessons = sale.lessonCount ?? selectedLessonPackage.lessonCount;
+      const totalLessons = sale.lessonCount ?? selectedLessonPackage?.lessonCount ?? 0;
       const historicalUsed = attendanceRecords.filter(
         (record) =>
           record.studentId === student.id &&
-          record.lessonId === selectedLessonPackage.id &&
+          attendanceRecordsShareSession(record, lessonSessionRecord) &&
           (record.status === 'present' || record.status === 'late') &&
           String(record.date ?? '').slice(0, 10) !== currentDay,
       ).length;
       const existingToday = attendanceRecords.find(
         (record) =>
           record.studentId === student.id &&
-          record.lessonId === selectedLessonPackage.id &&
+          attendanceRecordsShareSession(record, lessonSessionRecord) &&
           String(record.date ?? '').slice(0, 10) === currentDay,
       );
       const pendingStatus = attendance[student.id];
@@ -467,7 +559,29 @@ const Attendance: React.FC = () => {
       });
     });
     return map;
-  }, [attendanceType, selectedLessonPackage, date, filteredStudents, selectedLessonPackageSalesByStudentId, attendanceRecords, attendance]);
+  }, [attendanceType, selectedLessonPackage, date, filteredStudents, selectedLessonPackageSalesByStudentId, attendanceRecords, attendance, lessonSessionRecord]);
+
+  const sessionDraftRecord = useMemo(
+    () => ({
+      lessonId: currentSessionId || undefined,
+      attendanceType,
+      groupName: group.trim() || undefined,
+      branch: branch.trim() || undefined,
+      branchOffice: branchOffice.trim() || undefined,
+      status: 'absent' as const,
+    }),
+    [currentSessionId, attendanceType, group, branch, branchOffice],
+  );
+
+  const existingSessionRecords = useMemo(() => {
+    const dateNorm = date.slice(0, 10);
+    return attendanceRecords.filter((record) => {
+      if (String(record.date ?? '').slice(0, 10) !== dateNorm) return false;
+      return attendanceRecordsShareSession(record, sessionDraftRecord);
+    });
+  }, [attendanceRecords, date, sessionDraftRecord]);
+
+  const hasExistingSession = existingSessionRecords.length > 0;
 
   const groupLogEntries = useCallback(
     (groupKey: string) =>
@@ -481,18 +595,63 @@ const Attendance: React.FC = () => {
     const dateNorm = listDate.slice(0, 10);
     const byDate = attendanceRecords.filter((r) => r.date && r.date.slice(0, 10) === dateNorm);
     const studentMap = new Map<string, { id: string; name: string; group?: string }>(students.map((s) => [s.id, s]));
-    const rows: { studentId: string; name: string; group: string; status: string }[] = [];
+    const rows = new Map<string, {
+      key: string;
+      date: string;
+      time: string;
+      group: string;
+      attendanceType: 'group' | 'lesson';
+      branch: string;
+      branchOffice: string;
+      teacherName?: string;
+      lessonSummary?: string;
+      totalCount: number;
+      presentCount: number;
+      absentCount: number;
+      lateCount: number;
+      excusedCount: number;
+      statuses: Record<string, AttendanceStatus>;
+    }>();
     byDate.forEach((r) => {
       const student = studentMap.get(r.studentId);
-      if (listGroup && student && (student.group ?? '') !== listGroup) return;
-      rows.push({
-        studentId: r.studentId,
-        name: student ? student.name : r.studentId,
-        group: student ? (student.group || '—') : '—',
-        status: r.status || 'absent',
-      });
+      const parsed = parseAttendanceSessionId(r.lessonId);
+      const groupName = attendanceRecordGroupName(r, student?.group);
+      if (listGroup && groupName !== listGroup) return;
+      const scopeKey = attendanceRecordSessionScopeKey(r, student?.group);
+      const key = `${dateNorm}::${scopeKey || `legacy::${groupName}`}`;
+      const existing = rows.get(key) ?? {
+        key,
+        date: dateNorm,
+        time: attendanceRecordTime(r),
+        group: groupName,
+        attendanceType: attendanceRecordKind(r),
+        branch: String(r.branch ?? parsed.branch ?? student?.branch ?? '').trim(),
+        branchOffice: String(r.branchOffice ?? parsed.branchOffice ?? student?.branchOffice ?? '').trim(),
+        teacherName: r.teacherName,
+        lessonSummary: r.lessonSummary,
+        totalCount: 0,
+        presentCount: 0,
+        absentCount: 0,
+        lateCount: 0,
+        excusedCount: 0,
+        statuses: {},
+      };
+      existing.totalCount += 1;
+      const uiStatus = statusToUi(r.status);
+      if (uiStatus) existing.statuses[r.studentId] = uiStatus;
+      if (r.status === 'present') existing.presentCount += 1;
+      else if (r.status === 'late') existing.lateCount += 1;
+      else if (r.status === 'excused') existing.excusedCount += 1;
+      else existing.absentCount += 1;
+      if (!existing.lessonSummary && r.lessonSummary) existing.lessonSummary = r.lessonSummary;
+      if (!existing.teacherName && r.teacherName) existing.teacherName = r.teacherName;
+      if (existing.time === '—') existing.time = attendanceRecordTime(r);
+      rows.set(key, existing);
     });
-    return rows.sort((a, b) => a.name.localeCompare(b.name));
+    return [...rows.values()].sort((a, b) => {
+      if (a.time !== b.time) return a.time.localeCompare(b.time, 'tr');
+      return a.group.localeCompare(b.group, 'tr');
+    });
   }, [attendanceRecords, students, listDate, listGroup, listFetched]);
 
   const handleListeyiGetir = () => setListFetched(true);
@@ -560,69 +719,160 @@ const Attendance: React.FC = () => {
  /** Tek seçim (görseldeki gibi radyo benzeri) */
 const handleStatus = (id: string, status: AttendanceStatus) => {
    if (!status) return;
+   if (status === 'Present' && attendanceType === 'lesson') {
+     const balance = privateLessonBalanceByStudentId.get(id);
+     const currentStatus = attendance[id] ?? null;
+     if (balance && balance.remainingLessons <= 0 && currentStatus !== 'Present') return;
+   }
    setAttendance((prev) => ({ ...prev, [id]: status }));
-  const statusMap = { Present: 'present' as const, Absent: 'absent' as const, Late: 'late' as const, Excused: 'excused' as const };
-  void addAttendanceRecord({
-    date,
-    studentId: id,
-    status: statusMap[status],
-    teacherName: teacherName || undefined,
-    lessonSummary: lessonSummary.trim() || undefined,
-  });
  };
 
+  const blockedPresentStudentIds = useMemo(() => {
+    const blocked = new Set<string>();
+    if (attendanceType !== 'lesson') return blocked;
+    filteredStudents.forEach((student) => {
+      const balance = privateLessonBalanceByStudentId.get(student.id);
+      const currentStatus = attendance[student.id] ?? null;
+      if (balance && balance.remainingLessons <= 0 && currentStatus !== 'Present') {
+        blocked.add(student.id);
+      }
+    });
+    return blocked;
+  }, [attendanceType, filteredStudents, privateLessonBalanceByStudentId, attendance]);
+
   const handleStart = () => {
-    if (!group) return;
+    if (!group || !currentSessionId) return;
     const dateNorm = date.slice(0, 10);
     const existing: Record<string, AttendanceStatus> = {};
     const inGroup = filteredStudents;
+    let existingSessionTime = '';
+    let editing = false;
     inGroup.forEach((s) => {
       const rec = attendanceRecords.find(
         (r) =>
           r.studentId === s.id &&
           r.date &&
           r.date.slice(0, 10) === dateNorm &&
-          String(r.lessonId ?? '') === String(attendanceType === 'lesson' ? selectedLessonPackage?.id ?? '' : '')
+          attendanceRecordsShareSession(r, sessionDraftRecord)
       );
       if (rec) {
+        editing = true;
+        if (!existingSessionTime) existingSessionTime = String(rec.sessionTime ?? '').trim();
         if (rec.status === 'present') existing[s.id] = 'Present';
         else if (rec.status === 'absent') existing[s.id] = 'Absent';
-        else if (rec.status === 'late') existing[s.id] = 'Present';
+        else if (rec.status === 'late') existing[s.id] = 'Late';
         else if (rec.status === 'excused') existing[s.id] = 'Excused';
       }
     });
+    setSessionTime(existingSessionTime || sessionTime.trim() || derivedSessionTime);
     setAttendance(existing);
+    setIsEditingSession(editing);
     setShowStudents(true);
   };
+
+  useEffect(() => {
+    if (!pendingEditBridge) return;
+    setViewMode('take');
+
+    if (attendanceType !== pendingEditBridge.attendanceType) {
+      setAttendanceType(pendingEditBridge.attendanceType);
+      return;
+    }
+    if (branchOffice !== pendingEditBridge.branchOffice) {
+      setBranchOffice(pendingEditBridge.branchOffice);
+      return;
+    }
+    if (branch !== pendingEditBridge.branch) {
+      setBranch(pendingEditBridge.branch);
+      return;
+    }
+    if (!secondaryOptions.includes(pendingEditBridge.groupName)) return;
+    if (group !== pendingEditBridge.groupName) {
+      setGroup(pendingEditBridge.groupName);
+      return;
+    }
+    if (date !== pendingEditBridge.date) {
+      setDate(pendingEditBridge.date);
+      return;
+    }
+    if (pendingEditBridge.sessionTime && sessionTime !== pendingEditBridge.sessionTime) {
+      setSessionTime(pendingEditBridge.sessionTime);
+      return;
+    }
+    if (!currentSessionId) return;
+    handleStart();
+    setPendingEditBridge(null);
+  }, [
+    pendingEditBridge,
+    attendanceType,
+    branchOffice,
+    branch,
+    secondaryOptions,
+    group,
+    date,
+    sessionTime,
+    currentSessionId,
+  ]);
 
   const handleSetAll = (status: AttendanceStatus) => {
     if (!status) return;
     const next: Record<string, AttendanceStatus> = {};
-    filteredStudents.forEach((s) => { next[s.id] = status; });
+    filteredStudents.forEach((s) => {
+      if (status === 'Present' && blockedPresentStudentIds.has(s.id)) return;
+      next[s.id] = status;
+    });
     setAttendance(next);
   };
 
   const handleSave = () => {
     const statusMap = { Present: 'present' as const, Absent: 'absent' as const, Late: 'late' as const, Excused: 'excused' as const };
+    const resolvedTime = sessionTime.trim() || derivedSessionTime;
     filteredStudents.forEach((s) => {
       const st = attendance[s.id];
       addAttendanceRecord({
         date,
         studentId: s.id,
-        lessonId: attendanceType === 'lesson' ? selectedLessonPackage?.id : undefined,
+        lessonId: currentSessionId || undefined,
+        attendanceType,
+        groupName: group.trim() || undefined,
+        branch: branch.trim() || undefined,
+        branchOffice: branchOffice.trim() || undefined,
+        sessionTime: resolvedTime,
         status: st ? statusMap[st] : 'absent',
         teacherName: teacherName || undefined,
         lessonSummary: lessonSummary.trim() || undefined,
       });
     });
     setShowStudents(false);
+    setIsEditingSession(false);
     setAttendance({});
+    setGroup('');
+    setExpandedNoteStudentId(null);
     setLessonSummary('');
+    setSessionTime('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const presentCount = Object.values(attendance).filter((v) => v === 'Present').length;
   const absentCount = Object.values(attendance).filter((v) => v === 'Absent').length;
   const excusedCount = Object.values(attendance).filter((v) => v === 'Excused').length;
+
+  const openSessionForEdit = useCallback((row: typeof listRows[number]) => {
+    setAttendanceType(row.attendanceType);
+    setBranchOffice(row.branchOffice);
+    setBranch(row.branch);
+    setGroup(row.group);
+    setDate(row.date);
+    setSessionTime(row.time === '—' ? '' : row.time);
+    setTeacherName(row.teacherName ?? '');
+    setLessonSummary(row.lessonSummary ?? '');
+    setAttendance(row.statuses);
+    setIsEditingSession(true);
+    setShowStudents(true);
+    setViewMode('take');
+    setListFetched(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
 
  return (
  <div className="space-y-4 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-4 md:pb-0">
@@ -726,7 +976,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  {listFetched && (
  <>
  <div className="rounded-lg px-4 py-3 bg-emerald-600/20 text-emerald-300 text-sm font-bold border border-emerald-500/30">
- {listDate} {listGroup ? `· ${listGroup}` : ''} — {listRows.length} kayıt
+{listDate} {listGroup ? `· ${listGroup}` : ''} — {listRows.length} oturum
  </div>
  {listRows.length === 0 ? (
  <div className="py-12 text-center text-slate-400 rounded-lg border border-dashed border-slate-600">
@@ -736,29 +986,47 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <div className="space-y-2">
  {listRows.map((row) => (
  <div
- key={row.studentId}
- className={`flex items-center gap-4 px-4 py-3 rounded-xl border-2 ${
- row.status === 'present' ? 'bg-emerald-500/10 border-emerald-500/30' :
- row.status === 'absent' ? 'bg-rose-500/10 border-rose-500/30' :
- row.status === 'late' ? 'bg-amber-500/10 border-amber-500/30' :
- 'bg-orange-500/10 border-orange-500/30'
- }`}
+ key={row.key}
+ className="flex flex-col gap-3 px-4 py-4 rounded-xl border border-white/10 bg-slate-900/40 md:flex-row md:items-center"
  >
- <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-white font-black text-sm shrink-0">
- {row.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
- </div>
  <div className="min-w-0 flex-1">
- <div className="font-bold text-white truncate">{row.name}</div>
- <div className="text-xs text-slate-400">{row.group}</div>
- </div>
- <span className={`shrink-0 px-3 py-1 rounded-lg text-xs font-black uppercase ${
- row.status === 'present' ? 'bg-emerald-500/20 text-emerald-400' :
- row.status === 'absent' ? 'bg-rose-500/20 text-rose-400' :
- row.status === 'late' ? 'bg-amber-500/20 text-amber-400' :
- 'bg-orange-500/20 text-orange-400'
+ <div className="flex flex-wrap items-center gap-2">
+ <span className="font-bold text-white">{row.group}</span>
+ <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wide border ${
+   row.attendanceType === 'lesson'
+     ? 'border-indigo-500/30 bg-indigo-500/15 text-indigo-300'
+     : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
  }`}>
- {STATUS_LABELS[row.status] || row.status}
+   {row.attendanceType === 'lesson' ? 'Ders' : 'Grup'}
  </span>
+ </div>
+ <div className="mt-1 text-xs text-slate-400">
+   {isoDateToTr(row.date)} · {row.time}
+   {row.branch ? ` · ${row.branch}` : ''}
+   {row.branchOffice ? ` · ${row.branchOffice}` : ''}
+ </div>
+ {row.lessonSummary ? (
+   <div className="mt-1 text-xs text-slate-500 line-clamp-2">{row.lessonSummary}</div>
+ ) : null}
+ </div>
+ <div className="flex flex-wrap items-center gap-2">
+   <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-emerald-500/20 text-emerald-300">{row.presentCount} Var</span>
+   <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-rose-500/20 text-rose-300">{row.absentCount} Yok</span>
+   {row.lateCount > 0 ? (
+     <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-amber-500/20 text-amber-300">{row.lateCount} Geç</span>
+   ) : null}
+   {row.excusedCount > 0 ? (
+     <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-sky-500/20 text-sky-300">{row.excusedCount} İzinli</span>
+   ) : null}
+ </div>
+ <button
+   type="button"
+   onClick={() => openSessionForEdit(row)}
+   className="inline-flex items-center justify-center gap-2 rounded-lg border border-indigo-500/30 bg-indigo-500/15 px-3 py-2 text-xs font-black text-indigo-200 hover:bg-indigo-500/25 transition-all"
+ >
+   <ClipboardList className="w-4 h-4" />
+   Düzenle
+ </button>
  </div>
  ))}
  </div>
@@ -813,7 +1081,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <SelectField label="Şube">
  <select
  value={branchOffice}
- onChange={(e) => setBranchOffice(e.target.value)}
+ onChange={(e) => { setBranchOffice(e.target.value); setSessionTime(''); }}
  className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  >
  <option value="">Şube Seçiniz</option>
@@ -832,7 +1100,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <SelectField label="Branş">
  <select
  value={branch}
- onChange={(e) => setBranch(e.target.value)}
+ onChange={(e) => { setBranch(e.target.value); setSessionTime(''); }}
  className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  >
  <option value="">Branş Seçiniz</option>
@@ -853,7 +1121,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <SelectField label={attendanceType === 'lesson' ? 'Paket' : 'Grup'}>
  <select
  value={group}
- onChange={(e) => setGroup(e.target.value)}
+ onChange={(e) => { setGroup(e.target.value); setSessionTime(''); }}
  className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  >
  <option value="">{attendanceType === 'lesson' ? 'Paket Seçiniz' : 'Grup Seçiniz'}</option>
@@ -875,7 +1143,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <input
  type="date"
  value={date}
- onChange={(e) => setDate(e.target.value)}
+ onChange={(e) => { setDate(e.target.value); setSessionTime(''); }}
  className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
  />
  </SelectField>
@@ -910,17 +1178,23 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
 
  {/* Devam butonu */}
  {!showStudents && (
- <div className="flex gap-3 pt-2">
+<div className="flex flex-col gap-3 pt-2">
+{hasExistingSession ? (
+  <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-200">
+    Bu tarih ve {attendanceType === 'lesson' ? 'paket' : 'grup'} için zaten yoklama var. Başlatınca mevcut kayıt düzenleme modunda açılır.
+  </div>
+) : null}
+<div className="flex gap-3">
  <button
  type="button"
  onClick={handleStart}
- disabled={!group}
+disabled={!currentSessionId}
  className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-sm transition-all active:scale-95 shadow-lg shadow-indigo-500/20"
  >
  <CalendarCheck className="w-4 h-4" />
- Yoklamayı Başlat
+ {hasExistingSession ? 'Yoklamayı Düzenle' : 'Yoklamayı Başlat'}
  </button>
- 
+</div>
  </div>
  )}
  </div>
@@ -935,17 +1209,25 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
    {attendanceType === 'lesson' && selectedLessonPackage ? (
      <span className="text-indigo-200/80 font-medium"> · {selectedLessonPackage.lessonCount} ders</span>
    ) : null}
+  {isEditingSession ? (
+    <span className="ml-2 inline-flex items-center rounded-lg border border-amber-300/30 bg-amber-400/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-100">
+      Düzenleme Modu
+    </span>
+  ) : null}
  </div>
  <div className="inline-flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-3 py-2">
    <Calendar className="w-4 h-4 text-indigo-200 shrink-0" aria-hidden />
    <input
      type="date"
      value={date}
-     onChange={(e) => setDate(e.target.value)}
+     onChange={(e) => { setDate(e.target.value); setSessionTime(''); }}
      className="bg-transparent border-none outline-none text-sm font-semibold text-white min-w-0 max-w-[11rem] [color-scheme:dark]"
      aria-label="Yoklama tarihi"
    />
  </div>
+<div className="inline-flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-sm font-semibold text-white">
+  Saat: {sessionTime.trim() || derivedSessionTime}
+</div>
  </div>
 
  <div className="flex gap-2 overflow-x-auto scrollbar-none -mx-0.5 px-0.5 pb-0.5">
@@ -966,6 +1248,11 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <span className="px-2.5 py-1.5 rounded-lg bg-rose-500/10 text-rose-400 text-[10px] font-bold border border-rose-500/20 text-center sm:text-left">{absentCount} Katılmadı</span>
  <span className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 text-[10px] font-bold border border-amber-500/20 text-center sm:text-left">{excusedCount} İzinli</span>
  <span className="px-2.5 py-1.5 rounded-lg bg-white/[0.04] text-slate-400 text-[10px] font-bold border border-white/[0.06] text-center sm:text-left col-span-2 sm:col-span-1">{Math.max(0, filteredStudents.length - presentCount - absentCount - excusedCount)} seçilmedi</span>
+{attendanceType === 'lesson' && blockedPresentStudentIds.size > 0 ? (
+  <span className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 text-amber-300 text-[10px] font-bold border border-amber-500/20 text-center sm:text-left col-span-2 sm:col-span-1">
+    {blockedPresentStudentIds.size} öğrencinin hakkı bitti
+  </span>
+) : null}
  </div>
  <button type="button" className="w-full sm:w-auto sm:ml-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white text-[10px] font-bold uppercase tracking-wide transition-all min-h-[44px]">
  <MessageCircle className="w-3.5 h-3.5" /> Velilere Bildir
@@ -984,12 +1271,13 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <div className="md:hidden space-y-2">
  {filteredStudents.map((student, idx) => {
  const s = attendance[student.id] ?? null;
+const isPresentBlocked = blockedPresentStudentIds.has(student.id);
  const noteOpen = expandedNoteStudentId === student.id;
  const noteCount = student.lessonLog?.length ?? 0;
  return (
  <div
  key={student.id}
- className={`rounded-xl border p-3 space-y-2.5 transition-colors ${attendanceCardAccent(s)}`}
+className={`rounded-xl border p-3 space-y-2.5 transition-colors ${attendanceCardAccent(s)} ${isPresentBlocked ? 'ring-1 ring-amber-500/20' : ''}`}
  >
  <div className="flex items-start gap-2.5">
  <span className="text-[10px] font-bold text-slate-500 w-4 pt-2 tabular-nums shrink-0">{idx + 1}</span>
@@ -998,9 +1286,12 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <div className="font-semibold text-white text-sm leading-tight">{student.name}</div>
 {student.group ? <div className="text-[10px] text-slate-500 mt-0.5">{student.group}</div> : null}
 {attendanceType === 'lesson' && privateLessonBalanceByStudentId.get(student.id) ? (
-  <div className="mt-1 inline-flex items-center gap-1 rounded-md border border-indigo-500/20 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-bold text-indigo-200">
+  <div className={`mt-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold ${isPresentBlocked ? 'border border-amber-500/25 bg-amber-500/10 text-amber-200' : 'border border-indigo-500/20 bg-indigo-500/10 text-indigo-200'}`}>
     Kalan {privateLessonBalanceByStudentId.get(student.id)?.remainingLessons}/{privateLessonBalanceByStudentId.get(student.id)?.totalLessons} ders
   </div>
+) : null}
+{isPresentBlocked ? (
+  <div className="mt-1 text-[10px] font-bold text-amber-300">Paket hakkı bitti</div>
 ) : null}
  <div className="mt-2">
  <AnalysisPlatformButtons
@@ -1028,6 +1319,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  onAbsent={() => handleStatus(student.id, 'Absent')}
  onExcused={() => handleStatus(student.id, 'Excused')}
  layout="grid"
+disablePresent={isPresentBlocked}
  />
  {noteOpen ? (
  <div className="pt-1 border-t border-white/[0.06]">
@@ -1060,11 +1352,12 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <tbody>
  {filteredStudents.map((student, idx) => {
  const s = attendance[student.id] ?? null;
+const isPresentBlocked = blockedPresentStudentIds.has(student.id);
  const noteOpen = expandedNoteStudentId === student.id;
  const noteCount = student.lessonLog?.length ?? 0;
  return (
  <React.Fragment key={student.id}>
- <tr className="border-b border-white/[0.04] hover:bg-indigo-500/[0.04] transition-colors">
+<tr className={`border-b border-white/[0.04] hover:bg-indigo-500/[0.04] transition-colors ${isPresentBlocked ? 'bg-amber-500/[0.03]' : ''}`}>
  <td data-label="No" className="px-3 py-3 text-center text-slate-500 font-semibold tabular-nums text-xs">{idx + 1}</td>
  <td data-label="Foto" className="px-3 py-3">
  <div className="flex justify-center">
@@ -1075,10 +1368,11 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
 <div className="font-semibold text-white text-sm">{student.name}</div>
 {student.group ? <div className="text-[10px] text-slate-500 mt-0.5">{student.group}</div> : null}
 {attendanceType === 'lesson' && privateLessonBalanceByStudentId.get(student.id) ? (
-  <div className="mt-1 inline-flex items-center gap-1 rounded-md border border-indigo-500/20 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-bold text-indigo-200">
+  <div className={`mt-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold ${isPresentBlocked ? 'border border-amber-500/25 bg-amber-500/10 text-amber-200' : 'border border-indigo-500/20 bg-indigo-500/10 text-indigo-200'}`}>
     Kalan {privateLessonBalanceByStudentId.get(student.id)?.remainingLessons}/{privateLessonBalanceByStudentId.get(student.id)?.totalLessons} ders
   </div>
 ) : null}
+{isPresentBlocked ? <div className="mt-1 text-[10px] font-bold text-amber-300">Paket hakkı bitti</div> : null}
  </td>
  <td data-label="Analiz" className="px-3 py-3">
  <AnalysisPlatformButtons
@@ -1093,6 +1387,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  onPresent={() => handleStatus(student.id, 'Present')}
  onAbsent={() => handleStatus(student.id, 'Absent')}
  onExcused={() => handleStatus(student.id, 'Excused')}
+disablePresent={isPresentBlocked}
  />
  </td>
  <td data-label="Not" className="px-3 py-3 text-center">
@@ -1157,7 +1452,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  className="w-full md:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 md:py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-black text-sm transition-all active:scale-95 shadow-xl shadow-indigo-500/20 min-h-[48px]"
  >
  <Save className="w-4 h-4" />
- Yoklamayı Kaydet
+ {isEditingSession ? 'Yoklamayı Güncelle' : 'Yoklamayı Kaydet'}
  </button>
  </div>
  )}
@@ -1190,8 +1485,8 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
     </div>
   )}
   {analysisModal && (
-    <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm p-4 flex items-center justify-center">
-      <div className="w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-xl border border-slate-700 bg-white shadow-2xl">
+    <div className="modal-overlay z-[70]">
+      <div className="modal-panel w-full max-w-5xl overflow-hidden rounded-t-2xl sm:rounded-xl border border-slate-700 bg-white shadow-2xl">
         <div className={`px-4 py-3 flex items-center justify-between text-white ${analysisModal.platform === 'lichess' ? 'bg-black' : 'bg-[#5f8f3f]'}`}>
           <div className="font-bold text-sm">
             {analysisModal.student.name} - {analysisModal.platform === 'lichess' ? 'Lichess Analizi' : 'Chess.com Analizi'}
@@ -1200,7 +1495,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
             <X className="w-4 h-4" />
           </button>
         </div>
-        <div className="p-4 md:p-6 overflow-y-auto max-h-[calc(88vh-48px)] text-slate-900">
+        <div className="modal-scroll-body p-4 md:p-6 text-slate-900">
           {analysisLoading ? (
             <div className="py-16 text-center text-slate-600">
               <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3" />

@@ -199,6 +199,14 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
     try {
       const parentPhone = fullApp.phones[0] || fullApp.fatherPhone || fullApp.motherPhone || '';
       const phoneDigits = parentPhone.replace(/\D/g, '');
+      const fatherDigits = fullApp.fatherPhone?.replace(/\D/g, '') || '';
+      const motherDigits = fullApp.motherPhone?.replace(/\D/g, '') || '';
+      const parentName =
+        phoneDigits && phoneDigits === motherDigits
+          ? fullApp.motherName || fullApp.fatherName || fullApp.signatureName || 'Veli'
+          : phoneDigits && phoneDigits === fatherDigits
+            ? fullApp.fatherName || fullApp.motherName || fullApp.signatureName || 'Veli'
+            : fullApp.fatherName || fullApp.motherName || fullApp.signatureName || 'Veli';
       const photoUrl = await photoUrlFromApplication(fullApp.photoDataUrl, fullApp.id);
       const newStudent = await addStudent({
         name: fullApp.name,
@@ -206,9 +214,9 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
         elo: 0,
         ukd: 0,
         lastAttendance: new Date().toISOString().slice(0, 10),
-        paymentStatus: form.isScholarshipStudent ? 'Paid' : 'Unpaid',
+        paymentStatus: form.registrationType === 'monthly' && form.isScholarshipStudent ? 'Paid' : 'Unpaid',
         group: form.group,
-        parentName: fullApp.fatherName || fullApp.motherName || fullApp.signatureName || 'Veli',
+        parentName,
         parentPhone: phoneDigits,
         birthDate: fullApp.birthDate,
         registrationDate: new Date().toISOString().slice(0, 10),
@@ -221,15 +229,15 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
         healthInfo: fullApp.healthInfo || undefined,
         branch: form.branch,
         branchOffice: form.branchOffice,
-        registrationType: 'monthly',
-        monthlyFee: form.monthlyFee,
-        paymentReminderDay: form.paymentReminderDay,
-        latePaymentReminderDay: form.latePaymentReminderDay,
-        isScholarshipStudent: form.isScholarshipStudent || undefined,
-        hasSiblingDiscount: form.hasSiblingDiscount || undefined,
-        siblingDiscountType: form.siblingDiscountType,
-        siblingDiscountPercent: form.siblingDiscountPercent,
-        siblingDiscountAmount: form.siblingDiscountAmount,
+        registrationType: form.registrationType,
+        monthlyFee: form.registrationType === 'monthly' ? form.monthlyFee : undefined,
+        paymentReminderDay: form.registrationType === 'monthly' ? form.paymentReminderDay : undefined,
+        latePaymentReminderDay: form.registrationType === 'monthly' ? form.latePaymentReminderDay : undefined,
+        isScholarshipStudent: form.registrationType === 'monthly' ? (form.isScholarshipStudent || undefined) : undefined,
+        hasSiblingDiscount: form.registrationType === 'monthly' ? (form.hasSiblingDiscount || undefined) : undefined,
+        siblingDiscountType: form.registrationType === 'monthly' ? form.siblingDiscountType : undefined,
+        siblingDiscountPercent: form.registrationType === 'monthly' ? form.siblingDiscountPercent : undefined,
+        siblingDiscountAmount: form.registrationType === 'monthly' ? form.siblingDiscountAmount : undefined,
         fatherName: fullApp.fatherName || undefined,
         fatherPhone: fullApp.fatherPhone?.replace(/\D/g, '') || undefined,
         fatherJob: fullApp.fatherJob || undefined,
@@ -240,9 +248,9 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
         contactNumbers: fullApp.phones.length ? fullApp.phones.map((p) => p.replace(/\D/g, '')).filter(Boolean) : undefined,
         photoUrl,
         status: 'active',
-        trainingGroupId: form.trainingGroupId,
+        trainingGroupId: form.registrationType === 'monthly' ? form.trainingGroupId : undefined,
         coachId: form.coachId,
-        lessonSchedule: form.lessonSchedule,
+        lessonSchedule: form.registrationType === 'monthly' ? form.lessonSchedule : undefined,
       });
       try {
         const sync = await syncStudentRatingsFromExternal(newStudent);
@@ -428,8 +436,8 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
       </div>
 
       {detail ? (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/60" onClick={() => setDetail(null)}>
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-[#1e293b] border border-slate-600 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay z-50" onClick={() => setDetail(null)}>
+          <div className="modal-panel max-w-2xl rounded-t-2xl sm:rounded-2xl bg-[#1e293b] border border-slate-600 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 flex items-center justify-between px-5 py-4 border-b border-slate-700 bg-[#1e293b] z-10">
               <div>
                 <h2 className="text-lg font-black text-white">{detail.name}</h2>
@@ -437,7 +445,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
               </div>
               <button type="button" onClick={() => setDetail(null)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-400"><X className="w-5 h-5" /></button>
             </div>
-            <div className="p-5 space-y-5 text-sm">
+            <div className="modal-scroll-body p-5 space-y-5 text-sm">
               {detailLoading ? (
                 <div className="flex items-center justify-center py-8 text-slate-400 gap-2">
                   <Loader2 className="w-5 h-5 animate-spin" /> Detay yükleniyor...
@@ -501,8 +509,8 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
       ) : null}
 
       {shareOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setShareOpen(false)}>
-          <div className="w-full max-w-lg rounded-2xl bg-[#1e293b] border border-slate-600/80 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay z-50" onClick={() => setShareOpen(false)}>
+          <div className="modal-panel max-w-lg rounded-t-2xl sm:rounded-2xl bg-[#1e293b] border border-slate-600/80 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/80 bg-slate-800/50">
               <h3 className="text-base font-black text-white">Başvuru Formu Paylaş</h3>
               <button type="button" onClick={() => setShareOpen(false)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white">
@@ -661,8 +669,8 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
       />
 
       {approvedCredentials ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setApprovedCredentials(null)}>
-          <div className="w-full max-w-md rounded-2xl bg-[#1e293b] border border-emerald-500/30 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay z-[60]" onClick={() => setApprovedCredentials(null)}>
+          <div className="modal-panel max-w-md rounded-t-2xl sm:rounded-2xl bg-[#1e293b] border border-emerald-500/30 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/80 bg-emerald-500/10">
               <div>
                 <h3 className="text-base font-black text-white">Öğrenci Kaydı Oluşturuldu</h3>

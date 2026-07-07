@@ -59,12 +59,44 @@ Katılım linki:
 
 {{kulup_adi}}`,
   },
+  {
+    id: 'tpl-training-done',
+    key: 'training_completed',
+    name: 'Antrenman Tamamlandı',
+    enabled: true,
+    body: `Merhaba {{veli_adi}},
+
+{{ogrenci_adi}} bugünkü antrenmanını tamamladı ({{tarih}} {{saat}}).
+
+Hedef: {{bulmaca_hedef}} bulmaca, {{mac_hedef}} maç
+Yapılan: {{bulmaca_sayisi}} bulmaca, {{mac_sayisi}} maç
+
+{{kulup_adi}}`,
+  },
+  {
+    id: 'tpl-training-missed',
+    key: 'training_incomplete',
+    name: 'Antrenman Eksik (21:00)',
+    enabled: true,
+    body: `Merhaba {{veli_adi}},
+
+{{ogrenci_adi}} bugünkü antrenmanını tamamlayamadı ({{tarih}}).
+
+Hedef: {{bulmaca_hedef}} bulmaca, {{mac_hedef}} maç
+Yapılan: {{bulmaca_sayisi}} bulmaca, {{mac_sayisi}} maç
+
+Lütfen platformda antrenmanını tamamlamasını hatırlatın.
+
+{{kulup_adi}}`,
+  },
 ];
 
 export const DEFAULT_WHATSAPP_AUTO_RULES: WhatsAppAutoRule[] = [
   { event: 'parent_login', enabled: true, templateKey: 'parent_login' },
   { event: 'parent_consent', enabled: true, templateKey: 'parent_consent' },
   { event: 'lesson_start', enabled: true, templateKey: 'lesson_start' },
+  { event: 'training_completed', enabled: true, templateKey: 'training_completed' },
+  { event: 'training_incomplete', enabled: true, templateKey: 'training_incomplete' },
 ];
 
 export function renderWhatsAppTemplate(body: string, vars: TemplateVars): string {

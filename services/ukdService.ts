@@ -33,7 +33,9 @@ async function invokeApiRoute(body: { tc?: string; soyad?: string }): Promise<Uk
       body: JSON.stringify(body),
     });
     if (res.status === 404) return null;
-    return (await res.json()) as UkdFetchResponse;
+    const data = (await res.json()) as UkdFetchResponse;
+    if (res.status >= 500) return null;
+    return data;
   } catch {
     return null;
   }

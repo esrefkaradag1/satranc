@@ -14,6 +14,7 @@ import { normalizeClubKey } from '../lib/clubScope';
 import { resolveClubIdFromAuth, resolveBranchOfficeNames, clubIdForOfficeRecord } from '../lib/orgStructureDb';
 import { DEFAULT_APPLICATION_GROUPS, DEFAULT_APPLICATION_OFFICES } from '../lib/applicationFormOptions';
 import { buildDefaultOrgStructure, buildClubDefaultOrgStructure } from '../lib/seedDefaultOrgStructure';
+import { normalizeSearchText, searchIncludesText } from '../lib/searchText';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 
 const LESSON_COUNT_OPTIONS = [1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 48];
@@ -122,10 +123,10 @@ const BranchGroupManagement: React.FC = () => {
   }, [students, studentModalGroup]);
 
   const modalStudentOptions = useMemo(() => {
-    const q = studentSearch.trim().toLowerCase();
+    const q = normalizeSearchText(studentSearch);
     return [...students]
       .filter((s) => s.status !== 'inactive')
-      .filter((s) => !q || s.name.toLowerCase().includes(q) || (s.group || '').toLowerCase().includes(q))
+      .filter((s) => !q || searchIncludesText(s.name, q) || searchIncludesText(s.group, q))
       .sort((a, b) => a.name.localeCompare(b.name, 'tr'));
   }, [students, studentSearch]);
 
@@ -687,15 +688,6 @@ const BranchGroupManagement: React.FC = () => {
                     </span>
                     <div className="mt-1 text-sm font-black text-white truncate">{branch.name}</div>
                   </div>
-                  <span className="hidden sm:inline-flex px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-bold border border-emerald-500/25">
-                    ₺{Number(branch.monthlyFee || 0).toLocaleString('tr-TR')}
-                  </span>
-                  <span className="hidden sm:inline-flex w-8 h-8 rounded-full bg-sky-500/20 text-sky-300 text-xs font-black items-center justify-center border border-sky-500/30" title="Grup sayısı">
-                    {branchGroups.length}
-                  </span>
-                  <span className="hidden sm:inline-flex w-8 h-8 rounded-full bg-amber-500/20 text-amber-300 text-xs font-black items-center justify-center border border-amber-500/30" title="Paket sayısı">
-                    {branchPackages.length}
-                  </span>
                   <div className="flex items-center gap-1.5 justify-end">
                     <button type="button" onClick={() => openAddGroup(branch)} className="p-2 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25" title="Grup ekle">
                       <UserPlus className="w-4 h-4" />

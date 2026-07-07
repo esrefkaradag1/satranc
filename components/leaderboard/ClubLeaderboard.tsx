@@ -28,6 +28,7 @@ import { ResponsiveTable } from '../ui/ResponsiveTable';
 import { useApp } from '../../AppContext';
 import { normalizeClubKey } from '../../lib/clubScope';
 import { resolveClubLeaderboardPointSettings } from '../../lib/leaderboardPointSettings';
+import { canShowStudentCounts } from '../../lib/studentCountVisibility';
 
 type Props = {
   allStudents: Student[];
@@ -135,6 +136,8 @@ export const ClubLeaderboard: React.FC<Props> = ({
     () => pointSettingsProp ?? resolveClubLeaderboardPointSettings(resolvedClubId, clubs),
     [pointSettingsProp, resolvedClubId, clubs],
   );
+
+  const showLoadProgressCount = canShowStudentCounts(auth);
 
   const load = useCallback(async () => {
     if (peers.length === 0) {
@@ -256,9 +259,11 @@ export const ClubLeaderboard: React.FC<Props> = ({
         {loading && (
           <div className="mt-4 flex items-center gap-2 text-sm text-slate-400">
             <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-            {progress.total > 0
+            {showLoadProgressCount && progress.total > 0
               ? `Platform verileri alınıyor… ${progress.done}/${progress.total}`
-              : 'Hesaplanıyor…'}
+              : progress.total > 0
+                ? 'Platform verileri alınıyor…'
+                : 'Hesaplanıyor…'}
           </div>
         )}
         {error && <p className="mt-3 text-sm text-rose-400">{error}</p>}

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ShieldCheck, History, UserCheck, AlertTriangle, Search, Filter } from 'lucide-react';
 import { useApp } from '../AppContext';
-import { ResponsiveTable } from './ui/ResponsiveTable';
+import { maskStudentCount } from '../lib/studentCountVisibility';
 
 function formatLogTime(iso: string): { time: string; date: string } {
   try {
@@ -21,7 +21,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const Security: React.FC = () => {
-  const { activityLogs, students } = useApp();
+  const { activityLogs, scopedStudents: students, auth } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
 
   const filteredLogs = useMemo(() => {
@@ -57,7 +57,7 @@ const Security: React.FC = () => {
  <SecurityStatCard 
  icon={<UserCheck />} 
  label="Kayıtlı Öğrenci" 
- value={students.length.toString()} 
+ value={maskStudentCount(students.length, auth)} 
  sub="Sistemde kayıtlı"
  color="indigo" 
  />

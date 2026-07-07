@@ -163,6 +163,42 @@ function safeTurnAtFen(fen: string): 'w' | 'b' {
   }
 }
 
+function resolveSetupMoveSan(
+  fen: string,
+  lichessSetupMove: string,
+  rawSolution?: string[],
+): string | undefined {
+  const uci = lichessSetupMove.trim();
+  if (!uci) return undefined;
+  const onFen = resolveExpectedMoveSquares(fen, uci);
+  if (onFen) return onFen.san;
+  if (rawSolution && rawSolution.length >= 2 && rawSolution[0] === uci) {
+    const session = tryLichessSetupSession(fen, rawSolution);
+    return session?.setupMoveSan;
+  }
+  return looksLikeUciMove(uci) ? uci : undefined;
+}
+
+/** Son oynanan hamlenin karelerini vurgular (Lichess sarısı). */
+export function puzzleMoveHighlightStyles(
+  fen: string | null | undefined,
+  move: string,
+): Record<string, { background: string }> {
+  const style = { background: 'rgba(255, 255, 0, 0.41)' };
+  if (fen) {
+    const sq = resolveExpectedMoveSquares(fen, move);
+    if (sq) return { [sq.from]: style, [sq.to]: style };
+  }
+  const uci = move.trim().toLowerCase();
+  if (looksLikeUciMove(uci)) {
+    return {
+      [uci.slice(0, 2)]: style,
+      [uci.slice(2, 4)]: style,
+    };
+  }
+  return {};
+}
+
 /**
  * Supabase / bellekteki Lichess kaydı → oynanış oturumu.
  * Import sonrası kayıtlar doğrudan kullanılır; eski ham kayıtlar onarılır.
@@ -190,18 +226,23 @@ export function lichessPlayStateFromStored(
     return {
       playFen: rawFen,
       solutionMoves: rawSolution,
+      setupMoveSan: resolveSetupMoveSan(rawFen, setupMove, rawSolution),
       studentColor: safeTurnAtFen(rawFen),
       lichessSetupMove: setupMove,
     };
   }
 
   if (directOk && hint && hint === rawSolution[0]!) {
-    return {
-      playFen: rawFen,
-      solutionMoves: rawSolution,
-      studentColor: safeTurnAtFen(rawFen),
-      lichessSetupMove: setupMove,
-    };
+    const setupSession = rawSolution.length >= 2 ? tryLichessSetupSession(rawFen, rawSolution) : null;
+    if (!setupSession || setupSession.playFen === rawFen) {
+      return {
+        playFen: rawFen,
+        solutionMoves: rawSolution,
+        setupMoveSan: setupMove ? resolveSetupMoveSan(rawFen, setupMove, rawSolution) : undefined,
+        studentColor: safeTurnAtFen(rawFen),
+        lichessSetupMove: setupMove,
+      };
+    }
   }
 
   // Eski kayıt: kurulum öncesi FEN + tam Lichess hattı (hint = öğrenci hamlesi)
@@ -237,6 +278,47 @@ export function lichessPlayStateFromStored(
   }
 
   if (directOk) {
+    const setupSession = rawSolution.length >= 2 ? tryLichessSetupSession(rawFen, rawSolution) : null;
+
+    if (
+      setupSession &&
+      setupSession.playFen !== rawFen &&
+      setupSession.solutionMoves.length === rawSolution.length - 1
+    ) {
+      return {
+        playFen: setupSession.playFen,
+        solutionMoves: setupSession.solutionMoves,
+        setupMoveSan: setupSession.setupMoveSan,
+        studentColor: safeTurnAtFen(setupSession.playFen),
+        lichessSetupMove: rawSolution[0],
+      };
+    }
+
+    if (
+      rawSolution.length >= 2 &&
+      setupMove &&
+      !isMoveLegalForSideToMove(rawFen, rawSolution[0]!) &&
+      canReplayMovesFrom(rawFen, rawSolution.slice(1))
+    ) {
+      return {
+        playFen: rawFen,
+        solutionMoves: rawSolution.slice(1),
+        setupMoveSan: resolveSetupMoveSan(rawFen, setupMove, rawSolution) ?? setupSession?.setupMoveSan,
+        studentColor: safeTurnAtFen(rawFen),
+        lichessSetupMove: setupMove,
+      };
+    }
+
+    if (setupMove) {
+      return {
+        playFen: rawFen,
+        solutionMoves: rawSolution,
+        setupMoveSan: resolveSetupMoveSan(rawFen, setupMove, rawSolution),
+        studentColor: safeTurnAtFen(rawFen),
+        lichessSetupMove: setupMove,
+      };
+    }
+
     return {
       playFen: rawFen,
       solutionMoves: rawSolution,
@@ -493,23 +575,31 @@ function scorePlaySession(
 export function initCoachStyleSession(
   puzzle: Pick<Puzzle, 'fen' | 'solution' | 'hint' | 'source' | 'lichessId' | 'lichessThemes' | 'gamePgn' | 'lichessSetupMove'>,
 ): CoachStyleSession {
-  const rawFen = puzzle.fen?.trim() || DEFAULT_FEN;
-  const rawSolution = Array.isArray(puzzle.solution)
-    ? puzzle.solution.map((m) => String(m).trim()).filter(Boolean)
+  const src = isLichessStylePuzzle(puzzle)
+    ? materializeLichessPuzzleRecord({ ...puzzle, id: puzzle.lichessId ?? 'lichess' } as Puzzle)
+    : puzzle;
+  const rawFen = src.fen?.trim() || DEFAULT_FEN;
+  const rawSolution = Array.isArray(src.solution)
+    ? src.solution.map((m) => String(m).trim()).filter(Boolean)
     : [];
 
   if (rawSolution.length === 0) {
     return sessionFromPlayState(rawFen, rawFen, []);
   }
 
-  if (isLichessStylePuzzle(puzzle)) {
-    const state = lichessPlayStateFromStored(puzzle);
+  if (isLichessStylePuzzle(src)) {
+    const state = lichessPlayStateFromStored(src);
     if (state.solutionMoves.length > 0) {
-      return sessionFromPlayState(rawFen, state.playFen, state.solutionMoves, state.setupMoveSan);
+      const setupMoveSan =
+        state.setupMoveSan
+        ?? (state.lichessSetupMove
+          ? resolveSetupMoveSan(rawFen, state.lichessSetupMove, rawSolution)
+          : undefined);
+      return sessionFromPlayState(rawFen, state.playFen, state.solutionMoves, setupMoveSan);
     }
   }
 
-  const candidates = buildSessionCandidates(puzzle);
+  const candidates = buildSessionCandidates(src);
   if (candidates.length > 0) {
     return candidates.reduce((best, cur) =>
       scorePlaySession(cur, rawSolution) > scorePlaySession(best, rawSolution) ? cur : best,

@@ -208,7 +208,7 @@ export type WhatsAppAutoContext = {
 };
 
 export async function triggerWhatsAppAuto(
-  event: 'parent_login' | 'parent_consent' | 'lesson_start',
+  event: 'parent_login' | 'parent_consent' | 'lesson_start' | 'training_completed' | 'training_incomplete',
   ctx: WhatsAppAutoContext,
 ): Promise<number> {
   const rules = loadWhatsAppAutoRules();

@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Calendar, CalendarCheck, CalendarDays, CheckSquare, ChevronRight,
-  ExternalLink, Image as ImageIcon, ShieldCheck, Trophy,
+  ExternalLink, GraduationCap, Image as ImageIcon, ShieldCheck, Trophy,
   User, Users, Video, Wallet, BarChart3,
 } from 'lucide-react';
 import type { Student, Transaction } from '../../types';
@@ -10,6 +10,8 @@ import { DashboardHeroScene } from '../dashboard/DashboardHeroScene';
 import { QuickMenuButton, QuickStatCard } from '../dashboard/dashboardQuickUI';
 import { LeaderboardPreview } from '../leaderboard/LeaderboardPreview';
 import type { HomeworkPuzzleAttempt } from '../../types';
+import type { ClubDisplayInfo } from '../../lib/clubDisplay';
+import { clubNameInitials } from '../../lib/clubDisplay';
 
 type PanelTab = string;
 
@@ -22,6 +24,17 @@ type Props = {
     attendanceRate: string;
     totalAttendance: number;
   };
+  privateLessonSummary?: {
+    packageName: string;
+    branchOffice: string;
+    discipline: string;
+    totalLessons?: number;
+    usedLessons: number;
+    remainingLessons?: number;
+    attendanceUsedLessons: number;
+    startingUsedLessons: number;
+    saleDate: string;
+  } | null;
   homeworkAttempts: HomeworkPuzzleAttempt[];
   studentTransactions: Transaction[];
   statusBadge: React.ReactNode;
@@ -30,6 +43,7 @@ type Props = {
   formatDateTR: (iso?: string) => string;
   ageFromBirthDate: (iso?: string) => number | null;
   initials: (name: string) => string;
+  clubDisplay?: ClubDisplayInfo | null;
 };
 
 export const StudentSummaryDashboard: React.FC<Props> = ({
@@ -38,6 +52,7 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
   studentId,
   viewAs,
   derived,
+  privateLessonSummary,
   homeworkAttempts,
   studentTransactions,
   statusBadge,
@@ -46,6 +61,7 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
   formatDateTR,
   ageFromBirthDate,
   initials: studentInitials,
+  clubDisplay,
 }) => {
   const firstName = student.name.split(' ')[0];
   const todayLabel = new Date().toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -61,6 +77,25 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
             <div className="absolute inset-0 bg-gradient-to-r from-indigo-600/50 via-violet-500/25 to-transparent pointer-events-none" />
             <DashboardHeroScene />
             <div className="relative z-10 h-full flex flex-col justify-center pl-5 sm:pl-6 pr-[42%] sm:pr-[38%]">
+              {clubDisplay ? (
+                <div className="flex items-center gap-2.5 mb-2 min-w-0">
+                  {clubDisplay.logoUrl ? (
+                    <img
+                      src={clubDisplay.logoUrl}
+                      alt={clubDisplay.name}
+                      referrerPolicy="no-referrer"
+                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl object-cover border border-white/20 shadow-md shadow-black/20 shrink-0 bg-white/10"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-white font-black text-xs sm:text-sm shrink-0 shadow-md shadow-black/20">
+                      {clubNameInitials(clubDisplay.name)}
+                    </div>
+                  )}
+                  <p className="text-[11px] sm:text-xs font-bold text-white/90 uppercase tracking-wide line-clamp-2 leading-snug">
+                    {clubDisplay.name}
+                  </p>
+                </div>
+              ) : null}
               <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest capitalize">{todayLabel}</p>
               <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight mt-0.5 leading-tight">
                 {viewAs === 'student' ? `Merhaba, ${firstName}` : 'Veli Paneli'}
@@ -105,16 +140,79 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
         {/* Hızlı menü */}
         <section className="grid grid-cols-3 sm:grid-cols-6 gap-2.5 sm:gap-3">
           <QuickMenuButton icon={<Trophy className="w-5 h-5" />} label="Liderlik" color="amber" onClick={() => onTabChange('leaderboard')} />
-          {viewAs !== 'parent' && (
+          {viewAs === 'parent' ? (
+            <QuickMenuButton icon={<BarChart3 className="w-5 h-5" />} label="Analiz" color="indigo" onClick={() => onTabChange('analyses')} />
+          ) : (
             <QuickMenuButton icon={<CheckSquare className="w-5 h-5" />} label="Ödevler" color="emerald" onClick={() => onTabChange('puzzles')} />
           )}
           <QuickMenuButton icon={<CalendarDays className="w-5 h-5" />} label="Program" color="indigo" onClick={() => onTabChange('schedule')} />
-          {viewAs !== 'parent' && (
+          {viewAs === 'parent' && privateLessonSummary ? (
+            <QuickMenuButton icon={<GraduationCap className="w-5 h-5" />} label="Özel Ders" color="amber" onClick={() => onTabChange('private-lesson')} />
+          ) : viewAs !== 'parent' ? (
             <QuickMenuButton icon={<Video className="w-5 h-5" />} label="Canlı Ders" color="violet" onClick={() => onTabChange('live-lesson')} />
-          )}
+          ) : null}
           <QuickMenuButton icon={<ImageIcon className="w-5 h-5" />} label="Galeri" color="sky" onClick={() => onTabChange('gallery')} />
           <QuickMenuButton icon={<CalendarCheck className="w-5 h-5" />} label="Devam" color="rose" onClick={() => onTabChange('attendance')} />
         </section>
+
+        {privateLessonSummary && (
+          <section className="bento-card p-5 sm:p-6">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold text-indigo-400/90 uppercase tracking-wider mb-1">Özel Ders Paketi</p>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <GraduationCap className="w-5 h-5 text-amber-400 shrink-0" />
+                  <span className="truncate">{privateLessonSummary.packageName}</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  {[privateLessonSummary.branchOffice, privateLessonSummary.discipline].filter(Boolean).join(' · ') || 'Özel ders paketi'}
+                  {privateLessonSummary.saleDate ? ` · ${formatDateTR(privateLessonSummary.saleDate)}` : ''}
+                </p>
+              </div>
+              {viewAs === 'parent' && (
+                <button
+                  type="button"
+                  onClick={() => onTabChange('private-lesson')}
+                  className="shrink-0 inline-flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-200 hover:bg-amber-500/15 transition-colors"
+                >
+                  <GraduationCap className="w-4 h-4" />
+                  Özel ders detayı
+                </button>
+              )}
+              {viewAs === 'parent' && (
+                <button
+                  type="button"
+                  onClick={() => onTabChange('payments')}
+                  className="shrink-0 inline-flex items-center gap-2 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-3 py-2 text-xs font-bold text-indigo-200 hover:bg-indigo-500/15 transition-colors"
+                >
+                  <Wallet className="w-4 h-4" />
+                  Ödeme detayları
+                </button>
+              )}
+            </div>
+            <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Toplam</p>
+                <p className="mt-1 text-lg font-bold text-white">{privateLessonSummary.totalLessons ?? '—'}</p>
+              </div>
+              <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Kullanılan</p>
+                <p className="mt-1 text-lg font-bold text-amber-300">{privateLessonSummary.usedLessons}</p>
+              </div>
+              <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Kalan</p>
+                <p className="mt-1 text-lg font-bold text-emerald-300">{privateLessonSummary.remainingLessons ?? '—'}</p>
+              </div>
+              <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Kullanım Türü</p>
+                <p className="mt-1 text-sm font-bold text-white">
+                  Yoklama {privateLessonSummary.attendanceUsedLessons}
+                  <span className="text-slate-500 font-medium"> · Elle {privateLessonSummary.startingUsedLessons}</span>
+                </p>
+              </div>
+            </div>
+          </section>
+        )}
 
         {/* Profil */}
         <div className="bento-card overflow-hidden">
@@ -166,8 +264,11 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
               { tab: 'gallery', icon: <ImageIcon className="w-5 h-5" />, title: 'Medya & Galeri', sub: 'Fotoğraflar', color: 'text-violet-400 bg-violet-500/15' },
               ...(viewAs !== 'parent' ? [{ tab: 'live-lesson', icon: <Video className="w-5 h-5" />, title: 'Canlı ders', sub: 'Derse katıl', color: 'text-sky-400 bg-sky-500/15' }] : []),
               { tab: 'attendance', icon: <CalendarCheck className="w-5 h-5" />, title: 'Devam', sub: 'Yoklama bilgisi', color: 'text-rose-400 bg-rose-500/15' },
+              { tab: 'analyses', icon: <BarChart3 className="w-5 h-5" />, title: 'Performans analizi', sub: 'Antrenör raporları', color: 'text-indigo-300 bg-indigo-500/15' },
+              ...(viewAs === 'parent' && privateLessonSummary
+                ? [{ tab: 'private-lesson', icon: <GraduationCap className="w-5 h-5" />, title: 'Özel ders', sub: `Kalan ${privateLessonSummary.remainingLessons ?? '—'} ders`, color: 'text-amber-300 bg-amber-500/15' }]
+                : []),
               { tab: 'profile', icon: <User className="w-5 h-5" />, title: 'Profil', sub: 'Kişisel bilgiler', color: 'text-slate-300 bg-white/10' },
-              ...(viewAs !== 'parent' ? [{ tab: 'analyses', icon: <BarChart3 className="w-5 h-5" />, title: 'Analizler', sub: 'Performans raporu', color: 'text-indigo-300 bg-indigo-500/15' }] : []),
             ].map((item) => (
               <button
                 key={item.tab}

@@ -37,6 +37,7 @@ import {
   reconcileTrainingGroupLessons,
   removeTrainingGroupLessonsFromList,
 } from './lib/syncGroupLessons';
+import { attendanceRecordsShareSession } from './lib/attendanceSession';
 import { getPermissionsForAuth, hasPermission as checkPermission, defaultPermissionsForRole, resolveCustomRoleIdForAuth } from './lib/rolePermissions';
 import {
   loadRolesLocal,
@@ -917,6 +918,12 @@ function isLessonPgColumnError(error: { code?: string; message?: string } | null
   );
 }
 
+function isAttendancePgColumnError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const message = String(error.message || '').toLowerCase();
+  return error.code === 'PGRST204' || (message.includes('column') && message.includes('schema'));
+}
+
 async function lessonsUpsertWithRetry(
   sb: NonNullable<ReturnType<typeof getServiceSupabase>>,
   items: Lesson[],
@@ -968,7 +975,28 @@ function attendanceRecordToDb(r: Record<string, unknown>): Record<string, unknow
   if (r.date != null) out.date = r.date;
   if ((r as any).studentId != null) out.student_id = (r as any).studentId;
   if ((r as any).lessonId != null) out.lesson_id = (r as any).lessonId;
+  if ((r as any).attendanceType != null) out.attendance_type = (r as any).attendanceType;
+  if ((r as any).groupName != null) out.group_name = (r as any).groupName;
+  if ((r as any).branch != null) out.branch = (r as any).branch;
+  if ((r as any).branchOffice != null) out.branch_office = (r as any).branchOffice;
+  if ((r as any).sessionTime != null) out.session_time = (r as any).sessionTime;
   if (r.status != null) out.status = r.status;
+  if ((r as any).teacherName != null) out.teacher_name = (r as any).teacherName;
+  if ((r as any).lessonSummary != null) out.lesson_summary = (r as any).lessonSummary;
+  if ((r as any).notifiedParent != null) out.notified_parent = (r as any).notifiedParent;
+  return out;
+}
+
+function attendanceRecordToDbLegacy(r: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (r.id != null) out.id = r.id;
+  if (r.date != null) out.date = r.date;
+  if ((r as any).studentId != null) out.student_id = (r as any).studentId;
+  if ((r as any).lessonId != null) out.lesson_id = (r as any).lessonId;
+  if (r.status != null) out.status = r.status;
+  if ((r as any).teacherName != null) out.teacher_name = (r as any).teacherName;
+  if ((r as any).lessonSummary != null) out.lesson_summary = (r as any).lessonSummary;
+  if ((r as any).notifiedParent != null) out.notified_parent = (r as any).notifiedParent;
   return out;
 }
 
@@ -978,13 +1006,40 @@ function dbToAttendanceRecord(row: Record<string, unknown>): AttendanceRecord {
   const studentId = String((row as any).student_id ?? (row as any).studentId ?? '');
   const lessonIdVal = (row as any).lesson_id ?? (row as any).lessonId;
   const lessonId = lessonIdVal != null ? String(lessonIdVal) : undefined;
+  const attendanceTypeVal = (row as any).attendance_type ?? (row as any).attendanceType;
+  const attendanceType =
+    attendanceTypeVal === 'group' || attendanceTypeVal === 'lesson'
+      ? (attendanceTypeVal as AttendanceRecord['attendanceType'])
+      : undefined;
+  const groupNameVal = (row as any).group_name ?? (row as any).groupName;
+  const groupName = groupNameVal != null ? String(groupNameVal) : undefined;
+  const branchVal = (row as any).branch;
+  const branch = branchVal != null ? String(branchVal) : undefined;
+  const branchOfficeVal = (row as any).branch_office ?? (row as any).branchOffice;
+  const branchOffice = branchOfficeVal != null ? String(branchOfficeVal) : undefined;
+  const sessionTimeVal = (row as any).session_time ?? (row as any).sessionTime;
+  const sessionTime = sessionTimeVal != null ? String(sessionTimeVal) : undefined;
   const status = String((row as any).status ?? 'absent') as AttendanceRecord['status'];
   const notifiedParent = (row as any).notified_parent ?? (row as any).notifiedParent;
   const teacherNameVal = (row as any).teacher_name ?? (row as any).teacherName;
   const teacherName = teacherNameVal != null ? String(teacherNameVal) : undefined;
   const lessonSummaryVal = (row as any).lesson_summary ?? (row as any).lessonSummary;
   const lessonSummary = lessonSummaryVal != null ? String(lessonSummaryVal) : undefined;
-  return { id, date, studentId, lessonId, status, notifiedParent: Boolean(notifiedParent), teacherName, lessonSummary };
+  return {
+    id,
+    date,
+    studentId,
+    lessonId,
+    attendanceType,
+    groupName,
+    branch,
+    branchOffice,
+    sessionTime,
+    status,
+    notifiedParent: Boolean(notifiedParent),
+    teacherName,
+    lessonSummary,
+  };
 }
 
 function coachAiReportToDb(r: CoachAiReport): Record<string, unknown> {
@@ -1119,7 +1174,11 @@ function dbToHomeworkAttempt(row: Record<string, unknown>): HomeworkPuzzleAttemp
     movesPlayed: Array.isArray(r.moves_played) ? r.moves_played : Array.isArray(r.movesPlayed) ? r.movesPlayed : Array.isArray(r.movesplayed) ? r.movesplayed : [],
     solutionMoves: Array.isArray(r.solution_moves) ? r.solution_moves : Array.isArray(r.solutionMoves) ? r.solutionMoves : Array.isArray(r.solutionmoves) ? r.solutionmoves : [],
     finalFen: r.final_fen != null ? String(r.final_fen) : r.finalFen != null ? String(r.finalFen) : r.finalfen != null ? String(r.finalfen) : undefined,
-    thinkSeconds: r.think_seconds != null ? Number(r.think_seconds) : r.thinkSeconds != null ? Number(r.thinkSeconds) : r.thinkseconds != null ? Number(r.thinkseconds) : undefined,
+    thinkSeconds: (() => {
+      const raw = r.think_seconds != null ? Number(r.think_seconds) : r.thinkSeconds != null ? Number(r.thinkSeconds) : r.thinkseconds != null ? Number(r.thinkseconds) : undefined;
+      const clean = raw != null && Number.isFinite(raw) ? Math.round(raw) : undefined;
+      return clean != null && clean > 0 && clean <= 7200 ? clean : undefined;
+    })(),
     hintUsed: Boolean(r.hintused ?? r.hintUsed ?? r.hint_used ?? false),
     timestamp: String(r.timestamp ?? ''),
   };
@@ -1190,6 +1249,7 @@ function dbToTransaction(row: Record<string, unknown>): Transaction {
     lessonDiscipline: r.lesson_discipline != null ? String(r.lesson_discipline) : r.lessonDiscipline != null ? String(r.lessonDiscipline) : undefined,
     lessonBranchOffice: r.lesson_branch_office != null ? String(r.lesson_branch_office) : r.lessonBranchOffice != null ? String(r.lessonBranchOffice) : undefined,
     lessonCount: r.lesson_count != null ? Number(r.lesson_count) : r.lessonCount != null ? Number(r.lessonCount) : undefined,
+    startingUsedLessons: r.starting_used_lessons != null ? Number(r.starting_used_lessons) : r.startingUsedLessons != null ? Number(r.startingUsedLessons) : undefined,
     validityDays: r.validity_days != null ? Number(r.validity_days) : r.validityDays != null ? Number(r.validityDays) : undefined,
     branch: row.branch != null ? String(row.branch) : undefined,
     processedBy: r.processed_by != null ? String(r.processed_by) : r.processedBy != null ? String(r.processedBy) : undefined,
@@ -1212,6 +1272,7 @@ function transactionToDb(t: Transaction): Record<string, unknown> {
     lesson_discipline: t.lessonDiscipline ?? null,
     lesson_branch_office: t.lessonBranchOffice ?? null,
     lesson_count: t.lessonCount ?? null,
+    starting_used_lessons: t.startingUsedLessons ?? null,
     validity_days: t.validityDays ?? null,
     processed_by: t.processedBy ?? null,
     student_id: t.studentId ?? null,
@@ -1269,6 +1330,8 @@ function clubToDb(club: Club): Record<string, unknown> {
     login_username: club.loginUsername ?? null,
     role_id: club.roleId ?? null,
     leaderboard_points: club.leaderboardPoints ?? null,
+    logo_url: club.logoUrl ?? null,
+    profile: club.profile ?? null,
   };
 }
 
@@ -1341,6 +1404,16 @@ function dbToClub(row: Record<string, unknown>): Club {
     leaderboardPoints:
       leaderboardRaw && typeof leaderboardRaw === 'object'
         ? normalizeLeaderboardPointSettings(leaderboardRaw as Club['leaderboardPoints'])
+        : undefined,
+    logoUrl:
+      r.logo_url != null
+        ? String(r.logo_url)
+        : r.logoUrl != null
+          ? String(r.logoUrl)
+          : undefined,
+    profile:
+      r.profile && typeof r.profile === 'object' && !Array.isArray(r.profile)
+        ? (r.profile as Club['profile'])
         : undefined,
   };
 }
@@ -1580,8 +1653,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const scopedDisciplineBranches = useMemo(
-    () => resolveScopedDisciplineBranches(auth, disciplineBranches, branchOfficeRecords, clubs),
-    [auth, disciplineBranches, branchOfficeRecords, clubs],
+    () => resolveScopedDisciplineBranches(auth, disciplineBranches, branchOfficeRecords, clubs, trainingGroups),
+    [auth, disciplineBranches, branchOfficeRecords, clubs, trainingGroups],
   );
   const scopedLessonPackages = useMemo(
     () => resolveScopedLessonPackages(auth, lessonPackages, branchOfficeRecords, clubs),
@@ -3016,6 +3089,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (transaction.lessonDiscipline !== undefined) payload.lesson_discipline = transaction.lessonDiscipline ?? null;
       if (transaction.lessonBranchOffice !== undefined) payload.lesson_branch_office = transaction.lessonBranchOffice ?? null;
       if (transaction.lessonCount !== undefined) payload.lesson_count = transaction.lessonCount ?? null;
+      if (transaction.startingUsedLessons !== undefined) payload.starting_used_lessons = transaction.startingUsedLessons ?? null;
       if (transaction.validityDays !== undefined) payload.validity_days = transaction.validityDays ?? null;
       if (transaction.processedBy !== undefined) payload.processed_by = transaction.processedBy ?? null;
       if (transaction.branch !== undefined) payload.branch = transaction.branch ?? null;
@@ -3040,34 +3114,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newRecord = { ...record, id } as AttendanceRecord;
     const day = String(record.date ?? '').slice(0, 10);
     setAttendanceRecords(prev => {
-      const idx = prev.findIndex((r) => {
+      const matchingRecords = prev.filter((r) => {
         if (r.studentId !== record.studentId) return false;
         if (String(r.date ?? '').slice(0, 10) !== day) return false;
-        return String(r.lessonId ?? '') === String(record.lessonId ?? '');
+        return attendanceRecordsShareSession(r, record);
       });
-      if (idx === -1) return [newRecord, ...prev];
-      const next = prev.slice();
-      next[idx] = { ...next[idx], ...record };
+      if (matchingRecords.length === 0) return [newRecord, ...prev];
+      const keepId = matchingRecords[0]?.id;
+      const next = prev.filter((r) => !matchingRecords.some((item, idx) => idx > 0 && item.id === r.id));
+      const nextIdx = next.findIndex((r) => r.id === keepId);
+      if (nextIdx === -1) return [newRecord, ...next];
+      next[nextIdx] = { ...next[nextIdx], ...record };
       return next;
     });
     const sb = getServiceSupabase();
     if (sb) try {
       const payload = attendanceRecordToDb(newRecord as unknown as Record<string, unknown>);
-      let query = sb
+      const legacyPayload = attendanceRecordToDbLegacy(newRecord as unknown as Record<string, unknown>);
+      const query = sb
         .from('attendance_records')
-        .select('id')
+        .select('*')
         .eq('student_id', record.studentId)
         .eq('date', day);
-      query = record.lessonId ? query.eq('lesson_id', record.lessonId) : query.is('lesson_id', null);
-      const { data: existing, error: qErr } = await query.limit(1).maybeSingle();
+      const { data: existingRows, error: qErr } = await query;
       if (qErr) {
         console.error('Supabase attendance_records select error:', qErr);
-      } else if (existing?.id) {
-        const { error } = await sb.from('attendance_records').update(payload).eq('id', existing.id);
-        if (error) console.error('Supabase attendance_records update error:', error);
       } else {
-        const { error } = await sb.from('attendance_records').insert(payload);
-        if (error) console.error('Supabase attendance_records insert error:', error);
+        const matchingRows = ((existingRows as Record<string, unknown>[] | null) ?? [])
+          .map(dbToAttendanceRecord)
+          .filter((row) => attendanceRecordsShareSession(row, record));
+        const existing = matchingRows[0];
+        if (existing?.id) {
+          const { error } = await sb.from('attendance_records').update(payload).eq('id', existing.id);
+          if (!error) {
+            const duplicateIds = matchingRows.slice(1).map((row) => row.id).filter(Boolean);
+            if (duplicateIds.length > 0) {
+              const { error: deleteError } = await sb.from('attendance_records').delete().in('id', duplicateIds);
+              if (deleteError) console.error('Supabase attendance_records duplicate delete error:', deleteError);
+            }
+            return;
+          }
+          if (isAttendancePgColumnError(error)) {
+            const retry = await sb.from('attendance_records').update(legacyPayload).eq('id', existing.id);
+            if (!retry.error) {
+              const duplicateIds = matchingRows.slice(1).map((row) => row.id).filter(Boolean);
+              if (duplicateIds.length > 0) {
+                const { error: deleteError } = await sb.from('attendance_records').delete().in('id', duplicateIds);
+                if (deleteError) console.error('Supabase attendance_records duplicate legacy delete error:', deleteError);
+              }
+              return;
+            }
+            console.error('Supabase attendance_records legacy update error:', retry.error);
+          } else {
+            console.error('Supabase attendance_records update error:', error);
+          }
+        } else {
+          const { error } = await sb.from('attendance_records').insert(payload);
+          if (!error) return;
+          if (isAttendancePgColumnError(error)) {
+            const retry = await sb.from('attendance_records').insert(legacyPayload);
+            if (!retry.error) return;
+            console.error('Supabase attendance_records legacy insert error:', retry.error);
+          } else {
+            console.error('Supabase attendance_records insert error:', error);
+          }
+        }
       }
     } catch (err) { console.error('Supabase attendance_records throw error:', err); }
   }, []);
@@ -3644,6 +3755,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (patch.loginUsername !== undefined) payload.login_username = patch.loginUsername ?? null;
       if (patch.roleId !== undefined) payload.role_id = patch.roleId ?? null;
       if (patch.leaderboardPoints !== undefined) payload.leaderboard_points = patch.leaderboardPoints ?? null;
+      if (patch.logoUrl !== undefined) payload.logo_url = patch.logoUrl ?? null;
+      if (patch.profile !== undefined) payload.profile = patch.profile ?? null;
       if (Object.keys(payload).length > 0) {
         sb.from('clubs').update(payload).eq('id', id).then(({ error }) => {
           if (error) console.error('Supabase clubs update error:', error);

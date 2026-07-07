@@ -2,17 +2,18 @@ import type { HomeworkAssignment, HomeworkPuzzleAttempt, Student, StudentDailyTa
 import { countPerPuzzleResults } from './homeworkAnalysisUtils';
 import {
   dedupeChessComPuzzleAttempts,
-  selectHomeworkGoalPuzzles,
   type ChessComPuzzleTab,
   type ChessComPuzzleAttempt,
 } from '../lib/chesscomPuzzleParse';
 import {
   fetchChessComDailyPuzzleStats,
   fetchChessComGamesForDay,
+  fetchChessComGamesListForDay,
   fetchChessComPuzzlesBundle,
   fetchLichessDayStats,
   fetchLichessGamesCountForDay,
   fetchLichessGamesForDay,
+  type ChessComGame,
   type LichessGame,
 } from '../services/chessPlatformService';
 import { fetchLichessOAuthDayPuzzleStats, isStudentLichessOAuthConnected } from '../services/lichessOAuthClient';
@@ -323,34 +324,105 @@ function lichessGameDurationSeconds(game: LichessGame): number {
   return Math.max(0, Math.round((end - start) / 1000));
 }
 
-/** Ödev hedefi kadar platform aktivitesinin toplam süresi (sn). */
+function parseClockSeconds(raw: string | undefined): number | null {
+  const value = String(raw ?? '').trim();
+  if (!value) return null;
+  const parts = value.split(':').map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2 || parts.length > 3) return null;
+  const nums = parts.map((part) => Number(part));
+  if (nums.some((num) => !Number.isFinite(num))) return null;
+  if (nums.length === 2) {
+    const [minutes, seconds] = nums;
+    return Math.round(minutes * 60 + seconds);
+  }
+  const [hours, minutes, seconds] = nums;
+  return Math.round(hours * 3600 + minutes * 60 + seconds);
+}
+
+function parseInitialTimeControlSeconds(raw: string | undefined): { initialSeconds: number; incrementSeconds: number } | null {
+  const value = String(raw ?? '').trim();
+  if (!value || value === '-' || value.includes('/')) return null;
+  const [baseRaw, incrementRaw = '0'] = value.split('+');
+  const base = Number(baseRaw);
+  const increment = Number(incrementRaw);
+  if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(increment) || increment < 0) return null;
+  return {
+    initialSeconds: Math.round(base),
+    incrementSeconds: Math.round(increment),
+  };
+}
+
+function sumClockDurationsFromPgn(rawPgn: string | undefined, timeControl?: string): number {
+  const pgn = String(rawPgn ?? '');
+  if (!pgn.trim()) return 0;
+
+  const emtMatches = [...pgn.matchAll(/\[%emt\s+([0-9:.]+)\]/gi)];
+  if (emtMatches.length > 0) {
+    return emtMatches.reduce((sum, match) => {
+      const sec = parseClockSeconds(match[1]);
+      return sum + Math.max(0, sec ?? 0);
+    }, 0);
+  }
+
+  const clockMatches = [...pgn.matchAll(/\[%clk\s+([0-9:.]+)\]/gi)];
+  if (clockMatches.length === 0) return 0;
+
+  const tc = parseInitialTimeControlSeconds(timeControl);
+  if (!tc) return 0;
+
+  let prevWhite = tc.initialSeconds;
+  let prevBlack = tc.initialSeconds;
+  let total = 0;
+  clockMatches.forEach((match, index) => {
+    const remaining = parseClockSeconds(match[1]);
+    if (remaining == null) return;
+    if (index % 2 === 0) {
+      total += Math.max(0, prevWhite + tc.incrementSeconds - remaining);
+      prevWhite = remaining;
+    } else {
+      total += Math.max(0, prevBlack + tc.incrementSeconds - remaining);
+      prevBlack = remaining;
+    }
+  });
+  return total;
+}
+
+function chessComGameDurationSeconds(game: ChessComGame): number {
+  const headerTimeControl = game.pgn?.match(/\[TimeControl\s+"([^"]+)"\]/i)?.[1];
+  return sumClockDurationsFromPgn(game.pgn, headerTimeControl ?? game.time_control);
+}
+
+/** Gün boyu tüm platform aktivitesinin toplam süresi (sn). */
 export async function fetchStudentPlatformActivityTimeSeconds(
   student: Student,
   dayIso: string,
-  opts?: { puzzleTarget?: number; gameTarget?: number },
 ): Promise<number> {
-  const puzzleTarget = Math.max(0, opts?.puzzleTarget ?? 0);
-  const gameTarget = Math.max(0, opts?.gameTarget ?? 0);
   let total = 0;
 
   const chessComUsername = student.chessComUsername?.trim().toLowerCase();
-  if (chessComUsername && puzzleTarget > 0) {
+  if (chessComUsername) {
     try {
-      const rows = await fetchChessComPuzzlesForDay(chessComUsername, dayIso);
-      const goal = selectHomeworkGoalPuzzles(rows.map((r) => r.attempt), puzzleTarget);
-      total += goal.reduce((sum, a) => sum + Math.max(0, a.myTimeSec ?? 0), 0);
+      const rows = await fetchChessComPuzzlesForDay(chessComUsername, dayIso, {
+        tabs: ['rated', 'learning', 'rush'],
+      });
+      total += rows.reduce((sum, row) => sum + Math.max(0, row.attempt.myTimeSec ?? 0), 0);
+    } catch {
+      /* platform süresi atlanır */
+    }
+
+    try {
+      const games = await fetchChessComGamesListForDay(chessComUsername, dayIso);
+      total += games.reduce((sum, game) => sum + chessComGameDurationSeconds(game), 0);
     } catch {
       /* platform süresi atlanır */
     }
   }
 
   const lichessUsername = student.lichessUsername?.trim();
-  if (lichessUsername && gameTarget > 0) {
+  if (lichessUsername) {
     try {
       const games = await fetchLichessGamesForDay(lichessUsername, dayIso);
-      total += games
-        .slice(0, gameTarget)
-        .reduce((sum, g) => sum + lichessGameDurationSeconds(g), 0);
+      total += games.reduce((sum, g) => sum + lichessGameDurationSeconds(g), 0);
     } catch {
       /* platform süresi atlanır */
     }

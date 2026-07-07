@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Building2, CreditCard, Loader2, UserPlus, X } from 'lucide-react';
+import { AlertCircle, BookOpen, Building2, Calendar, CreditCard, GraduationCap, Loader2, UserPlus, X } from 'lucide-react';
 import { useApp } from '../AppContext';
 import type { StudentApplication } from '../lib/applicationTypes';
 import { DEFAULT_REMINDER_DAY, REMINDER_DAY_OPTIONS } from '../lib/reminderDays';
@@ -7,9 +7,14 @@ import {
   applyGroupDefaultsToStudent,
   applySiblingDiscount,
   disciplineNamesForOffice,
+  disciplineNamesForPackages,
+  disciplineMatches,
+  findLessonPackageByName,
   findTrainingGroupByName,
   formatLessonSchedule,
+  lessonPackageNamesForSelection,
   mergeBranchOffices,
+  trainingGroupNamesForSelection,
 } from '../lib/trainingGroupUtils';
 import { coachesForClub } from '../lib/orgScope';
 import type { GroupLessonSlot } from '../types';
@@ -17,13 +22,17 @@ import type { GroupLessonSlot } from '../types';
 const PLACEHOLDER_OFFICE = 'Şube Seçiniz';
 const PLACEHOLDER_DISCIPLINE = 'Branş Seçiniz';
 const PLACEHOLDER_GROUP = 'Grup Seçiniz';
+const PLACEHOLDER_PACKAGE = 'Paket Seçiniz';
 const PLACEHOLDER_COACH = 'Antrenör Seçiniz';
 
+type RegistrationType = 'monthly' | 'package';
+
 const inputCls =
-  'w-full px-4 py-2.5 rounded-lg text-[13px] font-bold outline-none transition-all duration-200 bg-slate-900/60 border border-slate-700/60 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50';
+  'w-full px-3.5 py-2 rounded-lg text-[12px] font-bold outline-none transition-all duration-200 bg-slate-900/60 border border-slate-700/60 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50';
 const selectCls = `${inputCls} appearance-none cursor-pointer`;
 
 export type ApplicationApproveFormData = {
+  registrationType: RegistrationType;
   branchOffice: string;
   branch: string;
   group: string;
@@ -41,6 +50,7 @@ export type ApplicationApproveFormData = {
 };
 
 type FormState = {
+  registrationType: RegistrationType;
   branchOffice: string;
   branch: string;
   group: string;
@@ -63,8 +73,8 @@ const Field: React.FC<{
   className?: string;
   children: React.ReactNode;
 }> = ({ label, required, error, hint, className = '', children }) => (
-  <div className={`space-y-1.5 ${className}`}>
-    <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+  <div className={`space-y-1 ${className}`}>
+    <label className="flex items-center gap-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wider">
       {label}
       {required && <span className="text-rose-500">*</span>}
     </label>
@@ -83,21 +93,72 @@ const Section: React.FC<{
   icon: React.ReactNode;
   children: React.ReactNode;
   columns?: 2 | 3;
-}> = ({ title, icon, children, columns = 2 }) => (
-  <section className="rounded-2xl border border-slate-700/50 bg-[#1e293b]/90 overflow-hidden shadow-sm">
-    <div className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
+  noGrid?: boolean;
+}> = ({ title, icon, children, columns = 2, noGrid = false }) => (
+  <section className="rounded-xl border border-slate-700/50 bg-[#1e293b]/90 overflow-hidden shadow-sm">
+    <div className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
       {React.cloneElement(icon as React.ReactElement<{ className?: string }>, { className: 'w-4 h-4 shrink-0' })}
-      <h2 className="text-sm font-black uppercase tracking-wide">{title}</h2>
+      <h2 className="text-xs font-black uppercase tracking-wide">{title}</h2>
     </div>
-    <div className={`p-5 grid grid-cols-1 ${columns === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4`}>
+    <div className={noGrid ? 'p-4' : `p-4 grid grid-cols-1 ${columns === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-3`}>
       {children}
     </div>
   </section>
 );
 
+const TypeCard: React.FC<{
+  selected: boolean;
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  badge?: string;
+  onClick: () => void;
+}> = ({ selected, icon, title, subtitle, badge, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`relative flex-1 flex flex-col items-start gap-2.5 p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] group ${
+      selected
+        ? 'border-indigo-500 bg-indigo-500/10 shadow-md shadow-indigo-500/10'
+        : 'border-slate-700/80 bg-slate-800/40 hover:border-indigo-500/30'
+    }`}
+  >
+    <div className="flex justify-between items-start w-full">
+      <div
+        className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+          selected ? 'bg-indigo-500 text-white' : 'bg-slate-700/80 text-slate-400'
+        }`}
+      >
+        {React.cloneElement(icon as React.ReactElement<{ size?: number; strokeWidth?: number }>, { size: 18, strokeWidth: 2 })}
+      </div>
+      {selected ? (
+        <div className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center">
+          <div className="w-2 h-2 rounded-full bg-white" />
+        </div>
+      ) : (
+        <div className="w-5 h-5 rounded-full border-2 border-slate-600 bg-transparent" />
+      )}
+    </div>
+    <div className="min-w-0 w-full">
+      <h3 className={`font-bold text-[13px] tracking-tight ${selected ? 'text-white' : 'text-slate-300'}`}>
+        {title}
+      </h3>
+      <p className={`text-[11px] font-medium mt-0.5 ${selected ? 'text-indigo-300/90' : 'text-slate-500'}`}>
+        {subtitle}
+      </p>
+      {badge ? (
+        <span className={`inline-flex mt-2 px-2 py-0.5 rounded text-[9px] font-bold uppercase ${selected ? 'bg-indigo-500/20 text-indigo-300' : 'bg-slate-800 text-slate-500'}`}>
+          {badge}
+        </span>
+      ) : null}
+    </div>
+  </button>
+);
+
 function buildInitialForm(app: StudentApplication, defaultOffice?: string): FormState {
   const office = defaultOffice?.trim() || app.branchOffice?.trim() || PLACEHOLDER_OFFICE;
   return {
+    registrationType: 'monthly',
     branchOffice: office,
     branch: PLACEHOLDER_DISCIPLINE,
     group: app.group?.trim() || PLACEHOLDER_GROUP,
@@ -130,7 +191,7 @@ const ApplicationApproveModal: React.FC<Props> = ({
   onClose,
   onConfirm,
 }) => {
-  const { branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth } = useApp();
+  const { branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedLessonPackages, scopedCoaches, auth } = useApp();
   const [form, setForm] = useState<FormState>(() =>
     app ? buildInitialForm(app, clubName) : buildInitialForm({} as StudentApplication, clubName),
   );
@@ -153,18 +214,40 @@ const ApplicationApproveModal: React.FC<Props> = ({
 
   const disciplineOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
+    const currentBranch = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined;
+    if (form.registrationType === 'package') {
+      const names = disciplineNamesForPackages(scopedLessonPackages, office || undefined, currentBranch);
+      return [PLACEHOLDER_DISCIPLINE, ...names];
+    }
     const names = disciplineNamesForOffice(scopedDisciplineBranches, office || undefined);
     return [PLACEHOLDER_DISCIPLINE, ...names];
-  }, [scopedDisciplineBranches, form.branchOffice]);
+  }, [form.registrationType, form.branchOffice, form.branch, scopedDisciplineBranches, scopedLessonPackages]);
 
-  const groupOptions = useMemo(() => {
+  const lessonPackageOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
     const discipline = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : '';
-    const filtered = scopedTrainingGroups
-      .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
-      .map((g) => g.name);
-    return [PLACEHOLDER_GROUP, ...filtered];
-  }, [form.branchOffice, form.branch, scopedTrainingGroups]);
+    return lessonPackageNamesForSelection(
+      scopedLessonPackages,
+      office,
+      discipline,
+      form.group !== PLACEHOLDER_PACKAGE ? form.group : undefined,
+    );
+  }, [form.branchOffice, form.branch, form.group, scopedLessonPackages]);
+
+  const groupOptions = useMemo(() => {
+    if (form.registrationType === 'package') return lessonPackageOptions;
+    const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
+    const discipline = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : '';
+    return trainingGroupNamesForSelection(
+      scopedTrainingGroups,
+      office,
+      discipline,
+      form.group !== PLACEHOLDER_GROUP ? form.group : undefined,
+    );
+  }, [form.registrationType, form.branchOffice, form.branch, form.group, scopedTrainingGroups, lessonPackageOptions]);
+
+  const groupPlaceholder =
+    form.registrationType === 'package' ? PLACEHOLDER_PACKAGE : PLACEHOLDER_GROUP;
 
   const coachOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
@@ -179,21 +262,100 @@ const ApplicationApproveModal: React.FC<Props> = ({
       if (clubName && branchOfficeOptions.includes(clubName)) {
         next.branchOffice = clubName;
       }
-      if (prev.group !== PLACEHOLDER_GROUP && !groupOptions.includes(prev.group)) {
-        next.group = app.group?.trim() && groupOptions.includes(app.group) ? app.group : PLACEHOLDER_GROUP;
-      } else if (prev.group === PLACEHOLDER_GROUP && app.group && groupOptions.includes(app.group)) {
+      const placeholder = prev.registrationType === 'package' ? PLACEHOLDER_PACKAGE : PLACEHOLDER_GROUP;
+      if (prev.group !== placeholder && !groupOptions.includes(prev.group)) {
+        const tg = findTrainingGroupByName(scopedTrainingGroups, prev.group);
+        if (tg) {
+          if (next.branch === PLACEHOLDER_DISCIPLINE && tg.discipline) next.branch = tg.discipline;
+          if (next.branchOffice === PLACEHOLDER_OFFICE && tg.branchOffice) next.branchOffice = tg.branchOffice;
+        } else {
+          next.group =
+            app.group?.trim() && groupOptions.includes(app.group) ? app.group : placeholder;
+        }
+      } else if (prev.group === placeholder && app.group && groupOptions.includes(app.group)) {
         next.group = app.group;
       }
       const disciplines = disciplineOptions.filter((x) => x !== PLACEHOLDER_DISCIPLINE);
       if (next.branch === PLACEHOLDER_DISCIPLINE && disciplines.length === 1) {
         next.branch = disciplines[0];
       }
+      if (prev.registrationType === 'package' && next.branch !== PLACEHOLDER_DISCIPLINE) {
+        const office = next.branchOffice !== PLACEHOLDER_OFFICE ? next.branchOffice : '';
+        const packages = lessonPackageNamesForSelection(
+          scopedLessonPackages,
+          office,
+          next.branch,
+        );
+        if (next.group === PLACEHOLDER_PACKAGE && packages.length === 1) {
+          next.group = packages[0];
+        }
+      }
       return next;
     });
-  }, [app, clubName, branchOfficeOptions, groupOptions, disciplineOptions]);
+  }, [app, clubName, branchOfficeOptions, groupOptions, disciplineOptions, scopedTrainingGroups, scopedLessonPackages, form.registrationType]);
 
   useEffect(() => {
-    if (!app || form.group === PLACEHOLDER_GROUP) return;
+    if (form.registrationType !== 'package') return;
+    const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
+    if (!office) return;
+    const packageDisciplines = disciplineNamesForPackages(scopedLessonPackages, office);
+    setForm((prev) => {
+      let next = { ...prev };
+      let changed = false;
+      if (
+        prev.branch !== PLACEHOLDER_DISCIPLINE &&
+        packageDisciplines.length > 0 &&
+        !packageDisciplines.some((d) => disciplineMatches(d, prev.branch))
+      ) {
+        next.branch = PLACEHOLDER_DISCIPLINE;
+        next.group = PLACEHOLDER_PACKAGE;
+        changed = true;
+      }
+      if (next.branch === PLACEHOLDER_DISCIPLINE && packageDisciplines.length === 1) {
+        next.branch = packageDisciplines[0];
+        changed = true;
+      }
+      const discipline = next.branch !== PLACEHOLDER_DISCIPLINE ? next.branch : '';
+      const packages = lessonPackageNamesForSelection(scopedLessonPackages, office, discipline);
+      if (next.group === PLACEHOLDER_PACKAGE && packages.length === 1) {
+        const pkg = findLessonPackageByName(scopedLessonPackages, packages[0], { branchOffice: office, discipline });
+        next.group = packages[0];
+        if (pkg) {
+          if (pkg.discipline) next.branch = pkg.discipline;
+          if (pkg.packageFee) next.monthlyFee = String(pkg.packageFee);
+          if (pkg.coachIds?.length === 1) next.coachId = pkg.coachIds[0];
+        }
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [form.registrationType, form.branchOffice, form.branch, form.group, scopedLessonPackages]);
+
+  useEffect(() => {
+    const placeholder = form.registrationType === 'package' ? PLACEHOLDER_PACKAGE : PLACEHOLDER_GROUP;
+    if (!app || form.group === placeholder) return;
+    if (form.registrationType === 'package') {
+      const selectedPackage = findLessonPackageByName(scopedLessonPackages, form.group, {
+        branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
+        discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
+      });
+      if (!selectedPackage) return;
+      setLessonSchedule([]);
+      setForm((prev) => ({
+        ...prev,
+        branch: selectedPackage.discipline || prev.branch,
+        branchOffice: selectedPackage.branchOffice || prev.branchOffice,
+        coachId:
+          selectedPackage.coachIds?.length === 1
+            ? selectedPackage.coachIds[0]
+            : prev.coachId !== PLACEHOLDER_COACH
+              ? prev.coachId
+              : auth?.role === 'coach' && auth.coachId
+                ? auth.coachId
+                : PLACEHOLDER_COACH,
+      }));
+      return;
+    }
     const tg = findTrainingGroupByName(scopedTrainingGroups, form.group, {
       branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
       discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
@@ -215,17 +377,19 @@ const ApplicationApproveModal: React.FC<Props> = ({
               ? auth.coachId
               : PLACEHOLDER_COACH,
     }));
-  }, [app, form.group, form.branchOffice, form.branch, scopedTrainingGroups, scopedDisciplineBranches, auth?.coachId, auth?.role]);
+  }, [app, form.registrationType, form.group, form.branchOffice, form.branch, scopedLessonPackages, scopedTrainingGroups, scopedDisciplineBranches, auth?.coachId, auth?.role]);
 
   const errors = useMemo(() => {
     const e: Record<string, string> = {};
     if (form.branchOffice === PLACEHOLDER_OFFICE) e.branchOffice = 'Şube seçiniz.';
     if (form.branch === PLACEHOLDER_DISCIPLINE) e.branch = 'Branş seçiniz.';
-    if (form.group === PLACEHOLDER_GROUP) e.group = 'Grup seçiniz.';
-    if (!form.isScholarshipStudent && !form.monthlyFee.trim()) {
+    if (form.group === PLACEHOLDER_GROUP || form.group === PLACEHOLDER_PACKAGE) {
+      e.group = form.registrationType === 'package' ? 'Paket seçiniz.' : 'Grup seçiniz.';
+    }
+    if (form.registrationType === 'monthly' && !form.isScholarshipStudent && !form.monthlyFee.trim()) {
       e.monthlyFee = 'Aylık aidat zorunludur.';
     }
-    if (form.hasSiblingDiscount && !form.isScholarshipStudent) {
+    if (form.registrationType === 'monthly' && form.hasSiblingDiscount && !form.isScholarshipStudent) {
       if (form.siblingDiscountType === 'amount') {
         const amt = Number(form.siblingDiscountAmount);
         const base = Number(form.monthlyFee || 0);
@@ -243,8 +407,62 @@ const ApplicationApproveModal: React.FC<Props> = ({
     setForm((s) => ({ ...s, [k]: v }));
 
   const handleGroupChange = (groupName: string) => {
-    setForm((prev) => ({ ...prev, group: groupName }));
-    if (groupName === PLACEHOLDER_GROUP) setLessonSchedule([]);
+    setForm((prev) => {
+      const next = { ...prev, group: groupName };
+      if (groupName === PLACEHOLDER_GROUP || groupName === PLACEHOLDER_PACKAGE) {
+        setLessonSchedule([]);
+        return next;
+      }
+      if (prev.registrationType === 'package') {
+        const selectedPackage = findLessonPackageByName(scopedLessonPackages, groupName, {
+          branchOffice: prev.branchOffice !== PLACEHOLDER_OFFICE ? prev.branchOffice : undefined,
+          discipline: prev.branch !== PLACEHOLDER_DISCIPLINE ? prev.branch : undefined,
+        });
+        if (selectedPackage) {
+          const autoCoach =
+            selectedPackage.coachIds?.length === 1
+              ? selectedPackage.coachIds[0]
+              : prev.coachId !== PLACEHOLDER_COACH
+                ? prev.coachId
+                : auth?.role === 'coach' && auth.coachId
+                  ? auth.coachId
+                  : PLACEHOLDER_COACH;
+          setLessonSchedule([]);
+          return {
+            ...next,
+            branch: selectedPackage.discipline || prev.branch,
+            branchOffice: selectedPackage.branchOffice || prev.branchOffice,
+            coachId: autoCoach,
+          };
+        }
+        setLessonSchedule([]);
+        return next;
+      }
+      const tg = findTrainingGroupByName(scopedTrainingGroups, groupName, {
+        branchOffice: prev.branchOffice !== PLACEHOLDER_OFFICE ? prev.branchOffice : undefined,
+        discipline: prev.branch !== PLACEHOLDER_DISCIPLINE ? prev.branch : undefined,
+      });
+      if (tg) {
+        const defaults = applyGroupDefaultsToStudent(tg, scopedDisciplineBranches);
+        setLessonSchedule(defaults.lessonSchedule ?? []);
+        return {
+          ...next,
+          branch: defaults.branch || prev.branch,
+          branchOffice: defaults.branchOffice || prev.branchOffice,
+          monthlyFee: defaults.monthlyFee ? String(defaults.monthlyFee) : prev.monthlyFee,
+          coachId:
+            tg.coachIds?.length === 1
+              ? tg.coachIds[0]
+              : prev.coachId !== PLACEHOLDER_COACH
+                ? prev.coachId
+                : auth?.role === 'coach' && auth.coachId
+                  ? auth.coachId
+                  : PLACEHOLDER_COACH,
+        };
+      }
+      setLessonSchedule([]);
+      return next;
+    });
   };
 
   const handleSubmit = async (ev: React.FormEvent) => {
@@ -252,31 +470,34 @@ const ApplicationApproveModal: React.FC<Props> = ({
     setSubmitted(true);
     if (Object.keys(errors).length > 0 || !app) return;
 
-    const tg = findTrainingGroupByName(scopedTrainingGroups, form.group, {
-      branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
-      discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
-    });
+    const tg = form.registrationType === 'monthly'
+      ? findTrainingGroupByName(scopedTrainingGroups, form.group, {
+          branchOffice: form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : undefined,
+          discipline: form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined,
+        })
+      : undefined;
 
     await onConfirm({
+      registrationType: form.registrationType,
       branchOffice: form.branchOffice,
       branch: form.branch,
       group: form.group,
       coachId: form.coachId !== PLACEHOLDER_COACH ? form.coachId : undefined,
-      trainingGroupId: tg?.id,
-      lessonSchedule: lessonSchedule.length ? lessonSchedule : undefined,
-      monthlyFee: form.isScholarshipStudent ? undefined : Number(form.monthlyFee),
+      trainingGroupId: form.registrationType === 'monthly' ? tg?.id : undefined,
+      lessonSchedule: form.registrationType === 'monthly' && lessonSchedule.length ? lessonSchedule : undefined,
+      monthlyFee: form.registrationType === 'monthly' && !form.isScholarshipStudent ? Number(form.monthlyFee) : undefined,
       paymentReminderDay: form.paymentReminderDay,
       latePaymentReminderDay: form.latePaymentReminderDay,
-      isScholarshipStudent: form.isScholarshipStudent,
-      hasSiblingDiscount: form.hasSiblingDiscount && !form.isScholarshipStudent,
+      isScholarshipStudent: form.registrationType === 'monthly' ? form.isScholarshipStudent : false,
+      hasSiblingDiscount: form.registrationType === 'monthly' && form.hasSiblingDiscount && !form.isScholarshipStudent,
       siblingDiscountType:
-        form.hasSiblingDiscount && !form.isScholarshipStudent ? form.siblingDiscountType : undefined,
+        form.registrationType === 'monthly' && form.hasSiblingDiscount && !form.isScholarshipStudent ? form.siblingDiscountType : undefined,
       siblingDiscountPercent:
-        form.hasSiblingDiscount && !form.isScholarshipStudent && form.siblingDiscountType === 'percent'
+        form.registrationType === 'monthly' && form.hasSiblingDiscount && !form.isScholarshipStudent && form.siblingDiscountType === 'percent'
           ? Number(form.siblingDiscountPercent || 0)
           : undefined,
       siblingDiscountAmount:
-        form.hasSiblingDiscount && !form.isScholarshipStudent && form.siblingDiscountType === 'amount'
+        form.registrationType === 'monthly' && form.hasSiblingDiscount && !form.isScholarshipStudent && form.siblingDiscountType === 'amount'
           ? Number(form.siblingDiscountAmount || 0)
           : undefined,
     });
@@ -286,16 +507,16 @@ const ApplicationApproveModal: React.FC<Props> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[55] flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+      className="modal-overlay z-[55] !items-start pt-16 sm:pt-24"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl bg-[#0f172a] border border-slate-600/80 shadow-2xl"
+        className="modal-panel max-w-[720px] max-h-[calc(100dvh-5rem)] sm:max-h-[calc(100dvh-7rem)] rounded-t-2xl sm:rounded-2xl bg-[#0f172a] border border-slate-600/80 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 border-b border-slate-700/80 bg-[#0f172a]">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-slate-700/80 bg-[#0f172a]">
           <div>
-            <h2 className="text-lg font-black text-white">Başvuruyu Onayla</h2>
+            <h2 className="text-base font-black text-white">Başvuruyu Onayla</h2>
             <p className="text-xs text-slate-400 mt-0.5">
               {app.name} · <span className="font-mono text-indigo-400">{app.applicationNo}</span>
             </p>
@@ -305,8 +526,8 @@ const ApplicationApproveModal: React.FC<Props> = ({
           </button>
         </div>
 
-        <form onSubmit={(e) => void handleSubmit(e)} className="p-5 space-y-5">
-          <div className="rounded-xl border border-slate-700/60 bg-slate-800/40 px-4 py-3 text-sm text-slate-300">
+        <form onSubmit={(e) => void handleSubmit(e)} className="modal-scroll-body p-4 space-y-4">
+          <div className="rounded-xl border border-slate-700/60 bg-slate-800/40 px-3.5 py-2.5 text-xs text-slate-300">
             <span className="text-slate-500">TC:</span> {app.tcNo}
             {app.birthDate ? (
               <>
@@ -316,16 +537,59 @@ const ApplicationApproveModal: React.FC<Props> = ({
             ) : null}
           </div>
 
+          <Section title="Kayıt Türü" icon={<BookOpen />} noGrid>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <TypeCard
+                selected={form.registrationType === 'monthly'}
+                onClick={() => {
+                  set('registrationType')('monthly');
+                  set('group')(PLACEHOLDER_GROUP);
+                  setLessonSchedule([]);
+                }}
+                icon={<Calendar />}
+                title="Aylık Aidat"
+                subtitle="Düzenli aylık ödeme sistemi"
+                badge="Önerilen"
+              />
+              <TypeCard
+                selected={form.registrationType === 'package'}
+                onClick={() => {
+                  setForm((prev) => ({
+                    ...prev,
+                    registrationType: 'package',
+                    branch: PLACEHOLDER_DISCIPLINE,
+                    group: PLACEHOLDER_PACKAGE,
+                  }));
+                  setLessonSchedule([]);
+                }}
+                icon={<GraduationCap />}
+                title="Ders Paketi"
+                subtitle="Belirli sayıda ders için ödeme"
+              />
+            </div>
+          </Section>
+
           <Section title="Şube Bilgileri" icon={<Building2 />}>
             <Field label="Şube" required error={submitted ? errors.branchOffice : undefined}>
               <select
                 value={form.branchOffice}
-                onChange={(e) => set('branchOffice')(e.target.value)}
+                onChange={(e) => {
+                  const branchOffice = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    branchOffice,
+                    branch: PLACEHOLDER_DISCIPLINE,
+                    group: prev.registrationType === 'package' ? PLACEHOLDER_PACKAGE : PLACEHOLDER_GROUP,
+                  }));
+                  setLessonSchedule([]);
+                }}
                 className={selectCls}
                 disabled={lockBranchOffice}
               >
                 {branchOfficeOptions.map((x) => (
-                  <option key={x}>{x}</option>
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
                 ))}
               </select>
               {lockBranchOffice && clubName ? (
@@ -333,18 +597,60 @@ const ApplicationApproveModal: React.FC<Props> = ({
               ) : null}
             </Field>
             <Field label="Branş" required error={submitted ? errors.branch : undefined}>
-              <select value={form.branch} onChange={(e) => set('branch')(e.target.value)} className={selectCls}>
+              <select
+                value={form.branch}
+                onChange={(e) => {
+                  const branch = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    branch,
+                    group: prev.registrationType === 'package' ? PLACEHOLDER_PACKAGE : PLACEHOLDER_GROUP,
+                  }));
+                  setLessonSchedule([]);
+                }}
+                className={selectCls}
+              >
                 {disciplineOptions.map((x) => (
-                  <option key={x}>{x}</option>
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
                 ))}
               </select>
+              {form.registrationType === 'package' &&
+              form.branchOffice !== PLACEHOLDER_OFFICE &&
+              disciplineOptions.filter((x) => x !== PLACEHOLDER_DISCIPLINE).length === 0 ? (
+                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
+                  Bu şubede tanımlı ders paketi yok. Branş & Grup bölümünden özel ders paketi ekleyin.
+                </p>
+              ) : null}
             </Field>
-            <Field label="Grup" required error={submitted ? errors.group : undefined} className="md:col-span-2">
-              <select value={form.group} onChange={(e) => handleGroupChange(e.target.value)} className={selectCls}>
+            <Field label={form.registrationType === 'package' ? 'Ders Paketi' : 'Grup'} required error={submitted ? errors.group : undefined} className="md:col-span-2">
+              <select
+                value={groupOptions.includes(form.group) ? form.group : groupPlaceholder}
+                onChange={(e) => handleGroupChange(e.target.value)}
+                className={selectCls}
+              >
+                <option value={groupPlaceholder}>{groupPlaceholder}</option>
                 {groupOptions.map((x) => (
-                  <option key={x}>{x}</option>
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
                 ))}
               </select>
+              {form.registrationType === 'monthly' &&
+              form.branch !== PLACEHOLDER_DISCIPLINE &&
+              groupOptions.length === 0 ? (
+                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
+                  Bu branşta tanımlı grup yok. Branş & Grup bölümünden eğitim grubu ekleyin.
+                </p>
+              ) : null}
+              {form.registrationType === 'package' &&
+              form.branch !== PLACEHOLDER_DISCIPLINE &&
+              groupOptions.length === 0 ? (
+                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
+                  Bu branşta tanımlı ders paketi yok.
+                </p>
+              ) : null}
             </Field>
             <Field label="Antrenör" className="md:col-span-2">
               <select value={form.coachId} onChange={(e) => set('coachId')(e.target.value)} className={selectCls}>
@@ -355,7 +661,7 @@ const ApplicationApproveModal: React.FC<Props> = ({
                 ))}
               </select>
             </Field>
-            {lessonSchedule.length > 0 ? (
+            {form.registrationType === 'monthly' && lessonSchedule.length > 0 ? (
               <Field label="Ders programı (gruptan)" className="md:col-span-2">
                 <div className="px-4 py-3 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-200 text-sm font-medium">
                   {formatLessonSchedule(lessonSchedule)}
@@ -364,6 +670,7 @@ const ApplicationApproveModal: React.FC<Props> = ({
             ) : null}
           </Section>
 
+          {form.registrationType === 'monthly' ? (
           <Section title="Aidat Bilgileri" icon={<CreditCard />} columns={3}>
             <Field
               label="Aidat ücreti (₺)"
@@ -522,6 +829,7 @@ const ApplicationApproveModal: React.FC<Props> = ({
               </>
             ) : null}
           </Section>
+          ) : null}
 
           <div className="flex flex-col-reverse sm:flex-row gap-2 pt-1">
             <button

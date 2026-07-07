@@ -13,6 +13,7 @@ import {
 import { useStockfish } from '../hooks/useStockfish';
 import type { PvLine } from '../hooks/useStockfish';
 import { useApp } from '../AppContext';
+import { canShowStudentCounts } from '../lib/studentCountVisibility';
 import { getLiveLessonReadClient, getServiceSupabase, isSupabaseBackend } from '../services/supabase';
 import {
   mergeChatMessageLists,
@@ -61,9 +62,8 @@ import {
 } from '../lib/enginePvPreview';
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
 import { promoteVariationLines } from '../lib/studySync/moveList';
-import { studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { triggerWhatsAppAuto } from '../services/whatsappClient';
-import type { TrainingGroup } from '../types';
+import { normalizeSearchText, searchIncludesText } from '../lib/searchText';
 import Analysis from './Analysis';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -1867,7 +1867,8 @@ function ClassroomToggle({
 }
 
 const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: roomIdProp, studentId: studentIdProp }) => {
-  const { scopedStudents: students, puzzles, refreshStudentsFromSupabase, addAttendanceRecord, trainingGroups, showToast, confirmDialog, alertDialog } = useApp();
+  const { scopedStudents: students, puzzles, refreshStudentsFromSupabase, addAttendanceRecord, showToast, confirmDialog, alertDialog, auth } = useApp();
+  const showStudentCounts = canShowStudentCounts(auth);
   /** Admin: seçilen oda (null = sınıf listesi göster) */
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<LiveLessonRoom[]>([]);
@@ -1883,6 +1884,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   } | null>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
   const [inviteStudentsLoading, setInviteStudentsLoading] = useState(false);
+  const [inviteMode, setInviteMode] = useState<'groups' | 'students'>('groups');
+  const [inviteStudentSearch, setInviteStudentSearch] = useState('');
+  const [inviteSelectedGroups, setInviteSelectedGroups] = useState<string[]>([]);
+  const [showInviteStudentPicker, setShowInviteStudentPicker] = useState(false);
+  const [inviteStudentPickerSearch, setInviteStudentPickerSearch] = useState('');
+  const [inviteStudentPickerAddedCount, setInviteStudentPickerAddedCount] = useState(0);
   const [linkCopied, setLinkCopied] = useState(false);
   /** Oda silme onayı (native confirm yerine) */
   const [roomPendingDelete, setRoomPendingDelete] = useState<LiveLessonRoom | null>(null);
@@ -2058,14 +2065,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const schemaHasSessionMediaRef = useRef<boolean | null>(null);
   const schemaHasChatMessagesRef = useRef<boolean | null>(null);
   const schemaHasVariationsRef = useRef<boolean | null>(null);
-  const [coachSide, setCoachSide] = useState<CollaborativeBoardSide | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const stored = sessionStorage.getItem(COACH_SIDE_STORAGE_KEY);
-      if (stored === 'w' || stored === 'b' || stored === 'both') return stored;
-    } catch { /* ignore */ }
-    return null;
-  });
+  /** Oda bazlı; önceki oturumdan sessionStorage ile yüklenmez (yanlış taraf kilidi). */
+  const [coachSide, setCoachSide] = useState<CollaborativeBoardSide | null>(null);
   /** Klavye F: tahtayı yalnızca yerelde çevir (oturumdaki koç tarafı değişmez) */
   const [lessonBoardViewFlipped, setLessonBoardViewFlipped] = useState(false);
 
@@ -2765,6 +2766,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   useEffect(() => {
     setLessonRoomClosed(false);
     lessonExitTriggeredRef.current = false;
+    lastSyncRef.current = '';
+    lastAnnoSyncRef.current = '';
+    lastLocalMoveTimeRef.current = 0;
+    setReplayNavPly(null);
+    setCurrentVariation(null);
+    setHoverFen(null);
+    setMoveHintSquare(null);
   }, [effectiveRoomId]);
 
   useEffect(() => {
@@ -2811,28 +2819,101 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     );
   }, []);
 
-  const inviteTrainingGroups = useMemo(
-    () =>
-      [...trainingGroups].sort(
-        (a, b) =>
-          a.branchOffice.localeCompare(b.branchOffice, 'tr') ||
-          a.discipline.localeCompare(b.discipline, 'tr') ||
-          a.name.localeCompare(b.name, 'tr'),
-      ),
-    [trainingGroups],
-  );
+  const addInviteStudent = useCallback((studentId: string) => {
+    setInviteStudentIds((prev) => (prev.includes(studentId) ? prev : [...prev, studentId]));
+    setInviteStudentPickerAddedCount((count) => count + 1);
+  }, []);
 
-  const toggleInviteTrainingGroup = useCallback(
-    (group: TrainingGroup) => {
-      const ids = studentsInTrainingGroup(students, group).map((s) => s.id);
-      setInviteStudentIds((prev) => {
-        const allIn = ids.length > 0 && ids.every((id) => prev.includes(id));
-        if (allIn) return prev.filter((id) => !ids.includes(id));
-        return [...new Set([...prev, ...ids])];
-      });
-    },
+  const addInviteStudents = useCallback((studentIds: string[]) => {
+    setInviteStudentIds((prev) => [...new Set([...prev, ...studentIds])]);
+    setInviteStudentPickerAddedCount((count) => count + studentIds.length);
+  }, []);
+
+  const removeInviteStudent = useCallback((studentId: string) => {
+    setInviteStudentIds((prev) => prev.filter((id) => id !== studentId));
+  }, []);
+
+  const inviteSortedStudents = useMemo(
+    () => [...students].sort(
+      (a, b) =>
+        a.name.localeCompare(b.name, 'tr') ||
+        (a.group || '').localeCompare(b.group || '', 'tr'),
+    ),
     [students],
   );
+
+  const inviteGroupOptions = useMemo(() => {
+    const groups = new Map<string, Student[]>();
+    inviteSortedStudents.forEach((student) => {
+      const key = (student.group || 'Diğer / Grupsuz').trim() || 'Diğer / Grupsuz';
+      const existing = groups.get(key) ?? [];
+      existing.push(student);
+      groups.set(key, existing);
+    });
+    return [...groups.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'tr'))
+      .map(([groupName, groupStudents]) => ({ groupName, students: groupStudents }));
+  }, [inviteSortedStudents]);
+
+  const filteredInviteGroups = useMemo(() => {
+    const q = normalizeSearchText(inviteStudentSearch);
+    if (!q) return inviteGroupOptions;
+    return inviteGroupOptions.filter(({ groupName, students: groupStudents }) =>
+      searchIncludesText(groupName, q) ||
+      groupStudents.some((student) =>
+        searchIncludesText(student.name, q) ||
+        searchIncludesText(student.group, q) ||
+        searchIncludesText(String(student.id), q),
+      ),
+    );
+  }, [inviteGroupOptions, inviteStudentSearch]);
+
+  const inviteSelectedStudentObjects = useMemo(
+    () => inviteSortedStudents.filter((student) => inviteStudentIds.includes(student.id)),
+    [inviteSortedStudents, inviteStudentIds],
+  );
+
+  const inviteAvailableStudents = useMemo(
+    () => inviteSortedStudents.filter((student) => !inviteStudentIds.includes(student.id)),
+    [inviteSortedStudents, inviteStudentIds],
+  );
+
+  const filteredInviteAvailableStudents = useMemo(() => {
+    const q = normalizeSearchText(inviteStudentPickerSearch);
+    if (!q) return inviteAvailableStudents;
+    return inviteAvailableStudents.filter((student) =>
+      searchIncludesText(student.name, q) ||
+      searchIncludesText(student.group, q) ||
+      searchIncludesText(String(student.id), q),
+    );
+  }, [inviteAvailableStudents, inviteStudentPickerSearch]);
+
+  const inviteAvailableStudentsByGroup = useMemo(() => {
+    const groups = new Map<string, Student[]>();
+    filteredInviteAvailableStudents.forEach((student) => {
+      const key = (student.group || 'Diğer / Grupsuz').trim() || 'Diğer / Grupsuz';
+      const existing = groups.get(key) ?? [];
+      existing.push(student);
+      groups.set(key, existing);
+    });
+    return [...groups.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'tr'))
+      .map(([groupName, groupStudents]) => ({ groupName, students: groupStudents }));
+  }, [filteredInviteAvailableStudents]);
+
+  const toggleInviteGroup = useCallback((groupName: string) => {
+    const match = inviteGroupOptions.find((group) => group.groupName === groupName);
+    if (!match) return;
+    const ids = match.students.map((student) => student.id);
+    const removing = inviteSelectedGroups.includes(groupName);
+    setInviteSelectedGroups((prev) =>
+      removing ? prev.filter((name) => name !== groupName) : [...prev, groupName]
+    );
+    setInviteStudentIds((prev) => {
+      if (removing) return prev.filter((id) => !ids.includes(id));
+      return [...new Set([...prev, ...ids])];
+    });
+  }, [inviteGroupOptions, inviteSelectedGroups]);
 
   const buildStudentInviteUrl = useCallback((roomId: string) => {
     if (typeof window === 'undefined') return '';
@@ -3248,7 +3329,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setSelectedRoomId(id);
       setShowNewRoomModal(false);
       setNewRoomName('');
+      setInviteStudentSearch('');
+      setInviteStudentPickerSearch('');
+      setInviteStudentPickerAddedCount(0);
+      setShowInviteStudentPicker(false);
+      setInviteMode('groups');
+      setInviteSelectedGroups([]);
       setInviteFollowUp({ roomId: id, roomName: String(payload.room_name), invitedStudentIds: invited });
+      setCoachSide('both');
+      try {
+        sessionStorage.setItem(COACH_SIDE_STORAGE_KEY, 'both');
+      } catch {
+        /* ignore */
+      }
       setInviteStudentIds([]);
       const lessonUrl = `${window.location.origin}${window.location.pathname}#/canli-ders?room=${encodeURIComponent(id)}`;
       for (const studentId of invited) {
@@ -3804,6 +3897,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
   }, [isStudentView, classroomRosterStudents, pushSessionMediaRemote]);
 
+  const grantDefaultStudentPlaySide = useCallback(
+    (prev: SessionMediaState, studentIds: string[]): Record<string, PlayBoardSide> => {
+      const playSides = { ...(prev.studentPlaySides ?? {}) };
+      for (const raw of studentIds) {
+        const sid = normalizeStudentId(raw);
+        if (!sid || playSides[sid] != null) continue;
+        playSides[sid] = 'both';
+      }
+      return playSides;
+    },
+    [],
+  );
+
   const admitStudentToClass = useCallback(
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
@@ -3816,10 +3922,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         pendingStudentIds: pending,
         admittedStudentIds: admitted,
         attendanceMarks: marks,
+        studentPlaySides: grantDefaultStudentPlaySide(prev, [id]),
       });
       recordLiveAttendance(id);
     },
-    [isStudentView, pushSessionMediaRemote, recordLiveAttendance],
+    [isStudentView, pushSessionMediaRemote, recordLiveAttendance, grantDefaultStudentPlaySide],
   );
 
   const admitAllPendingStudents = useCallback(() => {
@@ -3836,9 +3943,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       pendingStudentIds: [],
       admittedStudentIds: admitted,
       attendanceMarks: marks,
+      studentPlaySides: grantDefaultStudentPlaySide(prev, pending),
     });
     pending.forEach((id) => recordLiveAttendance(id));
-  }, [isStudentView, pushSessionMediaRemote, recordLiveAttendance]);
+  }, [isStudentView, pushSessionMediaRemote, recordLiveAttendance, grantDefaultStudentPlaySide]);
 
   useEffect(() => {
     if (!isStudentView || showClassList || !isSupabaseBackend()) return;
@@ -3863,6 +3971,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         admittedStudentIds: nextAdmitted,
         pendingStudentIds: nextPending,
         attendanceMarks: marks,
+        studentPlaySides: grantDefaultStudentPlaySide(prev, [sid]),
       });
       recordLiveAttendance(sid);
       return;
@@ -3888,6 +3997,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     pushSessionMediaRemote,
     recordLiveAttendance,
     effectiveRoomId,
+    grantDefaultStudentPlaySide,
   ]);
 
   useEffect(() => {
@@ -5220,17 +5330,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (!square || !liveLessonPieceEligibleForMoveHints(square, piece, !!isSparePiece)) return;
       setMoveHintSquare(square);
     },
-    onPieceDrop: (src: unknown, tgt: unknown, p: unknown) => {
-      const { sourceSquare, targetSquare } = pickDropArgs(src, tgt);
+    onPieceDrop: (args: unknown) => {
+      const { sourceSquare, targetSquare } = pickDropArgs(args, undefined);
       if (!sourceSquare) return false;
       if (!targetSquare) {
         setMoveHintSquare(null);
         return false;
       }
-      const ok = onPieceDrop(sourceSquare, targetSquare, p);
+      const ok = onPieceDrop(sourceSquare, targetSquare);
       if (!ok) setMoveHintSquare(null);
       return ok;
     },
+    allowDragging:
+      (isStudentView ? playSide != null : drawingTool === 'mouse') && boardExploreMode,
     onPieceClick: ({
       piece,
       square,
@@ -5289,10 +5401,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         return next;
       });
     },
-    arePiecesDraggable:
-      (isStudentView
-        ? playSide != null
-        : drawingTool === 'mouse') && boardExploreMode,
     allowDrawingArrows: liveLessonDrawArrowsEnabled,
     arrows: boardArrowsToShow,
     clearArrowsOnPositionChange: false,
@@ -5487,9 +5595,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   <Users className="w-4 h-4 text-indigo-400/80" />
                   <span className="text-[10px] font-semibold uppercase tracking-wide">Çevrimiçi öğrenciler</span>
                 </div>
-                <span className="px-2.5 py-1 rounded-lg bg-indigo-500/15 text-indigo-300 text-xs font-bold tabular-nums">
-                  {students.length}
-                </span>
+                {showStudentCounts ? (
+                  <span className="px-2.5 py-1 rounded-lg bg-indigo-500/15 text-indigo-300 text-xs font-bold tabular-nums">
+                    {students.length}
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -5518,11 +5628,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
         {/* New Room Modal - Chess.com Style */}
         {showNewRoomModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl animate-in fade-in" onClick={() => setShowNewRoomModal(false)}>
+          <>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl animate-in fade-in" onClick={() => { setShowNewRoomModal(false); setInviteStudentSearch(''); setInviteStudentPickerSearch(''); setInviteStudentPickerAddedCount(0); setShowInviteStudentPicker(false); setInviteMode('groups'); }}>
             <div className="w-full max-w-md bg-[#1e293b] rounded-2xl border border-white/[0.08] shadow-[0_24px_80px_rgba(0,0,0,0.55)] overflow-hidden animate-in zoom-in-95 atmospheric-bg" onClick={e => e.stopPropagation()}>
               <div className="p-6 border-b border-white/[0.06] flex items-center justify-between bg-slate-900/40">
                  <h3 className="text-lg font-bold text-white">Sınıf Oluştur</h3>
-                 <button onClick={() => setShowNewRoomModal(false)} className="p-2 rounded-lg text-slate-500 hover:text-white hover:bg-white/5 transition-colors"><X className="w-5 h-5" /></button>
+                 <button onClick={() => { setShowNewRoomModal(false); setInviteStudentSearch(''); setInviteStudentPickerSearch(''); setInviteStudentPickerAddedCount(0); setShowInviteStudentPicker(false); setInviteMode('groups'); }} className="p-2 rounded-lg text-slate-500 hover:text-white hover:bg-white/5 transition-colors"><X className="w-5 h-5" /></button>
               </div>
               <div className="p-6 space-y-5">
                  <div>
@@ -5534,41 +5645,184 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Katılımcı daveti</label>
                        <button type="button" onClick={() => refreshStudentsFromSupabase()} className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 uppercase">Yenile</button>
                     </div>
-                    {inviteTrainingGroups.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5 mb-3">
-                        {inviteTrainingGroups.map((g) => {
-                          const groupStudents = studentsInTrainingGroup(students, g);
-                          const ids = groupStudents.map((s) => s.id);
-                          const allSelected = ids.length > 0 && ids.every((id) => inviteStudentIds.includes(id));
-                          return (
-                            <button
-                              key={g.id}
-                              type="button"
-                              onClick={() => toggleInviteTrainingGroup(g)}
-                              title={`${g.discipline} · ${g.branchOffice}`}
-                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all ${
-                                allSelected
-                                  ? 'bg-indigo-600/25 text-indigo-200 border-indigo-500/40'
-                                  : 'bg-slate-800/60 text-slate-400 border-white/10 hover:border-indigo-500/30'
-                              }`}
-                            >
-                              {g.name} ({groupStudents.length})
-                            </button>
-                          );
-                        })}
+                    <div className="space-y-3">
+                      <div className="flex bg-black/30 p-1 rounded-lg w-full sm:w-fit">
+                        <button
+                          type="button"
+                          onClick={() => setInviteMode('groups')}
+                          className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${inviteMode === 'groups' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                          Gruplara Ata
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInviteMode('students')}
+                          className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${inviteMode === 'students' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                          Öğrencilere Ata
+                        </button>
                       </div>
-                    ) : (
-                      <p className="text-[10px] text-slate-500 mb-3 leading-snug">
-                        Henüz eğitim grubu yok. Branş–Grup sayfasından grup ekleyin.
-                      </p>
-                    )}
-                    <div className="max-h-40 overflow-y-auto rounded-xl border border-white/[0.06] bg-[#0f172a]/60 custom-scrollbar divide-y divide-white/[0.04]">
-                       {students.map(s => (
-                         <label key={s.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-indigo-500/[0.06] cursor-pointer transition-colors group">
-                            <input type="checkbox" checked={inviteStudentIds.includes(s.id)} onChange={() => toggleInviteStudent(s.id)} className="w-4 h-4 rounded border-slate-600 bg-[#0f172a] text-indigo-600 focus:ring-indigo-500/30" />
-                            <span className="text-sm font-medium text-slate-300 group-hover:text-white">{s.name}</span>
-                         </label>
-                       ))}
+                      <div className="bg-black/20 border border-white/10 rounded-lg p-4 space-y-2">
+                        {inviteMode === 'groups' ? (
+                          <>
+                            <div className="relative">
+                              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                              <input
+                                value={inviteStudentSearch}
+                                onChange={(e) => setInviteStudentSearch(e.target.value)}
+                                placeholder="Öğrenci veya grup ara..."
+                                className="w-full rounded-xl border border-white/10 bg-slate-900/70 py-2.5 pl-10 pr-3 text-sm font-medium text-white placeholder:text-slate-500 outline-none focus:border-indigo-500/40"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between px-1">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                Gruplar
+                              </p>
+                              <span className="text-[10px] font-bold text-indigo-300">
+                                {inviteStudentIds.length} seçili
+                              </span>
+                            </div>
+                            <div className="max-h-64 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                              {inviteStudentsLoading ? (
+                                <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-white/10 bg-slate-900/30 px-3 py-8 text-xs text-slate-500">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  Öğrenciler yükleniyor...
+                                </div>
+                              ) : filteredInviteGroups.length === 0 ? (
+                                <div className="rounded-lg border border-dashed border-white/10 bg-slate-900/30 px-3 py-8 text-center text-[11px] text-slate-500">
+                                  Aramaya uygun grup veya öğrenci bulunamadı.
+                                </div>
+                              ) : filteredInviteGroups.map(({ groupName, students: groupStudents }) => {
+                                const selected = inviteSelectedGroups.includes(groupName);
+                                const selectedCount = groupStudents.filter((student) => inviteStudentIds.includes(student.id)).length;
+                                const normalizedSearch = normalizeSearchText(inviteStudentSearch);
+                                const visibleStudents = !normalizedSearch
+                                  ? groupStudents
+                                  : groupStudents.filter((student) =>
+                                      searchIncludesText(student.name, normalizedSearch) ||
+                                      searchIncludesText(String(student.id), normalizedSearch),
+                                    );
+                                return (
+                                  <div key={groupName} className="space-y-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleInviteGroup(groupName)}
+                                      className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
+                                        selected
+                                          ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30'
+                                          : 'bg-slate-800/60 text-slate-300 border border-transparent hover:border-white/10'
+                                      }`}
+                                    >
+                                      <span className="truncate">{groupName}</span>
+                                      <span className={`shrink-0 text-[10px] ${selected ? 'text-indigo-200' : 'text-slate-500'}`}>
+                                        {selectedCount}/{groupStudents.length}
+                                      </span>
+                                    </button>
+                                    {selected ? (
+                                      <div className="rounded-xl border border-indigo-500/15 bg-indigo-500/5 p-2.5">
+                                        <div className="flex items-center justify-between gap-2 px-1 pb-2">
+                                          <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300 truncate">
+                                            {groupName}
+                                          </span>
+                                          <span className="text-[10px] text-slate-500 font-bold">
+                                            {showStudentCounts ? `${selectedCount}/${groupStudents.length} öğrenci` : 'Seçili öğrenciler'}
+                                          </span>
+                                        </div>
+                                        <div className="space-y-1 max-h-44 overflow-y-auto pr-1 custom-scrollbar">
+                                          {visibleStudents.length === 0 ? (
+                                            <div className="rounded-lg border border-dashed border-white/10 bg-slate-900/30 px-3 py-4 text-center text-[11px] text-slate-500">
+                                              Aramaya uygun öğrenci bulunamadı.
+                                            </div>
+                                          ) : visibleStudents.map((student) => {
+                                            const studentSelected = inviteStudentIds.includes(student.id);
+                                            return (
+                                              <button
+                                                key={student.id}
+                                                type="button"
+                                                onClick={() => toggleInviteStudent(student.id)}
+                                                className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left border transition-all ${
+                                                  studentSelected
+                                                    ? 'bg-indigo-600/10 border-indigo-500/20 text-white'
+                                                    : 'bg-slate-900/40 border-transparent text-slate-300 hover:border-white/10 hover:bg-white/[0.03]'
+                                                }`}
+                                              >
+                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black shrink-0 ${
+                                                  studentSelected
+                                                    ? 'bg-indigo-500/20 text-indigo-200'
+                                                    : 'bg-slate-800 text-slate-400'
+                                                }`}>
+                                                  {student.name.charAt(0)}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                  <p className={`text-xs font-bold truncate ${studentSelected ? 'text-white' : 'text-slate-200'}`}>
+                                                    {student.name}
+                                                  </p>
+                                                  <p className="text-[10px] text-slate-500 truncate">{student.group || 'Grupsuz'}</p>
+                                                </div>
+                                                <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 border ${
+                                                  studentSelected
+                                                    ? 'border-indigo-400 bg-indigo-500/20 text-indigo-200'
+                                                    : 'border-white/10 text-slate-600'
+                                                }`}>
+                                                  {studentSelected ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                                                </div>
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">
+                                Seçilen öğrenciler ({inviteSelectedStudentObjects.length})
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => { setInviteStudentPickerAddedCount(0); setShowInviteStudentPicker(true); }}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600/20 text-indigo-300 text-[10px] font-black uppercase tracking-wider hover:bg-indigo-600/30"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                Öğrenci Ekle
+                              </button>
+                            </div>
+                            <div className="max-h-52 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                              {inviteSelectedStudentObjects.length === 0 ? (
+                                <div className="rounded-lg border border-dashed border-white/10 bg-slate-900/30 px-3 py-6 text-center text-[11px] text-slate-500">
+                                  Henüz öğrenci seçilmedi.
+                                </div>
+                              ) : inviteSelectedStudentObjects.map((student) => (
+                                <div
+                                  key={student.id}
+                                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg bg-indigo-600/10 text-slate-200 border border-indigo-500/20"
+                                >
+                                  <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-black text-slate-300 text-xs shrink-0">
+                                    {student.name.charAt(0)}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <span className="block truncate text-xs font-bold">{student.name}</span>
+                                    <span className="text-[10px] text-slate-500">{student.group || 'Grupsuz'}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeInviteStudent(student.id)}
+                                    className="p-1.5 rounded-lg text-slate-500 hover:text-rose-300 hover:bg-rose-500/10 shrink-0"
+                                    title="Öğrenciyi çıkar"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                  </div>
               </div>
@@ -5577,6 +5831,81 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </div>
             </div>
           </div>
+          {inviteMode === 'students' && showInviteStudentPicker && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl animate-in fade-in" onClick={() => { setShowInviteStudentPicker(false); setInviteStudentPickerSearch(''); setInviteStudentPickerAddedCount(0); }}>
+              <div className="bg-[#15181c] border border-white/10 rounded-3xl shadow-3xl w-full max-w-sm overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                <div className="p-6 border-b border-white/5 bg-slate-900/50 flex items-center justify-between">
+                  <h3 className="font-black text-white text-lg uppercase tracking-tight">Öğrenci Ekle</h3>
+                  <button type="button" onClick={() => { setShowInviteStudentPicker(false); setInviteStudentPickerSearch(''); setInviteStudentPickerAddedCount(0); }} className="text-slate-500 hover:text-white"><X className="w-6 h-6" /></button>
+                </div>
+                <div className="p-2 max-h-80 overflow-y-auto custom-scrollbar space-y-4">
+                  <div className="px-2 pt-2">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                      <input
+                        value={inviteStudentPickerSearch}
+                        onChange={(e) => setInviteStudentPickerSearch(e.target.value)}
+                        placeholder="Öğrenci ara..."
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 py-2.5 pl-10 pr-3 text-sm font-medium text-white placeholder:text-slate-500 outline-none focus:border-indigo-500/40"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <p className="px-2 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">Öğrenciler (Gruplara Göre)</p>
+                    <div className="space-y-3">
+                      {inviteAvailableStudentsByGroup.map(({ groupName, students: groupStudents }) => (
+                        <div key={groupName} className="border border-white/5 rounded-2xl p-2.5 bg-slate-900/30">
+                          <div className="flex items-center justify-between px-1.5 pb-2 border-b border-white/5">
+                            <span className="text-[11px] font-black text-teal-400 uppercase tracking-wider truncate max-w-[180px]">
+                              {groupName} ({groupStudents.length})
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => addInviteStudents(groupStudents.map((student) => student.id))}
+                              className="px-2.5 py-1 rounded bg-teal-500/20 text-teal-300 text-[9px] font-black uppercase hover:bg-teal-500 hover:text-black transition-all active:scale-95 shadow-sm"
+                            >
+                              Hepsini Ekle
+                            </button>
+                          </div>
+                          <div className="space-y-1 mt-2">
+                            {groupStudents.map((student) => (
+                              <button
+                                key={student.id}
+                                type="button"
+                                onClick={() => addInviteStudent(student.id)}
+                                className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-teal-500/10 group transition-all text-left"
+                              >
+                                <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-black text-slate-400 group-hover:bg-teal-500 group-hover:text-black transition-all text-xs shrink-0">
+                                  {student.name.charAt(0)}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-bold text-white leading-tight truncate">{student.name}</p>
+                                  <p className="text-[9px] text-slate-600 font-mono leading-none mt-0.5">#{student.id}</p>
+                                </div>
+                                <Plus className="w-3.5 h-3.5 text-slate-700 group-hover:text-teal-400 shrink-0" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {filteredInviteAvailableStudents.length === 0 && (
+                      <p className="text-center py-12 text-[11px] text-slate-600 italic">Eklenebilecek öğrenci kalmadı.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="p-4 border-t border-white/5 bg-black/40">
+                  <div className="space-y-3">
+                    <p className="text-center text-[11px] font-medium text-slate-500">
+                      {inviteStudentPickerAddedCount > 0 ? `${inviteStudentPickerAddedCount} öğrenci eklendi.` : 'Henüz öğrenci eklenmedi.'}
+                    </p>
+                    <button type="button" onClick={() => { setShowInviteStudentPicker(false); setInviteStudentPickerSearch(''); setInviteStudentPickerAddedCount(0); }} className="w-full py-3 rounded-xl bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 font-bold text-xs uppercase tracking-widest transition-all">Tamam</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          </>
         )}
       </div>
     );
@@ -7488,13 +7817,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
       {/* ── ÇALIŞMAYA KAYDET MODAL ───────────────────────────────────────── */}
       {showStudyExportModal && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
+        <div className="modal-overlay z-[110] animate-in fade-in duration-200">
           <div
             className="absolute inset-0 bg-black/80 backdrop-blur-xl"
             onClick={closeStudyExportModal}
           />
           <div
-            className="relative w-full max-w-4xl max-h-[90vh] bg-[#1e293b]/95 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[0_24px_80px_rgba(0,0,0,0.55)] overflow-hidden flex flex-col animate-in zoom-in-95 duration-300 atmospheric-bg"
+            className="modal-panel relative w-full max-w-4xl bg-[#1e293b]/95 backdrop-blur-2xl rounded-t-2xl sm:rounded-2xl border border-white/[0.08] shadow-[0_24px_80px_rgba(0,0,0,0.55)] overflow-hidden flex flex-col animate-in zoom-in-95 duration-300 atmospheric-bg"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-6 sm:px-8 pt-6 pb-4 flex items-start justify-between gap-4 border-b border-white/5 bg-black/20">
@@ -7523,7 +7852,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-6 sm:px-8 py-6 space-y-6 custom-scrollbar">
+            <div className="modal-scroll-body px-6 sm:px-8 py-6 space-y-6 custom-scrollbar">
               {fetchingStudies ? (
                 <div className="flex flex-col items-center justify-center gap-3 py-20 text-slate-400 text-sm">
                   <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />

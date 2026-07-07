@@ -47,6 +47,8 @@ export const PARENT_DEFAULT_PERMISSIONS = [
   'messages',
   'gallery',
   'schedule',
+  'analyses',
+  'private-lesson',
   'payments',
   'dues',
   'attendance',
@@ -197,9 +199,9 @@ export function sanitizePermissionsForRole(panel: RolePanel, keys: string[]): st
   return keys.filter((k) => allowed.has(k));
 }
 
-/** Kulübün antrenörüne verebileceği menü izinleri (antrenör paneli). */
+/** Kulübün antrenörüne verebileceği menü izinleri (yönetim + antrenör + kulüp menüleri). */
 export function coachGrantablePermissionDefs(): PermissionDef[] {
-  return mergePermissionDefs(permissionsForPanel('coach'), EXTRA_COACH);
+  return permissionsForRoleEditor('club');
 }
 
 export function groupedCoachGrantablePermissions(): [string, PermissionDef[]][] {
@@ -301,7 +303,16 @@ export function mergeNavForPermissions(allowed: Set<string>, catalogs: NavCatego
     }
   }
 
-  return merged.filter((cat) => cat.items.length > 0);
+  const filtered = merged.filter((cat) => cat.items.length > 0);
+  const studentIdx = filtered.findIndex((cat) => cat.title === 'Öğrenci İşleri');
+  const educationIdx = filtered.findIndex((cat) => cat.title === 'Eğitim & İçerik');
+  if (studentIdx >= 0 && educationIdx >= 0 && educationIdx !== studentIdx + 1) {
+    const next = filtered.slice();
+    const [education] = next.splice(educationIdx, 1);
+    if (education) next.splice(studentIdx + 1, 0, education);
+    return next;
+  }
+  return filtered;
 }
 
 export function clubNavForPermissions(allowed: Set<string>): NavCategory[] {
@@ -457,7 +468,13 @@ export function getPermissionsForAuth(
 
   if (roleId in rolePermissionMap) {
     const keys = rolePermissionMap[roleId];
-    if (keys.length > 0) return new Set(keys);
+    if (keys.length > 0) {
+      const set = new Set(keys);
+      if (auth.role === 'parent') {
+        defaultPermissionsForRole('parent').forEach((k) => set.add(k));
+      }
+      return set;
+    }
     if (!customRoleId || customRoleId === systemRoleId) return new Set(keys);
   }
 

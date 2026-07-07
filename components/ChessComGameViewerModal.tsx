@@ -155,14 +155,14 @@ const ChessComGameViewerModal: React.FC<{
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-sm"
+      className="modal-overlay z-[200]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="chesscom-viewer-title"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-4xl max-h-[96vh] overflow-hidden rounded-2xl border border-slate-600/60 bg-slate-900 shadow-2xl flex flex-col"
+        className="modal-panel relative w-full max-w-4xl overflow-hidden rounded-t-2xl sm:rounded-2xl border border-slate-600/60 bg-slate-900 shadow-2xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 px-4 py-3 sm:px-5 sm:py-4 border-b border-slate-700/80 shrink-0">
@@ -197,7 +197,7 @@ const ChessComGameViewerModal: React.FC<{
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-5">
+        <div className="modal-scroll-body p-4 md:p-5">
           {!rawPgn && <div className="py-12 text-center text-slate-400 text-sm">Bu kayıtta PGN bulunamadı.</div>}
 
           {is960 && (

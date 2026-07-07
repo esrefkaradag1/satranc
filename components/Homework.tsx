@@ -10,6 +10,7 @@ import {
   Search, CheckCircle2, CircleDashed,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
+import { canShowStudentCounts } from '../lib/studentCountVisibility';
 import { analyzeStudentHomework } from '../services/geminiService';
 import { resolveHomeworkAssignees } from '../homeworkUtils';
 import type { HomeworkAssignment, Student, Puzzle, StudentDailyTarget } from '../types';
@@ -46,6 +47,7 @@ import {
   readCoachPlatformCache,
   writeCoachPlatformCache,
 } from '../lib/homeworkPlatformCache';
+import { normalizeSearchText, searchIncludesText } from '../lib/searchText';
 import {
   buildInternalHomeworkStats,
   buildPlatformHomeworkStats,
@@ -55,7 +57,7 @@ import {
   resolveProgramDailyTarget,
   type PlatformStudentStat,
 } from '../lib/homeworkStatsBuilders';
-import { isToday, todayDayKey, weekdayKeyFromIso, mondayOfWeek, isoDateForWeekday, type DayCompletionStatus } from '../lib/homeworkDayUtils';
+import { isToday, todayDayKey, weekdayKeyFromIso, mondayOfWeek, isoDateForWeekday, resolveDayCompletionStatus, type DayCompletionStatus } from '../lib/homeworkDayUtils';
 import { puzzleBoardOrientationForFen, puzzleBoardOrientationForStudent, formatPuzzleHintText, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
 
 /** Platform API otomatik kontrol aralığı (manuel yenileme sonrası / sekme açıkken) */
@@ -136,8 +138,9 @@ const Homework: React.FC = () => {
     scopedStudents: students, scopedHomeworks: homeworks, puzzles, homeworkAttempts, homeworkSubmissions,
     addHomework, updateHomework, deleteHomework, refreshFromStorage,
     resetHomeworkAttemptsForStudent, removeHomeworkSubmission,
-    branchOffices, disciplineBranches, trainingGroups, showToast, confirmDialog,
+    branchOffices, disciplineBranches, trainingGroups, showToast, confirmDialog, auth,
   } = useApp();
+  const showStudentCounts = canShowStudentCounts(auth);
   const ALL_HOMEWORKS_ID = '__all__';
   const [selectedHwId, setSelectedHwId] = useState<string>(ALL_HOMEWORKS_ID);
   const [showHwPicker, setShowHwPicker] = useState(false);
@@ -175,9 +178,14 @@ const Homework: React.FC = () => {
   const [assignDueDate, setAssignDueDate] = useState('');
   const [assignMode, setAssignMode] = useState<'groups' | 'students'>('groups');
   const [assignSelectedGroups, setAssignSelectedGroups] = useState<string[]>([]);
+  const [assignExcludedStudentIds, setAssignExcludedStudentIds] = useState<string[]>([]);
+  const [assignGroupSearches, setAssignGroupSearches] = useState<Record<string, string>>({});
   const [assignSelectedStudents, setAssignSelectedStudents] = useState<string[]>([]);
   const [assignSelectedPuzzles, setAssignSelectedPuzzles] = useState<string[]>([]);
   const [assignPuzzleSearch, setAssignPuzzleSearch] = useState('');
+  const [showAssignStudentPicker, setShowAssignStudentPicker] = useState(false);
+  const [assignStudentPickerSearch, setAssignStudentPickerSearch] = useState('');
+  const [assignStudentPickerAddedCount, setAssignStudentPickerAddedCount] = useState(0);
   const [assignWeeklyEditId, setAssignWeeklyEditId] = useState<string | null>(null);
   const [assignGoalTab, setAssignGoalTab] = useState<'daily' | 'weekly'>('weekly');
   const [assignFieldErrors, setAssignFieldErrors] = useState<{ title?: string; targets?: string; goals?: string; puzzles?: string }>({});
@@ -190,15 +198,17 @@ const Homework: React.FC = () => {
   const [programSelectedHwId, setProgramSelectedHwId] = useState<string | null>(null);
   const [programDetailStat, setProgramDetailStat] = useState<PlatformStudentStat | null>(null);
   const [viewDate, setViewDate] = useState(() => todayDayKey());
+  const [dayCloseClock, setDayCloseClock] = useState(() => Date.now());
   const [analysisView, setAnalysisView] = useState<'list' | 'detail'>('list');
 
   useEffect(() => {
     const tick = () => {
       const today = todayDayKey();
       setViewDate((prev) => (isToday(prev) ? today : prev));
+      setDayCloseClock(Date.now());
     };
     tick();
-    const id = window.setInterval(tick, 60_000);
+    const id = window.setInterval(tick, 30_000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -288,8 +298,50 @@ const Homework: React.FC = () => {
   }, [selectedHwId, homeworks]);
 
   const studentGroups = useMemo(
-    () => [...new Set(students.map((s) => s.group).filter(Boolean))].sort(),
+    () => [...new Set(students.map((s) => s.group).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'tr')),
     [students]
+  );
+
+  const assignSelectedStudentObjects = useMemo(
+    () => students
+      .filter((s) => assignSelectedStudents.includes(s.id))
+      .sort((a, b) => a.name.localeCompare(b.name, 'tr')),
+    [students, assignSelectedStudents],
+  );
+
+  const assignAvailableStudents = useMemo(
+    () => students
+      .filter((s) => !assignSelectedStudents.includes(s.id))
+      .sort((a, b) => a.name.localeCompare(b.name, 'tr')),
+    [students, assignSelectedStudents],
+  );
+
+  const filteredAssignAvailableStudents = useMemo(() => {
+    const q = normalizeSearchText(assignStudentPickerSearch);
+    if (!q) return assignAvailableStudents;
+    return assignAvailableStudents.filter((s) =>
+      searchIncludesText(s.name, q) ||
+      searchIncludesText(s.group, q) ||
+      searchIncludesText(String(s.id), q),
+    );
+  }, [assignAvailableStudents, assignStudentPickerSearch]);
+
+  const assignAvailableStudentsByGroup = useMemo(() => {
+    const groups = new Map<string, Student[]>();
+    filteredAssignAvailableStudents.forEach((student) => {
+      const key = (student.group || 'Diğer / Grupsuz').trim() || 'Diğer / Grupsuz';
+      const existing = groups.get(key) ?? [];
+      existing.push(student);
+      groups.set(key, existing);
+    });
+    return [...groups.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'tr'))
+      .map(([groupName, groupStudents]) => ({ groupName, students: groupStudents }));
+  }, [filteredAssignAvailableStudents]);
+
+  const assignExcludedStudentIdSet = useMemo(
+    () => new Set(assignExcludedStudentIds),
+    [assignExcludedStudentIds],
   );
 
   const getAssignees = useCallback((hw: HomeworkAssignment): Student[] => {
@@ -319,6 +371,16 @@ const Homework: React.FC = () => {
   const totalPoints = useMemo(() => hwPuzzles.reduce((s, p) => s + p.points, 0), [hwPuzzles]);
 
   const assignees = useMemo(() => selectedHw ? getAssignees(selectedHw) : [], [selectedHw, getAssignees]);
+
+  const buildStatsForHomework = useCallback((hw: HomeworkAssignment) => {
+    return buildInternalHomeworkStats(
+      hw,
+      getAssignees(hw),
+      homeworkAttempts,
+      homeworkSubmissions,
+      puzzles,
+    );
+  }, [getAssignees, homeworkAttempts, homeworkSubmissions, puzzles]);
 
   const programSelectedHw = useMemo(() => {
     if (!programSelectedHwId) return null;
@@ -416,17 +478,8 @@ const Homework: React.FC = () => {
 
       const timePatch: Record<string, Record<string, number>> = {};
       for (const s of scopeAssignees) {
-        const target = hw.studentDailyTargets?.[s.id];
-        const currentDayKey = weekdayKeyFromIso(dateKey);
-        const dayTarget = target?.weeklySchedule?.[currentDayKey];
-        const dailyGameTarget = Math.max(0, dayTarget?.dailyGameTarget ?? target?.dailyGameTarget ?? hw.dailyGameTarget ?? 0);
-        const dailyPuzzleTarget = Math.max(0, dayTarget?.dailyPuzzleTarget ?? target?.dailyPuzzleTarget ?? hw.dailyPuzzleTarget ?? 0);
-        if (dailyGameTarget <= 0 && dailyPuzzleTarget <= 0) continue;
         try {
-          const sec = await fetchStudentPlatformActivityTimeSeconds(s, dateKey, {
-            puzzleTarget: dailyPuzzleTarget,
-            gameTarget: dailyGameTarget,
-          });
+          const sec = await fetchStudentPlatformActivityTimeSeconds(s, dateKey);
           const prevSec = studentPlatformWeekTimeSecondsRef.current[s.id]?.[dateKey];
           timePatch[s.id] = {
             [dateKey]: mergePlatformActivitySeconds(prevSec, sec),
@@ -545,6 +598,7 @@ const Homework: React.FC = () => {
     viewDate,
     viewDatePlatformStats,
     viewDatePlatformTimeSeconds,
+    dayCloseClock,
   ]);
 
   const liveProgramDetailStat = useMemo(() => {
@@ -624,8 +678,8 @@ const Homework: React.FC = () => {
   const displayStats = useMemo(() => {
     let list = filteredStats;
     if (statusFilter !== 'all') list = list.filter((s) => s.status === statusFilter);
-    const q = studentSearch.trim().toLowerCase();
-    if (q) list = list.filter((s) => s.name.toLowerCase().includes(q));
+    const q = normalizeSearchText(studentSearch);
+    if (q) list = list.filter((s) => searchIncludesText(s.name, q));
     return list;
   }, [filteredStats, statusFilter, studentSearch]);
 
@@ -634,6 +688,7 @@ const Homework: React.FC = () => {
     completed: filteredStats.filter((s) => s.status === 'Tamamlandı').length,
     inProgress: filteredStats.filter((s) => s.status === 'Devam Ediyor').length,
     notStarted: filteredStats.filter((s) => s.status === 'Başlamadı').length,
+    missed: filteredStats.filter((s) => s.status === 'Yapılmadı').length,
     avgProgress: filteredStats.length
       ? Math.round(filteredStats.reduce((sum, st) => sum + st.progress, 0) / filteredStats.length)
       : 0,
@@ -715,7 +770,6 @@ const Homework: React.FC = () => {
     const studentId = programStudentId ?? programStudents[0]?.id;
     if (!studentId) return {};
     const draft = dailyTargetDrafts[studentId] ?? {};
-    const today = todayDayKey();
     const monday = mondayOfWeek();
     const out: Record<number, DayCompletionStatus> = {};
     for (let day = 1; day <= 7; day++) {
@@ -725,17 +779,12 @@ const Homework: React.FC = () => {
         continue;
       }
       const iso = isoDateForWeekday(monday, day);
-      const isFuture = iso > today;
       const platform = programPlatformForDay(studentId, iso);
       const goalEval = evaluatePlatformDayGoalsFromStats(gameTarget, puzzleTarget, minAccuracy, platform);
-      const { done } = goalEval;
-      if (isFuture) out[day] = 'pending';
-      else if (done) out[day] = 'done';
-      else if (iso === today) out[day] = 'pending';
-      else out[day] = 'missed';
+      out[day] = resolveDayCompletionStatus(iso, goalEval.done);
     }
     return out;
-  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, programPlatformForDay]);
+  }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, programPlatformForDay, dayCloseClock]);
 
   const programDayProgress = useMemo(() => {
     if (!programHomework) return {};
@@ -854,16 +903,17 @@ const Homework: React.FC = () => {
       }
       return next;
     });
-    showToast(`Hedefler ${programStudents.length} öğrenciye kopyalandı. Kaydetmeyi unutmayın.`, 'success');
+    showToast(`Hedefler ${showStudentCounts ? `${programStudents.length} öğrenciye` : 'gruba'} kopyalandı. Kaydetmeyi unutmayın.`, 'success');
   }, [dailyTargetDrafts, programStudents, showToast]);
 
   const summary = useMemo(() => {
     const completed = effectiveStats.filter(s => s.status === 'Tamamlandı').length;
     const inProgress = effectiveStats.filter(s => s.status === 'Devam Ediyor').length;
     const notStarted = effectiveStats.filter(s => s.status === 'Başlamadı').length;
+    const missed = effectiveStats.filter(s => s.status === 'Yapılmadı').length;
     const avgPoints = effectiveStats.length > 0 ? Math.round(effectiveStats.reduce((s, st) => s + st.points, 0) / effectiveStats.length) : 0;
     const avgProgress = effectiveStats.length > 0 ? Math.round(effectiveStats.reduce((s, st) => s + st.progress, 0) / effectiveStats.length) : 0;
-    return { completed, inProgress, notStarted, avgPoints, avgProgress };
+    return { completed, inProgress, notStarted, missed, avgPoints, avgProgress };
   }, [effectiveStats]);
 
   useEffect(() => {
@@ -898,10 +948,12 @@ const Homework: React.FC = () => {
   const assignFormStudents = useMemo(() => {
     if (assignMode === 'groups') {
       if (assignSelectedGroups.length === 0) return [];
-      return students.filter((s) => assignSelectedGroups.includes(s.group));
+      return students
+        .filter((s) => assignSelectedGroups.includes(s.group) && !assignExcludedStudentIdSet.has(s.id))
+        .sort((a, b) => a.name.localeCompare(b.name, 'tr'));
     }
-    return students.filter((s) => assignSelectedStudents.includes(s.id));
-  }, [students, assignMode, assignSelectedGroups, assignSelectedStudents]);
+    return assignSelectedStudentObjects;
+  }, [students, assignMode, assignSelectedGroups, assignSelectedStudentObjects, assignExcludedStudentIdSet]);
 
   useEffect(() => {
     setAssignDailyTargetDrafts((prev) => {
@@ -934,13 +986,45 @@ const Homework: React.FC = () => {
   }, []);
 
   const toggleAssignGroup = useCallback((group: string) => {
+    const removing = assignSelectedGroups.includes(group);
     setAssignSelectedGroups((prev) => (prev.includes(group) ? prev.filter((x) => x !== group) : [...prev, group]));
+    if (removing) {
+      const groupStudentIds = new Set(students.filter((s) => s.group === group).map((s) => s.id));
+      setAssignExcludedStudentIds((prev) => prev.filter((id) => !groupStudentIds.has(id)));
+      setAssignGroupSearches((prev) => {
+        const next = { ...prev };
+        delete next[group];
+        return next;
+      });
+    }
+    setAssignFieldErrors((p) => (p.targets ? { ...p, targets: undefined } : p));
+  }, [assignSelectedGroups, students]);
+
+  const toggleAssignGroupStudent = useCallback((studentId: string) => {
+    setAssignExcludedStudentIds((prev) => (
+      prev.includes(studentId) ? prev.filter((id) => id !== studentId) : [...prev, studentId]
+    ));
     setAssignFieldErrors((p) => (p.targets ? { ...p, targets: undefined } : p));
   }, []);
 
-  const toggleAssignStudent = useCallback((studentId: string) => {
-    setAssignSelectedStudents((prev) => (prev.includes(studentId) ? prev.filter((x) => x !== studentId) : [...prev, studentId]));
+  const addAssignStudent = useCallback((studentId: string) => {
+    setAssignSelectedStudents((prev) => (prev.includes(studentId) ? prev : [...prev, studentId]));
+    setAssignStudentPickerAddedCount((count) => count + 1);
     setAssignFieldErrors((p) => (p.targets ? { ...p, targets: undefined } : p));
+  }, []);
+
+  const addAssignStudents = useCallback((studentIds: string[]) => {
+    setAssignSelectedStudents((prev) => {
+      const merged = new Set(prev);
+      studentIds.forEach((id) => merged.add(id));
+      return [...merged];
+    });
+    setAssignStudentPickerAddedCount((count) => count + studentIds.length);
+    setAssignFieldErrors((p) => (p.targets ? { ...p, targets: undefined } : p));
+  }, []);
+
+  const removeAssignStudent = useCallback((studentId: string) => {
+    setAssignSelectedStudents((prev) => prev.filter((x) => x !== studentId));
   }, []);
 
   const resetAssignForm = useCallback(() => {
@@ -948,8 +1032,13 @@ const Homework: React.FC = () => {
     setAssignDueDate('');
     setAssignSelectedPuzzles([]);
     setAssignSelectedGroups([]);
+    setAssignExcludedStudentIds([]);
+    setAssignGroupSearches({});
     setAssignSelectedStudents([]);
     setAssignPuzzleSearch('');
+    setAssignStudentPickerSearch('');
+    setShowAssignStudentPicker(false);
+    setAssignStudentPickerAddedCount(0);
     setAssignMode('groups');
     setAssignDailyTargetDrafts({});
     setAssignDefaultTargets({ dailyGameTarget: 0, dailyPuzzleTarget: 0, minPuzzleAccuracyPct: 60 });
@@ -1080,12 +1169,19 @@ const Homework: React.FC = () => {
     if (!assignTitle.trim()) errors.title = 'Başlık zorunludur.';
     const selectedTargets =
       assignMode === 'groups'
-        ? assignSelectedGroups.map((g) => `group:${g}`)
+        ? [
+            ...assignSelectedGroups.map((g) => `group:${g}`),
+            ...assignExcludedStudentIds.map((id) => `exclude:${id}`),
+          ]
         : assignSelectedStudents;
-    if (selectedTargets.length === 0) {
-      errors.targets = assignMode === 'groups'
-        ? 'En az bir grup seçin.'
-        : 'En az bir öğrenci seçin.';
+    if (assignMode === 'groups') {
+      if (assignSelectedGroups.length === 0) {
+        errors.targets = 'En az bir grup seçin.';
+      } else if (assignFormStudents.length === 0) {
+        errors.targets = 'Grupta atanacak en az bir öğrenci bırakın.';
+      }
+    } else if (selectedTargets.length === 0) {
+      errors.targets = 'En az bir öğrenci seçin.';
     }
 
     const isProgramForm = assignFormPurpose === 'program';
@@ -1146,6 +1242,7 @@ const Homework: React.FC = () => {
     assignFormPurpose,
     assignFormStudents,
     assignMode,
+    assignExcludedStudentIds,
     assignSelectedGroups,
     assignSelectedPuzzles,
     assignSelectedStudents,
@@ -1293,7 +1390,8 @@ const Homework: React.FC = () => {
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-bold text-white truncate">{hw.title}</p>
                             <p className="text-[10px] text-slate-500 mt-0.5">
-                              {hw.puzzles.length} bulmaca · {hwAssignees.length} öğrenci
+                              {hw.puzzles.length} bulmaca
+                              {showStudentCounts ? ` · ${hwAssignees.length} öğrenci` : ''}
                               {hw.dueDate
                                 ? ` · ${new Date(hw.dueDate).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })}`
                                 : ' · Kalıcı ödev'}
@@ -1313,6 +1411,7 @@ const Homework: React.FC = () => {
       </div>
 
       {showAssignForm && (
+        <>
         <div
           className="fixed inset-0 z-50 flex justify-center items-start sm:items-center p-2 sm:p-4 bg-black/70 backdrop-blur-sm overflow-y-auto"
           onClick={() => setShowAssignForm(false)}
@@ -1395,33 +1494,148 @@ const Homework: React.FC = () => {
               {assignFieldErrors.targets ? (
                 <p className="text-[11px] text-rose-400">{assignFieldErrors.targets}</p>
               ) : null}
-              <div className="max-h-40 sm:max-h-44 overflow-y-auto space-y-1 pr-1">
+              <div className="max-h-56 sm:max-h-64 overflow-y-auto space-y-1 pr-1">
                 {assignMode === 'groups'
-                  ? studentGroups.map((g) => (
-                      <button
-                        key={g}
-                        type="button"
-                        onClick={() => toggleAssignGroup(g)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-                          assignSelectedGroups.includes(g) ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30' : 'bg-slate-800/60 text-slate-300 border border-transparent hover:border-white/10'
-                        }`}
-                      >
-                        {g}
-                      </button>
-                    ))
-                  : students.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => toggleAssignStudent(s.id)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-                          assignSelectedStudents.includes(s.id) ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30' : 'bg-slate-800/60 text-slate-300 border border-transparent hover:border-white/10'
-                        }`}
-                      >
-                        <span className="block truncate">{s.name}</span>
-                        <span className="text-[10px] text-slate-500">{s.group}</span>
-                      </button>
-                    ))}
+                  ? (
+                    <div className="space-y-2">
+                      {studentGroups.map((g) => {
+                        const selected = assignSelectedGroups.includes(g);
+                        const groupStudents = students
+                          .filter((s) => s.group === g)
+                          .sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+                        const activeCount = groupStudents.filter((s) => !assignExcludedStudentIdSet.has(s.id)).length;
+                        const search = assignGroupSearches[g] ?? '';
+                        const normalizedSearch = normalizeSearchText(search);
+                        const filteredGroupStudents = !normalizedSearch
+                          ? groupStudents
+                          : groupStudents.filter((student) =>
+                              searchIncludesText(student.name, normalizedSearch) ||
+                              searchIncludesText(String(student.id), normalizedSearch),
+                            );
+                        return (
+                          <div key={g} className="space-y-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleAssignGroup(g)}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
+                                selected ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30' : 'bg-slate-800/60 text-slate-300 border border-transparent hover:border-white/10'
+                              }`}
+                            >
+                              {g}
+                            </button>
+                            {selected ? (
+                              <div className="rounded-xl border border-indigo-500/15 bg-indigo-500/5 p-2.5">
+                                <div className="flex items-center justify-between gap-2 px-1 pb-2">
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300 truncate">
+                                    {g}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 font-bold">
+                                    {showStudentCounts ? `${activeCount}/${groupStudents.length} öğrenci` : 'Öğrenci listesi'}
+                                  </span>
+                                </div>
+                                <div className="relative mb-2">
+                                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+                                  <input
+                                    value={search}
+                                    onChange={(e) => setAssignGroupSearches((prev) => ({ ...prev, [g]: e.target.value }))}
+                                    placeholder="Grupta öğrenci ara..."
+                                    className="w-full rounded-lg border border-white/10 bg-slate-900/70 py-2 pl-9 pr-3 text-[11px] font-medium text-white placeholder:text-slate-500 outline-none focus:border-indigo-500/40"
+                                  />
+                                </div>
+                                <div className="space-y-1 max-h-44 overflow-y-auto pr-1">
+                                  {filteredGroupStudents.length === 0 ? (
+                                    <div className="rounded-lg border border-dashed border-white/10 bg-slate-900/30 px-3 py-4 text-center text-[11px] text-slate-500">
+                                      Aramaya uygun öğrenci bulunamadı.
+                                    </div>
+                                  ) : filteredGroupStudents.map((student) => {
+                                    const excluded = assignExcludedStudentIdSet.has(student.id);
+                                    return (
+                                      <div
+                                        key={student.id}
+                                        className={`flex items-center gap-2 rounded-lg px-2.5 py-2 border transition-colors ${
+                                          excluded
+                                            ? 'bg-slate-900/50 border-white/5'
+                                            : 'bg-indigo-600/10 border-indigo-500/20'
+                                        }`}
+                                      >
+                                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black shrink-0 ${
+                                          excluded ? 'bg-slate-800 text-slate-500' : 'bg-indigo-500/20 text-indigo-200'
+                                        }`}>
+                                          {student.name.charAt(0)}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <p className={`text-xs font-bold truncate ${excluded ? 'text-slate-500 line-through' : 'text-white'}`}>
+                                            {student.name}
+                                          </p>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleAssignGroupStudent(student.id)}
+                                          className={`p-1.5 rounded-lg shrink-0 ${
+                                            excluded
+                                              ? 'text-emerald-300 hover:bg-emerald-500/10'
+                                              : 'text-rose-300 hover:bg-rose-500/10'
+                                          }`}
+                                          title={excluded ? 'Öğrenciyi tekrar ekle' : 'Öğrenciyi çıkar'}
+                                        >
+                                          {excluded ? <Plus className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )
+                  : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">
+                          Seçilen öğrenciler ({assignSelectedStudentObjects.length})
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => { setAssignStudentPickerAddedCount(0); setShowAssignStudentPicker(true); }}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600/20 text-indigo-300 text-[10px] font-black uppercase tracking-wider hover:bg-indigo-600/30"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Öğrenci Ekle
+                        </button>
+                      </div>
+                      <div className="max-h-40 sm:max-h-44 overflow-y-auto space-y-1 pr-1">
+                        {assignSelectedStudentObjects.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-white/10 bg-slate-900/30 px-3 py-6 text-center text-[11px] text-slate-500">
+                            Henüz öğrenci seçilmedi.
+                          </div>
+                        ) : assignSelectedStudentObjects.map((s) => (
+                          <div
+                            key={s.id}
+                            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg bg-indigo-600/10 text-slate-200 border border-indigo-500/20"
+                          >
+                            <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-black text-slate-300 text-xs shrink-0">
+                              {s.name.charAt(0)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <span className="block truncate text-xs font-bold">{s.name}</span>
+                              <span className="text-[10px] text-slate-500">{s.group || 'Grupsuz'}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeAssignStudent(s.id)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-rose-300 hover:bg-rose-500/10 shrink-0"
+                              title="Öğrenciyi çıkar"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
               </div>
             </div>
 
@@ -1664,8 +1878,8 @@ const Homework: React.FC = () => {
             <div className="bg-black/30 rounded-lg p-3 text-center border border-white/5">
               <p className="text-lg font-black text-emerald-400">
                 {assignMode === 'groups'
-                  ? students.filter((s) => assignSelectedGroups.includes(s.group)).length
-                  : assignSelectedStudents.length}
+                  ? assignFormStudents.length
+                  : assignFormStudents.length}
               </p>
               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Öğrenci</p>
             </div>
@@ -1697,6 +1911,81 @@ const Homework: React.FC = () => {
           </div>
         </div>
         </div>
+        {assignMode === 'students' && showAssignStudentPicker && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl animate-in fade-in" onClick={() => { setShowAssignStudentPicker(false); setAssignStudentPickerSearch(''); setAssignStudentPickerAddedCount(0); }}>
+            <div className="bg-[#15181c] border border-white/10 rounded-3xl shadow-3xl w-full max-w-sm overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+              <div className="p-6 border-b border-white/5 bg-slate-900/50 flex items-center justify-between">
+                <h3 className="font-black text-white text-lg uppercase tracking-tight">Öğrenci Ekle</h3>
+                <button type="button" onClick={() => { setShowAssignStudentPicker(false); setAssignStudentPickerSearch(''); setAssignStudentPickerAddedCount(0); }} className="text-slate-500 hover:text-white"><X className="w-6 h-6" /></button>
+              </div>
+              <div className="p-2 max-h-80 overflow-y-auto custom-scrollbar space-y-4">
+                <div className="px-2 pt-2">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                    <input
+                      value={assignStudentPickerSearch}
+                      onChange={(e) => setAssignStudentPickerSearch(e.target.value)}
+                      placeholder="Öğrenci ara..."
+                      className="w-full rounded-xl border border-white/10 bg-slate-900/70 py-2.5 pl-10 pr-3 text-sm font-medium text-white placeholder:text-slate-500 outline-none focus:border-indigo-500/40"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <p className="px-2 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">Öğrenciler (Gruplara Göre)</p>
+                  <div className="space-y-3">
+                    {assignAvailableStudentsByGroup.map(({ groupName, students: groupStudents }) => (
+                      <div key={groupName} className="border border-white/5 rounded-2xl p-2.5 bg-slate-900/30">
+                        <div className="flex items-center justify-between px-1.5 pb-2 border-b border-white/5">
+                          <span className="text-[11px] font-black text-teal-400 uppercase tracking-wider truncate max-w-[180px]">
+                            {groupName} ({groupStudents.length})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => addAssignStudents(groupStudents.map((s) => s.id))}
+                            className="px-2.5 py-1 rounded bg-teal-500/20 text-teal-300 text-[9px] font-black uppercase hover:bg-teal-500 hover:text-black transition-all active:scale-95 shadow-sm"
+                          >
+                            Hepsini Ekle
+                          </button>
+                        </div>
+                        <div className="space-y-1 mt-2">
+                          {groupStudents.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => addAssignStudent(s.id)}
+                              className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-teal-500/10 group transition-all text-left"
+                            >
+                              <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-black text-slate-400 group-hover:bg-teal-500 group-hover:text-black transition-all text-xs shrink-0">
+                                {s.name.charAt(0)}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold text-white leading-tight truncate">{s.name}</p>
+                                <p className="text-[9px] text-slate-600 font-mono leading-none mt-0.5">#{s.id}</p>
+                              </div>
+                              <Plus className="w-3.5 h-3.5 text-slate-700 group-hover:text-teal-400 shrink-0" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {filteredAssignAvailableStudents.length === 0 && (
+                    <p className="text-center py-12 text-[11px] text-slate-600 italic">Eklenebilecek öğrenci kalmadı.</p>
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-t border-white/5 bg-black/40">
+                <div className="space-y-3">
+                  <p className="text-center text-[11px] font-medium text-slate-500">
+                    {assignStudentPickerAddedCount > 0 ? `${assignStudentPickerAddedCount} öğrenci eklendi.` : 'Henüz öğrenci eklenmedi.'}
+                  </p>
+                  <button type="button" onClick={() => { setShowAssignStudentPicker(false); setAssignStudentPickerSearch(''); setAssignStudentPickerAddedCount(0); }} className="w-full py-3 rounded-xl bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 font-bold text-xs uppercase tracking-widest transition-all">Tamam</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        </>
       )}
 
       <div className="relative z-0 grid grid-cols-1 xl:grid-cols-[260px_1fr] gap-5">
@@ -1877,10 +2166,10 @@ const Homework: React.FC = () => {
 
       {/* Genel öğrenci özeti (ödev seçilmeden — eski akış yedek) */}
       {detailStat && !selectedHw && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setDetailStat(null)}>
+        <div className="modal-overlay z-50" onClick={() => setDetailStat(null)}>
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden />
           <div
-            className="relative w-full max-w-[100vw] sm:max-w-4xl lg:max-w-5xl max-h-[92vh] sm:max-h-[90vh] bg-[#1e293b] border border-white/10 sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden flex flex-col"
+            className="modal-panel relative max-w-[100vw] sm:max-w-4xl lg:max-w-5xl bg-[#1e293b] border border-white/10 sm:rounded-2xl rounded-t-2xl shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
@@ -1891,7 +2180,7 @@ const Homework: React.FC = () => {
                 </div>
                 <div className="min-w-0">
                   <h3 className="text-lg sm:text-xl font-bold text-white truncate">{detailStat.name}</h3>
-                  <span className={`inline-block mt-1 px-3 py-1 rounded-lg text-xs font-bold uppercase ${detailStat.status === 'Tamamlandı' ? 'bg-emerald-500/20 text-emerald-400' : detailStat.status === 'Devam Ediyor' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-600/50 text-slate-400'}`}>
+                  <span className={`inline-block mt-1 px-3 py-1 rounded-lg text-xs font-bold uppercase ${detailStat.status === 'Tamamlandı' ? 'bg-emerald-500/20 text-emerald-400' : detailStat.status === 'Devam Ediyor' ? 'bg-amber-500/20 text-amber-400' : detailStat.status === 'Yapılmadı' ? 'bg-rose-500/20 text-rose-400' : 'bg-slate-600/50 text-slate-400'}`}>
                     {detailStat.status}
                   </span>
                 </div>
@@ -1928,7 +2217,7 @@ const Homework: React.FC = () => {
                     <span className="text-white">%{detailStat.progress}</span>
                   </div>
                   <div className="h-3 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                    <div className={`h-full rounded-full transition-all ${detailStat.status === 'Tamamlandı' ? 'bg-emerald-500' : detailStat.status === 'Devam Ediyor' ? 'bg-amber-500' : 'bg-slate-600'}`} style={{ width: `${Math.min(detailStat.progress, 100)}%` }} />
+                    <div className={`h-full rounded-full transition-all ${detailStat.status === 'Tamamlandı' ? 'bg-emerald-500' : detailStat.status === 'Devam Ediyor' ? 'bg-amber-500' : detailStat.status === 'Yapılmadı' ? 'bg-rose-500' : 'bg-slate-600'}`} style={{ width: `${Math.min(detailStat.progress, 100)}%` }} />
                   </div>
                 </div>
 

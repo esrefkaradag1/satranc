@@ -11,9 +11,9 @@ export const StudyKeyboardHelpModal: React.FC<Props> = ({ open, onClose }) => {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+    <div className="modal-overlay z-[80]">
       <div
-        className="w-full max-w-2xl max-h-[88vh] overflow-hidden rounded-2xl border border-white/10 bg-[#1e293b] shadow-2xl"
+        className="modal-panel w-full max-w-2xl overflow-hidden rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#1e293b] shadow-2xl"
         role="dialog"
         aria-labelledby="study-kbd-help-title"
       >
@@ -34,7 +34,7 @@ export const StudyKeyboardHelpModal: React.FC<Props> = ({ open, onClose }) => {
           </button>
         </div>
 
-        <div className="p-5 overflow-y-auto max-h-[calc(88vh-4.5rem)] space-y-5 custom-scrollbar">
+        <div className="modal-scroll-body p-5 space-y-5 custom-scrollbar">
           {STUDY_KEYBOARD_SECTIONS.map((section) => (
             <section key={section.title}>
               <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-300 mb-2">

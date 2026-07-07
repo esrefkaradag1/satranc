@@ -86,14 +86,14 @@ export const ConfirmDialog: React.FC<{
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+      className="modal-overlay z-[10000] animate-in fade-in duration-200"
       onClick={handleBackdrop}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="app-dialog-title"
-        className="w-full max-w-md rounded-3xl border border-white/10 bg-[#12161d] shadow-[0_24px_80px_rgba(0,0,0,0.55)] animate-in zoom-in-95 duration-200 overflow-hidden"
+        className="modal-panel w-full max-w-md rounded-t-3xl sm:rounded-3xl border border-white/10 bg-[#12161d] shadow-[0_24px_80px_rgba(0,0,0,0.55)] animate-in zoom-in-95 duration-200 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6">

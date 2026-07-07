@@ -5,6 +5,7 @@ import {
   KeyRound, Image, Contact,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
+import { canShowStudentCounts } from '../lib/studentCountVisibility';
 import type { Student, WhatsAppContactGroup, WhatsAppTemplate } from '../types';
 import {
   loadWhatsAppConfig, saveWhatsAppConfig, loadWhatsAppTemplates, saveWhatsAppTemplates,
@@ -44,6 +45,7 @@ const WhatsAppManagement: React.FC = () => {
     auth,
     showToast,
   } = useApp();
+  const showStudentCounts = canShowStudentCounts(auth);
 
   const [view, setView] = useState<View>('home');
   const [branchOffice, setBranchOffice] = useState(activeClubBranch || branchOffices[0] || '');
@@ -306,7 +308,9 @@ const WhatsAppManagement: React.FC = () => {
       {/* Bulk */}
       {view === 'bulk' && (
         <Panel title="Bireysel / Toplu Mesaj">
-          <p className="text-xs text-slate-500 mb-2">Veli telefonu kayıtlı öğrencileri seçin ({officeStudents.length} öğrenci)</p>
+          <p className="text-xs text-slate-500 mb-2">
+            Veli telefonu kayıtlı öğrencileri seçin{showStudentCounts ? ` (${officeStudents.length} öğrenci)` : ''}
+          </p>
           <div className="max-h-48 overflow-y-auto space-y-1 border border-white/5 rounded-lg p-2">
             {officeStudents.map((s) => (
               <label key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-white/5 cursor-pointer text-sm">
@@ -423,6 +427,8 @@ const WhatsAppManagement: React.FC = () => {
                   {rule.event === 'parent_login' && 'Öğrenci kaydı — veli giriş bilgileri'}
                   {rule.event === 'parent_consent' && 'Öğrenci kaydı — veli form daveti'}
                   {rule.event === 'lesson_start' && 'Canlı ders başlangıcı'}
+                  {rule.event === 'training_completed' && 'Antrenman tamamlandı — anında veli bildirimi'}
+                  {rule.event === 'training_incomplete' && 'Antrenman eksik — her gün 21:00 veli bildirimi'}
                 </div>
                 <div className="text-xs text-slate-500">Şablon: {rule.templateKey}</div>
               </div>

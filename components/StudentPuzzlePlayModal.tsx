@@ -4,7 +4,7 @@ import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardU
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
 import { Chess } from 'chess.js';
-import { X, CheckCircle2, XCircle, Lightbulb, ListChecks, ChevronRight, RotateCcw } from 'lucide-react';
+import { X, CheckCircle2, XCircle, Lightbulb, ListChecks, ChevronRight, RotateCcw, Play } from 'lucide-react';
 import type { Puzzle } from '../types';
 import { fetchPuzzleById } from '../services/lichessService';
 import {
@@ -16,9 +16,11 @@ import {
   initCoachStyleSession,
   isStudentMoveAtIndex,
   isMoveLegalForSideToMove,
+  materializeLichessPuzzleRecord,
   nextStudentSolutionIndex,
   fenBeforeSolutionMove,
   puzzleBoardOrientationForStudent,
+  puzzleMoveHighlightStyles,
 } from '../lib/puzzlePlayUtils';
 
 export interface HomeworkAttemptRecord {
@@ -54,6 +56,16 @@ function makeGameFromFen(fen: string): Chess {
   }
 }
 
+/** Hamle sayacı hariç pozisyon karşılaştırması. */
+function fenPositionsEqual(a: string, b: string): boolean {
+  const norm = (f: string) => f.trim().split(/\s+/).slice(0, 4).join(' ');
+  try {
+    return norm(a) === norm(b);
+  } catch {
+    return a === b;
+  }
+}
+
 /** Bulmaca yönetimi solution modu: history.length ile çözüm indeksi, çift ply öğrenci. */
 const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   puzzle, onClose, homeworkId, studentId, onAttemptRecord, nextPuzzle, onPlayNext,
@@ -69,11 +81,17 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     setPlayPuzzle(puzzle);
   }, [puzzleResetKey, puzzle]);
 
-  const session = useMemo(
-    () => initCoachStyleSession(playPuzzle),
-    [playPuzzle],
+  const materializedPuzzle = useMemo(
+    () => materializeLichessPuzzleRecord(playPuzzle),
+    [puzzleResetKey, playPuzzle],
   );
-  const { playFen, solutionMoves, studentColor, setupMoveSan } = session;
+
+  const session = useMemo(
+    () => initCoachStyleSession(materializedPuzzle),
+    [materializedPuzzle],
+  );
+  const { playFen, solutionMoves, studentColor, setupMoveSan, rawFen } = session;
+  const hasSetupMove = !!setupMoveSan && !fenPositionsEqual(rawFen, playFen);
   const fullSolution = Array.isArray(playPuzzle.solution) ? playPuzzle.solution.filter(Boolean) : [];
 
   const lichessRepairAttemptedRef = useRef(false);
@@ -101,7 +119,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     fetchPuzzleById(lichessId)
       .then((fresh) => {
         if (cancelled || !fresh) return;
-        setPlayPuzzle((prev) => ({
+        setPlayPuzzle((prev) => materializeLichessPuzzleRecord({
           ...prev,
           fen: fresh.fen,
           solution: fresh.solution,
@@ -117,10 +135,12 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     return () => { cancelled = true; };
   }, [playPuzzle.id, playPuzzle.lichessId, playPuzzle.source, playFen, solutionMoves, studentColor]);
 
+  const requiresManualStart = !!homeworkId;
   const movesPlayedRef = useRef<string[]>([]);
   const reportedRef = useRef(false);
-  const puzzleStartRef = useRef<number>(Date.now());
+  const puzzleStartRef = useRef<number>(0);
   const sessionHintUsedRef = useRef(false);
+  const [sessionStarted, setSessionStarted] = useState(() => !requiresManualStart);
   const playFenRef = useRef(playFen);
   /** Çözüm hattındaki ply — FEN'den kurulan game'de history boş kalır, indeks ayrı tutulur. */
   const [solutionPly, setSolutionPly] = useState(0);
@@ -128,7 +148,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   const [movesPlayed, setMovesPlayed] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
-  const [game, setGame] = useState(() => makeGameFromFen(playFen));
+  const [game, setGame] = useState(() => makeGameFromFen(requiresManualStart ? rawFen : playFen));
   const [status, setStatus] = useState<'playing' | 'wrong' | 'solved'>('playing');
   const [hintRevealed, setHintRevealed] = useState(false);
   const [solutionRevealed, setSolutionRevealed] = useState(false);
@@ -137,6 +157,20 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   const [puzzleModalBoardOrientation, setPuzzleModalBoardOrientation] = useState<'white' | 'black'>(() =>
     puzzleBoardOrientationForStudent(studentColor),
   );
+  const [lastMoveStyles, setLastMoveStyles] = useState<Record<string, React.CSSProperties>>({});
+
+  const refreshSetupHighlight = useCallback(() => {
+    if (setupMoveSan && rawFen !== playFen) {
+      setLastMoveStyles(puzzleMoveHighlightStyles(rawFen, setupMoveSan));
+      return;
+    }
+    const setupUci = materializedPuzzle.lichessSetupMove?.trim();
+    if (setupUci) {
+      setLastMoveStyles(puzzleMoveHighlightStyles(null, setupUci));
+      return;
+    }
+    setLastMoveStyles({});
+  }, [setupMoveSan, rawFen, playFen, materializedPuzzle.lichessSetupMove]);
 
   const markHintUsed = useCallback(() => {
     sessionHintUsedRef.current = true;
@@ -154,7 +188,13 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     } else {
       sessionHintUsedRef.current = true;
     }
-    puzzleStartRef.current = Date.now();
+    if (requiresManualStart) {
+      setSessionStarted(false);
+      puzzleStartRef.current = 0;
+    } else {
+      setSessionStarted(true);
+      puzzleStartRef.current = Date.now();
+    }
     setMovesPlayed([]);
     setSubmitted(false);
     setAutoPlaying(false);
@@ -162,8 +202,18 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     setAutoPlayError(null);
     setPuzzleModalBoardOrientation(puzzleBoardOrientationForStudent(studentColor));
     setSolutionPly(0);
-    setGame(makeGameFromFen(playFen));
-  }, [playFen, studentColor]);
+    setGame(makeGameFromFen(requiresManualStart ? rawFen : playFen));
+    if (requiresManualStart) {
+      setLastMoveStyles({});
+    } else {
+      refreshSetupHighlight();
+    }
+  }, [playFen, rawFen, studentColor, refreshSetupHighlight, requiresManualStart]);
+
+  const handleStartSession = useCallback(() => {
+    setSessionStarted(true);
+    puzzleStartRef.current = Date.now();
+  }, []);
 
   // Yeni bulmaca → oturumu sıfırla
   useEffect(() => {
@@ -192,7 +242,9 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
         movesPlayed: [...movesPlayedRef.current],
         solutionMoves: [...fullSolution],
         finalFen: finalFen || undefined,
-        thinkSeconds: Math.max(1, Math.round((Date.now() - puzzleStartRef.current) / 1000)),
+        thinkSeconds: puzzleStartRef.current > 0
+          ? Math.max(1, Math.round((Date.now() - puzzleStartRef.current) / 1000))
+          : undefined,
         hintUsed: sessionHintUsedRef.current,
       });
       setSubmitted(true);
@@ -224,9 +276,35 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     setSolutionRevealed(true);
   }, [markHintUsed]);
 
-  // Rakip hamlesi: tahtada sıra öğrencide değilken çözümdeki hamleyi otomatik oyna.
+  // Kurulum + rakip hamleleri: Başlat sonrası sırayla oyna.
   useEffect(() => {
-    if (status !== 'playing' || solutionMoves.length === 0) return;
+    if (!sessionStarted || status !== 'playing') return;
+
+    const fen = game.fen();
+    const setupDone = !hasSetupMove || !fenPositionsEqual(fen, rawFen);
+
+    // Kurulum hamlesi (rawFen → playFen)
+    if (hasSetupMove && !setupDone && setupMoveSan) {
+      setAutoPlaying(true);
+      setAutoPlayError(null);
+      const timer = setTimeout(() => {
+        const g = makeGameFromFen(rawFen);
+        const mv = applySolutionMoveOnGame(g, setupMoveSan);
+        if (!mv) {
+          setAutoPlaying(false);
+          setAutoPlayError('Kurulum hamlesi uygulanamadı. Bulmaca verisi hatalı olabilir; sayfayı yenileyin veya antrenöre bildirin.');
+          return;
+        }
+        setLastMoveStyles(puzzleMoveHighlightStyles(rawFen, setupMoveSan));
+        setGame(makeGameFromFen(g.fen()));
+        setSolutionPly(0);
+        setAutoPlaying(false);
+      }, 450);
+      return () => clearTimeout(timer);
+    }
+
+    if (!setupDone || solutionMoves.length === 0) return;
+
     const ply = solutionPly;
     if (ply >= solutionMoves.length) {
       if (!game.isGameOver() && ply > 0) {
@@ -242,13 +320,15 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     setAutoPlaying(true);
     setAutoPlayError(null);
     const timer = setTimeout(() => {
-      const g = makeGameFromFen(game.fen());
+      const fenBefore = game.fen();
+      const g = makeGameFromFen(fenBefore);
       const mv = applySolutionMoveOnGame(g, solutionMoves[ply]!);
       if (!mv) {
         setAutoPlaying(false);
         setAutoPlayError('Rakip hamlesi uygulanamadı. Bulmaca verisi hatalı olabilir; sayfayı yenileyin veya antrenöre bildirin.');
         return;
       }
+      setLastMoveStyles(puzzleMoveHighlightStyles(fenBefore, solutionMoves[ply]!));
       const nextPly = ply + 1;
       setSolutionPly(nextPly);
       setGame(makeGameFromFen(g.fen()));
@@ -259,7 +339,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       }
     }, 450);
     return () => clearTimeout(timer);
-  }, [game, solutionPly, solutionMoves, status, reportAttempt, studentColor]);
+  }, [sessionStarted, hasSetupMove, rawFen, playFen, setupMoveSan, game, solutionPly, solutionMoves, status, reportAttempt, studentColor]);
 
   useEffect(() => {
     if (!showSuccessToast) return;
@@ -285,6 +365,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
 
   const canDragStudentPiece = useCallback(
     ({ piece }: { piece?: { pieceType?: string } | string }) => {
+      if (!sessionStarted) return false;
+      if (hasSetupMove && fenPositionsEqual(game.fen(), rawFen)) return false;
       if (status === 'solved' || autoPlaying) return false;
       if (game.turn() !== studentColor) return false;
       if (solutionPly >= solutionMoves.length) return false;
@@ -293,11 +375,13 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       if (colorChar !== 'w' && colorChar !== 'b') return false;
       return colorChar === game.turn() && colorChar === studentColor;
     },
-    [game, status, autoPlaying, studentColor, solutionPly, solutionMoves],
+    [sessionStarted, hasSetupMove, rawFen, game, status, autoPlaying, studentColor, solutionPly, solutionMoves],
   );
 
   const onPieceDrop = useCallback(
     (sourceSquare: string, targetSquare: string) => {
+      if (!sessionStarted) return false;
+      if (hasSetupMove && fenPositionsEqual(game.fen(), rawFen)) return false;
       if (status === 'solved' || autoPlaying) return false;
       if (game.isGameOver()) return false;
       if (status === 'wrong') setStatus('playing');
@@ -342,11 +426,12 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
 
       movesPlayedRef.current = [...movesPlayedRef.current, played.san];
       setMovesPlayed([...movesPlayedRef.current]);
+      setLastMoveStyles(puzzleMoveHighlightStyles(game.fen(), expectedMove));
       setSolutionPly(ply + 1);
       setGame(makeGameFromFen(copy.fen()));
       return true;
     },
-    [game, solutionMoves, solutionPly, status, autoPlaying, studentColor, reportAttempt]
+    [sessionStarted, hasSetupMove, rawFen, game, solutionMoves, solutionPly, status, autoPlaying, studentColor, reportAttempt]
   );
 
   const handleDrop = useCallback(
@@ -372,15 +457,29 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     return () => window.removeEventListener('keydown', onDown);
   }, []);
 
-  const lastMoveSquares: Record<string, React.CSSProperties> = {};
-  // FEN tabanlı tahta history tutmaz; son hamle vurgusu movesPlayed üzerinden yapılmaz
+  const lastMoveSquares = lastMoveStyles;
 
   const sideToMove = game.turn();
   const turnLabel = sideToMove === 'w' ? 'Beyaz' : 'Siyah';
   const studentLabel = studentColor === 'w' ? 'Beyaz' : 'Siyah';
-  const isStudentTurn = status === 'playing'
+  const isStudentTurn = sessionStarted
+    && status === 'playing'
     && sideToMove === studentColor
     && !autoPlaying;
+
+  const preStartTurnLabel = useMemo(() => {
+    try {
+      return new Chess(rawFen).turn() === 'w' ? 'Beyaz' : 'Siyah';
+    } catch {
+      return 'Beyaz';
+    }
+  }, [rawFen]);
+
+  const startPreviewLabel = hasSetupMove
+    ? `Başlatınca ${preStartTurnLabel} kurulum hamlesini oynayacak`
+    : sideToMove === studentColor
+      ? `Başlatınca sıra sizde (${studentLabel})`
+      : `Başlatınca ${turnLabel} hamle oynayacak`;
 
   const studentMoveIndex = nextStudentSolutionIndex(
     playFenRef.current,
@@ -427,7 +526,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={handleClose}>
+    <div className="modal-overlay z-[100]" onClick={handleClose}>
       {showSuccessToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[101] flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm shadow-lg border border-emerald-500/50 animate-in fade-in slide-in-from-top-2 duration-300">
           <CheckCircle2 className="w-5 h-5 shrink-0" />
@@ -435,7 +534,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
         </div>
       )}
       <div
-        className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
+        className="modal-panel bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
@@ -452,7 +551,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-4">
+        <div className="modal-scroll-body p-4">
           {lichessRepairing ? (
             <p className="text-xs text-sky-300/90 text-center mb-2 px-2">Bulmaca Lichess&apos;ten yükleniyor…</p>
           ) : solutionMoves.length === 0 ? (
@@ -464,10 +563,28 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
               Tahta öğretmenin belirlediği pozisyonda. Sadece doğru hamleleri yapın; farklı hamle hata verir.
             </p>
           )}
-          {setupMoveSan ? (
-            <p className="text-xs text-sky-300/90 text-center mb-2">
-              Rakip kurulum hamlesi uygulandı: <span className="font-mono font-bold">{setupMoveSan}</span>
+          {hasSetupMove && !sessionStarted ? (
+            <p className="text-xs text-sky-300/90 text-center mb-2 px-2">
+              Başlatınca ilk hamle tahtada oynanacak.
             </p>
+          ) : setupMoveSan && sessionStarted ? (
+            <p className="text-xs text-sky-300/90 text-center mb-2">
+              Kurulum hamlesi: <span className="font-mono font-bold">{setupMoveSan}</span>
+            </p>
+          ) : null}
+          {!sessionStarted && requiresManualStart ? (
+            <div className="flex flex-col items-center gap-3 mb-3">
+              <p className="text-xs text-slate-400 text-center px-2">{startPreviewLabel}</p>
+              <button
+                type="button"
+                onClick={handleStartSession}
+                disabled={lichessRepairing || solutionMoves.length === 0}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-sm uppercase tracking-wide shadow-lg shadow-indigo-600/30 transition-all active:scale-[0.98]"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                Başlat
+              </button>
+            </div>
           ) : null}
           {autoPlaying ? (
             <p className="text-xs text-slate-400 text-center mb-2">Rakip hamle oynanıyor…</p>
@@ -475,22 +592,24 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
           {autoPlayError ? (
             <p className="text-xs text-rose-300/90 text-center mb-2 px-2">{autoPlayError}</p>
           ) : null}
-          <div className="flex flex-wrap items-center justify-center gap-2 mb-2">
-            <span
-              className={`text-[11px] font-bold px-3 py-1 rounded-full border ${
-                isStudentTurn
-                  ? 'text-indigo-200 border-indigo-500/40 bg-indigo-500/15'
-                  : 'text-slate-400 border-white/10 bg-slate-800/60'
-              }`}
-            >
-              Sırada: {turnLabel}
-              {isStudentTurn ? ' · Sizin hamleniz' : status === 'playing' ? ' · Rakip' : ''}
-            </span>
-            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
-              Siz: {studentLabel}
-            </span>
-          </div>
-          {status === 'playing' && isStudentTurn && !hintRevealed ? (
+          {sessionStarted ? (
+            <div className="flex flex-wrap items-center justify-center gap-2 mb-2">
+              <span
+                className={`text-[11px] font-bold px-3 py-1 rounded-full border ${
+                  isStudentTurn
+                    ? 'text-indigo-200 border-indigo-500/40 bg-indigo-500/15'
+                    : 'text-slate-400 border-white/10 bg-slate-800/60'
+                }`}
+              >
+                Sırada: {turnLabel}
+                {isStudentTurn ? ' · Sizin hamleniz' : status === 'playing' ? ' · Rakip' : ''}
+              </span>
+              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                Siz: {studentLabel}
+              </span>
+            </div>
+          ) : null}
+          {status === 'playing' && sessionStarted && isStudentTurn && !hintRevealed ? (
             <div className="flex justify-center mb-2">
               <button
                 type="button"
@@ -507,8 +626,11 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
               <span>Beklenen hamle: {hintText}</span>
             </p>
           ) : null}
-          <ChessBoardFrame boardOrientation={puzzleModalBoardOrientation} className="max-w-full mx-auto">
+          <ChessBoardFrame boardOrientation={puzzleModalBoardOrientation} className="max-w-full mx-auto relative">
             <Chessboard options={{ ...boardOptions, ...CHESSBOARD_NO_NOTATION }} />
+            {!sessionStarted && requiresManualStart ? (
+              <div className="absolute inset-0 rounded-[inherit] bg-slate-950/25 pointer-events-none" aria-hidden />
+            ) : null}
           </ChessBoardFrame>
           {movesPlayed.length > 0 && (
             <div className="mt-4 p-3 rounded-xl bg-slate-800/80 border border-slate-700/50">

@@ -2,6 +2,16 @@ import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puz
 import { resolveHomeworkAssignees } from '../homeworkUtils';
 import { studentInitials } from './homeworkPanelUtils';
 
+/** Tek bulmaca denemesi için makul üst sınır (2 saat). */
+export const MAX_PLAUSIBLE_THINK_SECONDS = 7200;
+
+/** Yanlış kayıt (Unix zaman damgası vb.) filtrelenir. */
+export function sanitizeThinkSeconds(seconds?: number | null): number {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return 0;
+  if (seconds > MAX_PLAUSIBLE_THINK_SECONDS) return 0;
+  return Math.round(seconds);
+}
+
 export type StudentHwStat = {
   studentId: string;
   name: string;
@@ -12,7 +22,7 @@ export type StudentHwStat = {
   points: number;
   timeSeconds: number;
   progress: number;
-  status: 'Tamamlandı' | 'Devam Ediyor' | 'Başlamadı';
+  status: 'Tamamlandı' | 'Devam Ediyor' | 'Başlamadı' | 'Yapılmadı';
 };
 
 /** Ödevdeki her bulmaca için doğru / yanlış / çözülmedi sayar */
@@ -41,23 +51,27 @@ export function studentTotalThinkSeconds(attempts: HomeworkPuzzleAttempt[]): num
   const sorted = [...attempts].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   );
-  const recorded = sorted.reduce((sum, a) => sum + (a.thinkSeconds ?? 0), 0);
+  const recorded = sorted.reduce((sum, a) => sum + sanitizeThinkSeconds(a.thinkSeconds), 0);
   if (recorded > 0) return recorded;
   if (sorted.length >= 2) {
-    return Math.round(
+    const span = Math.round(
       (new Date(sorted[sorted.length - 1]!.timestamp).getTime()
         - new Date(sorted[0]!.timestamp).getTime()) / 1000,
     );
+    if (span > 0 && span <= MAX_PLAUSIBLE_THINK_SECONDS * Math.max(sorted.length, 1)) {
+      return span;
+    }
   }
-  if (sorted.length === 1 && sorted[0]!.thinkSeconds) return sorted[0]!.thinkSeconds;
-  return 0;
+  const single = sorted.length === 1 ? sanitizeThinkSeconds(sorted[0]!.thinkSeconds) : 0;
+  return single;
 }
 
 export function attemptThinkSeconds(
   attempt: HomeworkPuzzleAttempt,
   sortedAsc: HomeworkPuzzleAttempt[],
 ): number | null {
-  if (attempt.thinkSeconds != null && attempt.thinkSeconds > 0) return attempt.thinkSeconds;
+  const stored = sanitizeThinkSeconds(attempt.thinkSeconds);
+  if (stored > 0) return stored;
   return thinkSecondsBetweenAttempts(sortedAsc, attempt.id);
 }
 
@@ -211,8 +225,14 @@ export function thinkSecondsBetweenAttempts(
 }
 
 export function formatHomeworkDuration(seconds: number): string {
-  if (seconds <= 0) return '—';
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return m > 0 ? `${m}dk ${s}sn` : `${s}sn`;
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—';
+  const sec = Math.round(seconds);
+  // Unix zaman damgası veya bozuk toplam (ör. 29M dk)
+  if (sec > 86400) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}sa ${m}dk`;
+  if (m > 0) return `${m}dk ${s}sn`;
+  return `${s}sn`;
 }

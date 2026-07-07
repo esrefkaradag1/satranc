@@ -1172,8 +1172,9 @@ const ChessBoard: React.FC = () => {
 
   const getHwAssignees = (hw: typeof homeworks[0]) => {
     const groups = hw.assignedTo.filter(a => a.startsWith('group:')).map(a => a.replace('group:', ''));
-    const studentIds = hw.assignedTo.filter(a => !a.startsWith('group:'));
-    const fromGroups = groups.length > 0 ? students.filter(s => groups.includes(s.group)) : [];
+    const excludedIds = hw.assignedTo.filter(a => a.startsWith('exclude:')).map(a => a.replace('exclude:', '').trim());
+    const studentIds = hw.assignedTo.filter(a => !a.startsWith('group:') && !a.startsWith('exclude:'));
+    const fromGroups = groups.length > 0 ? students.filter(s => groups.includes(s.group) && !excludedIds.includes(s.id)) : [];
     const fromIds = studentIds.length > 0 ? students.filter(s => studentIds.includes(s.id)) : [];
     const all = [...fromGroups, ...fromIds];
     const unique = Array.from(new Map(all.map(s => [s.id, s])).values());

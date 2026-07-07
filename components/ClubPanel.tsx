@@ -18,6 +18,7 @@ import {
   Shield,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
+import { canShowStudentCounts } from '../lib/studentCountVisibility';
 import Sidebar from './Sidebar';
 import { clubNavForPermissions, isClubPanelTabAllowed, clubSidebarTabFor, clubPreferredStudentListTab, defaultPermissionsForRole, sanitizeCoachGrantPermissions, permissionSetsEqual, coachPermissionSummary } from '../lib/rolePermissions';
 import { CoachPermissionsPicker } from './club/CoachPermissionsPicker';
@@ -26,6 +27,7 @@ import StudentAdd from './StudentAdd';
 import Finance from './Finance';
 import Security from './Security';
 import RoleManagement from './roles/RoleManagement';
+import AccountDropdown, { type AccountDropdownItem } from './ui/AccountDropdown';
 import CorporateStructure from './CorporateStructure';
 import Tournaments from './Tournaments';
 import ClubProfile from './club/ClubProfile';
@@ -48,7 +50,8 @@ import Inventory from './Inventory';
 import ApplicationsAdmin from './ApplicationsAdmin';
 import { getClubApplicationSlug } from '../lib/applicationClub';
 import { getCoachNamesForStudent } from '../lib/orgScope';
-import type { Coach, Student } from '../types';
+import { normalizeSearchText, searchIncludesText } from '../lib/searchText';
+import type { Club, Coach, Student } from '../types';
 
 const inputCls =
   'w-full px-4 py-2.5 rounded-lg text-sm font-medium outline-none bg-slate-900/60 border border-slate-700/60 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50';
@@ -85,7 +88,10 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     scopedStudents: branchStudents,
     scopedCoaches: branchCoaches,
     scopedTransactions: branchTx,
+    auth,
   } = useApp();
+
+  const showStudentCounts = canShowStudentCounts(auth);
 
   const defaultClubTab = authPermissions.has('dashboard')
     ? 'dashboard'
@@ -209,13 +215,13 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   const onlyDigits = (v: string) => v.replace(/\D/g, '');
 
   const filteredStudents = useMemo(() => {
-    const q = studentSearch.trim().toLowerCase();
+    const q = normalizeSearchText(studentSearch);
     if (!q) return branchStudents;
     return branchStudents.filter(
       (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.parentName.toLowerCase().includes(q) ||
-        (s.group || '').toLowerCase().includes(q) ||
+        searchIncludesText(s.name, q) ||
+        searchIncludesText(s.parentName, q) ||
+        searchIncludesText(s.group, q) ||
         (s.parentPhone || '').includes(q),
     );
   }, [branchStudents, studentSearch]);
@@ -406,7 +412,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
     setShowStudentModal(false);
   };
 
-  const handleProfileSave = (patch: { address?: string; activeDays: boolean[] }) => {
+  const handleProfileSave = (patch: Partial<Club>) => {
     if (!club) return;
     updateClub(club.id, patch);
   };
@@ -536,7 +542,9 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
             <div className="px-5 py-4 border-b border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider">Öğrenciler</h2>
-                <p className="text-xs text-slate-500 mt-0.5">{filteredStudents.length} kayıt</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {showStudentCounts ? `${filteredStudents.length} kayıt` : 'Kayıtlar'}
+                </p>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
                 <div className="relative">
@@ -706,6 +714,20 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   };
 
   const sidebarTab = clubSidebarTabFor(activeTab, authPermissions);
+  const clubAccountMenuItems: AccountDropdownItem[] = [
+    {
+      id: 'dashboard',
+      label: 'Kulüp paneli',
+      icon: <Building2 className="w-5 h-5" />,
+      onClick: () => setActiveTab(defaultClubTab),
+    },
+    {
+      id: 'profile',
+      label: 'Kulüp profili',
+      icon: <User className="w-5 h-5" />,
+      onClick: () => setActiveTab('profile'),
+    },
+  ];
 
   return (
     <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
@@ -714,6 +736,12 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
         setActiveTab={setActiveTab}
         navCategories={clubNavCategories}
         onLogout={onLogout}
+        footerProfile={{
+          name: club?.name?.trim() || branch,
+          subtitle: 'Kulüp hesabı',
+          initials: (club?.name?.trim() || branch).slice(0, 1).toUpperCase(),
+          menuItems: clubAccountMenuItems,
+        }}
         mobileOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         defaultIconOnly={sidebarIconOnlyDefault}
@@ -741,9 +769,17 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
               </div>
             </div>
           </div>
-          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-black text-sm shrink-0">
-            K
-          </div>
+          <AccountDropdown
+            name={club?.name?.trim() || branch}
+            subtitle="Kulüp hesabı"
+            initials={(club?.name?.trim() || branch).slice(0, 1).toUpperCase()}
+            items={clubAccountMenuItems}
+            onLogout={onLogout}
+            accent="emerald"
+            showIdentity={false}
+            avatarClassName="w-9 h-9 sm:w-10 sm:h-10 rounded-xl"
+            menuClassName="w-72"
+          />
         </header>
         <div
           className={

@@ -29,6 +29,7 @@ import {
   lichessActivityGameCount,
   lichessActivityGameResultsByMode,
   lichessActivityPuzzleCount,
+  parseLichessActivityPuzzles,
   rankLeaderboardEntries,
 } from '../lib/leaderboardUtils';
 import {
@@ -38,9 +39,9 @@ import {
   sumGameResultsByMode,
 } from '../lib/leaderboardPointSettings';
 
-const CHESSCOM_PUB_API = 'https://api.chess.com/pub';
 const PLATFORM_SNAPSHOT_CACHE_TTL_MS = 60 * 60 * 1000;
 const LEADERBOARD_STUDENT_CONCURRENCY = 4;
+const CHESSCOM_USERNAME_RE = /^[a-z0-9_-]{1,25}$/i;
 
 const platformSnapshotCache = new Map<string, { at: number; snapshot: LeaderboardPlatformSnapshot }>();
 
@@ -126,13 +127,22 @@ function addChessComGameToByMode(byMode: GameResultsByMode, game: ChessComGame, 
   else byMode[mode].losses += 1;
 }
 
-function archiveMonthEndMs(archiveUrl: string): number | null {
-  const match = archiveUrl.match(/\/games\/(\d{4})\/(\d{1,2})$/);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
-  return new Date(year, month, 0, 23, 59, 59, 999).getTime();
+function chessComRangeMonths(bounds: PeriodBounds): Array<{ year: string; month: string }> {
+  const months: Array<{ year: string; month: string }> = [];
+  const cursor = new Date(bounds.endMs);
+  cursor.setDate(1);
+  cursor.setHours(0, 0, 0, 0);
+  const earliest = new Date(bounds.startMs);
+  earliest.setDate(1);
+  earliest.setHours(0, 0, 0, 0);
+  while (cursor.getTime() >= earliest.getTime()) {
+    months.push({
+      year: String(cursor.getFullYear()),
+      month: String(cursor.getMonth() + 1).padStart(2, '0'),
+    });
+    cursor.setMonth(cursor.getMonth() - 1);
+  }
+  return months;
 }
 
 /** Dönem içindeki Chess.com maçları — yalnızca gerekli arşiv ayları (400 oyun taraması yok). */
@@ -141,22 +151,14 @@ async function fetchChessComGamesForPeriod(
   bounds: PeriodBounds,
 ): Promise<ChessComGame[]> {
   const trimmed = username.trim().toLowerCase();
-  if (!trimmed) return [];
+  if (!trimmed || !CHESSCOM_USERNAME_RE.test(trimmed)) return [];
   try {
-    const archivesRes = await fetch(
-      `${CHESSCOM_PUB_API}/player/${encodeURIComponent(trimmed)}/games/archives`,
-    );
-    if (!archivesRes.ok) return [];
-    const archivesData = (await archivesRes.json()) as { archives?: string[] };
-    const archives = archivesData.archives ?? [];
-    if (archives.length === 0) return [];
-
     const all: ChessComGame[] = [];
-    for (const archiveUrl of archives.slice().reverse()) {
-      const monthEndMs = archiveMonthEndMs(archiveUrl);
-      if (monthEndMs != null && monthEndMs < bounds.startMs) break;
-
-      const gamesRes = await fetch(archiveUrl);
+    for (const { year, month } of chessComRangeMonths(bounds)) {
+      const q = new URLSearchParams({ username: trimmed, year, month });
+      const gamesRes = await fetch(`/api/chesscom-games?${q.toString()}`, {
+        headers: { Accept: 'application/json' },
+      });
       if (!gamesRes.ok) continue;
       const gamesData = (await gamesRes.json()) as { games?: ChessComGame[] };
       for (const game of gamesData.games ?? []) {
@@ -178,6 +180,7 @@ async function studentPeriodStats(
   homeworkAttempts: HomeworkPuzzleAttempt[],
 ): Promise<{
   puzzles: number;
+  puzzleWrong: number;
   games: number;
   internalPuzzles: number;
   wins: number;
@@ -185,11 +188,15 @@ async function studentPeriodStats(
   losses: number;
   gameResultsByMode: GameResultsByMode;
 }> {
-  const internalPuzzles = homeworkAttempts.filter(
+  const internalCorrect = homeworkAttempts.filter(
     (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
   ).length;
+  const internalWrong = homeworkAttempts.filter(
+    (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && !a.correct,
+  ).length;
 
-  let externalPuzzles = 0;
+  let externalCorrect = 0;
+  let externalWrong = 0;
   let games = 0;
   const gameResultsByMode = emptyGameResultsByMode();
 
@@ -211,7 +218,9 @@ async function studentPeriodStats(
   for (const row of lichessActivityResult) {
     const start = row.interval?.start;
     if (!start || !isEpochMsInPeriod(start, bounds)) continue;
-    externalPuzzles += lichessActivityPuzzleCount(row);
+    externalCorrect += lichessActivityPuzzleCount(row);
+    const lichessPuzzles = parseLichessActivityPuzzles(row);
+    externalWrong += lichessPuzzles.failed;
     games += lichessActivityGameCount(row);
     const modeResults = lichessActivityGameResultsByMode(row);
     for (const mode of Object.keys(modeResults) as (keyof GameResultsByMode)[]) {
@@ -222,8 +231,9 @@ async function studentPeriodStats(
   }
 
   if (chessComBundle) {
-    const attempts = [...chessComBundle.rated, ...chessComBundle.learning, ...chessComBundle.rush];
-    externalPuzzles += attempts.filter((a) => a.passed && isTimestampInPeriod(a.date, bounds)).length;
+    const attempts = chessComBundle.rated.filter((a) => isTimestampInPeriod(a.date, bounds));
+    externalCorrect += attempts.filter((a) => a.passed).length;
+    externalWrong += attempts.filter((a) => !a.passed).length;
   }
 
   if (chessComUsername) {
@@ -236,9 +246,10 @@ async function studentPeriodStats(
   const totals = sumGameResultsByMode(gameResultsByMode);
 
   return {
-    puzzles: externalPuzzles + internalPuzzles,
+    puzzles: externalCorrect + internalCorrect,
+    puzzleWrong: externalWrong + internalWrong,
     games,
-    internalPuzzles,
+    internalPuzzles: internalCorrect,
     wins: totals.wins,
     draws: totals.draws,
     losses: totals.losses,
@@ -284,6 +295,7 @@ async function buildStudentLeaderboardRow(
       ? studentPeriodStats(student, bounds, homeworkAttempts)
       : Promise.resolve({
           puzzles: 0,
+          puzzleWrong: 0,
           games: 0,
           internalPuzzles: 0,
           wins: 0,
@@ -317,6 +329,7 @@ async function buildStudentLeaderboardRow(
     displayStats.wins,
     displayStats.draws,
     displayStats.losses,
+    displayStats.puzzleWrong ?? 0,
   );
 }
 

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BarChart3, TrendingUp, Target, Brain, ChevronRight, ArrowLeft, X, Users, BookOpen, PieChart, Search, Sparkles, Loader2 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { useApp } from '../AppContext';
+import { canShowStudentCounts } from '../lib/studentCountVisibility';
 import type { Student, Puzzle, HomeworkPuzzleAttempt } from '../types';
 import {
   analyzeStudentComprehensive,
@@ -35,6 +36,7 @@ import {
   type SkillKey,
 } from '../lib/platformSkillAnalysis';
 import { buildPlatformRatingHistory } from '../lib/analysisDashboardUtils';
+import { searchIncludesText } from '../lib/searchText';
 import {
   AnalysisActionBar,
   AnalysisKpiStrip,
@@ -197,7 +199,7 @@ interface AnalysisProps {
 }
 
 const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = null }) => {
-  const { scopedStudents: students, puzzles, homeworkAttempts } = useApp();
+  const { scopedStudents: students, puzzles, homeworkAttempts, auth } = useApp();
   const [showDetailReport, setShowDetailReport] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(studentId ?? null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -301,7 +303,9 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
   const currentLabel = selectedStudent
     ? `${selectedStudent.name} · Son: ${selectedStudent.elo} ELO`
     : students.length > 0
-      ? `${students.length} öğrenci · Son: ${academyAvgElo} ELO`
+      ? canShowStudentCounts(auth)
+        ? `${students.length} öğrenci · Son: ${academyAvgElo} ELO`
+        : `Ortalama: ${academyAvgElo} ELO`
       : null;
 
   const levelBreakdown = useMemo(() => {
@@ -735,7 +739,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
 
   const filteredStudents = useMemo(() => {
     if (!studentSearch) return students;
-    return students.filter(s => s.name.toLowerCase().includes(studentSearch.toLowerCase()));
+    return students.filter((s) => searchIncludesText(s.name, studentSearch));
   }, [students, studentSearch]);
 
   return (

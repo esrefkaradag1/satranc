@@ -1,5 +1,5 @@
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student, StudentDailyTarget } from '../types';
-import { weekdayKeyFromIso } from './homeworkDayUtils';
+import { weekdayKeyFromIso, isDailyHomeworkDayClosed } from './homeworkDayUtils';
 import {
   countPerPuzzleResults,
   studentTotalThinkSeconds,
@@ -7,7 +7,6 @@ import {
 } from './homeworkAnalysisUtils';
 import { studentInitials } from './homeworkPanelUtils';
 import {
-  capDailyPuzzleDisplay,
   evaluatePlatformDayGoalsFromStats,
   type PlatformDayStats,
 } from './homeworkPlatformUtils';
@@ -213,17 +212,11 @@ export function buildPlatformHomeworkStats(
     const hasTargets = dailyGameTarget > 0 || dailyPuzzleTarget > 0;
     const dailyGoalDone = goalEval.done;
 
-    const capped = capDailyPuzzleDisplay(
-      goalEval.puzzlePassed,
-      goalEval.puzzleFailed,
-      dailyPuzzleTarget,
-    );
-    const displayCorrect = capped.correct;
-    const displayWrong = capped.wrong;
-
     const hasActivity = todayGames > 0 || todayPuzzleSolved > 0;
+    const dayClosed = isDailyHomeworkDayClosed(viewDate);
     let status: StudentHwStat['status'] = 'Başlamadı';
     if (hasTargets && dailyGoalDone) status = 'Tamamlandı';
+    else if (hasTargets && dayClosed) status = 'Yapılmadı';
     else if (hasActivity) status = 'Devam Ediyor';
 
     const goalCount = (dailyGameTarget > 0 ? 1 : 0) + (dailyPuzzleTarget > 0 ? 1 : 0);
@@ -238,8 +231,8 @@ export function buildPlatformHomeworkStats(
       studentId: student.id,
       name: student.name,
       initials: studentInitials(student.name),
-      correct: displayCorrect,
-      wrong: displayWrong,
+      correct: goalEval.puzzlePassed,
+      wrong: goalEval.puzzleFailed,
       skipped: 0,
       points: 0,
       timeSeconds: platformTimeByStudent[student.id] ?? 0,
@@ -262,7 +255,8 @@ export function platformSummaryFromStats(stats: PlatformStudentStat[]) {
   const active = withTargets.filter(
     (s) => (s.todayGames ?? 0) > 0 || (s.todayPuzzleSolved ?? 0) > 0,
   );
-  const completed = withTargets.filter((s) => s.dailyGoalDone).length;
+  const completed = withTargets.filter((s) => s.dailyGoalDone || s.status === 'Tamamlandı').length;
+  const missed = withTargets.filter((s) => s.status === 'Yapılmadı').length;
   const avgCompletion = withTargets.length
     ? Math.round(withTargets.reduce((sum, s) => sum + s.progress, 0) / withTargets.length)
     : 0;
@@ -273,6 +267,7 @@ export function platformSummaryFromStats(stats: PlatformStudentStat[]) {
     studentCount: stats.length,
     activeCount: active.length,
     completed,
+    missed,
     avgCompletion,
     gameTargetSum,
     puzzleTargetSum,

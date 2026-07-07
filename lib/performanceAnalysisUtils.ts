@@ -1,4 +1,4 @@
-import type { PerformanceAnalysis, PerformanceAnalysisCategory } from '../types';
+import type { PerformanceAnalysis, PerformanceAnalysisCategory, Student } from '../types';
 
 export function newCategoryId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -88,9 +88,14 @@ export type AnalysisFormMeta = {
   longTermGoal: string;
 };
 
-export function emptyAnalysisFormMeta(): AnalysisFormMeta {
+export function resolveStudentAnalysisBranch(student: Pick<Student, 'branch'> | null | undefined): string {
+  const branch = String(student?.branch ?? '').trim();
+  return branch || 'Genel';
+}
+
+export function emptyAnalysisFormMeta(branch = ''): AnalysisFormMeta {
   return {
-    branch: '',
+    branch,
     analysisDate: new Date().toISOString().slice(0, 10),
     generalEvaluation: '',
     recommendations: '',

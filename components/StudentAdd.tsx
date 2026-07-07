@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   BookOpen,
@@ -31,10 +31,15 @@ import type { GroupLessonSlot, Student } from '../types';
 import {
   applyGroupDefaultsToStudent,
   applySiblingDiscount,
+  disciplineMatches,
   disciplineNamesForOffice,
+  disciplineNamesForPackages,
+  findLessonPackageByName,
   findTrainingGroupByName,
   formatLessonSchedule,
+  lessonPackageNamesForSelection,
   mergeBranchOffices,
+  trainingGroupNamesForSelection,
 } from '../lib/trainingGroupUtils';
 import { coachesForClub } from '../lib/orgScope';
 import { isValidTrPhone, normalizeTrPhoneDigits } from '../lib/phoneUtils';
@@ -349,28 +354,103 @@ const StudentAdd: React.FC<{
 
   const disciplineOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
+    const currentBranch = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : undefined;
+    if (form.registrationType === 'package') {
+      const names = disciplineNamesForPackages(scopedLessonPackages, office || undefined, currentBranch);
+      return [PLACEHOLDER_DISCIPLINE, ...names];
+    }
     const names = disciplineNamesForOffice(scopedDisciplineBranches, office || undefined);
     return [PLACEHOLDER_DISCIPLINE, ...names];
-  }, [scopedDisciplineBranches, form.branchOffice]);
+  }, [form.registrationType, form.branchOffice, form.branch, scopedDisciplineBranches, scopedLessonPackages]);
 
   const lessonPackageOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
     const discipline = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : '';
-    const filtered = scopedLessonPackages
-      .filter((pkg) => (!office || pkg.branchOffice === office) && (!discipline || pkg.discipline === discipline))
-      .map((pkg) => pkg.name);
-    return [PLACEHOLDER_PACKAGE, ...filtered];
-  }, [form.branchOffice, form.branch, scopedLessonPackages]);
+    return lessonPackageNamesForSelection(
+      scopedLessonPackages,
+      office,
+      discipline,
+      form.group !== PLACEHOLDER_PACKAGE ? form.group : undefined,
+    );
+  }, [form.branchOffice, form.branch, form.group, scopedLessonPackages]);
 
   const groupOptions = useMemo(() => {
     if (form.registrationType === 'package') return lessonPackageOptions;
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
     const discipline = form.branch !== PLACEHOLDER_DISCIPLINE ? form.branch : '';
-    const filtered = scopedTrainingGroups
-      .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
-      .map((g) => g.name);
-    return [PLACEHOLDER_GROUP, ...filtered];
-  }, [form.registrationType, form.branchOffice, form.branch, scopedTrainingGroups, lessonPackageOptions]);
+    return trainingGroupNamesForSelection(
+      scopedTrainingGroups,
+      office,
+      discipline,
+      form.group !== PLACEHOLDER_GROUP ? form.group : undefined,
+    );
+  }, [form.registrationType, form.branchOffice, form.branch, form.group, scopedTrainingGroups, lessonPackageOptions]);
+
+  const groupPlaceholder =
+    form.registrationType === 'package' ? PLACEHOLDER_PACKAGE : PLACEHOLDER_GROUP;
+
+  useEffect(() => {
+    if (form.group === groupPlaceholder) return;
+    const tg = findTrainingGroupByName(scopedTrainingGroups, form.group);
+    if (!tg) return;
+    setForm((prev) => {
+      if (prev.group !== form.group) return prev;
+      let changed = false;
+      const next = { ...prev };
+      if (prev.branch === PLACEHOLDER_DISCIPLINE && tg.discipline) {
+        next.branch = tg.discipline;
+        changed = true;
+      }
+      if (prev.branchOffice === PLACEHOLDER_OFFICE && tg.branchOffice) {
+        next.branchOffice = tg.branchOffice;
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [form.group, groupPlaceholder, scopedTrainingGroups]);
+
+  useEffect(() => {
+    if (form.registrationType !== 'package') return;
+    const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
+    if (!office) return;
+
+    const packageDisciplines = disciplineNamesForPackages(scopedLessonPackages, office);
+    setForm((prev) => {
+      let next = { ...prev };
+      let changed = false;
+
+      if (
+        prev.branch !== PLACEHOLDER_DISCIPLINE &&
+        packageDisciplines.length > 0 &&
+        !packageDisciplines.some((d) => disciplineMatches(d, prev.branch))
+      ) {
+        next.branch = PLACEHOLDER_DISCIPLINE;
+        next.group = PLACEHOLDER_PACKAGE;
+        changed = true;
+      }
+
+      if (next.branch === PLACEHOLDER_DISCIPLINE && packageDisciplines.length === 1) {
+        next.branch = packageDisciplines[0];
+        changed = true;
+      }
+
+      const discipline = next.branch !== PLACEHOLDER_DISCIPLINE ? next.branch : '';
+      const packages = lessonPackageNamesForSelection(scopedLessonPackages, office, discipline);
+
+      if (next.group === PLACEHOLDER_PACKAGE && packages.length === 1) {
+        const pkg = findLessonPackageByName(scopedLessonPackages, packages[0], { branchOffice: office, discipline });
+        next.group = packages[0];
+        if (pkg) {
+          if (pkg.discipline) next.branch = pkg.discipline;
+          if (pkg.packageFee) next.monthlyFee = String(pkg.packageFee);
+          if (pkg.coachIds?.length === 1) next.coachId = pkg.coachIds[0];
+        }
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [form.registrationType, form.branchOffice, form.branch, form.group, scopedLessonPackages]);
 
   const coachOptions = useMemo(() => {
     const office = form.branchOffice !== PLACEHOLDER_OFFICE ? form.branchOffice : '';
@@ -386,12 +466,10 @@ const StudentAdd: React.FC<{
         return next;
       }
       if (prev.registrationType === 'package') {
-        const selectedPackage = scopedLessonPackages.find(
-          (pkg) =>
-            pkg.name === groupName &&
-            (prev.branchOffice === PLACEHOLDER_OFFICE || pkg.branchOffice === prev.branchOffice) &&
-            (prev.branch === PLACEHOLDER_DISCIPLINE || pkg.discipline === prev.branch),
-        );
+        const selectedPackage = findLessonPackageByName(scopedLessonPackages, groupName, {
+          branchOffice: prev.branchOffice !== PLACEHOLDER_OFFICE ? prev.branchOffice : undefined,
+          discipline: prev.branch !== PLACEHOLDER_DISCIPLINE ? prev.branch : undefined,
+        });
         if (selectedPackage) {
           const autoCoach =
             selectedPackage.coachIds?.length === 1
@@ -743,8 +821,12 @@ const StudentAdd: React.FC<{
               <TypeCard
                 selected={form.registrationType === 'package'}
                 onClick={() => {
-                  set('registrationType')('package');
-                  set('group')(PLACEHOLDER_PACKAGE);
+                  setForm((prev) => ({
+                    ...prev,
+                    registrationType: 'package',
+                    branch: PLACEHOLDER_DISCIPLINE,
+                    group: PLACEHOLDER_PACKAGE,
+                  }));
                   setLessonSchedule([]);
                 }}
                 icon={<GraduationCap />}
@@ -758,11 +840,24 @@ const StudentAdd: React.FC<{
             <Field label="Şube" required error={errors.branchOffice}>
               <select
                 value={form.branchOffice}
-                onChange={(e) => set('branchOffice')(e.target.value)}
+                onChange={(e) => {
+                  const branchOffice = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    branchOffice,
+                    branch: PLACEHOLDER_DISCIPLINE,
+                    group: prev.registrationType === 'package' ? PLACEHOLDER_PACKAGE : PLACEHOLDER_GROUP,
+                  }));
+                  setLessonSchedule([]);
+                }}
                 className={selectCls}
                 disabled={lockBranchOffice}
               >
-                {branchOfficeOptions.map((x) => <option key={x}>{x}</option>)}
+                {branchOfficeOptions.map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
               </select>
               {lockBranchOffice && defaultBranchOffice ? (
                 <p className="text-[10px] text-slate-500 mt-1">Öğrenci yalnızca sizin kulübünüze kaydedilir.</p>
@@ -771,20 +866,58 @@ const StudentAdd: React.FC<{
             <Field label="Branş" required error={errors.branch}>
               <select
                 value={form.branch}
-                onChange={(e) => set('branch')(e.target.value)}
+                onChange={(e) => {
+                  const branch = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    branch,
+                    group: prev.registrationType === 'package' ? PLACEHOLDER_PACKAGE : PLACEHOLDER_GROUP,
+                  }));
+                  setLessonSchedule([]);
+                }}
                 className={selectCls}
               >
-                {disciplineOptions.map((x) => <option key={x}>{x}</option>)}
+                {disciplineOptions.map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
               </select>
+              {form.registrationType === 'package' &&
+              form.branchOffice !== PLACEHOLDER_OFFICE &&
+              disciplineOptions.filter((x) => x !== PLACEHOLDER_DISCIPLINE).length === 0 ? (
+                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
+                  Bu şubede tanımlı ders paketi yok. Branş & Grup bölümünden özel ders paketi ekleyin.
+                </p>
+              ) : null}
             </Field>
             <Field label={form.registrationType === 'package' ? 'Ders Paketi' : 'Grup'} required error={errors.group} className="md:col-span-2">
               <select
-                value={form.group}
+                value={groupOptions.includes(form.group) ? form.group : groupPlaceholder}
                 onChange={(e) => handleGroupChange(e.target.value)}
                 className={selectCls}
               >
-                {groupOptions.map((x) => <option key={x}>{x}</option>)}
+                <option value={groupPlaceholder}>{groupPlaceholder}</option>
+                {groupOptions.map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
               </select>
+              {form.registrationType === 'monthly' &&
+              form.branch !== PLACEHOLDER_DISCIPLINE &&
+              groupOptions.length === 0 ? (
+                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
+                  Bu branşta tanımlı grup yok. Branş & Grup bölümünden eğitim grubu ekleyin.
+                </p>
+              ) : null}
+              {form.registrationType === 'package' &&
+              form.branch !== PLACEHOLDER_DISCIPLINE &&
+              groupOptions.length === 0 ? (
+                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
+                  Bu branşta tanımlı ders paketi yok.
+                </p>
+              ) : null}
             </Field>
             <Field label="Antrenör" className="md:col-span-2">
               <select

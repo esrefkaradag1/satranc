@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { X, Lightbulb, Clock, CheckCircle2, XCircle, CircleDashed } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { X, Lightbulb, Clock, CheckCircle2, XCircle, CircleDashed, Play } from 'lucide-react';
 import { Chessboard } from 'react-chessboard';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
@@ -11,6 +11,7 @@ import {
   studentTotalThinkSeconds,
 } from '../../lib/homeworkAnalysisUtils';
 import { puzzleBoardOrientationForFen, formatPuzzleHintText, puzzlePlayPreviewState } from '../../lib/puzzlePlayUtils';
+import { HomeworkPuzzleReplayModal } from './HomeworkPuzzleReplayModal';
 
 type Props = {
   stat: StudentHwStat;
@@ -66,6 +67,8 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
   attempts,
   onClose,
 }) => {
+  const [replayPuzzle, setReplayPuzzle] = useState<{ puzzle: Puzzle; index: number } | null>(null);
+
   const hwPuzzles = useMemo(
     () => homework.puzzles
       .map((id, index) => {
@@ -126,14 +129,15 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
         : preview.orientation,
       hintText: formatPuzzleHintText(puzzle),
       hintUsedEver,
+      puzzleAttempts,
     };
   }), [hwPuzzles, attemptsByPuzzleId, studentAttempts]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+    <div className="modal-overlay z-50" onClick={onClose}>
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" aria-hidden />
       <div
-        className="relative w-full max-w-6xl max-h-[94vh] bg-[#0f172a] border border-white/10 sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden flex flex-col"
+        className="modal-panel relative max-w-6xl bg-[#0f172a] border border-white/10 sm:rounded-2xl rounded-t-2xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between bg-[#1a2332]/80 shrink-0">
@@ -180,10 +184,10 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 custom-scrollbar space-y-6">
+        <div className="modal-scroll-body p-4 sm:p-5 custom-scrollbar space-y-6">
           {cards.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {cards.map(({ puzzle, index, result, meta, attempt, wrongCount, thinkSec, fen, boardOrientation, hintText, hintUsedEver }) => {
+              {cards.map(({ puzzle, index, result, meta, attempt, wrongCount, thinkSec, fen, boardOrientation, hintText, hintUsedEver, puzzleAttempts }) => {
                 const StatusIcon = meta.icon;
                 return (
                   <div
@@ -268,6 +272,18 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
                           <span className="text-slate-600">—</span>
                         )}
                       </DetailRow>
+                      {puzzleAttempts.length > 0 && (
+                        <div className="pt-3 mt-2 border-t border-white/[0.06]">
+                          <button
+                            type="button"
+                            onClick={() => setReplayPuzzle({ puzzle, index })}
+                            className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-indigo-600/20 border border-indigo-500/35 text-indigo-200 text-xs font-bold hover:bg-indigo-600/35 transition-colors"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            Hamleleri Oynat
+                          </button>
+                        </div>
+                      )}
                       {attempt && (
                         <div className="pt-2 mt-2 border-t border-white/[0.06]">
                           <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
@@ -314,6 +330,16 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {replayPuzzle && (
+        <HomeworkPuzzleReplayModal
+          puzzle={replayPuzzle.puzzle}
+          puzzleIndex={replayPuzzle.index}
+          studentName={stat.name}
+          attempts={attemptsByPuzzleId.get(replayPuzzle.puzzle.id) ?? []}
+          onClose={() => setReplayPuzzle(null)}
+        />
+      )}
     </div>
   );
 };

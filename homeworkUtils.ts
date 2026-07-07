@@ -4,6 +4,9 @@
  */
 import type { HomeworkAssignment } from './types';
 
+const GROUP_PREFIX = 'group:';
+const EXCLUDE_PREFIX = 'exclude:';
+
 export interface StudentForAssignment {
   id: string;
   group?: string | null;
@@ -22,13 +25,21 @@ export function isHomeworkAssignedToStudent(
   const to = hw.assignedTo || [];
   const studentIdStr = String(studentId).trim();
   const studentGroupNorm = normalizeGroup(studentGroup || '');
+  const excludedIds = new Set(
+    to
+      .filter((a) => a.startsWith(EXCLUDE_PREFIX))
+      .map((a) => a.replace(/^exclude:\s*/i, '').trim())
+      .filter(Boolean),
+  );
+
+  if (excludedIds.has(studentIdStr)) return false;
 
   for (const a of to) {
-    if (a.startsWith('group:')) {
+    if (a.startsWith(GROUP_PREFIX)) {
       const hwGroup = a.replace(/^group:\s*/i, '').trim();
       if (normalizeGroup(hwGroup) === studentGroupNorm) return true;
       if (hwGroup === (studentGroup || '').trim()) return true;
-    } else {
+    } else if (!a.startsWith(EXCLUDE_PREFIX)) {
       if (String(a).trim() === studentIdStr) return true;
     }
   }
@@ -53,12 +64,28 @@ export function getAssignedStudentIds(
 ): string[] {
   const ids = new Set<string>();
   const to = hw.assignedTo || [];
-  const groupNames = to.filter(a => a.startsWith('group:')).map(a => a.replace(/^group:\s*/i, '').trim());
-  const directIds = to.filter(a => !a.startsWith('group:')).map(a => a.trim());
+  const groupNames = to
+    .filter((a) => a.startsWith(GROUP_PREFIX))
+    .map((a) => a.replace(/^group:\s*/i, '').trim());
+  const excludedIds = new Set(
+    to
+      .filter((a) => a.startsWith(EXCLUDE_PREFIX))
+      .map((a) => a.replace(/^exclude:\s*/i, '').trim())
+      .filter(Boolean),
+  );
+  const directIds = to
+    .filter((a) => !a.startsWith(GROUP_PREFIX) && !a.startsWith(EXCLUDE_PREFIX))
+    .map((a) => a.trim());
 
   for (const s of students) {
+    if (excludedIds.has(String(s.id).trim())) continue;
     if (directIds.includes(String(s.id).trim())) ids.add(s.id);
-    else if (groupNames.length > 0 && s.group != null) {
+    else if (
+      s.group != null
+      && directIds.some((raw) => normalizeGroup(raw) === normalizeGroup(s.group || ''))
+    ) {
+      ids.add(s.id);
+    } else if (groupNames.length > 0 && s.group != null) {
       const sGroupNorm = normalizeGroup(s.group);
       if (groupNames.some(g => normalizeGroup(g) === sGroupNorm)) ids.add(s.id);
     }

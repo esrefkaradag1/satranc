@@ -18,6 +18,7 @@ const CorporateStructure: React.FC = () => {
   const [formLoginPassword, setFormLoginPassword] = useState('');
   const [formLoginUsername, setFormLoginUsername] = useState('');
   const [formRoleId, setFormRoleId] = useState('');
+  const [formLogoUrl, setFormLogoUrl] = useState('');
   const [formActiveDays, setFormActiveDays] = useState<boolean[]>([true, true, true, true, false, false, false]);
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(new Set());
 
@@ -28,6 +29,7 @@ const CorporateStructure: React.FC = () => {
     setFormLoginPassword('');
     setFormLoginUsername('');
     setFormRoleId('');
+    setFormLogoUrl('');
     setFormActiveDays([true, true, true, true, false, false, false]);
     setModalOpen(true);
   };
@@ -39,6 +41,7 @@ const CorporateStructure: React.FC = () => {
     setFormLoginPassword(club.loginPassword ?? '');
     setFormLoginUsername(club.loginUsername ?? suggestClubUsername(club.name, clubs, club.id));
     setFormRoleId(club.roleId ?? '');
+    setFormLogoUrl(club.logoUrl ?? '');
     setFormActiveDays(club.activeDays?.length === 7 ? club.activeDays : [true, true, true, true, false, false, false]);
     setModalOpen(true);
   };
@@ -70,6 +73,7 @@ const CorporateStructure: React.FC = () => {
         loginUsername,
         loginPassword,
         roleId,
+        logoUrl: formLogoUrl.trim() || undefined,
       });
     } else {
       if (clubs.length >= MAX_CLUBS) {
@@ -83,6 +87,7 @@ const CorporateStructure: React.FC = () => {
         loginUsername,
         loginPassword,
         roleId,
+        logoUrl: formLogoUrl.trim() || undefined,
       });
     }
     closeModal();
@@ -362,6 +367,19 @@ const CorporateStructure: React.FC = () => {
                   placeholder="Adres girilmedi"
                   className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/50 outline-none"
                 />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Logo URL (opsiyonel)
+                </label>
+                <input
+                  type="url"
+                  value={formLogoUrl}
+                  onChange={(e) => setFormLogoUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">Veli ve öğrenci anasayfasında görünür.</p>
               </div>
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">

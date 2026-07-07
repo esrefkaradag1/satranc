@@ -26,9 +26,10 @@ export default async function handler(req: Req, res: Res) {
   }
 
   const path = queryParam(req.query, 'path');
+  const softFail = queryParam(req.query, 'soft') === '1';
   const qs = new URLSearchParams();
   for (const [key, raw] of Object.entries(req.query)) {
-    if (key === 'path') continue;
+    if (key === 'path' || key === 'soft') continue;
     const value = Array.isArray(raw) ? raw[0] : raw;
     if (value != null && value !== '') qs.set(key, String(value));
   }
@@ -38,6 +39,13 @@ export default async function handler(req: Req, res: Res) {
 
   try {
     const upstream = await lichessProxyRequest(path, qs, accept);
+    if (softFail && upstream.status === 429) {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('X-Lichess-Rate-Limited', '1');
+      res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
+      res.status(200).send('[]');
+      return;
+    }
     if (upstream.contentType) res.setHeader('Content-Type', upstream.contentType);
     res.setHeader('Cache-Control', 's-maxage=90, stale-while-revalidate=180');
     res.status(upstream.status).send(upstream.body);

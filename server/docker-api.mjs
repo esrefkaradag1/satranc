@@ -18,6 +18,8 @@ import {
 } from '../lib/lichessOAuthApi.mjs';
 import { lichessProxyRequest } from '../lib/lichessProxyThrottle.mjs';
 import { parentStudentLoginViaEnv } from '../lib/studentParentAuth.mjs';
+import { trainingNotifyHandler, startTrainingNotifyScheduler } from '../lib/trainingWhatsAppNotify.mjs';
+import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch.mjs';
 
 function syncServerEnv() {
   const pairs = [
@@ -80,6 +82,23 @@ async function handleAuthParent(req, res) {
   const body = await readJsonBody(req);
   const result = await parentStudentLoginViaEnv(body, process.env);
   return sendJson(res, result.status, result.body);
+}
+
+async function handleFetchUkd(req, res) {
+  const body = await readJsonBody(req);
+  const result = await fetchUkdFromTsfServer({
+    tc: typeof body.tc === 'string' ? body.tc : undefined,
+    soyad: typeof body.soyad === 'string' ? body.soyad : undefined,
+  });
+  if ('error' in result && result.error === 'Kayıt bulunamadı') {
+    return sendJson(res, 200, result);
+  }
+  if ('error' in result) {
+    const status =
+      result.error === 'tc veya soyad gerekli' || result.error.includes('11 haneli') ? 400 : 502;
+    return sendJson(res, status, result);
+  }
+  return sendJson(res, 200, result, 'no-store');
 }
 
 async function handleLiveLessonChat(req, res) {
@@ -228,7 +247,10 @@ async function handleChessComRecentPuzzles(url, res) {
       },
     );
     if (!upstream.ok) {
-      return sendJson(res, upstream.status, { error: 'Chess.com bulmaca listesi alınamadı', profileUrl });
+      const body = type === 'all'
+        ? { rated: [], learning: [], rush: [], unavailable: true, profileUrl, upstreamStatus: upstream.status, error: 'Chess.com bulmaca listesi alınamadı' }
+        : { attempts: [], unavailable: true, profileUrl, upstreamStatus: upstream.status, error: 'Chess.com bulmaca listesi alınamadı' };
+      return sendJson(res, 200, body, 's-maxage=120, stale-while-revalidate=300');
     }
     const data = await upstream.json();
     const rated = parseTactics2Puzzles(data, 'rated');
@@ -240,7 +262,10 @@ async function handleChessComRecentPuzzles(url, res) {
     return sendJson(res, 200, { attempts, unavailable: attempts.length === 0, profileUrl }, cache);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Chess.com bağlantı hatası';
-    return sendJson(res, 502, { error: msg, profileUrl });
+    const body = type === 'all'
+      ? { rated: [], learning: [], rush: [], unavailable: true, profileUrl, error: msg }
+      : { attempts: [], unavailable: true, profileUrl, error: msg };
+    return sendJson(res, 200, body, 's-maxage=120, stale-while-revalidate=300');
   }
 }
 
@@ -301,21 +326,41 @@ async function handleChessComGames(url, res) {
       headers: { Accept: 'application/json', 'User-Agent': 'NetChessAcademy/1.0' },
       signal: AbortSignal.timeout(20000),
     });
-    if (!upstream.ok) return sendJson(res, upstream.status, { error: 'Chess.com oyun arşivi alınamadı' });
+    if (!upstream.ok) {
+      return sendJson(
+        res,
+        200,
+        { games: [], unavailable: true, upstreamStatus: upstream.status, error: 'Chess.com oyun arşivi alınamadı' },
+        's-maxage=60, stale-while-revalidate=120',
+      );
+    }
     const data = await upstream.json();
     return sendJson(res, 200, data, 's-maxage=120, stale-while-revalidate=300');
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Chess.com bağlantı hatası';
-    return sendJson(res, 502, { error: msg });
+    return sendJson(res, 200, { games: [], unavailable: true, error: msg }, 's-maxage=60, stale-while-revalidate=120');
   }
 }
 
 async function handleLichessProxy(url, req, res) {
   if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed' });
   const path = qp(url, 'path').replace(/^\/+/, '');
+  const softFail = qp(url, 'soft') === '1';
   const accept = req.headers.accept || 'application/json';
   try {
-    const upstream = await lichessProxyRequest(path, url.searchParams, accept);
+    const searchParams = new URLSearchParams(url.searchParams);
+    searchParams.delete('path');
+    searchParams.delete('soft');
+    const upstream = await lichessProxyRequest(path, searchParams, accept);
+    if (softFail && upstream.status === 429) {
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 's-maxage=30, stale-while-revalidate=60',
+        'X-Lichess-Rate-Limited': '1',
+      });
+      res.end('[]');
+      return;
+    }
     return sendText(res, upstream.status, upstream.body, upstream.contentType, 's-maxage=90, stale-while-revalidate=180');
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Lichess bağlantı hatası';
@@ -360,6 +405,10 @@ export async function dispatchApi(req, res, url) {
       await handleAuthParent(req, res);
       return true;
     }
+    if (path === '/api/fetch-ukd' && req.method === 'POST') {
+      await handleFetchUkd(req, res);
+      return true;
+    }
     if (path === '/api/live-lesson-chat' && req.method === 'POST') {
       await handleLiveLessonChat(req, res);
       return true;
@@ -392,6 +441,12 @@ export async function dispatchApi(req, res, url) {
       await handleLichessPuzzleDashboard(url, res);
       return true;
     }
+    if (path === '/api/training-notify' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const result = await trainingNotifyHandler(body, process.env);
+      sendJson(res, result.status, result.body);
+      return true;
+    }
 
     sendJson(res, 404, { error: 'Not found' });
     return true;
@@ -410,5 +465,6 @@ if (isMain) {
   });
   server.listen(PORT, HOST, () => {
     console.log(`[docker-api] listening on http://${HOST}:${PORT}`);
+    startTrainingNotifyScheduler(process.env);
   });
 }

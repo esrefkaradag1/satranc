@@ -6,15 +6,13 @@ import {
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../../types';
 import { evaluatePlatformDailyGoals } from '../../lib/homeworkPlatformUtils';
 import { homeworkHasPlatformGoals } from '../../lib/homeworkStatsBuilders';
+import { isDailyHomeworkDayClosed } from '../../lib/homeworkDayUtils';
 import { nextHomeworkPuzzle } from '../../lib/puzzlePlayUtils';
-import { LichessOAuthConnect } from './LichessOAuthConnect';
 import {
   StudentWeeklyHomeworkGrid,
   computeStudentWeeklySummary,
 } from './StudentWeeklyHomeworkGrid';
 import type { PlatformDayStats } from '../../lib/homeworkPlatformUtils';
-
-type FilterKey = 'all' | 'todo' | 'progress' | 'done';
 
 export type HomeworkPlayPayload = {
   puzzle: Puzzle;
@@ -61,7 +59,7 @@ type HwProgress = {
   solvedCount: number;
   wrongCount: number;
   progressPct: number;
-  status: 'Başlamadı' | 'Devam Ediyor' | 'Tamamlandı';
+  status: 'Başlamadı' | 'Devam Ediyor' | 'Tamamlandı' | 'Yapılmadı';
   isOverdue: boolean;
   daysLeft: number | null;
   isUrgent: boolean;
@@ -86,6 +84,7 @@ export function buildHomeworkProgress(
   todayExternalGameCount: number,
   todayExternalPuzzleCount: number,
   todayExternalPuzzlePassed: number,
+  weekPlatformStatsByDate: Record<string, PlatformDayStats | undefined> = {},
 ): HwProgress {
   const hwPuzzles = hw.puzzles
     .map((id) => puzzles.find((p) => p.id === id))
@@ -137,21 +136,45 @@ export function buildHomeworkProgress(
   const dailyGoalCount = (dailyGameTarget > 0 ? 1 : 0) + (dailyPuzzleTarget > 0 ? 1 : 0);
   const dailyGoalDoneCount = (dailyGameTarget > 0 && gameGoalMet ? 1 : 0) + (dailyPuzzleTarget > 0 && puzzleGoalMet ? 1 : 0);
   const puzzlesDone = total === 0 || solvedCount >= total;
-  let progressPct = total > 0
-    ? Math.round((solvedCount / total) * 100)
-    : hasDailyTargets
-      ? (dailyGoalCount > 0 ? Math.round((dailyGoalDoneCount / dailyGoalCount) * 100) : 0)
-      : (submitted ? 100 : 0);
-  if (hasDailyTargets && dailyGoalsMet) {
-    const dailyPct = dailyGoalCount > 0 ? Math.round((dailyGoalDoneCount / dailyGoalCount) * 100) : 100;
-    progressPct = total > 0 ? Math.max(progressPct, dailyPct) : dailyPct;
-  }
+  const isPlatformHomework = total === 0 && (hasDailyTargets || homeworkHasPlatformGoals(hw));
 
-  let status: HwProgress['status'] = 'Başlamadı';
-  if (submitted || (hasDailyTargets && dailyGoalsMet) || (puzzlesDone && !hasDailyTargets)) {
-    status = 'Tamamlandı';
-  } else if (studentAttempts.length > 0 || dailyStarted) {
-    status = 'Devam Ediyor';
+  let progressPct: number;
+  let status: HwProgress['status'];
+
+  if (isPlatformHomework) {
+    const weeklySummary = computeStudentWeeklySummary(hw, studentTarget, todayKey, weekPlatformStatsByDate);
+    progressPct = weeklySummary.dueDays > 0 ? weeklySummary.progressPct : 0;
+    const weekComplete = weeklySummary.dueDays > 0 && weeklySummary.completedDays >= weeklySummary.dueDays;
+    const hasWeekProgress = weeklySummary.completedDays > 0 || dailyStarted;
+    const todayClosedMissed = isDailyHomeworkDayClosed(todayKey) && hasDailyTargets && !dailyGoalsMet;
+    if (weekComplete) {
+      status = 'Tamamlandı';
+    } else if (todayClosedMissed && !hasWeekProgress && studentAttempts.length === 0) {
+      status = 'Yapılmadı';
+    } else if (hasWeekProgress || studentAttempts.length > 0) {
+      status = 'Devam Ediyor';
+    } else if (todayClosedMissed) {
+      status = 'Yapılmadı';
+    } else {
+      status = 'Başlamadı';
+    }
+  } else {
+    progressPct = total > 0
+      ? Math.round((solvedCount / total) * 100)
+      : hasDailyTargets
+        ? (dailyGoalCount > 0 ? Math.round((dailyGoalDoneCount / dailyGoalCount) * 100) : 0)
+        : (submitted ? 100 : 0);
+    if (hasDailyTargets && dailyGoalsMet) {
+      const dailyPct = dailyGoalCount > 0 ? Math.round((dailyGoalDoneCount / dailyGoalCount) * 100) : 100;
+      progressPct = total > 0 ? Math.max(progressPct, dailyPct) : dailyPct;
+    }
+
+    status = 'Başlamadı';
+    if (submitted || (hasDailyTargets && dailyGoalsMet) || (puzzlesDone && !hasDailyTargets)) {
+      status = 'Tamamlandı';
+    } else if (studentAttempts.length > 0 || dailyStarted) {
+      status = 'Devam Ediyor';
+    }
   }
 
   const dueDate = hw.dueDate ? new Date(hw.dueDate) : null;
@@ -188,6 +211,7 @@ export function buildHomeworkProgress(
 const STATUS_META = {
   Tamamlandı: { pill: 'bg-emerald-500/15 text-emerald-400', icon: CheckCircle2 },
   'Devam Ediyor': { pill: 'bg-amber-500/15 text-amber-400', icon: Play },
+  Yapılmadı: { pill: 'bg-rose-500/15 text-rose-400', icon: AlertCircle },
   Başlamadı: { pill: 'bg-slate-500/15 text-slate-400', icon: CircleDashed },
 } as const;
 
@@ -212,10 +236,8 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
   onPlayPuzzle,
   onDailyGoalsComplete,
 }) => {
-  const [filter, setFilter] = useState<FilterKey>('all');
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [showCompleted, setShowCompleted] = useState(false);
 
   const lichessUsername = student.lichessUsername?.trim() || '';
   const chessComUsername = student.chessComUsername?.trim() || '';
@@ -226,19 +248,22 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
       buildHomeworkProgress(
         hw, student, puzzles, homeworkAttempts, homeworkSubmissions,
         homeworkDayKey, todayExternalGameCount, todayExternalPuzzleCount, todayExternalPuzzlePassed,
+        weekPlatformStatsByDate,
       ),
     ),
     [
       assignedHomeworks, student, puzzles, homeworkAttempts, homeworkSubmissions,
       homeworkDayKey, todayExternalGameCount, todayExternalPuzzleCount, todayExternalPuzzlePassed,
+      weekPlatformStatsByDate,
     ],
   );
 
   useEffect(() => {
     if (!onDailyGoalsComplete) return;
     for (const item of progressList) {
-      const isDailyOnly = item.hwPuzzles.length === 0 && (item.dailyPuzzleTarget > 0 || item.dailyGameTarget > 0);
-      if (!isDailyOnly || item.status !== 'Tamamlandı') continue;
+      const isPlatform = item.hwPuzzles.length === 0
+        && (item.dailyPuzzleTarget > 0 || item.dailyGameTarget > 0 || homeworkHasPlatformGoals(item.hw));
+      if (!isPlatform || item.status !== 'Tamamlandı') continue;
       const submitted = homeworkSubmissions.some(
         (s) => s.studentId === student.id && s.homeworkId === item.hw.id,
       );
@@ -246,30 +271,9 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
     }
   }, [progressList, homeworkSubmissions, student.id, onDailyGoalsComplete]);
 
-  const summary = useMemo(() => {
-    const todo = progressList.filter((p) => p.status === 'Başlamadı').length;
-    const progress = progressList.filter((p) => p.status === 'Devam Ediyor').length;
-    const done = progressList.filter((p) => p.status === 'Tamamlandı').length;
-    const urgent = progressList.filter((p) => p.isUrgent && p.status !== 'Tamamlandı').length;
-    const remainingPuzzles = progressList.reduce(
-      (s, p) => s + Math.max(0, p.hwPuzzles.length - p.solvedCount),
-      0,
-    );
-    const earnedPoints = progressList.reduce((s, p) => {
-      return s + p.puzzleStates
-        .filter((x) => x.state === 'done')
-        .reduce((sum, x) => sum + x.puzzle.points, 0);
-    }, 0);
-    return { todo, progress, done, urgent, remainingPuzzles, earnedPoints, total: progressList.length };
-  }, [progressList]);
-
   const filtered = useMemo(() => {
-    let list = progressList;
-    if (filter === 'todo') list = list.filter((p) => p.status === 'Başlamadı');
-    else if (filter === 'progress') list = list.filter((p) => p.status === 'Devam Ediyor');
-    else if (filter === 'done') list = list.filter((p) => p.status === 'Tamamlandı');
-
     const q = search.trim().toLowerCase();
+    let list = progressList;
     if (q) list = list.filter((p) => p.hw.title.toLowerCase().includes(q));
 
     return [...list].sort((a, b) => {
@@ -284,10 +288,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
       if (da && db) return da.localeCompare(db);
       return b.hw.title.localeCompare(a.hw.title, 'tr');
     });
-  }, [progressList, filter, search]);
-
-  const activeList = filtered.filter((p) => p.status !== 'Tamamlandı');
-  const completedList = filtered.filter((p) => p.status === 'Tamamlandı');
+  }, [progressList, search]);
 
   const makePlayPayload = (puzzle: Puzzle, hw: HomeworkAssignment): HomeworkPlayPayload => ({
     puzzle,
@@ -414,7 +415,6 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
                 Günlük hedefler Lichess veya Chess.com hesabınızdan otomatik sayılır.
-                Lichess&apos;te tek tek bulmaca listesi için yukarıdan hesabınızı OAuth ile bağlayın.
                 Profilinizde kullanıcı adınız tanımlı olmalı.
               </span>
             </div>
@@ -530,12 +530,12 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
             <Grid className="w-5 h-5 text-indigo-400" />
-            Ödevlerim
+            Antremanım
           </h2>
           <p className="text-slate-400 text-sm mt-1">
-            {summary.total > 0
-              ? `${summary.remainingPuzzles} bulmaca kaldı · ${summary.earnedPoints} puan · haftalık programlar aşağıda`
-              : 'Öğretmeninizin atadığı bulmaca ve haftalık programlar burada listelenir.'}
+            {progressList.length > 0
+              ? 'Haftalık antrenman programınız aşağıda listelenir.'
+              : 'Öğretmeninizin atadığı haftalık program burada görünür.'}
           </p>
         </div>
         <button
@@ -549,103 +549,46 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
         </button>
       </div>
 
-      <LichessOAuthConnect
-        student={student}
-        onDisconnected={onRefreshPlatform ?? onRefresh}
-      />
-
       {homeworksLoading && (
         <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-8 text-center">
           <RefreshCw className="w-10 h-10 text-indigo-400 animate-spin mx-auto mb-2" />
-          <p className="text-slate-400 text-sm">Ödevler yükleniyor...</p>
+          <p className="text-slate-400 text-sm">Antreman yükleniyor...</p>
         </div>
       )}
 
-      {!homeworksLoading && summary.total > 0 && (
+      {!homeworksLoading && progressList.length > 0 && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: 'Yapılacak', value: summary.todo, color: 'text-slate-300' },
-              { label: 'Devam eden', value: summary.progress, color: 'text-amber-400' },
-              { label: 'Tamamlanan', value: summary.done, color: 'text-emerald-400' },
-              { label: 'Acil', value: summary.urgent, color: 'text-rose-400' },
-            ].map((item) => (
-              <div key={item.label} className="rounded-xl bg-slate-800/50 border border-slate-700/50 p-3 sm:p-4">
-                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{item.label}</p>
-                <p className={`text-xl font-black mt-0.5 tabular-nums ${item.color}`}>{item.value}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="relative flex-1">
+          {progressList.length > 1 && (
+            <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
               <input
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Ödev ara..."
+                placeholder="Antrenman ara..."
                 className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-800/80 border border-slate-700/50 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500/50"
               />
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {([
-                ['all', 'Tümü'],
-                ['todo', 'Yapılacak'],
-                ['progress', 'Devam'],
-                ['done', 'Bitti'],
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setFilter(key)}
-                  className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-                    filter === key
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
 
           <div className="space-y-4">
-            {activeList.length > 0 ? (
-              activeList.map(renderCard)
-            ) : filter !== 'done' && completedList.length === 0 ? (
+            {filtered.length > 0 ? (
+              filtered.map(renderCard)
+            ) : (
               <div className="rounded-xl border border-dashed border-white/10 p-8 text-center text-slate-500 text-sm">
-                Bu filtreye uygun ödev yok.
-              </div>
-            ) : null}
-
-            {completedList.length > 0 && filter !== 'todo' && filter !== 'progress' && (
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setShowCompleted((v) => !v)}
-                  className="flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-white mb-3"
-                >
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  Tamamlanan ödevler ({completedList.length})
-                  {showCompleted ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                </button>
-                {showCompleted && (
-                  <div className="space-y-3 opacity-90">
-                    {completedList.map(renderCard)}
-                  </div>
-                )}
+                Aramanıza uygun antrenman bulunamadı.
               </div>
             )}
-
-            {filter === 'done' && completedList.map(renderCard)}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 px-1">
             <Clock className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
             <span>Günlük hedefler gece yarısı sıfırlanır.</span>
-            <span className="text-indigo-400/80">· Gün sonu: {midnightCountdown}</span>
+            <span className="text-indigo-400/80">
+              {isDailyHomeworkDayClosed(homeworkDayKey)
+                ? '· Bugünkü gün kapandı (23:59)'
+                : `· Gün sonu (23:59): ${midnightCountdown}`}
+            </span>
           </div>
           {externalStatsNote && (
             <div className="flex items-start gap-2 rounded-xl border border-slate-600/40 bg-slate-800/60 px-3 py-2 text-xs text-slate-400">
@@ -662,7 +605,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
         </>
       )}
 
-      {!homeworksLoading && summary.total === 0 && (
+      {!homeworksLoading && progressList.length === 0 && (
         <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-10 text-center">
           <Target className="w-12 h-12 text-slate-500 mx-auto mb-3" />
           <h3 className="text-white font-bold mb-1">Henüz atanmış bulmaca yok</h3>

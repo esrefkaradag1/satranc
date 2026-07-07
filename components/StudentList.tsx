@@ -39,15 +39,16 @@ import { uploadStudentPhotoDataUrl, isDisplayablePhotoUrl } from '../lib/student
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { getCoachNamesForStudent, coachesForClub } from '../lib/orgScope';
 import { normalizeClubKey } from '../lib/clubScope';
+import { searchIncludesText } from '../lib/searchText';
 
 const PLACEHOLDER_OFFICE = 'Şube Seçiniz';
 const PLACEHOLDER_DISCIPLINE = 'Branş Seçiniz';
 const PLACEHOLDER_GROUP = 'Grup Seçiniz';
 const PLACEHOLDER_COACH = 'Antrenör Seçiniz';
 
-const BRANCH_OFFICES = ['Tüm Şubeler', 'Merkez', 'Çayyolu', 'Ümitköy'];
-const BRANCHES = ['Tüm Branşlar', 'Satranç', 'Robotik', 'Kodlama'];
-const GROUPS = ['Tüm Gruplar', 'Alt Yapı A', 'Alt Yapı B', 'Gelişim A', 'Gelişim B'];
+const FILTER_ALL_OFFICES = 'Tüm Şubeler';
+const FILTER_ALL_BRANCHES = 'Tüm Branşlar';
+const FILTER_ALL_GROUPS = 'Tüm Gruplar';
 
 interface StudentListProps {
  onAddNew?: () => void;
@@ -60,9 +61,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const isCoach = auth?.role === 'coach';
  const baseStudents = scopedStudents;
  const [searchTerm, setSearchTerm] = useState('');
- const [filterBranchOffice, setFilterBranchOffice] = useState(BRANCH_OFFICES[0]);
- const [filterBranch, setFilterBranch] = useState(BRANCHES[0]);
- const [filterGroup, setFilterGroup] = useState(GROUPS[0]);
+ const [filterBranchOffice, setFilterBranchOffice] = useState(FILTER_ALL_OFFICES);
+ const [filterBranch, setFilterBranch] = useState(FILTER_ALL_BRANCHES);
+ const [filterGroup, setFilterGroup] = useState(FILTER_ALL_GROUPS);
  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
  const [filterScholarship, setFilterScholarship] = useState<'all' | 'yes' | 'no'>('all');
  const [filterCoach, setFilterCoach] = useState('Tüm Antrenörler');
@@ -144,6 +145,45 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   [branchOffices, scopedDisciplineBranches],
  );
 
+ const filterOfficeOptions = useMemo(
+  () => [FILTER_ALL_OFFICES, ...mergedOffices],
+  [mergedOffices],
+ );
+
+ const filterBranchOptions = useMemo(() => {
+  const office = filterBranchOffice !== FILTER_ALL_OFFICES ? filterBranchOffice : undefined;
+  const names = disciplineNamesForOffice(scopedDisciplineBranches, office);
+  return [FILTER_ALL_BRANCHES, ...names];
+ }, [scopedDisciplineBranches, filterBranchOffice]);
+
+ const filterGroupOptions = useMemo(() => {
+  const office = filterBranchOffice !== FILTER_ALL_OFFICES ? filterBranchOffice : '';
+  const discipline = filterBranch !== FILTER_ALL_BRANCHES ? filterBranch : '';
+  const names = scopedTrainingGroups
+   .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
+   .map((g) => g.name.trim())
+   .filter(Boolean);
+  return [FILTER_ALL_GROUPS, ...[...new Set(names)].sort((a, b) => a.localeCompare(b, 'tr'))];
+ }, [scopedTrainingGroups, filterBranchOffice, filterBranch]);
+
+ useEffect(() => {
+  if (filterBranchOffice !== FILTER_ALL_OFFICES && !mergedOffices.includes(filterBranchOffice)) {
+   setFilterBranchOffice(FILTER_ALL_OFFICES);
+  }
+ }, [filterBranchOffice, mergedOffices]);
+
+ useEffect(() => {
+  if (filterBranch !== FILTER_ALL_BRANCHES && !filterBranchOptions.includes(filterBranch)) {
+   setFilterBranch(FILTER_ALL_BRANCHES);
+  }
+ }, [filterBranch, filterBranchOptions]);
+
+ useEffect(() => {
+  if (filterGroup !== FILTER_ALL_GROUPS && !filterGroupOptions.includes(filterGroup)) {
+   setFilterGroup(FILTER_ALL_GROUPS);
+  }
+ }, [filterGroup, filterGroupOptions]);
+
  const editOfficeOptions = useMemo(
   () => [PLACEHOLDER_OFFICE, ...mergedOffices],
   [mergedOffices],
@@ -181,15 +221,15 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   .filter((s) => {
  const matchSearch =
  !searchTerm ||
- s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
- s.group.toLowerCase().includes(searchTerm.toLowerCase()) ||
+ searchIncludesText(s.name, searchTerm) ||
+ searchIncludesText(s.group, searchTerm) ||
  (s.tcNo && s.tcNo.includes(searchTerm)) ||
  (s.parentPhone && s.parentPhone.includes(searchTerm));
  const matchBranchOffice =
- filterBranchOffice === BRANCH_OFFICES[0] || s.branchOffice === filterBranchOffice;
+ filterBranchOffice === FILTER_ALL_OFFICES || s.branchOffice === filterBranchOffice;
  const matchBranch =
- filterBranch === BRANCHES[0] || s.branch === filterBranch || s.group === filterBranch;
- const matchGroup = filterGroup === GROUPS[0] || s.group === filterGroup;
+ filterBranch === FILTER_ALL_BRANCHES || s.branch === filterBranch || s.group === filterBranch;
+ const matchGroup = filterGroup === FILTER_ALL_GROUPS || s.group === filterGroup;
  const matchStatus =
  filterStatus === 'all' ||
  (filterStatus === 'active' && s.status !== 'inactive') ||
@@ -228,9 +268,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
 
  const clearFilters = () => {
  setSearchTerm('');
- setFilterBranchOffice(BRANCH_OFFICES[0]);
- setFilterBranch(BRANCHES[0]);
- setFilterGroup(GROUPS[0]);
+ setFilterBranchOffice(FILTER_ALL_OFFICES);
+ setFilterBranch(FILTER_ALL_BRANCHES);
+ setFilterGroup(FILTER_ALL_GROUPS);
  setFilterStatus('all');
  setFilterScholarship('all');
  setFilterCoach('Tüm Antrenörler');
@@ -542,19 +582,26 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    <>
  <select
  value={filterBranchOffice}
- onChange={(e) => setFilterBranchOffice(e.target.value)}
+ onChange={(e) => {
+  setFilterBranchOffice(e.target.value);
+  setFilterBranch(FILTER_ALL_BRANCHES);
+  setFilterGroup(FILTER_ALL_GROUPS);
+ }}
  className="w-full lg:w-auto lg:flex-1 lg:min-w-[120px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
  >
- {BRANCH_OFFICES.map((o) => (
+ {filterOfficeOptions.map((o) => (
  <option key={o} value={o}>{o}</option>
  ))}
  </select>
  <select
  value={filterBranch}
- onChange={(e) => setFilterBranch(e.target.value)}
+ onChange={(e) => {
+  setFilterBranch(e.target.value);
+  setFilterGroup(FILTER_ALL_GROUPS);
+ }}
  className="w-full lg:w-auto lg:flex-1 lg:min-w-[110px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
  >
- {BRANCHES.map((b) => (
+ {filterBranchOptions.map((b) => (
  <option key={b} value={b}>{b}</option>
  ))}
  </select>
@@ -563,7 +610,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  onChange={(e) => setFilterGroup(e.target.value)}
  className="w-full lg:w-auto lg:flex-1 lg:min-w-[110px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
  >
- {GROUPS.map((g) => (
+ {filterGroupOptions.map((g) => (
  <option key={g} value={g}>{g}</option>
  ))}
  </select>

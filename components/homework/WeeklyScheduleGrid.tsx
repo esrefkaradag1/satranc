@@ -2,8 +2,11 @@ import React, { useMemo } from 'react';
 import { Calendar, Copy, RefreshCw, Save, Users } from 'lucide-react';
 import type { Student, StudentDailyTarget } from '../../types';
 import { PROGRAM_BULK_EDIT_ID, WEEKDAY_LABELS } from '../../lib/homeworkPanelUtils';
+import { useApp } from '../../AppContext';
+import { canShowStudentCounts } from '../../lib/studentCountVisibility';
 
 import type { DayCompletionStatus } from '../../lib/homeworkDayUtils';
+import { dayCompletionLabel } from '../../lib/homeworkDayUtils';
 
 type DayPatch = Partial<NonNullable<StudentDailyTarget['weeklySchedule']>[number]>;
 
@@ -42,16 +45,8 @@ function completionStyles(status: DayCompletionStatus | undefined): string {
 }
 
 function completionLabel(status: DayCompletionStatus | undefined): string | null {
-  switch (status) {
-    case 'done':
-      return 'Tamam';
-    case 'missed':
-      return 'Eksik';
-    case 'pending':
-      return 'Bekliyor';
-    default:
-      return null;
-  }
+  if (!status || status === 'none') return null;
+  return dayCompletionLabel(status);
 }
 
 function numVal(v: number | undefined): string {
@@ -100,6 +95,8 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
   autoSelectedHomework = false,
   variant = 'program',
 }) => {
+  const { auth } = useApp();
+  const showStudentCounts = canShowStudentCounts(auth);
   const isAssign = variant === 'assign';
   const showSaveButton = !isAssign;
   const showPlatformRefresh = !isAssign && Boolean(onRefreshPlatform);
@@ -211,7 +208,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
               }`}
             >
               <Users className="w-3.5 h-3.5" />
-              Tüm Grup ({students.length})
+              Tüm Grup{showStudentCounts ? ` (${students.length})` : ''}
             </button>
           ) : null}
           {students.map((s) => (
@@ -235,7 +232,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
             {isBulk ? (
               <div className="rounded-xl border border-violet-500/25 bg-violet-500/10 px-4 py-3">
                 <p className="text-sm font-bold text-violet-200">
-                  Toplu düzenleme — {students.length} öğrenci
+                  Toplu düzenleme{showStudentCounts ? ` — ${students.length} öğrenci` : ''}
                 </p>
                 <p className="text-[10px] text-violet-300/80 mt-1">
                   Buradaki değişiklikler listedeki tüm öğrencilere uygulanır. Sol panelden şube / grup seçerek kapsamı daraltabilirsiniz.

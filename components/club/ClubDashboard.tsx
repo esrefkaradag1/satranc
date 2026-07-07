@@ -28,6 +28,7 @@ import { Dashboard3DBackground } from '../dashboard/Dashboard3DBackground';
 import { DashboardHeroScene } from '../dashboard/DashboardHeroScene';
 import { QuickMenuButton, QuickStatCard } from '../dashboard/dashboardQuickUI';
 import type { Club, Coach, Student, Transaction } from '../../types';
+import { canShowStudentCounts } from '../../lib/studentCountVisibility';
 
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 
@@ -54,7 +55,7 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
   onNavigate,
   canAccess,
 }) => {
-  const { homeworks, lessons, scopedTournaments } = useApp();
+  const { homeworks, lessons, scopedTournaments, auth } = useApp();
   const clubKey = normalizeClubKey(branch);
 
   const totalIncome = useMemo(
@@ -108,6 +109,7 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
     };
   }, [transactions]);
 
+  const showStudentCounts = canShowStudentCounts(auth);
   const activeStudents = useMemo(() => students.filter((s) => s.status !== 'inactive').length, [students]);
   const groupCount = useMemo(() => new Set(students.map((s) => s.group).filter(Boolean)).size, [students]);
   const paid = students.filter((s) => s.paymentStatus === 'Paid').length;
@@ -218,9 +220,9 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
           <div className="lg:col-span-5 grid grid-cols-3 gap-3">
             <QuickStatCard
               icon={<Users className="w-5 h-5" />}
-              value={activeStudents.toString()}
+              value={showStudentCounts ? activeStudents.toString() : '—'}
               label="Öğrenci"
-              sub={`${groupCount} grup`}
+              sub={showStudentCounts ? `${groupCount} grup` : 'Özet'}
               bg="from-emerald-700 to-emerald-900"
               onClick={() => onNavigate(studentListTab)}
             />
@@ -580,11 +582,17 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
                         <span className="text-amber-200 font-semibold">{homeworkKpis.overdue} gecikmiş ödev</span> var.
                       </>
                     ) : unpaid > 0 ? (
-                      <>
-                        <span className="text-amber-200 font-semibold">{unpaid} öğrenci</span> ödeme bekliyor.
-                      </>
-                    ) : (
+                      showStudentCounts ? (
+                        <>
+                          <span className="text-amber-200 font-semibold">{unpaid} öğrenci</span> ödeme bekliyor.
+                        </>
+                      ) : (
+                        <>Ödeme bekleyen kayıtlar var.</>
+                      )
+                    ) : showStudentCounts ? (
                       `${branch} kulübü dengeli görünüyor. ${coaches.length} antrenör, ${activeStudents} aktif öğrenci.`
+                    ) : (
+                      `${branch} kulübü dengeli görünüyor. ${coaches.length} antrenör.`
                     )}
                   </p>
                 </div>

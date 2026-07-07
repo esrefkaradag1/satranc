@@ -95,6 +95,7 @@ export async function fetchUkdFromTsfServer(params: {
 
   const form = new URLSearchParams();
   form.set('t', 'ukdbilgigoster');
+  form.set('sessionid', '');
   if (tc) {
     form.set('tckimlikno', tc);
   } else {
@@ -109,6 +110,7 @@ export async function fetchUkdFromTsfServer(params: {
       Accept: 'text/html',
     },
     body: form.toString(),
+    signal: AbortSignal.timeout(20000),
   });
 
   if (!res.ok) {

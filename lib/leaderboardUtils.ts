@@ -157,7 +157,10 @@ export interface LeaderboardEntry {
   name: string;
   initials: string;
   group: string;
+  /** Doğru bulmaca sayısı (gösterim) */
   puzzles: number;
+  /** Yanlış bulmaca denemesi — puan hesabı için */
+  puzzleWrong?: number;
   games: number;
   internalPuzzles: number;
   wins: number;
@@ -198,7 +201,11 @@ export function rankLeaderboardEntries(
   pointSettings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
 ): LeaderboardEntry[] {
   const activityScores = rows.map((r) =>
-    computeLeaderboardScore(r.puzzles, r.gameResultsByMode, pointSettings),
+    computeLeaderboardScoreFromBreakdown(
+      { correct: r.puzzles, wrong: r.puzzleWrong ?? 0 },
+      r.gameResultsByMode,
+      pointSettings,
+    ),
   );
   const withScore = rows.map((r, i) => {
     const score = activityScores[i]!;
@@ -235,6 +242,7 @@ export function entryForStudent(
   wins = 0,
   draws = 0,
   losses = 0,
+  puzzleWrong = 0,
 ): Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'> {
   return {
     studentId: student.id,
@@ -242,6 +250,7 @@ export function entryForStudent(
     initials: studentInitials(student.name),
     group: student.group || '—',
     puzzles,
+    puzzleWrong,
     games,
     internalPuzzles,
     wins,

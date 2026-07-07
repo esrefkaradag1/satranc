@@ -31,8 +31,15 @@ export function msUntilLocalMidnight(ref = new Date()): number {
   return Math.max(0, end.getTime() - ref.getTime());
 }
 
+/** Günlük ödev günü kapanışına (23:59) kalan süre */
+export function msUntilDailyHomeworkClose(ref = new Date()): number {
+  const closeAt = new Date(ref);
+  closeAt.setHours(23, 59, 0, 0);
+  return Math.max(0, closeAt.getTime() - ref.getTime());
+}
+
 export function formatMidnightCountdown(ref = new Date()): string {
-  const ms = msUntilLocalMidnight(ref);
+  const ms = msUntilDailyHomeworkClose(ref);
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
   const s = Math.floor((ms % 60000) / 1000);
@@ -41,6 +48,44 @@ export function formatMidnightCountdown(ref = new Date()): string {
 
 export function isToday(isoDate: string): boolean {
   return isoDate === todayDayKey();
+}
+
+/** Günlük hedef günü kapandı mı? (geçmiş günler veya bugün 23:59 sonrası) */
+export function isDailyHomeworkDayClosed(isoDate: string, ref = new Date()): boolean {
+  const day = isoDate.slice(0, 10);
+  const today = todayDayKey(ref);
+  if (day < today) return true;
+  if (day > today) return false;
+  const closeAt = new Date(ref);
+  closeAt.setHours(23, 59, 0, 0);
+  return ref.getTime() >= closeAt.getTime();
+}
+
+export function resolveDayCompletionStatus(
+  isoDate: string,
+  done: boolean,
+  ref = new Date(),
+): DayCompletionStatus {
+  if (done) return 'done';
+  if (isDailyHomeworkDayClosed(isoDate, ref)) return 'missed';
+  if (isoDate.slice(0, 10) > todayDayKey(ref)) return 'pending';
+  return 'pending';
+}
+
+export function dayCompletionLabel(
+  status: DayCompletionStatus,
+  opts?: { isToday?: boolean },
+): string {
+  switch (status) {
+    case 'done':
+      return 'Tamam';
+    case 'missed':
+      return 'Yapılmadı';
+    case 'pending':
+      return opts?.isToday ? 'Bugün' : 'Bekliyor';
+    default:
+      return '—';
+  }
 }
 
 /** ISO gün anahtarında ±N gün kaydırır */

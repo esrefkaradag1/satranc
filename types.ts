@@ -164,6 +164,23 @@ export interface AppRole {
 }
 
 /** Kurumsal yapıda yönetilen kulüp (şube) — ad, adres, aktif günler, giriş parolası */
+export interface ClubExtendedProfile {
+  /** Kulüp tanıtım metni */
+  description?: string;
+  phone?: string;
+  email?: string;
+  whatsapp?: string;
+  website?: string;
+  instagram?: string;
+  facebook?: string;
+  city?: string;
+  district?: string;
+  /** Örn: "14:00 – 20:00" veya serbest metin */
+  openingHours?: string;
+  foundedYear?: string;
+  contactPerson?: string;
+}
+
 export interface Club {
   id: string;
   name: string;
@@ -178,6 +195,10 @@ export interface Club {
   roleId?: string;
   /** Lider tablosu mod bazlı puan ayarları */
   leaderboardPoints?: LeaderboardPointSettings;
+  /** Kulüp logosu (URL) */
+  logoUrl?: string;
+  /** İletişim, sosyal medya ve tanıtım alanları */
+  profile?: ClubExtendedProfile;
 }
 
 /** Kulüp tarafından eklenen antrenör (şubeye bağlı) */
@@ -227,6 +248,8 @@ export interface Transaction {
   lessonBranchOffice?: string;
   /** Özel ders paketindeki toplam ders/saat */
   lessonCount?: number;
+  /** Sisteme aktarım öncesi kullanılmış ders sayısı (devir bakiye için) */
+  startingUsedLessons?: number;
   /** Özel ders paketi geçerlilik süresi */
   validityDays?: number;
   branch?: string;
@@ -289,6 +312,11 @@ export interface AttendanceRecord {
   date: string;
   studentId: string;
   lessonId?: string;
+  attendanceType?: 'group' | 'lesson';
+  groupName?: string;
+  branch?: string;
+  branchOffice?: string;
+  sessionTime?: string;
   status: 'present' | 'absent' | 'late' | 'excused';
   notifiedParent?: boolean;
   /** Yoklama alan antrenör/öğretmen adı */
@@ -344,7 +372,7 @@ export interface HomeworkAssignment {
   puzzles: string[]; // Puzzle IDs
   /** Boş string = son teslim tarihi yok */
   dueDate: string;
-  assignedTo: string[]; // Group names or student IDs
+  assignedTo: string[]; // group:<name>, exclude:<studentId> or direct student IDs
   /** Günlük hedeflenen maç adedi (platform bağımsız) */
   dailyGameTarget?: number;
   /** Günlük hedeflenen bulmaca adedi */
@@ -558,6 +586,8 @@ export type WhatsAppTemplateKey =
   | 'parent_consent'
   | 'lesson_start'
   | 'attendance_reminder'
+  | 'training_completed'
+  | 'training_incomplete'
   | 'manual';
 
 export interface WhatsAppTemplate {
@@ -583,7 +613,12 @@ export interface WhatsAppMessageLog {
   createdAt: string;
 }
 
-export type WhatsAppAutoEvent = 'parent_login' | 'parent_consent' | 'lesson_start';
+export type WhatsAppAutoEvent =
+  | 'parent_login'
+  | 'parent_consent'
+  | 'lesson_start'
+  | 'training_completed'
+  | 'training_incomplete';
 
 export interface WhatsAppAutoRule {
   event: WhatsAppAutoEvent;

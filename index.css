@@ -98,6 +98,48 @@
     @apply bg-[#0f172a]/40 backdrop-blur-xl border border-white/[0.08];
   }
 
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding:
+      max(env(safe-area-inset-top), 0.5rem)
+      max(env(safe-area-inset-right), 0.75rem)
+      max(env(safe-area-inset-bottom), 0.75rem)
+      max(env(safe-area-inset-left), 0.75rem);
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(10px);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .modal-panel {
+    width: 100%;
+    min-width: 0;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 1rem);
+  }
+
+  .modal-panel-scroll {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .modal-scroll-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .hero-glow {
     background:
       radial-gradient(ellipse 80% 60% at 20% 0%, rgba(99, 102, 241, 0.35), transparent 55%),
@@ -199,6 +241,17 @@
 @media (min-width: 768px) {
   .responsive-table-inner > table {
     min-width: var(--rt-min-width, 600px);
+  }
+}
+
+@media (min-width: 640px) {
+  .modal-overlay {
+    align-items: flex-start;
+    padding: 5rem;
+  }
+
+  .modal-panel {
+    max-height: min(96dvh, calc(100dvh - 2rem));
   }
 }
 

@@ -19,6 +19,19 @@ export { parseChessComTactics2Puzzles };
 const LICHESS_DIRECT_API = 'https://lichess.org/api';
 const CHESSCOM_DIRECT_API = 'https://api.chess.com/pub';
 const FETCH_TIMEOUT_MS = 8000;
+const LICHESS_USERNAME_RE = /^[A-Za-z0-9_-]{1,30}$/;
+const CHESSCOM_USERNAME_RE = /^[a-z0-9_-]{1,25}$/i;
+
+function normalizeLichessUsername(username: string): string {
+  const trimmed = username.trim();
+  return LICHESS_USERNAME_RE.test(trimmed) ? trimmed : '';
+}
+
+function normalizeChessComUsername(username: string): string {
+  const trimmed = username.trim().toLowerCase();
+  return CHESSCOM_USERNAME_RE.test(trimmed) ? trimmed : '';
+}
+
 function lichessProxyUrl(apiPath: string, params?: URLSearchParams): string {
   const q = new URLSearchParams();
   q.set('path', apiPath.replace(/^\/+/, ''));
@@ -42,9 +55,20 @@ async function lichessApiFetch(
   init?: RequestInit,
   params?: URLSearchParams,
 ): Promise<Response> {
+  if (isLichessGloballyRateLimited()) {
+    return new Response('[]', {
+      status: 429,
+      statusText: 'Lichess rate limit (bekleme)',
+      headers: { 'Content-Type': 'application/json', 'X-Lichess-Rate-Limited': '1' },
+    });
+  }
   return runLichessThrottled(async () => {
     if (isLichessGloballyRateLimited()) {
-      return new Response(null, { status: 429, statusText: 'Lichess rate limit (bekleme)' });
+      return new Response('[]', {
+        status: 429,
+        statusText: 'Lichess rate limit (bekleme)',
+        headers: { 'Content-Type': 'application/json', 'X-Lichess-Rate-Limited': '1' },
+      });
     }
     const proxyUrl = lichessProxyUrl(apiPath, params);
     const res = await fetchWithTimeout(proxyUrl, init);
@@ -76,9 +100,6 @@ function sleep(ms: number): Promise<void> {
 /** Tüm Lichess proxy isteklerini sıraya alır; Lichess rate limit (429) riskini azaltır. */
 async function runLichessThrottled<T>(fn: () => Promise<T>): Promise<T> {
   const task = async () => {
-    const now = Date.now();
-    const backoffWait = lichessGlobalBackoffUntil - now;
-    if (backoffWait > 0) await sleep(backoffWait);
     const gapWait = lichessLastRequestDoneAt + LICHESS_MIN_REQUEST_GAP_MS - Date.now();
     if (gapWait > 0) await sleep(gapWait);
     try {
@@ -267,7 +288,7 @@ export async function fetchChessComAllUserGames(
   username: string,
   opts?: FetchChessComAllGamesOptions
 ): Promise<ChessComGame[]> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return [];
   const maxTotal = opts?.maxTotal ?? 50_000;
   const onProgress = opts?.onProgress;
@@ -308,7 +329,7 @@ export async function fetchChessComGamesPage(
   username: string,
   opts?: FetchChessComGamesPageOptions
 ): Promise<FetchChessComGamesPageResult> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return { games: [], nextBeforeEndTime: null, hasMore: false };
   const pageSize = Math.max(1, Math.min(100, Math.floor(opts?.max ?? 20)));
   const beforeEndTime = typeof opts?.beforeEndTime === 'number' && Number.isFinite(opts.beforeEndTime)
@@ -358,10 +379,10 @@ export async function fetchChessComGamesPage(
 
 /** Lichess kullanıcı profili ve rating'leri çeker */
 export async function fetchLichessUser(username: string): Promise<LichessUserProfile | null> {
-  const trimmed = username.trim();
+  const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return null;
   try {
-    const res = await lichessApiFetch(`user/${encodeURIComponent(trimmed)}`, {
+    const res = await lichessApiFetch(`user/${trimmed}`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return null;
@@ -409,12 +430,12 @@ function parseNdjsonGames(text: string): LichessGame[] {
 
 /** Lichess kullanıcısının son oyunlarını çeker (ND-JSON) */
 export async function fetchLichessRecentGames(username: string, max = 10): Promise<LichessGame[]> {
-  const trimmed = username.trim();
+  const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return [];
   try {
     const params = new URLSearchParams({ max: String(max), moves: '0', opening: 'true' });
     const res = await lichessApiFetch(
-      `games/user/${encodeURIComponent(trimmed)}`,
+      `games/user/${trimmed}`,
       { headers: { Accept: 'application/x-ndjson' } },
       params,
     );
@@ -441,7 +462,7 @@ export async function fetchLichessGamesPage(
   username: string,
   opts?: FetchLichessGamesPageOptions
 ): Promise<FetchLichessGamesPageResult> {
-  const trimmed = username.trim();
+  const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return { games: [], nextUntil: null, hasMore: false };
   const pageSize = Math.max(1, Math.min(100, Math.floor(opts?.max ?? 20)));
   try {
@@ -453,7 +474,7 @@ export async function fetchLichessGamesPage(
       params.set('until', String(Math.floor(opts.until)));
     }
     const res = await lichessApiFetch(
-      `games/user/${encodeURIComponent(trimmed)}`,
+      `games/user/${trimmed}`,
       { headers: { Accept: 'application/x-ndjson' } },
       params,
     );
@@ -489,7 +510,7 @@ export async function fetchLichessAllUserGames(
   username: string,
   opts?: FetchLichessAllGamesOptions
 ): Promise<LichessGame[]> {
-  const trimmed = username.trim();
+  const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return [];
   const maxTotal = opts?.maxTotal ?? 50_000;
   const onProgress = opts?.onProgress;
@@ -510,7 +531,7 @@ export async function fetchLichessAllUserGames(
       if (until !== undefined) params.set('until', String(until));
 
       const res = await lichessApiFetch(
-        `games/user/${encodeURIComponent(trimmed)}`,
+        `games/user/${trimmed}`,
         { headers: { Accept: 'application/x-ndjson' } },
         params,
       );
@@ -563,7 +584,7 @@ export async function fetchLichessGamesForDay(
   username: string,
   day: string = new Date().toISOString().slice(0, 10),
 ): Promise<LichessGame[]> {
-  const trimmed = username.trim();
+  const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return [];
   const target = day.slice(0, 10);
   const [y, m, d] = target.split('-').map(Number);
@@ -577,7 +598,7 @@ export async function fetchLichessGamesForDay(
     params.set('since', String(since));
     params.set('until', String(until));
     const res = await lichessApiFetch(
-      `games/user/${encodeURIComponent(trimmed)}`,
+      `games/user/${trimmed}`,
       { headers: { Accept: 'application/x-ndjson' } },
       params,
     );
@@ -596,7 +617,7 @@ export async function fetchLichessGamesForDay(
 
 /** Chess.com kullanıcı profili çeker */
 export async function fetchChessComPlayer(username: string): Promise<ChessComPlayer | null> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
   try {
     const res = await fetch(`${CHESSCOM_API}/player/${encodeURIComponent(trimmed)}`);
@@ -609,7 +630,7 @@ export async function fetchChessComPlayer(username: string): Promise<ChessComPla
 
 /** Chess.com kullanıcı istatistikleri (rating'ler) çeker */
 export async function fetchChessComStats(username: string): Promise<ChessComStats | null> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
   try {
     const res = await fetch(`${CHESSCOM_API}/player/${encodeURIComponent(trimmed)}/stats`);
@@ -622,7 +643,7 @@ export async function fetchChessComStats(username: string): Promise<ChessComStat
 
 /** Chess.com son oyunları çeker (yalnızca en güncel aydan; hızlı önizleme için) */
 export async function fetchChessComRecentGames(username: string, max = 10): Promise<ChessComGame[]> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return [];
   try {
     const archivesRes = await fetch(`${CHESSCOM_API}/player/${encodeURIComponent(trimmed)}/games/archives`);
@@ -869,7 +890,7 @@ export async function fetchChessComMemberStats(
   username: string,
   type: 'rated' | 'learning' | 'rush' = 'rated',
 ): Promise<ChessComMemberStats | null> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
   try {
     const res = await fetch(
@@ -953,7 +974,7 @@ function parseChessComPuzzlesBundlePayload(
 
 /** Tek istekte tüm bulmaca sekmeleri + hata mesajı */
 export async function fetchChessComPuzzlesBundleWithMeta(username: string): Promise<ChessComPuzzlesBundleResult> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return { data: null, error: 'Kullanıcı adı boş' };
   const profileUrl = `https://www.chess.com/member/${encodeURIComponent(trimmed)}/stats/puzzles`;
   try {
@@ -977,7 +998,7 @@ export async function fetchChessComPuzzlesBundleWithMeta(username: string): Prom
 
 /** Tek istekte tüm bulmaca sekmeleri (Chess.com profil ile aynı kaynak) */
 export async function fetchChessComPuzzlesBundle(username: string): Promise<ChessComPuzzlesBundle | null> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
   const profileUrl = `https://www.chess.com/member/${encodeURIComponent(trimmed)}/stats/puzzles`;
   try {
@@ -1054,7 +1075,7 @@ export async function fetchChessComRecentPuzzles(
   username: string,
   type: ChessComPuzzleTab = 'rated',
 ): Promise<ChessComRecentPuzzlesResult> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   const profileUrl = trimmed
     ? `https://www.chess.com/member/${encodeURIComponent(trimmed)}/stats/puzzles`
     : undefined;
@@ -1156,7 +1177,7 @@ export function lichessPerfLabel(key: string): string {
  * Aynı kullanıcı için eşzamanlı/tekrarlayan istekler önbellek ve tek uçuş birleştirmesiyle sınırlanır.
  */
 export async function fetchLichessActivity(username: string): Promise<LichessActivity[]> {
-  const trimmed = username.trim();
+  const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return [];
   const key = lichessActivityCacheKey(trimmed);
   const now = Date.now();
@@ -1165,16 +1186,24 @@ export async function fetchLichessActivity(username: string): Promise<LichessAct
     const ttl = cached.rateLimited ? LICHESS_ACTIVITY_RATE_LIMIT_MS : LICHESS_ACTIVITY_CACHE_TTL_MS;
     if (now - cached.fetchedAt < ttl) return cached.data;
   }
+  if (isLichessGloballyRateLimited()) {
+    const fallback = cached?.data ?? [];
+    lichessActivityCache.set(key, { fetchedAt: Date.now(), data: fallback, rateLimited: true });
+    return fallback;
+  }
 
   const inflight = lichessActivityInFlight.get(key);
   if (inflight) return inflight;
 
   const promise = (async () => {
     try {
-      const res = await lichessApiFetch(`user/${encodeURIComponent(trimmed)}/activity`, {
-        headers: { Accept: 'application/json' },
-      });
-      if (res.status === 429) {
+      const res = await lichessApiFetch(
+        `user/${trimmed}/activity`,
+        { headers: { Accept: 'application/json' } },
+        new URLSearchParams({ soft: '1' }),
+      );
+      const softlyRateLimited = res.headers.get('X-Lichess-Rate-Limited') === '1';
+      if (res.status === 429 || softlyRateLimited) {
         const fallback = cached?.data ?? [];
         lichessActivityCache.set(key, { fetchedAt: Date.now(), data: fallback, rateLimited: true });
         return fallback;
@@ -1208,8 +1237,9 @@ export async function fetchLichessGamesCountForDay(
   username: string,
   day: string = new Date().toISOString().slice(0, 10),
 ): Promise<number> {
-  const trimmed = username.trim();
+  const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return 0;
+  if (isLichessGloballyRateLimited()) return 0;
   const target = day.slice(0, 10);
   const [y, m, d] = target.split('-').map(Number);
   if (!y || !m || !d) return 0;
@@ -1220,7 +1250,7 @@ export async function fetchLichessGamesCountForDay(
     params.set('moves', '0');
     params.set('since', String(since));
     const res = await lichessApiFetch(
-      `games/user/${encodeURIComponent(trimmed)}`,
+      `games/user/${trimmed}`,
       { headers: { Accept: 'application/x-ndjson' } },
       params,
     );
@@ -1321,7 +1351,7 @@ export async function fetchChessComGamesListForDay(
   username: string,
   day: string = new Date().toISOString().slice(0, 10),
 ): Promise<ChessComGame[]> {
-  const trimmed = username.trim().toLowerCase();
+  const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return [];
   const target = day.slice(0, 10);
   const [y, m] = target.split('-');

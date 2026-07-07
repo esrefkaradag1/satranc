@@ -23,7 +23,7 @@ import Security from './components/Security';
 import Inventory from './components/Inventory';
 import StudyPage from './components/StudyPage';
 import Tournaments from './components/Tournaments';
-import { Menu, Search, Bell } from 'lucide-react';
+import { Menu, Search, Bell, LayoutDashboard, User } from 'lucide-react';
 import { AppProvider, useApp } from './AppContext';
 import { COACH_NAV_CATEGORIES, NAV_CATEGORIES, type NavCategory } from './constants';
 import ClubPanel from './components/ClubPanel';
@@ -34,7 +34,9 @@ import LeaderboardPage from './components/leaderboard/LeaderboardPage';
 import CoachProfilePage from './components/profile/CoachProfilePage';
 import AdminProfilePage from './components/profile/AdminProfilePage';
 import RoleManagement from './components/roles/RoleManagement';
+import AccountDropdown, { type AccountDropdownItem } from './components/ui/AccountDropdown';
 import { getSessionDisplay } from './lib/sessionDisplayName';
+import { loadAdminProfile } from './lib/adminProfile';
 import { filterNavByPermissions, coachNavForPermissions, isCoachPanelTabAllowed, coachSidebarTabFor } from './lib/rolePermissions';
 import { readPanelHash, writePanelHash, isAdminLoginRoute } from './lib/panelRouting';
 import { getClubApplicationSlug } from './lib/applicationClub';
@@ -134,6 +136,7 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
     () => getSessionDisplay(auth, { students, coaches, clubs }),
     [auth, students, coaches, clubs, profileTick],
   );
+  const adminProfile = useMemo(() => loadAdminProfile(), [profileTick]);
   const initial = readHash();
   const defaultAdminTab = 'dashboard';
   const [activeTab, setActiveTabRaw] = useState(() => {
@@ -263,6 +266,20 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
     () => filterNavByPermissions(NAV_CATEGORIES, authPermissions),
     [authPermissions],
   );
+  const adminAccountMenuItems: AccountDropdownItem[] = [
+    {
+      id: 'dashboard',
+      label: 'Yönetim paneli',
+      icon: <LayoutDashboard className="w-5 h-5" />,
+      onClick: () => handleSidebarTab('dashboard'),
+    },
+    {
+      id: 'profile',
+      label: 'Profilim',
+      icon: <User className="w-5 h-5" />,
+      onClick: () => setActiveTab('profile', null),
+    },
+  ];
 
   return (
     <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
@@ -271,6 +288,12 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
           setActiveTab={handleSidebarTab}
           navCategories={adminNavCategories}
           onLogout={onLogout}
+          footerProfile={{
+            name: session.fullName,
+            subtitle: session.roleLabel,
+            photoUrl: adminProfile.photoUrl,
+            menuItems: adminAccountMenuItems,
+          }}
           mobileOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           defaultIconOnly={sidebarIconOnlyDefault}
@@ -301,15 +324,15 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
                 <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-500 rounded-full border-2 border-[#020617]" />
               </button>
               <div className="h-6 sm:h-8 w-px bg-white/5 hidden sm:block" />
-              <div className="flex items-center gap-2 sm:gap-4 group cursor-pointer">
-                <div className="text-right hidden sm:block">
-                  <p className="text-sm font-bold tracking-tight text-slate-200 truncate max-w-[120px] lg:max-w-none">{session.fullName}</p>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{session.roleLabel}</p>
-                </div>
-                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg border-2 border-white/10 shadow-2xl overflow-hidden group-hover:scale-105 transition-transform shrink-0 bg-indigo-600/30 flex items-center justify-center text-indigo-200 font-black text-sm">
-                  {session.firstName.charAt(0).toUpperCase()}
-                </div>
-              </div>
+              <AccountDropdown
+                name={session.fullName}
+                subtitle={session.roleLabel}
+                photoUrl={adminProfile.photoUrl}
+                initials={session.firstName.charAt(0).toUpperCase()}
+                items={adminAccountMenuItems}
+                onLogout={onLogout}
+                accent="indigo"
+              />
             </div>
           </header>
 
@@ -339,6 +362,14 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   const session = useMemo(
     () => getSessionDisplay(auth, { students, coaches, clubs }),
     [auth, students, coaches, clubs, profileTick],
+  );
+  const coachProfile = useMemo(
+    () =>
+      auth?.role === 'coach'
+        ? (auth.coachId ? coaches.find((coach) => coach.id === auth.coachId) : undefined) ??
+          coaches.find((coach) => (coach.branch || '').trim() === (auth.branch || '').trim())
+        : undefined,
+    [auth, coaches],
   );
   const coachPermissions = authPermissions;
   const isCoachTabAllowed = useCallback(
@@ -533,6 +564,20 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarDesktopExpanded, setSidebarDesktopExpanded] = useState(true);
   const sidebarIconOnlyDefault = activeTab === 'lessons';
+  const coachAccountMenuItems: AccountDropdownItem[] = [
+    {
+      id: 'dashboard',
+      label: 'Antrenör paneli',
+      icon: <LayoutDashboard className="w-5 h-5" />,
+      onClick: () => handleSidebarTab(defaultCoachTab),
+    },
+    {
+      id: 'profile',
+      label: 'Profilim',
+      icon: <User className="w-5 h-5" />,
+      onClick: () => setActiveTab('profile', null),
+    },
+  ];
 
   return (
     <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
@@ -541,6 +586,12 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         setActiveTab={handleSidebarTab}
         navCategories={coachNavCategories}
         onLogout={onLogout}
+        footerProfile={{
+          name: session.fullName,
+          subtitle: coachProfile?.title || session.roleLabel,
+          photoUrl: coachProfile?.photoUrl,
+          menuItems: coachAccountMenuItems,
+        }}
         mobileOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         defaultIconOnly={sidebarIconOnlyDefault}
@@ -557,20 +608,22 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            <div className="text-right hidden sm:block">
-              <p className="text-xs sm:text-sm font-bold text-amber-400/90 truncate max-w-[140px] lg:max-w-none">{session.fullName}</p>
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{session.roleLabel}</p>
-            </div>
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 font-black shrink-0 text-sm">
-              {session.firstName.charAt(0).toUpperCase()}
-            </div>
+            <AccountDropdown
+              name={session.fullName}
+              subtitle={coachProfile?.title || session.roleLabel}
+              photoUrl={coachProfile?.photoUrl}
+              initials={session.firstName.charAt(0).toUpperCase()}
+              items={coachAccountMenuItems}
+              onLogout={onLogout}
+              accent="amber"
+            />
           </div>
         </header>
         <div
           className={
             FULL_BLEED_TABS.has(activeTab)
               ? 'flex-1 min-h-0 flex flex-col p-0 overflow-hidden relative z-10 w-full'
-              : 'p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full min-w-0 relative z-10 flex-1'
+              : 'p-4 sm:p-6 lg:p-8 mx-auto w-full min-w-0 relative z-10 flex-1'
           }
         >
           {renderContent()}

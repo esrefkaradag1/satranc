@@ -4,6 +4,8 @@ import { WEEKDAY_LABELS } from '../../lib/homeworkPanelUtils';
 import {
   isoDateForWeekday,
   mondayOfWeek,
+  resolveDayCompletionStatus,
+  dayCompletionLabel,
   type DayCompletionStatus,
 } from '../../lib/homeworkDayUtils';
 import {
@@ -33,17 +35,8 @@ function completionStyles(status: DayCompletionStatus): string {
   }
 }
 
-function completionLabel(status: DayCompletionStatus): string {
-  switch (status) {
-    case 'done':
-      return 'Tamam';
-    case 'missed':
-      return 'Eksik';
-    case 'pending':
-      return 'Bekliyor';
-    default:
-      return '—';
-  }
+function completionLabel(status: DayCompletionStatus, isToday: boolean): string {
+  return dayCompletionLabel(status, { isToday });
 }
 
 function formatDayDate(iso: string): string {
@@ -113,11 +106,7 @@ export const StudentWeeklyHomeworkGrid: React.FC<Props> = ({
       const platform = weekStatsByDate[iso];
       const evalResult = evaluatePlatformDayGoalsFromStats(gameTarget, puzzleTarget, minAccuracy, platform);
       const isFuture = iso > todayKey;
-      let status: DayCompletionStatus = 'pending';
-      if (isFuture) status = 'pending';
-      else if (evalResult.done) status = 'done';
-      else if (iso === todayKey) status = 'pending';
-      else status = 'missed';
+      const status = isFuture ? 'pending' : resolveDayCompletionStatus(iso, evalResult.done);
 
       rows.push({
         day,
@@ -170,7 +159,7 @@ export const StudentWeeklyHomeworkGrid: React.FC<Props> = ({
                 : row.status === 'missed' ? 'text-rose-400'
                   : 'text-amber-300'
             }`}>
-              {row.isToday && row.status === 'pending' ? 'Bugün' : completionLabel(row.status)}
+              {completionLabel(row.status, row.isToday)}
             </span>
           </div>
         ))}

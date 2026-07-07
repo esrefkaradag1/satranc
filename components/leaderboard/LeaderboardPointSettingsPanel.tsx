@@ -59,7 +59,7 @@ export const LeaderboardPointSettingsPanel: React.FC<Props> = ({
           <div className="min-w-0">
             <div className="text-sm font-bold text-white">Aktivite Puan Ayarları</div>
             <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-              {clubName ? `${clubName} · ` : ''}Bulmaca ve mod bazlı maç puanları (Rapid, Blitz, Bullet…)
+              {clubName ? `${clubName} · ` : ''}Bulmaca (doğru/yanlış) ve mod bazlı maç puanları
             </p>
           </div>
         </div>
@@ -68,18 +68,41 @@ export const LeaderboardPointSettingsPanel: React.FC<Props> = ({
 
       {open && (
         <div className="px-5 pb-5 border-t border-white/5 pt-4 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-2 items-center max-w-xs">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Bulmaca (puan)</label>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={draft.puzzle}
-              disabled={!canEdit}
-              onChange={(e) => setDraft((prev) => ({ ...prev, puzzle: Math.max(0, Math.round(Number(e.target.value) || 0)) }))}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-sm disabled:opacity-60"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md">
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-emerald-400/90 uppercase tracking-wider">Bulmaca — doğru (puan)</label>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={draft.puzzleCorrect ?? draft.puzzle}
+                disabled={!canEdit}
+                onChange={(e) => {
+                  const n = Math.max(0, Math.round(Number(e.target.value) || 0));
+                  setDraft((prev) => ({ ...prev, puzzle: n, puzzleCorrect: n }));
+                }}
+                className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-sm disabled:opacity-60"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-rose-400/90 uppercase tracking-wider">Bulmaca — yanlış (puan)</label>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={draft.puzzleWrong ?? 0}
+                disabled={!canEdit}
+                onChange={(e) => {
+                  const n = Math.max(0, Math.round(Number(e.target.value) || 0));
+                  setDraft((prev) => ({ ...prev, puzzleWrong: n }));
+                }}
+                className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-sm disabled:opacity-60"
+              />
+            </div>
           </div>
+          <p className="text-[11px] text-slate-500">
+            Yanlış puan 0 bırakılırsa önceki gibi yalnızca doğru bulmacalar sayılır. Mevcut kayıtlar otomatik uyumlu kalır.
+          </p>
 
           <div className="overflow-x-auto rounded-xl border border-white/5">
             <table className="w-full text-sm min-w-[520px]">

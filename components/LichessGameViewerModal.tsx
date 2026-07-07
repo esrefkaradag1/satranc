@@ -41,14 +41,14 @@ const LichessGameViewerModal: React.FC<{
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-sm"
+      className="modal-overlay z-[200]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="lichess-viewer-title"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-4xl max-h-[96vh] flex flex-col rounded-2xl border border-slate-600/60 bg-slate-900 shadow-2xl overflow-hidden"
+        className="modal-panel relative w-full max-w-4xl flex flex-col rounded-t-2xl sm:rounded-2xl border border-slate-600/60 bg-slate-900 shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 px-4 py-3 sm:px-5 sm:py-4 border-b border-slate-700/80 shrink-0">

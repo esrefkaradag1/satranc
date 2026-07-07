@@ -1,4 +1,5 @@
-import type { DisciplineBranch, GroupLessonSlot, Student, TrainingGroup } from '../types';
+import type { DisciplineBranch, GroupLessonSlot, LessonPackage, Student, TrainingGroup } from '../types';
+import { normalizeClubKey } from './clubScope';
 
 export const WEEKDAY_OPTIONS: { value: number; label: string }[] = [
   { value: 1, label: 'Pazartesi' },
@@ -14,6 +15,113 @@ export function monthKey(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, '0')}`;
 }
 
+export function branchOfficeMatches(
+  recordOffice: string | undefined,
+  selectedOffice: string | undefined,
+): boolean {
+  const selected = selectedOffice?.trim();
+  const record = recordOffice?.trim();
+  if (!selected) return true;
+  if (!record) return false;
+  return normalizeClubKey(record) === normalizeClubKey(selected);
+}
+
+export function disciplineMatches(
+  recordDiscipline: string | undefined,
+  selectedDiscipline: string | undefined,
+): boolean {
+  const selected = selectedDiscipline?.trim();
+  const record = recordDiscipline?.trim();
+  if (!selected) return true;
+  if (!record) return false;
+  return record.localeCompare(selected, 'tr', { sensitivity: 'accent' }) === 0;
+}
+
+export function filterTrainingGroupsForSelection(
+  groups: TrainingGroup[],
+  branchOffice?: string,
+  discipline?: string,
+): TrainingGroup[] {
+  return groups.filter(
+    (g) => branchOfficeMatches(g.branchOffice, branchOffice) && disciplineMatches(g.discipline, discipline),
+  );
+}
+
+export function trainingGroupNamesForSelection(
+  groups: TrainingGroup[],
+  branchOffice?: string,
+  discipline?: string,
+  includeName?: string,
+): string[] {
+  const names = filterTrainingGroupsForSelection(groups, branchOffice, discipline)
+    .map((g) => g.name.trim())
+    .filter(Boolean);
+  const set = new Set(names);
+  const extra = includeName?.trim();
+  if (extra) set.add(extra);
+  return [...set].sort((a, b) => a.localeCompare(b, 'tr'));
+}
+
+export function filterLessonPackagesForSelection(
+  packages: LessonPackage[],
+  branchOffice?: string,
+  discipline?: string,
+): LessonPackage[] {
+  return packages.filter(
+    (p) => branchOfficeMatches(p.branchOffice, branchOffice) && disciplineMatches(p.discipline, discipline),
+  );
+}
+
+export function lessonPackageNamesForSelection(
+  packages: LessonPackage[],
+  branchOffice?: string,
+  discipline?: string,
+  includeName?: string,
+): string[] {
+  const names = filterLessonPackagesForSelection(packages, branchOffice, discipline)
+    .map((p) => p.name.trim())
+    .filter(Boolean);
+  const set = new Set(names);
+  const extra = includeName?.trim();
+  if (extra) set.add(extra);
+  return [...set].sort((a, b) => a.localeCompare(b, 'tr'));
+}
+
+/** Ders paketi tanımlı branş adları (aylık grup branşları hariç) */
+export function disciplineNamesForPackages(
+  packages: LessonPackage[],
+  branchOffice?: string,
+  includeDiscipline?: string,
+): string[] {
+  const names = filterLessonPackagesForSelection(packages, branchOffice, undefined)
+    .map((p) => p.discipline.trim())
+    .filter(Boolean);
+  const set = new Set(names);
+  const extra = includeDiscipline?.trim();
+  if (extra) set.add(extra);
+  return [...set].sort((a, b) => a.localeCompare(b, 'tr'));
+}
+
+export function findLessonPackageByName(
+  packages: LessonPackage[],
+  name: string,
+  scope?: { branchOffice?: string; discipline?: string },
+): LessonPackage | undefined {
+  const trimmed = name.trim();
+  if (!trimmed) return undefined;
+  const matches = packages.filter((p) => p.name === trimmed);
+  if (!matches.length) return undefined;
+  if (scope?.branchOffice || scope?.discipline) {
+    const scoped = matches.find(
+      (p) =>
+        branchOfficeMatches(p.branchOffice, scope.branchOffice) &&
+        disciplineMatches(p.discipline, scope.discipline),
+    );
+    if (scoped) return scoped;
+  }
+  return matches[0];
+}
+
 export function findTrainingGroupByName(
   groups: TrainingGroup[],
   name: string,
@@ -23,12 +131,13 @@ export function findTrainingGroupByName(
   if (!trimmed) return undefined;
   const matches = groups.filter((g) => g.name === trimmed);
   if (!matches.length) return undefined;
-  if (scope?.branchOffice && scope.discipline) {
-    return (
-      matches.find(
-        (g) => g.branchOffice === scope.branchOffice!.trim() && g.discipline === scope.discipline!.trim(),
-      ) ?? matches[0]
+  if (scope?.branchOffice || scope?.discipline) {
+    const scoped = matches.find(
+      (g) =>
+        branchOfficeMatches(g.branchOffice, scope.branchOffice) &&
+        disciplineMatches(g.discipline, scope.discipline),
     );
+    if (scoped) return scoped;
   }
   return matches[0];
 }
@@ -239,9 +348,8 @@ export function disciplineNamesForOffice(
   disciplineBranches: DisciplineBranch[],
   branchOffice?: string,
 ): string[] {
-  const office = branchOffice?.trim();
-  const filtered = office
-    ? disciplineBranches.filter((b) => b.branchOffice === office)
+  const filtered = branchOffice?.trim()
+    ? disciplineBranches.filter((b) => branchOfficeMatches(b.branchOffice, branchOffice))
     : disciplineBranches;
   return [...new Set(filtered.map((b) => b.name.trim()).filter(Boolean))].sort((a, b) =>
     a.localeCompare(b, 'tr'),

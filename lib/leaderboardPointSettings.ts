@@ -7,13 +7,20 @@ export interface ModePointValues {
 }
 
 export interface LeaderboardPointSettings {
+  /** Doğru bulmaca puanı — geriye dönük uyumluluk için puzzleCorrect yoksa kullanılır */
   puzzle: number;
+  /** Doğru bulmaca puanı (opsiyonel; yoksa puzzle değeri) */
+  puzzleCorrect?: number;
+  /** Yanlış bulmaca puanı (varsayılan 0 — eski davranış) */
+  puzzleWrong?: number;
   bullet: ModePointValues;
   blitz: ModePointValues;
   rapid: ModePointValues;
   classical: ModePointValues;
   other: ModePointValues;
 }
+
+export type PuzzleScoreBreakdown = { correct: number; wrong: number };
 
 export const LEADERBOARD_SCORING_MODES: { id: LeaderboardScoringMode; label: string }[] = [
   { id: 'bullet', label: 'Bullet' },
@@ -27,12 +34,33 @@ const DEFAULT_MODE_POINTS: ModePointValues = { win: 10, draw: 5, loss: 1 };
 
 export const DEFAULT_LEADERBOARD_POINT_SETTINGS: LeaderboardPointSettings = {
   puzzle: 1,
+  puzzleCorrect: 1,
+  puzzleWrong: 0,
   bullet: { ...DEFAULT_MODE_POINTS },
   blitz: { ...DEFAULT_MODE_POINTS },
   rapid: { ...DEFAULT_MODE_POINTS },
   classical: { ...DEFAULT_MODE_POINTS },
   other: { ...DEFAULT_MODE_POINTS },
 };
+
+export function resolvePuzzlePointValues(settings: LeaderboardPointSettings): { correct: number; wrong: number } {
+  const correct = clampPoint(
+    settings.puzzleCorrect ?? settings.puzzle,
+    DEFAULT_LEADERBOARD_POINT_SETTINGS.puzzle,
+  );
+  const wrong = clampPoint(settings.puzzleWrong, 0);
+  return { correct, wrong };
+}
+
+export function normalizePuzzleScoreBreakdown(
+  input: number | PuzzleScoreBreakdown,
+): PuzzleScoreBreakdown {
+  if (typeof input === 'number') return { correct: input, wrong: 0 };
+  return {
+    correct: Math.max(0, input.correct),
+    wrong: Math.max(0, input.wrong),
+  };
+}
 
 export type GameResultsByMode = Record<LeaderboardScoringMode, { wins: number; draws: number; losses: number }>;
 
@@ -53,8 +81,15 @@ function normalizeModePoints(raw: unknown, fallback: ModePointValues): ModePoint
 
 export function normalizeLeaderboardPointSettings(raw?: Partial<LeaderboardPointSettings> | null): LeaderboardPointSettings {
   if (!raw) return { ...DEFAULT_LEADERBOARD_POINT_SETTINGS };
+  const puzzleCorrect = clampPoint(
+    raw.puzzleCorrect ?? raw.puzzle,
+    DEFAULT_LEADERBOARD_POINT_SETTINGS.puzzle,
+  );
+  const puzzleWrong = clampPoint(raw.puzzleWrong, 0);
   return {
-    puzzle: clampPoint(raw.puzzle, DEFAULT_LEADERBOARD_POINT_SETTINGS.puzzle),
+    puzzle: puzzleCorrect,
+    puzzleCorrect,
+    puzzleWrong,
     bullet: normalizeModePoints(raw.bullet, DEFAULT_LEADERBOARD_POINT_SETTINGS.bullet),
     blitz: normalizeModePoints(raw.blitz, DEFAULT_LEADERBOARD_POINT_SETTINGS.blitz),
     rapid: normalizeModePoints(raw.rapid, DEFAULT_LEADERBOARD_POINT_SETTINGS.rapid),
@@ -105,11 +140,13 @@ export function sumGameResultsByMode(byMode: GameResultsByMode): { wins: number;
 }
 
 export function computeLeaderboardScoreFromBreakdown(
-  puzzles: number,
+  puzzles: number | PuzzleScoreBreakdown,
   byMode: GameResultsByMode,
   settings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
 ): number {
-  let score = puzzles * settings.puzzle;
+  const breakdown = normalizePuzzleScoreBreakdown(puzzles);
+  const puzzlePts = resolvePuzzlePointValues(settings);
+  let score = breakdown.correct * puzzlePts.correct + breakdown.wrong * puzzlePts.wrong;
   for (const { id } of LEADERBOARD_SCORING_MODES) {
     const r = byMode[id];
     const p = settings[id];
@@ -119,7 +156,11 @@ export function computeLeaderboardScoreFromBreakdown(
 }
 
 export function formatLeaderboardPointsSummary(settings: LeaderboardPointSettings): string {
-  const parts = [`bulmaca ${settings.puzzle}p`];
+  const puzzlePts = resolvePuzzlePointValues(settings);
+  const puzzleLabel = puzzlePts.wrong > 0
+    ? `bulmaca D${puzzlePts.correct}/Y${puzzlePts.wrong}p`
+    : `bulmaca ${puzzlePts.correct}p`;
+  const parts = [puzzleLabel];
   for (const { id, label } of LEADERBOARD_SCORING_MODES) {
     const p = settings[id];
     parts.push(`${label} G${p.win}/B${p.draw}/M${p.loss}`);

@@ -17,10 +17,14 @@ import {
 import { lichessProxyRequest } from './lib/lichessProxyThrottle.mjs';
 import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
 import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
+import { trainingNotifyHandler, startTrainingNotifyScheduler } from './lib/trainingWhatsAppNotify.mjs';
 
 const DEV_GET_ROUTES = new Set([
   '/api/site-messages',
   '/api/whatsapp',
+  '/api/chesscom-member-stats',
+  '/api/chesscom-recent-puzzles',
+  '/api/chesscom-games',
   '/api/lichess-oauth-status',
   '/api/lichess-puzzle-activity',
   '/api/lichess-puzzle-dashboard',
@@ -36,12 +40,14 @@ const DEV_POST_ROUTES = new Set([
   '/api/auth-parent',
   '/api/lichess-oauth-token',
   '/api/lichess-oauth-disconnect',
+  '/api/training-notify',
 ]);
 
 function devApiPlugin(env: Record<string, string>): Plugin {
   return {
     name: 'dev-api-routes',
     configureServer(server) {
+      startTrainingNotifyScheduler(env);
       server.middlewares.use((req, res, next) => {
         const fullUrl = req.url ?? '';
         const route = fullUrl.split('?')[0];
@@ -56,6 +62,77 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 result = await listSiteMessagesViaEnv(conversationId || undefined, env);
               } else if (route === '/api/whatsapp') {
                 result = await whatsappApiGetHandler(fullUrl, env);
+              } else if (route === '/api/chesscom-member-stats') {
+                const username = parsed.searchParams.get('username')?.trim().toLowerCase() ?? '';
+                const type = parsed.searchParams.get('type')?.trim().toLowerCase() || 'rated';
+                if (!username) {
+                  result = { status: 200, body: {} };
+                } else {
+                  const upstream = await fetch(
+                    `https://www.chess.com/callback/member/stats/puzzles/${encodeURIComponent(username)}?type=${encodeURIComponent(type)}`,
+                    {
+                      headers: {
+                        Accept: 'application/json',
+                        'User-Agent': 'NetChessAcademy/1.0',
+                        Referer: `https://www.chess.com/member/${encodeURIComponent(username)}/stats/puzzles`,
+                      },
+                      signal: AbortSignal.timeout(15000),
+                    },
+                  );
+                  result = upstream.ok
+                    ? { status: 200, body: await upstream.json() }
+                    : { status: 200, body: { unavailable: true, upstreamStatus: upstream.status } };
+                }
+              } else if (route === '/api/chesscom-recent-puzzles') {
+                const username = parsed.searchParams.get('username')?.trim().toLowerCase() ?? '';
+                const type = parsed.searchParams.get('type')?.trim().toLowerCase() || 'rated';
+                const profileUrl = username
+                  ? `https://www.chess.com/member/${encodeURIComponent(username)}/stats/puzzles`
+                  : undefined;
+                if (!username) {
+                  result = { status: 200, body: { rated: [], learning: [], rush: [], unavailable: true, profileUrl } };
+                } else {
+                  const upstream = await fetch(
+                    `https://www.chess.com/callback/stats/tactics2/new/puzzles/${encodeURIComponent(username)}`,
+                    {
+                      headers: {
+                        Accept: 'application/json',
+                        'User-Agent': 'NetChessAcademy/1.0',
+                        Referer: profileUrl,
+                      },
+                      signal: AbortSignal.timeout(15000),
+                    },
+                  );
+                  if (!upstream.ok) {
+                    result = {
+                      status: 200,
+                      body: type === 'all'
+                        ? { rated: [], learning: [], rush: [], unavailable: true, profileUrl, upstreamStatus: upstream.status }
+                        : { attempts: [], unavailable: true, profileUrl, upstreamStatus: upstream.status },
+                    };
+                  } else {
+                    result = { status: 200, body: await upstream.json() };
+                  }
+                }
+              } else if (route === '/api/chesscom-games') {
+                const username = parsed.searchParams.get('username')?.trim().toLowerCase() ?? '';
+                const year = parsed.searchParams.get('year')?.trim() ?? '';
+                const month = parsed.searchParams.get('month')?.trim() ?? '';
+                if (!username || !year || !month) {
+                  result = { status: 200, body: { games: [], unavailable: true } };
+                } else {
+                  const mm = month.padStart(2, '0');
+                  const upstream = await fetch(
+                    `https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/${year}/${mm}`,
+                    {
+                      headers: { Accept: 'application/json', 'User-Agent': 'NetChessAcademy/1.0' },
+                      signal: AbortSignal.timeout(15000),
+                    },
+                  );
+                  result = upstream.ok
+                    ? { status: 200, body: await upstream.json() }
+                    : { status: 200, body: { games: [], unavailable: true, upstreamStatus: upstream.status } };
+                }
               } else if (route === '/api/lichess-oauth-status') {
                 result = await lichessOAuthStatusViaEnv(parsed.searchParams.get('studentId'), env);
               } else if (route === '/api/lichess-puzzle-activity') {
@@ -64,11 +141,23 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 result = await lichessPuzzleDashboardViaEnv(parsed.searchParams, env);
               } else {
                 const accept = req.headers.accept || 'application/json';
+                const softFail = parsed.searchParams.get('soft') === '1';
+                const searchParams = new URLSearchParams(parsed.searchParams);
+                searchParams.delete('path');
+                searchParams.delete('soft');
                 const upstream = await lichessProxyRequest(
                   parsed.searchParams.get('path') ?? '',
-                  parsed.searchParams,
+                  searchParams,
                   Array.isArray(accept) ? accept[0] : accept,
                 );
+                if (softFail && upstream.status === 429) {
+                  res.statusCode = 200;
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.setHeader('X-Lichess-Rate-Limited', '1');
+                  res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
+                  res.end('[]');
+                  return;
+                }
                 res.statusCode = upstream.status;
                 if (upstream.contentType) res.setHeader('Content-Type', upstream.contentType);
                 res.setHeader('Cache-Control', 's-maxage=90, stale-while-revalidate=180');
@@ -128,6 +217,8 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 };
               } else if (route === '/api/auth-parent') {
                 result = await parentStudentLoginViaEnv(body, env);
+              } else if (route === '/api/training-notify') {
+                result = await trainingNotifyHandler(body, env);
               } else if (body.replace === true) {
                 result = await replaceSessionMediaViaEnv(body, env);
               } else {

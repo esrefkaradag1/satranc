@@ -45,10 +45,10 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+    <div className="modal-overlay z-50" onClick={onClose}>
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" aria-hidden />
       <div
-        className="relative w-full max-w-6xl max-h-[94vh] bg-[#0f172a] border border-white/10 sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden flex flex-col"
+        className="modal-panel relative max-w-6xl bg-[#0f172a] border border-white/10 sm:rounded-2xl rounded-t-2xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between bg-[#1a2332]/80 shrink-0">
@@ -100,7 +100,7 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 custom-scrollbar">
+        <div className="modal-scroll-body p-4 sm:p-5 custom-scrollbar">
           <PlatformDailyPuzzlesSection
             key={`${student.id}-${viewDate}`}
             student={student}

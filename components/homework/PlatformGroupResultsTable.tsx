@@ -1,12 +1,14 @@
 import React from 'react';
-import { CheckCircle2, CircleDashed, Play, Clock, ChevronRight } from 'lucide-react';
+import { CheckCircle2, CircleDashed, Play, Clock, ChevronRight, XCircle } from 'lucide-react';
 import type { PlatformStudentStat } from '../../lib/homeworkStatsBuilders';
+import { StudentCountText, StudentCountPairText } from '../ui/StudentCountText';
 import { formatHomeworkDuration } from '../../lib/homeworkAnalysisUtils';
 
 const STATUS_ICON = {
   Tamamlandı: CheckCircle2,
   'Devam Ediyor': Play,
   Başlamadı: CircleDashed,
+  Yapılmadı: XCircle,
 } as const;
 
 type Props = {
@@ -23,8 +25,10 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
   onSelect,
 }) => {
   const sorted = [...stats].sort((a, b) => {
-    if (a.status === 'Başlamadı' && b.status !== 'Başlamadı') return 1;
-    if (b.status === 'Başlamadı' && a.status !== 'Başlamadı') return -1;
+    const order = { 'Devam Ediyor': 0, Başlamadı: 1, Yapılmadı: 2, Tamamlandı: 3 };
+    const ao = order[a.status as keyof typeof order] ?? 1;
+    const bo = order[b.status as keyof typeof order] ?? 1;
+    if (ao !== bo) return ao - bo;
     return b.correct - a.correct || a.name.localeCompare(b.name, 'tr');
   });
   const totalCorrect = stats.reduce((s, x) => s + x.correct, 0);
@@ -46,8 +50,8 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-bold tabular-nums">
           <span className="text-emerald-400">{totalCorrect} doğru</span>
           <span className="text-rose-400">{totalWrong} yanlış</span>
-          <span className="text-slate-500">{stats.length} öğrenci</span>
-          <span className="text-violet-300">{completed}/{stats.length} tamamladı</span>
+          <StudentCountText count={stats.length} className="text-slate-500" />
+          <StudentCountPairText current={completed} total={stats.length} suffix="tamamladı" className="text-violet-300" />
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -65,13 +69,15 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
           </thead>
           <tbody>
             {sorted.map((stat) => {
-              const Icon = STATUS_ICON[stat.status];
               const statusColor =
                 stat.status === 'Tamamlandı'
                   ? 'text-emerald-400'
                   : stat.status === 'Devam Ediyor'
                     ? 'text-amber-400'
-                    : 'text-slate-500';
+                    : stat.status === 'Yapılmadı'
+                      ? 'text-rose-400'
+                      : 'text-slate-500';
+              const Icon = STATUS_ICON[stat.status] ?? CircleDashed;
               const gameTarget = stat.dailyGameTarget ?? 0;
               const games = stat.todayGames ?? 0;
               return (

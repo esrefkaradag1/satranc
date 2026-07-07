@@ -5,6 +5,7 @@ import {
   ChevronRight, ArrowRight, Settings, UserPlus, CheckCircle2
 } from 'lucide-react';
 import { useApp } from '../AppContext';
+import { canShowStudentCounts } from '../lib/studentCountVisibility';
 import { filterStudentsByClub } from '../lib/clubScope';
 import type { Tournament, TournamentPairing, TournamentStanding, Student } from '../types';
 
@@ -16,7 +17,8 @@ interface TournamentsProps {
 const inputCls = 'w-full px-3 py-2.5 rounded-lg text-sm bg-slate-900 border border-slate-700/60 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500/50 transition-all';
 
 const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => {
-  const { scopedTournaments: tournaments, addTournament, updateTournament, deleteTournament, scopedStudents: students, scopedCoaches: coaches } = useApp();
+  const { scopedTournaments: tournaments, addTournament, updateTournament, deleteTournament, scopedStudents: students, scopedCoaches: coaches, auth } = useApp();
+  const showStudentCounts = canShowStudentCounts(auth);
   const [showForm, setShowForm] = useState(false);
   const [activeTournamentId, setActiveTournamentId] = useState<string | null>(null);
   
@@ -490,7 +492,9 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBa
                 <h3 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-2">
                   <UserPlus className="w-4 h-4 text-emerald-500" /> Sporcu Kaydı
                 </h3>
-                <span className="text-[10px] font-black text-slate-500">{(t.participantIds?.length || 0)} / {students.length}</span>
+                {showStudentCounts ? (
+                  <span className="text-[10px] font-black text-slate-500">{(t.participantIds?.length || 0)} / {students.length}</span>
+                ) : null}
               </div>
               <div className="p-4 max-h-[450px] overflow-y-auto space-y-2 thin-scrollbar bg-slate-900/20">
                 {students.map(s => {

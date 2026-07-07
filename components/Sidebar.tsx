@@ -27,6 +27,15 @@ function buildDefaultCollapsedCategories(categories: NavCategory[]): Set<string>
   return collapsed;
 }
 
+function nameInitials(name: string): string {
+  return name
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
 const ICON_BOX_CLASS: Record<NavIconColor, string> = {
   blue: "bg-blue-500",
   violet: "bg-violet-500",
@@ -57,6 +66,19 @@ interface SidebarProps {
   defaultIconOnly?: boolean;
   /** Masaüstü genişlik değişince (ana içerik margin'i için) */
   onDesktopExpandedChange?: (expanded: boolean) => void;
+  footerProfile?: {
+    name: string;
+    subtitle?: string;
+    photoUrl?: string;
+    initials?: string;
+    menuItems?: Array<{
+      id: string;
+      label: string;
+      icon?: React.ReactNode;
+      onClick: () => void;
+      tone?: "default" | "danger";
+    }>;
+  };
 }
 
 function renderNavItem(
@@ -167,12 +189,15 @@ const Sidebar: React.FC<SidebarProps> = ({
   onClose,
   defaultIconOnly = false,
   onDesktopExpandedChange,
+  footerProfile,
 }) => {
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [desktopExpanded, setDesktopExpanded] = useState(!defaultIconOnly);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => new Set());
+  const [footerMenuOpen, setFooterMenuOpen] = useState(false);
   const categoryDefaultsApplied = React.useRef(false);
   const knownCategoryKeysRef = React.useRef<Set<string>>(new Set());
+  const footerMenuRef = React.useRef<HTMLDivElement | null>(null);
   const useCategories = navCategories && navCategories.length > 0;
   const iconOnly = !desktopExpanded && !mobileOpen;
 
@@ -204,6 +229,22 @@ const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     onDesktopExpandedChange?.(desktopExpanded);
   }, [desktopExpanded, onDesktopExpandedChange]);
+
+  useEffect(() => {
+    if (!footerMenuOpen) return;
+    const handleOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (footerMenuRef.current?.contains(target)) return;
+      setFooterMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("touchstart", handleOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("touchstart", handleOutside);
+    };
+  }, [footerMenuOpen]);
 
   useEffect(() => {
     const list = useCategories
@@ -294,8 +335,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         type="button"
         onClick={() => {
           if (iconOnly) expandDesktop();
+          handleNav('dashboard');
         }}
-        title={iconOnly ? "Menüyü genişlet" : undefined}
+        title={iconOnly ? "Ana sayfaya git" : "Ana sayfaya git"}
         className={`shrink-0 flex items-center border-b border-white/5 transition-all ${
           iconOnly ? "justify-center p-4 w-full hover:bg-white/[0.03]" : "gap-3 p-6"
         }`}
@@ -405,21 +447,112 @@ const Sidebar: React.FC<SidebarProps> = ({
         )}
       </nav>
 
-      {/* Logout */}
-      <div className={`border-t border-white/5 shrink-0 ${iconOnly ? "p-2" : "p-4"}`}>
-        <button
-          type="button"
-          onClick={onLogout}
-          title={iconOnly ? "Çıkış Yap" : undefined}
-          className={`w-full flex items-center rounded-xl text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-all duration-200 group ${
-            iconOnly ? "justify-center px-2 py-2.5" : "gap-3 px-3.5 py-2.5"
-          }`}
-        >
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-white/5 group-hover:bg-red-500/10 transition-colors shrink-0">
-            <LogOut className="w-5 h-5" />
+      {/* Footer profile + logout */}
+      <div className={`border-t border-white/5 shrink-0 space-y-2 ${iconOnly ? "p-2" : "p-4"}`}>
+        {footerProfile ? (
+          <div className="relative" ref={footerMenuRef}>
+            <button
+              type="button"
+              onClick={() => setFooterMenuOpen((prev) => !prev)}
+              title={iconOnly ? footerProfile.name : undefined}
+              className={`w-full rounded-2xl border border-white/8 bg-white/[0.03] hover:bg-white/[0.05] transition-all ${
+                iconOnly ? "flex items-center justify-center px-2 py-2.5" : "flex items-center gap-3 px-3 py-3 text-left"
+              }`}
+            >
+              {footerProfile.photoUrl ? (
+                <img
+                  src={footerProfile.photoUrl}
+                  alt={footerProfile.name}
+                  className={`${iconOnly ? "w-10 h-10 rounded-xl" : "w-12 h-12 rounded-2xl"} object-cover border border-indigo-500/25 shadow-md shadow-indigo-500/10 shrink-0`}
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className={`${iconOnly ? "w-10 h-10 rounded-xl text-base" : "w-12 h-12 rounded-2xl text-base"} bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/25 flex items-center justify-center text-indigo-300 font-black shadow-md shadow-indigo-500/10 shrink-0`}>
+                  {footerProfile.initials || nameInitials(footerProfile.name)}
+                </div>
+              )}
+              {!iconOnly && (
+                <>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-bold text-white truncate">{footerProfile.name}</div>
+                    {footerProfile.subtitle ? (
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1 truncate">
+                        {footerProfile.subtitle}
+                      </div>
+                    ) : null}
+                  </div>
+                  <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${footerMenuOpen ? "rotate-180" : ""}`} />
+                </>
+              )}
+            </button>
+
+            {footerMenuOpen && (
+              <div
+                className={`absolute z-30 overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#1b2233]/95 backdrop-blur-2xl shadow-2xl shadow-black/40 ${
+                  iconOnly ? "left-full bottom-0 ml-3 w-64" : "left-0 right-0 bottom-full mb-2"
+                }`}
+              >
+                <div className="p-4 border-b border-white/8">
+                  <div className="text-lg font-semibold text-white truncate">{footerProfile.name}</div>
+                  {footerProfile.subtitle ? <div className="text-sm text-slate-400 mt-1 truncate">{footerProfile.subtitle}</div> : null}
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {(footerProfile.menuItems ?? []).map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setFooterMenuOpen(false);
+                        item.onClick();
+                      }}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-left transition-colors ${
+                        item.tone === "danger"
+                          ? "text-rose-300 hover:bg-rose-500/10"
+                          : "text-slate-200 hover:bg-white/[0.06]"
+                      }`}
+                    >
+                      <span className={`${item.tone === "danger" ? "text-rose-400" : "text-slate-400"} shrink-0`}>
+                        {item.icon}
+                      </span>
+                      <span className="text-sm font-medium truncate">{item.label}</span>
+                    </button>
+                  ))}
+                  {onLogout ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFooterMenuOpen(false);
+                        onLogout();
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-left text-rose-300 hover:bg-rose-500/10 transition-colors"
+                    >
+                      <span className="text-rose-400 shrink-0">
+                        <LogOut className="w-5 h-5" />
+                      </span>
+                      <span className="text-sm font-medium truncate">Çıkış Yap</span>
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            )}
           </div>
-          {!iconOnly && <span className="text-sm font-semibold">Çıkış Yap</span>}
-        </button>
+        ) : null}
+
+        {!footerProfile && (
+          <button
+            type="button"
+            onClick={onLogout}
+            title={iconOnly ? "Çıkış Yap" : undefined}
+            className={`w-full flex items-center rounded-xl text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-all duration-200 group ${
+              iconOnly ? "justify-center px-2 py-2.5" : "gap-3 px-3.5 py-2.5"
+            }`}
+          >
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-white/5 group-hover:bg-red-500/10 transition-colors shrink-0">
+              <LogOut className="w-5 h-5" />
+            </div>
+            {!iconOnly && <span className="text-sm font-semibold">Çıkış Yap</span>}
+          </button>
+        )}
       </div>
     </aside>
     </>

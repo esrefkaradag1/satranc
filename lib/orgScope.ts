@@ -1,7 +1,8 @@
 import type { AuthUser, Coach, Student, TrainingGroup, Transaction, Tournament, DisciplineBranch, LessonPackage, HomeworkAssignment, AttendanceRecord, GalleryItem } from '../types';
 import { filterCoachesByClub, filterStudentsByClub, filterTransactionsByClub, normalizeClubKey, studentBelongsToClub } from './clubScope';
 import { clubOfficeNamesForAuth, orgRecordBelongsToClub, resolveClubIdFromAuth, type BranchOfficeRecord } from './orgStructureDb';
-import { findTrainingGroupById, findTrainingGroupByName } from './trainingGroupUtils';
+import { getAssignedStudentIds } from '../homeworkUtils';
+import { findTrainingGroupById, findTrainingGroupByName, studentsInTrainingGroup } from './trainingGroupUtils';
 
 export function getStudentTrainingGroup(
   student: Student,
@@ -44,7 +45,33 @@ export function filterStudentsByCoach(
   trainingGroups: TrainingGroup[],
 ): Student[] {
   if (!coachId) return [];
-  return students.filter((s) => studentBelongsToCoach(s, coachId, trainingGroups));
+  const cid = coachId.trim();
+  const assignedGroups = trainingGroups.filter((g) => (g.coachIds ?? []).some((id) => id?.trim() === cid));
+  const idSet = new Set<string>();
+  for (const g of assignedGroups) {
+    for (const s of studentsInTrainingGroup(students, g)) {
+      idSet.add(s.id);
+    }
+  }
+  for (const s of students) {
+    if (s.coachId?.trim() === cid) idSet.add(s.id);
+  }
+  return students.filter((s) => idSet.has(s.id));
+}
+
+export function filterTrainingGroupsByCoach(
+  trainingGroups: TrainingGroup[],
+  coachId: string,
+  branchOffice?: string,
+): TrainingGroup[] {
+  const cid = coachId.trim();
+  if (!cid) return [];
+  const officeKey = branchOffice ? normalizeClubKey(branchOffice) : '';
+  return trainingGroups.filter((g) => {
+    if (!(g.coachIds ?? []).some((id) => id?.trim() === cid)) return false;
+    if (officeKey && normalizeClubKey(g.branchOffice ?? '') !== officeKey) return false;
+    return true;
+  });
 }
 
 export function getCoachNamesForStudent(
@@ -155,6 +182,16 @@ export function resolveScopedTrainingGroups(
     const offices = clubOfficeNamesForAuth(auth, branchOfficeRecords, clubs);
     return trainingGroups.filter((g) => orgRecordBelongsToClub(g, auth, offices, clubs));
   }
+  if (auth.role === 'coach') {
+    const key = clubKeyForAuth(auth);
+    let list = key
+      ? trainingGroups.filter((g) => normalizeClubKey(g.branchOffice) === key)
+      : trainingGroups;
+    if (auth.coachId?.trim()) {
+      list = filterTrainingGroupsByCoach(list, auth.coachId, key || undefined);
+    }
+    return list;
+  }
   const key = clubKeyForAuth(auth);
   if (!key) return trainingGroups;
   return trainingGroups.filter((g) => normalizeClubKey(g.branchOffice) === key);
@@ -165,11 +202,23 @@ export function resolveScopedDisciplineBranches(
   branches: DisciplineBranch[],
   branchOfficeRecords: BranchOfficeRecord[] = [],
   clubs: { id: string; name: string }[] = [],
+  trainingGroups: TrainingGroup[] = [],
 ): DisciplineBranch[] {
   if (!auth || auth.role === 'admin') return branches;
   if (auth.role === 'club') {
     const offices = clubOfficeNamesForAuth(auth, branchOfficeRecords, clubs);
     return branches.filter((b) => orgRecordBelongsToClub(b, auth, offices, clubs));
+  }
+  if (auth.role === 'coach' && auth.coachId?.trim() && trainingGroups.length > 0) {
+    const scopedGroups = resolveScopedTrainingGroups(auth, trainingGroups, branchOfficeRecords, clubs);
+    if (scopedGroups.length > 0) {
+      const keys = new Set(
+        scopedGroups.map((g) => `${normalizeClubKey(g.branchOffice)}|${(g.discipline ?? '').trim()}`),
+      );
+      return branches.filter((b) =>
+        keys.has(`${normalizeClubKey(b.branchOffice)}|${(b.name ?? '').trim()}`),
+      );
+    }
   }
   const key = clubKeyForAuth(auth);
   if (!key) return branches;
@@ -188,8 +237,14 @@ export function resolveScopedLessonPackages(
     return packages.filter((p) => orgRecordBelongsToClub(p, auth, offices, clubs));
   }
   const key = clubKeyForAuth(auth);
-  if (!key) return packages;
-  return packages.filter((p) => normalizeClubKey(p.branchOffice) === key);
+  let list = key
+    ? packages.filter((p) => normalizeClubKey(p.branchOffice) === key)
+    : packages;
+  if (auth.role === 'coach' && auth.coachId?.trim()) {
+    const cid = auth.coachId.trim();
+    list = list.filter((p) => (p.coachIds ?? []).some((id) => id?.trim() === cid));
+  }
+  return list;
 }
 
 export function resolveScopedTournaments(auth: AuthUser | null, tournaments: Tournament[]): Tournament[] {
@@ -212,23 +267,9 @@ export function resolveScopedHomeworks(
 ): HomeworkAssignment[] {
   if (!auth || auth.role === 'admin') return homeworks;
   const studentIds = scopedStudentIdSet(scopedStudents);
-  const groupNames = [
-    ...scopedTrainingGroups.map((g) => g.name.trim()).filter(Boolean),
-    ...scopedStudents.map((s) => (s.group ?? '').trim()).filter(Boolean),
-  ];
-  const groupNamesSet = new Set(groupNames);
-  const normalizedGroupNames = new Set(groupNames.map((name) => name.toLocaleLowerCase('tr-TR')));
   return homeworks.filter((hw) => {
-    const targets = hw.assignedTo ?? [];
-    if (targets.some((t) => studentIds.has(String(t).trim()))) return true;
-    if (targets.some((t) => {
-      const raw = String(t).trim();
-      if (groupNamesSet.has(raw)) return true; // eski düz grup adı kayıtları
-      const groupName = raw.startsWith('group:') ? raw.slice(6).trim() : '';
-      return Boolean(groupName) && normalizedGroupNames.has(groupName.toLocaleLowerCase('tr-TR'));
-    })) return true;
-    if (hw.groupName?.trim() && normalizedGroupNames.has(hw.groupName.trim().toLocaleLowerCase('tr-TR'))) return true;
-    return false;
+    const assigneeIds = getAssignedStudentIds(hw, scopedStudents);
+    return assigneeIds.some((id) => studentIds.has(id));
   });
 }
 

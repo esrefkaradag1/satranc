@@ -147,7 +147,7 @@ export const COACH_NAV_ITEMS: NavItem[] = [
   { id: 'curriculum', label: 'Ders Programı & Müfredat', icon: <BookOpen className="w-5 h-5" />, iconColor: 'indigo' },
   { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
   { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
-  { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'green' },
+  { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'emerald' },
   { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
   { id: 'analysis', label: 'Analiz & Performans', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'rose' },
 ];
@@ -284,40 +284,53 @@ export const STUDENT_NAV_CATEGORIES: NavCategory[] = [
     icon: <LayoutDashboard className="w-4 h-4" />,
     items: [
       { id: 'summary', label: 'Özet', icon: <LayoutDashboard className="w-5 h-5" />, iconColor: 'blue' },
-      { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'schedule', label: 'Ders Programı', icon: <CalendarDays className="w-5 h-5" />, iconColor: 'teal' },
       { id: 'messages', label: 'Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+      { id: 'analyses', label: 'Performans Analizi', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'indigo' },
     ],
   },
   {
-    title: 'İçerik & Eğitim',
+    title: 'Yoklama',
+    icon: <CalendarCheck className="w-4 h-4" />,
+    items: [
+      { id: 'attendance', label: 'Devam', icon: <CalendarCheck className="w-5 h-5" />, iconColor: 'emerald' },
+    ],
+  },
+  {
+    title: 'Özel Ders',
+    icon: <GraduationCap className="w-4 h-4" />,
+    items: [
+      { id: 'private-lesson', label: 'Özel Ders', icon: <GraduationCap className="w-5 h-5" />, iconColor: 'amber' },
+    ],
+  },
+  {
+    title: 'Eğitim',
     icon: <BookOpen className="w-4 h-4" />,
     items: [
-      { id: 'gallery', label: 'Medya & Galeri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
-      { id: 'schedule', label: 'Ders Programı', icon: <CalendarDays className="w-5 h-5" />, iconColor: 'teal' },
       { id: 'live-lesson', label: 'Canlı Derse Katıl', icon: <Video className="w-5 h-5" />, iconColor: 'violet' },
-      { id: 'puzzles', label: 'Bulmaca', icon: <Grid className="w-5 h-5" />, iconColor: 'amber' },
       { id: 'study', label: 'Çalışma', icon: <BookMarked className="w-5 h-5" />, iconColor: 'teal' },
-      { id: 'tournaments', label: 'Turnuvalar', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'puzzles', label: 'Bulmaca', icon: <Grid className="w-5 h-5" />, iconColor: 'amber' },
       { id: 'analyses', label: 'Analizler', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'indigo' },
+      { id: 'gallery', label: 'Medya & Galeri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
+    ],
+  },
+  {
+    title: 'Performans',
+    icon: <TrendingUp className="w-4 h-4" />,
+    items: [
+      { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'tournaments', label: 'Turnuvalar', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
       { id: 'ukd', label: 'UKD/FIDE', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
       { id: 'lichess', label: 'Lichess', icon: <ExternalLink className="w-5 h-5" />, iconColor: 'teal' },
       { id: 'chesscom', label: 'Chess.com', icon: <ExternalLink className="w-5 h-5" />, iconColor: 'emerald' },
     ],
   },
   {
-    title: 'Ödeme & Aidat',
-    icon: <Wallet className="w-4 h-4" />,
-    items: [
-      { id: 'payments', label: 'Ödemeler', icon: <Wallet className="w-5 h-5" />, iconColor: 'emerald' },
-      { id: 'dues', label: 'Aidat Geçmişi', icon: <CreditCard className="w-5 h-5" />, iconColor: 'amber' },
-    ],
-  },
-  {
-    title: 'Takip & Hesap',
+    title: 'Hesap',
     icon: <User className="w-4 h-4" />,
     items: [
-      { id: 'attendance', label: 'Devam', icon: <CalendarCheck className="w-5 h-5" />, iconColor: 'emerald' },
       { id: 'profile', label: 'Profil', icon: <User className="w-5 h-5" />, iconColor: 'indigo' },
+      { id: 'payments', label: 'Aidat ve Ödemeler', icon: <Wallet className="w-5 h-5" />, iconColor: 'emerald' },
     ],
   },
 ];

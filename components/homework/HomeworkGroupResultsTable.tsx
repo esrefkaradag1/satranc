@@ -1,6 +1,7 @@
 import React from 'react';
 import { CheckCircle2, CircleDashed, Play, Clock, ChevronRight } from 'lucide-react';
 import type { StudentProgressCardStat } from './StudentProgressCard';
+import { StudentCountText, StudentCountPairText } from '../ui/StudentCountText';
 import { formatHomeworkDuration } from '../../lib/homeworkAnalysisUtils';
 
 const STATUS_ICON = {
@@ -43,8 +44,16 @@ export const HomeworkGroupResultsTable: React.FC<Props> = ({
           <span className="text-emerald-400">{totalCorrect} doğru</span>
           <span className="text-rose-400">{totalWrong} yanlış</span>
           {totalSkipped > 0 && <span className="text-slate-400">{totalSkipped} çözülmedi</span>}
-          <span className="text-slate-500">{stats.length} öğrenci</span>
-          <span className="text-indigo-300">{completed}/{stats.length} tamamladı</span>
+          <StudentCountText count={stats.length} className="text-slate-500" />
+          {completed > 0 || stats.length > 0 ? (
+            <StudentCountPairText
+              current={completed}
+              total={stats.length}
+              suffix="tamamladı"
+              className="text-indigo-300"
+              fallback={<span className="text-indigo-300">{completed > 0 ? 'Tamamlayan var' : ''}</span>}
+            />
+          ) : null}
         </div>
       </div>
       <div className="overflow-x-auto">

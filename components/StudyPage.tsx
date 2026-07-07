@@ -19,6 +19,7 @@ import { createStudyCall } from '../services/studyCall';
 import {
   Study, StudyChapter, StudyChatMessage, BottomTab, LeftTab, StudyView
 } from '../lib/studyTypes';
+import type { Student } from '../types';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { StudyBottomTools } from './study/StudyBottomTools';
 import { StudyBoardPgnHeader } from './study/StudyBoardPgnHeader';
@@ -75,6 +76,7 @@ import { imageToFenMultiple, formatOpenRouterError, type ImageBoardResult } from
 import { pdfAllPagesToDataUrls } from '../services/pdfToImage';
 import StudentStudyView from './StudentStudyView';
 import { readPanelHash, writeStudyEditorHash } from '../lib/panelRouting';
+import { normalizeSearchText, searchIncludesText } from '../lib/searchText';
 
 type AppView = StudyView;
 
@@ -214,6 +216,8 @@ const StudyPage: React.FC = () => {
 
   // Modals
   const [showAddMember, setShowAddMember] = useState(false);
+  const [addMemberAddedCount, setAddMemberAddedCount] = useState(0);
+  const [addMemberSearch, setAddMemberSearch] = useState('');
   const [showStudySettings, setShowStudySettings] = useState(false);
   const [showCallPanel, setShowCallPanel] = useState(false);
   
@@ -947,10 +951,30 @@ const StudyPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [selectedStudyId, auth?.user?.id, selectedChapter, syncState, sticky]);
 
+  // Bölüm değişince öğrenci anında takip edebilsin
+  useEffect(() => {
+    if (!selectedStudyId || !auth?.user?.id || !selectedChapter) return;
+    void upsertPresence({
+      studyId: selectedStudyId,
+      userId: auth.user!.id,
+      chapterId: selectedChapter.id,
+      path: syncState ? serializePath(syncState.currentPath) : null,
+      sticky: !!sticky,
+    });
+  }, [selectedStudyId, auth?.user?.id, selectedChapter?.id, sticky]);
+
   const members = useMemo(() => {
     if (!selectedStudy) return [];
     return resolveStudyMembers(selectedStudy.memberIds, students, coaches);
   }, [students, coaches, selectedStudy]);
+
+  const memberNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    members.forEach((member) => {
+      map.set(String(member.id), member.name);
+    });
+    return map;
+  }, [members]);
 
   const availableStudentsToAdd = useMemo(() => {
     if (!selectedStudy) return [];
@@ -960,21 +984,35 @@ const StudyPage: React.FC = () => {
       .sort((a, b) => a.name.localeCompare(b.name, 'tr'));
   }, [selectedStudy, students]);
 
+  const filteredAvailableStudentsToAdd = useMemo(() => {
+    const q = normalizeSearchText(addMemberSearch);
+    if (!q) return availableStudentsToAdd;
+    return availableStudentsToAdd.filter((s) =>
+      searchIncludesText(s.name, q) || searchIncludesText(s.group, q) || searchIncludesText(String(s.id), q),
+    );
+  }, [availableStudentsToAdd, addMemberSearch]);
+
   const studentsByGroup = useMemo(() => {
     const map: Record<string, Student[]> = {};
-    for (const s of availableStudentsToAdd) {
+    for (const s of filteredAvailableStudentsToAdd) {
       const g = s.group || 'Diğer / Grupsuz';
       if (!map[g]) map[g] = [];
       map[g].push(s);
     }
     return map;
-  }, [availableStudentsToAdd]);
+  }, [filteredAvailableStudentsToAdd]);
 
   const availableCoachesToAdd = useMemo(() => {
     if (!selectedStudy) return [];
     const memberSet = new Set(selectedStudy.memberIds.map(String));
     return coaches.filter((c) => !memberSet.has(toCoachMemberId(String(c.id))));
   }, [selectedStudy, coaches]);
+
+  const filteredAvailableCoachesToAdd = useMemo(() => {
+    const q = normalizeSearchText(addMemberSearch);
+    if (!q) return availableCoachesToAdd;
+    return availableCoachesToAdd.filter((c) => searchIncludesText(c.name, q));
+  }, [availableCoachesToAdd, addMemberSearch]);
   useEffect(() => {
     if (!selectedStudy?.id) { setPresenceByUserId({}); return; }
     let mounted = true;
@@ -1020,6 +1058,28 @@ const StudyPage: React.FC = () => {
     };
   }, [getVsComputerHistory, selectedStudy?.chapters]);
 
+  const activeVsComputerStudents = useMemo(() => {
+    const currentChapterId = selectedChapter?.id ? String(selectedChapter.id) : null;
+    return Object.values(presenceByUserId)
+      .map((row: any) => {
+        const userId = String(row?.user_id ?? '');
+        const presence = formatPresence(row);
+        if (!userId || !presence?.vsComputer) return null;
+        if (currentChapterId && String(row?.chapter_id ?? '') !== currentChapterId) return null;
+        const student = students.find((s) => String(s.id) === userId) ?? null;
+        const name = student?.name ?? memberNameById.get(userId) ?? row?.payload?.studentName ?? 'Öğrenci';
+        return {
+          id: userId,
+          name,
+          student,
+          presence,
+          lastSeen: String(row?.last_seen ?? ''),
+        };
+      })
+      .filter((entry): entry is { id: string; name: string; student: Student | null; presence: NonNullable<ReturnType<typeof formatPresence>>; lastSeen: string } => !!entry)
+      .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+  }, [presenceByUserId, formatPresence, selectedChapter?.id, students, memberNameById]);
+
   const viewingStudentPresenceRow = useMemo(() => {
     return viewingStudentId ? presenceByUserId[String(viewingStudentId)] : null;
   }, [viewingStudentId, presenceByUserId]);
@@ -1029,8 +1089,19 @@ const StudyPage: React.FC = () => {
   }, [formatPresence, viewingStudentPresenceRow]);
 
   const viewingStudent = useMemo(() => {
-    return viewingStudentId ? students.find(s => String(s.id) === String(viewingStudentId)) : null;
-  }, [students, viewingStudentId]);
+    if (!viewingStudentId) return null;
+    return students.find(s => String(s.id) === String(viewingStudentId))
+      ?? activeVsComputerStudents.find((entry) => String(entry.id) === String(viewingStudentId))?.student
+      ?? null;
+  }, [students, viewingStudentId, activeVsComputerStudents]);
+
+  const viewingStudentName = useMemo(() => {
+    if (!viewingStudentId) return 'Öğrenci';
+    return viewingStudent?.name
+      ?? activeVsComputerStudents.find((entry) => String(entry.id) === String(viewingStudentId))?.name
+      ?? memberNameById.get(String(viewingStudentId))
+      ?? 'Öğrenci';
+  }, [viewingStudentId, viewingStudent, activeVsComputerStudents, memberNameById]);
 
   const viewingStudentVcHistory = useMemo(() => viewingStudentPresence?.vcHistory ?? [], [viewingStudentPresence]);
 
@@ -1423,6 +1494,17 @@ const StudyPage: React.FC = () => {
     setLastMoveSquares({});
     setMoveFrom(null);
 
+    void setSticky(true);
+    if (auth?.user?.id) {
+      void upsertPresence({
+        studyId: selectedStudy.id,
+        userId: auth.user.id,
+        chapterId: ch.id,
+        path: null,
+        sticky: true,
+      });
+    }
+
     showToast('Öğrenci oyunu yeni bölüm olarak çalışmaya eklendi. Artık üzerinde varyantlar oluşturup analiz edebilirsiniz.', 'success');
   }, [
     selectedStudy,
@@ -1432,6 +1514,8 @@ const StudyPage: React.FC = () => {
     viewingStudentVcHistory,
     showToast,
     updateAndSaveStudy,
+    auth?.user?.id,
+    setSticky,
   ]);
 
   const handleNcFenFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1566,20 +1650,24 @@ const StudyPage: React.FC = () => {
   const addMember = useCallback((memberId: string) => {
     if (!selectedStudy || selectedStudy.memberIds.includes(memberId)) return;
     updateStudy({ memberIds: [...selectedStudy.memberIds, memberId] });
+    setAddMemberAddedCount((count) => count + 1);
   }, [selectedStudy, updateStudy]);
 
   const addMembers = useCallback((idsToAdd: string[]) => {
     if (!selectedStudy || idsToAdd.length === 0) return;
     const nextIds = [...selectedStudy.memberIds];
     let changed = false;
+    let addedCount = 0;
     for (const id of idsToAdd) {
       if (!nextIds.includes(id)) {
         nextIds.push(id);
         changed = true;
+        addedCount += 1;
       }
     }
     if (changed) {
       updateStudy({ memberIds: nextIds });
+      setAddMemberAddedCount((count) => count + addedCount);
     }
   }, [selectedStudy, updateStudy]);
 
@@ -3809,7 +3897,7 @@ const StudyPage: React.FC = () => {
               <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar min-h-0 p-3 space-y-3">
                 <button
                   type="button"
-                  onClick={() => setShowAddMember(true)}
+                  onClick={() => { setAddMemberAddedCount(0); setShowAddMember(true); }}
                   className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-indigo-500/15 border border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/25 transition-all text-xs font-bold uppercase tracking-wide"
                 >
                   <UserPlus className="w-4 h-4" />
@@ -4407,7 +4495,7 @@ const StudyPage: React.FC = () => {
                 <div className="flex items-center gap-3">
                   <div className="relative shrink-0">
                     <div className="w-11 h-11 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-200 font-black text-sm shadow-inner shadow-indigo-950/50">
-                      {viewingStudent?.name?.[0] || 'Ö'}
+                      {viewingStudentName?.[0] || 'Ö'}
                     </div>
                     <span className={`absolute -right-1 -bottom-1 w-3.5 h-3.5 rounded-full border-2 border-[#18203a] ${viewingStudentPresence?.gameOver ? 'bg-emerald-400' : viewingStudentPresence?.vcThinking ? 'bg-amber-400 animate-pulse' : 'bg-indigo-400 animate-pulse'}`} />
                   </div>
@@ -4419,7 +4507,7 @@ const StudyPage: React.FC = () => {
                       </span>
                     </div>
                     <p className="text-sm font-black text-white truncate">
-                      {viewingStudent?.name || 'Öğrenci'}
+                      {viewingStudentName}
                     </p>
                     {viewingStudentPresence?.vsComputer && (
                       <p className="text-[10px] font-bold text-slate-400 mt-0.5 truncate">
@@ -4445,20 +4533,19 @@ const StudyPage: React.FC = () => {
                    <p className="text-[10px] font-black text-orange-500/80 uppercase tracking-widest">Oynayan Öğrenciler</p>
                  </div>
                  <div className="space-y-2">
-                   {members.filter(m => m.kind === 'student').map(m => {
-                     const p = formatPresence(presenceByUserId[String(m.id)]);
-                     if (!p?.vsComputer) return null;
+                   {activeVsComputerStudents.map((entry) => {
+                     const p = entry.presence;
                      return (
                        <button 
-                         key={m.id}
-                         onClick={() => setViewingStudentId(m.id)}
+                         key={entry.id}
+                         onClick={() => setViewingStudentId(entry.id)}
                          className="w-full flex items-center gap-3 p-2.5 rounded-xl bg-white/5 border border-white/5 hover:bg-orange-500/10 hover:border-orange-500/20 transition-all text-left group shadow-lg"
                        >
                          <div className="w-8 h-8 rounded-lg bg-orange-500/20 flex items-center justify-center text-orange-400 font-bold text-xs shadow-inner">
-                           {m.name.charAt(0)}
+                           {entry.name.charAt(0)}
                          </div>
                          <div className="flex-1 min-w-0">
-                           <p className="text-xs font-bold text-slate-300 truncate group-hover:text-white transition-colors">{m.name}</p>
+                           <p className="text-xs font-bold text-slate-300 truncate group-hover:text-white transition-colors">{entry.name}</p>
                            <p className="text-[9px] text-slate-500 uppercase font-black tracking-tighter">{Math.ceil(p.vcHistory.length / 2)} hamle yapıldı</p>
                          </div>
                          <div className="w-7 h-7 rounded-lg bg-white/5 flex items-center justify-center group-hover:bg-orange-500 group-hover:text-white text-slate-600 transition-all">
@@ -4467,7 +4554,7 @@ const StudyPage: React.FC = () => {
                        </button>
                      );
                    })}
-                   {members.filter(m => m.kind === 'student' && formatPresence(presenceByUserId[String(m.id)])?.vsComputer).length === 0 && (
+                   {activeVsComputerStudents.length === 0 && (
                      <div className="py-8 px-4 border-2 border-dashed border-white/5 rounded-2xl flex flex-col items-center justify-center gap-2 opacity-40">
                         <Users className="w-6 h-6 text-slate-600" />
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest text-center">Şu an bu bölümü oynayan öğrenci yok</p>
@@ -5323,17 +5410,28 @@ const StudyPage: React.FC = () => {
 
       {/* Add member modal */}
       {showAddMember && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl animate-in fade-in" onClick={() => setShowAddMember(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl animate-in fade-in" onClick={() => { setShowAddMember(false); setAddMemberSearch(''); setAddMemberAddedCount(0); }}>
           <div className="bg-[#15181c] border border-white/10 rounded-3xl shadow-3xl w-full max-w-sm overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
             <div className="p-6 border-b border-white/5 bg-slate-900/50 flex items-center justify-between">
               <h3 className="font-black text-white text-lg uppercase tracking-tight">Üye Ekle</h3>
-              <button type="button" onClick={() => setShowAddMember(false)} className="text-slate-500 hover:text-white"><X className="w-6 h-6" /></button>
+              <button type="button" onClick={() => { setShowAddMember(false); setAddMemberSearch(''); setAddMemberAddedCount(0); }} className="text-slate-500 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             <div className="p-2 max-h-80 overflow-y-auto custom-scrollbar space-y-4">
-              {availableCoachesToAdd.length > 0 ? (
+              <div className="px-2 pt-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <input
+                    value={addMemberSearch}
+                    onChange={(e) => setAddMemberSearch(e.target.value)}
+                    placeholder="Öğrenci veya antrenör ara..."
+                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 py-2.5 pl-10 pr-3 text-sm font-medium text-white placeholder:text-slate-500 outline-none focus:border-indigo-500/40"
+                  />
+                </div>
+              </div>
+              {filteredAvailableCoachesToAdd.length > 0 ? (
                 <div>
                   <p className="px-2 pb-2 text-[10px] font-bold uppercase tracking-widest text-amber-400/80">Antrenörler</p>
-                  {availableCoachesToAdd.map((c) => (
+                  {filteredAvailableCoachesToAdd.map((c) => (
                     <button
                       key={c.id}
                       type="button"
@@ -5386,16 +5484,21 @@ const StudyPage: React.FC = () => {
                     </div>
                   ))}
                 </div>
-                {availableStudentsToAdd.length === 0 && availableCoachesToAdd.length === 0 && (
+                {filteredAvailableStudentsToAdd.length === 0 && filteredAvailableCoachesToAdd.length === 0 && (
                   <p className="text-center py-12 text-[11px] text-slate-600 italic">Eklenebilecek üye kalmadı.</p>
                 )}
-                {availableStudentsToAdd.length === 0 && availableCoachesToAdd.length > 0 && (
+                {filteredAvailableStudentsToAdd.length === 0 && filteredAvailableCoachesToAdd.length > 0 && (
                   <p className="text-center py-4 text-[11px] text-slate-600 italic">Tüm öğrenciler zaten eklendi.</p>
                 )}
               </div>
             </div>
             <div className="p-4 border-t border-white/5 bg-black/40">
-              <button type="button" onClick={() => setShowAddMember(false)} className="w-full py-3 rounded-xl text-slate-500 hover:text-white font-bold text-xs uppercase tracking-widest transition-all">Vazgeç</button>
+              <div className="space-y-3">
+                <p className="text-center text-[11px] font-medium text-slate-500">
+                  {addMemberAddedCount > 0 ? `${addMemberAddedCount} üye eklendi.` : 'Henüz üye eklenmedi.'}
+                </p>
+                <button type="button" onClick={() => { setShowAddMember(false); setAddMemberSearch(''); setAddMemberAddedCount(0); }} className="w-full py-3 rounded-xl bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 font-bold text-xs uppercase tracking-widest transition-all">Tamam</button>
+              </div>
             </div>
           </div>
         </div>

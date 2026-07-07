@@ -48,7 +48,7 @@ import {
   Sparkles,
   Plus,
 } from 'lucide-react';
-import { useApp, getDisplayStudentNo } from '../AppContext';
+import { useApp } from '../AppContext';
 import { createStudentLoginCredentials } from '../lib/studentCredentials';
 import { analyzeStudentHomework } from '../services/geminiService';
 import {
@@ -85,6 +85,7 @@ import type { Puzzle } from '../types';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { fetchFidePlayer, searchFidePlayer, federationLabel, type FidePlayer } from '../services/fideService';
 import { fetchUkdFromTsf } from '../services/ukdService';
+import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
 import { getServiceSupabase } from '../services/supabase';
 import { Student, type Transaction, type PerformanceAnalysis, type PerformanceAnalysisCategory } from '../types';
 import {
@@ -95,18 +96,26 @@ import {
   emptyAnalysisFormMeta,
   getAnalysisCategories,
   newCategoryId,
+  resolveStudentAnalysisBranch,
   type AnalysisFormMeta,
 } from '../lib/performanceAnalysisUtils';
 import { DATE_INPUT_MAX, DATE_INPUT_MIN, normalizeDateInputYear } from '../lib/dateInputUtils';
 import { isPackageSaleCategory } from '../lib/salePaymentUtils';
 import { filterDuesTransactions, isDuesPaymentTransaction } from '../lib/transactionUtils';
 import SalePaymentCell from './SalePaymentCell';
+import { attendanceRecordGroupName, attendanceRecordSessionScopeKey, attendanceRecordTime } from '../lib/attendanceSession';
+import { attendanceEditBridgePayloadFromRecord, saveAttendanceEditBridge } from '../lib/attendanceEditBridge';
+import { writePanelHash } from '../lib/panelRouting';
+import { countPrivateLessonAttendanceUsage } from '../lib/privateLessonUsage';
+import { UkdFideRatingsPanel } from './student/UkdFideRatingsPanel';
 
 import { REMINDER_DAY_OPTIONS, DEFAULT_REMINDER_DAY } from '../lib/reminderDays';
 import {
   applyGroupDefaultsToStudent,
   applySiblingDiscount,
   disciplineNamesForOffice,
+  disciplineNamesForPackages,
+  findLessonPackageByName,
   findTrainingGroupByName,
   formatLessonSchedule,
   getBaseMonthlyFeeForStudent,
@@ -116,6 +125,8 @@ import {
   isMonthDuesWaived,
   mergeBranchOffices,
   monthKey,
+  lessonPackageNamesForSelection,
+  trainingGroupNamesForSelection,
 } from '../lib/trainingGroupUtils';
 import type { GroupLessonSlot } from '../types';
 
@@ -829,7 +840,6 @@ const StudentDetail: React.FC<{
     addPerformanceAnalysis,
     updatePerformanceAnalysis,
     deletePerformanceAnalysis,
-    disciplines,
     homeworkAttempts,
     scopedTrainingGroups: trainingGroups,
     scopedDisciplineBranches: disciplineBranches,
@@ -852,6 +862,7 @@ const StudentDetail: React.FC<{
   const [saleDiscipline, setSaleDiscipline] = useState('');
   const [saleLessonPackageId, setSaleLessonPackageId] = useState('');
   const [saleTotalHours, setSaleTotalHours] = useState('');
+  const [saleRemainingLessons, setSaleRemainingLessons] = useState('');
   const [saleValidityDays, setSaleValidityDays] = useState('');
   const [salePackageName, setSalePackageName] = useState('');
   const [saleTotalAmount, setSaleTotalAmount] = useState('');
@@ -871,6 +882,8 @@ const StudentDetail: React.FC<{
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [editTxnAmount, setEditTxnAmount] = useState('');
   const [editTxnTotalAmount, setEditTxnTotalAmount] = useState('');
+  const [editTxnLessonCount, setEditTxnLessonCount] = useState('');
+  const [editTxnRemainingLessons, setEditTxnRemainingLessons] = useState('');
   const [editTxnDate, setEditTxnDate] = useState('');
   const [editTxnPaymentType, setEditTxnPaymentType] = useState<'Nakit' | 'Havale/EFT' | 'Kredi Kartı'>('Nakit');
   const [editTxnProcessedBy, setEditTxnProcessedBy] = useState('');
@@ -886,6 +899,9 @@ const StudentDetail: React.FC<{
   const [ukdImportBirthYear, setUkdImportBirthYear] = useState('');
   const [ukdImportLastVisa, setUkdImportLastVisa] = useState('');
   const [loadingUkdFetch, setLoadingUkdFetch] = useState(false);
+  const [ukdFetchNote, setUkdFetchNote] = useState<string | null>(null);
+  const ukdAutoFetchedKeyRef = useRef('');
+  const ukdFetchInFlightRef = useRef(false);
   const [showAnalysisModal, setShowAnalysisModal] = useState(false);
   const [editingAnalysisId, setEditingAnalysisId] = useState<string | null>(null);
   const [expandedAnalysisId, setExpandedAnalysisId] = useState<string | null>(null);
@@ -895,16 +911,29 @@ const StudentDetail: React.FC<{
   const [analysisFormMeta, setAnalysisFormMeta] = useState<AnalysisFormMeta>(emptyAnalysisFormMeta);
   const [analysisCategories, setAnalysisCategories] = useState<PerformanceAnalysisCategory[]>(cloneDefaultCategories);
 
-  const resetAnalysisModal = useCallback(() => {
+  type DetailTab = 'finans' | 'ukd' | 'lichess' | 'chesscom' | 'analizler' | 'taksitler' | 'ozel-dersler' | 'gecmis' | 'bilgiler';
+  const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('finans');
+
+  const visibleStudents = auth?.role === 'admin' ? students : scopedStudents;
+  const student = useMemo<Student | null>(() => {
+    if (!studentId) return null;
+    return visibleStudents.find((s) => s.id === studentId) ?? null;
+  }, [visibleStudents, studentId]);
+
+  const studentRef = useRef(student);
+  studentRef.current = student;
+
+  const resetAnalysisModal = useCallback((branch = '') => {
     setEditingAnalysisId(null);
-    setAnalysisFormMeta(emptyAnalysisFormMeta());
+    setAnalysisFormMeta(emptyAnalysisFormMeta(branch));
     setAnalysisCategories(cloneDefaultCategories());
   }, []);
 
   const openAddAnalysisModal = useCallback(() => {
-    resetAnalysisModal();
+    if (!student) return;
+    resetAnalysisModal(resolveStudentAnalysisBranch(student));
     setShowAnalysisModal(true);
-  }, [resetAnalysisModal]);
+  }, [resetAnalysisModal, student]);
 
   const openEditAnalysisModal = useCallback((analysis: PerformanceAnalysis) => {
     setEditingAnalysisId(analysis.id);
@@ -918,35 +947,39 @@ const StudentDetail: React.FC<{
     resetAnalysisModal();
   }, [resetAnalysisModal]);
 
-  type DetailTab = 'finans' | 'ukd' | 'lichess' | 'chesscom' | 'analizler' | 'taksitler' | 'ozel-dersler' | 'gecmis' | 'bilgiler';
-  const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('finans');
-
-  const visibleStudents = auth?.role === 'admin' ? students : scopedStudents;
-  const student = useMemo<Student | null>(() => {
-    if (!studentId) return null;
-    return visibleStudents.find((s) => s.id === studentId) ?? null;
-  }, [visibleStudents, studentId]);
-
   const saveAnalysisModal = useCallback(() => {
-    if (!studentId || !analysisFormMeta.branch.trim() || !analysisFormMeta.analysisDate) return;
-    const payload = buildPerformanceAnalysisPayload(studentId, analysisFormMeta, analysisCategories);
+    if (!studentId || !student || !analysisFormMeta.analysisDate) return;
+    const meta: AnalysisFormMeta = {
+      ...analysisFormMeta,
+      branch: resolveStudentAnalysisBranch(student),
+    };
+    const payload = buildPerformanceAnalysisPayload(studentId, meta, analysisCategories);
     if (editingAnalysisId) {
       updatePerformanceAnalysis(editingAnalysisId, payload);
     } else {
       addPerformanceAnalysis(payload);
     }
     closeAnalysisModal();
-  }, [studentId, analysisFormMeta, analysisCategories, editingAnalysisId, addPerformanceAnalysis, updatePerformanceAnalysis, closeAnalysisModal]);
+  }, [studentId, student, analysisFormMeta, analysisCategories, editingAnalysisId, addPerformanceAnalysis, updatePerformanceAnalysis, closeAnalysisModal]);
 
   const openEditTransaction = useCallback((t: Transaction) => {
+    const attendanceUsedLessons = countPrivateLessonAttendanceUsage(t, attendanceRecords, studentId);
+    const totalLessons = t.lessonCount;
+    const startingUsedLessons = Math.max(0, Number(t.startingUsedLessons ?? 0));
+    const currentRemainingLessons =
+      totalLessons != null
+        ? Math.max(0, totalLessons - startingUsedLessons - attendanceUsedLessons)
+        : undefined;
     setEditingTransactionId(t.id);
     setEditTxnAmount(String(t.amount));
     setEditTxnTotalAmount(t.totalAmount != null ? String(t.totalAmount) : '');
+    setEditTxnLessonCount(totalLessons != null ? String(totalLessons) : '');
+    setEditTxnRemainingLessons(currentRemainingLessons != null ? String(currentRemainingLessons) : '');
     setEditTxnDate(normalizeDateInputYear(t.date || ''));
     setEditTxnPaymentType(t.paymentType);
     setEditTxnProcessedBy(t.processedBy || '');
     setEditTxnDescription(t.description || '');
-  }, []);
+  }, [attendanceRecords, studentId]);
 
   const salePaymentPreview = useMemo(() => {
     const total = Number(String(saleTotalAmount).replace(/\s/g, '').replace(',', '.'));
@@ -999,6 +1032,7 @@ const StudentDetail: React.FC<{
     if (!pkg) {
       setSalePackageName('');
       setSaleTotalHours('');
+      setSaleRemainingLessons('');
       setSaleValidityDays('');
       return;
     }
@@ -1006,6 +1040,7 @@ const StudentDetail: React.FC<{
     setSaleDiscipline(pkg.discipline);
     setSalePackageName(pkg.name);
     setSaleTotalHours(String(pkg.lessonCount));
+    setSaleRemainingLessons(String(pkg.lessonCount));
     setSaleValidityDays(String(pkg.validityDays));
     setSaleTotalAmount(String(pkg.packageFee));
   }, [lessonPackages]);
@@ -1014,6 +1049,7 @@ const StudentDetail: React.FC<{
     setSaleLessonPackageId('');
     setSalePackageName('');
     setSaleTotalHours('');
+    setSaleRemainingLessons('');
     setSaleValidityDays('');
     setSaleTotalAmount('');
   }, []);
@@ -1028,6 +1064,7 @@ const StudentDetail: React.FC<{
     setSaleDiscipline(nextType === 'ozel-ders' ? defaultDiscipline : '');
     setSaleLessonPackageId('');
     setSaleTotalHours('');
+    setSaleRemainingLessons('');
     setSaleValidityDays('');
     setSalePackageName('');
     setSaleTotalAmount('');
@@ -1129,60 +1166,105 @@ const StudentDetail: React.FC<{
     if (activeDetailTab === 'ukd' && student?.fideId) loadFide();
   }, [activeDetailTab, student?.fideId, loadFide]);
 
-  const handleFetchUkd = useCallback(async () => {
-    if (!student) return;
-    const tc = student.tcNo?.replace(/\D/g, '') || '';
-    const soyad = (student.name || '').trim().split(/\s+/).slice(-1)[0] || undefined;
+  const handleFetchUkd = useCallback(async (opts?: { silent?: boolean; force?: boolean }) => {
+    const s = studentRef.current;
+    if (!s) return;
+    const tc = s.tcNo?.replace(/\D/g, '') || '';
+    const soyad = (s.name || '').trim().split(/\s+/).slice(-1)[0] || undefined;
     if (!tc) {
-      setShowUkdImportModal(true);
+      if (!opts?.silent) setShowUkdImportModal(true);
       return;
     }
+    const fetchKey = `${s.id}:${tc}`;
+    if (!opts?.force && ukdAutoFetchedKeyRef.current === fetchKey) return;
+    if (ukdFetchInFlightRef.current) return;
+
+    ukdFetchInFlightRef.current = true;
     setLoadingUkdFetch(true);
+    if (!opts?.silent) setUkdFetchNote(null);
     try {
       const res = await fetchUkdFromTsf({ tc, soyad });
       if (res && 'ok' in res && res.ok && res.ukd != null) {
         const patch: Partial<Student> = { ukd: res.ukd };
         if (res.fideId) patch.fideId = res.fideId;
         if (res.name?.trim()) patch.name = res.name.trim();
-        if (res.dogumYil?.trim().length === 4 && (!student.birthDate || student.birthDate.slice(0, 4) !== res.dogumYil.trim())) {
+        if (res.dogumYil?.trim().length === 4 && (!s.birthDate || s.birthDate.slice(0, 4) !== res.dogumYil.trim())) {
           patch.birthDate = `${res.dogumYil.trim()}-01-01`;
         }
-        updateStudent(student.id, patch);
-        if (student.fideId !== res.fideId && res.fideId) setFideIdInput(res.fideId);
+        const changed = (Object.keys(patch) as (keyof Student)[]).some(
+          (key) => patch[key] !== s[key],
+        );
+        if (changed) {
+          updateStudent(s.id, patch);
+          if (s.fideId !== res.fideId && res.fideId) setFideIdInput(res.fideId);
+        }
+        setUkdFetchNote(`TSF güncel UKD: ${res.ukd}`);
+        ukdAutoFetchedKeyRef.current = fetchKey;
       } else if (res && 'error' in res) {
-        void alertDialog({
-          title: 'UKD çekilemedi',
-          message: `UKD otomatik çekilemedi.\n${res.error}\n\nTSF sorgu sonucu ekranda varsa "TSF verilerini elle aktar" ile kaydedebilirsiniz.`,
-          variant: 'warning',
-        });
-        setUkdImportUkd(String(student.ukd || ''));
-        setUkdImportName(student.name || '');
-        setUkdImportBirthYear(student.birthDate ? student.birthDate.slice(0, 4) : '');
-        setUkdImportLastVisa('');
-        setShowUkdImportModal(true);
-      } else {
+        setUkdFetchNote(res.error);
+        ukdAutoFetchedKeyRef.current = fetchKey;
+        if (!opts?.silent) {
+          void alertDialog({
+            title: 'UKD çekilemedi',
+            message: `UKD otomatik çekilemedi.\n${res.error}\n\nTSF sorgu sonucu ekranda varsa "TSF verilerini elle aktar" ile kaydedebilirsiniz.`,
+            variant: 'warning',
+          });
+          setUkdImportUkd(String(s.ukd || ''));
+          setUkdImportName(s.name || '');
+          setUkdImportBirthYear(s.birthDate ? s.birthDate.slice(0, 4) : '');
+          setUkdImportLastVisa('');
+          setShowUkdImportModal(true);
+        }
+      } else if (!opts?.silent) {
         void alertDialog({
           title: 'UKD servisi yanıt vermedi',
           message: 'UKD servisi yanıt vermedi. Lütfen Edge Function (fetch-ukd) deploy durumunu kontrol edin veya verileri elle aktarın.',
           variant: 'warning',
         });
-        setUkdImportUkd(String(student.ukd || ''));
-        setUkdImportName(student.name || '');
-        setUkdImportBirthYear(student.birthDate ? student.birthDate.slice(0, 4) : '');
+        setUkdImportUkd(String(s.ukd || ''));
+        setUkdImportName(s.name || '');
+        setUkdImportBirthYear(s.birthDate ? s.birthDate.slice(0, 4) : '');
         setUkdImportLastVisa('');
         setShowUkdImportModal(true);
       }
     } finally {
+      ukdFetchInFlightRef.current = false;
       setLoadingUkdFetch(false);
     }
-  }, [student, updateStudent]);
+  }, [updateStudent]);
+
+  React.useEffect(() => {
+    ukdAutoFetchedKeyRef.current = '';
+  }, [student?.id, student?.tcNo]);
+
+  React.useEffect(() => {
+    if (activeDetailTab !== 'ukd' || !student?.id || !student?.tcNo) return;
+    const tc = student.tcNo.replace(/\D/g, '');
+    if (tc.length !== 11) return;
+    void handleFetchUkd({ silent: true });
+    // handleFetchUkd stabil (updateStudent); öğrenci güncellenince tekrar tetiklenmesin
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDetailTab, student?.id, student?.tcNo]);
 
   const studentAttendances = useMemo(() => {
     if (!studentId) return [];
-    return attendanceRecords
+    const sorted = attendanceRecords
       .filter((r) => r.studentId === studentId)
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [studentId, attendanceRecords]);
+    const deduped = new Map<string, typeof sorted[number]>();
+    sorted.forEach((record) => {
+      const key = `${String(record.date ?? '').slice(0, 10)}::${attendanceRecordSessionScopeKey(record, student.group) || record.id}`;
+      if (!deduped.has(key)) deduped.set(key, record);
+    });
+    return [...deduped.values()];
+  }, [studentId, attendanceRecords, student.group]);
+
+  const openAttendanceEdit = useCallback((record: typeof studentAttendances[number]) => {
+    saveAttendanceEditBridge(
+      attendanceEditBridgePayloadFromRecord(record, student.group),
+    );
+    writePanelHash('attendance');
+  }, [student.group]);
 
   const studentTransactions = useMemo(() => {
     if (!studentId) return [];
@@ -1201,26 +1283,64 @@ const StudentDetail: React.FC<{
     return packageTransactions.filter((t) => t.category === 'Özel Ders');
   }, [packageTransactions]);
 
+  const headerPrivateLessonMeta = useMemo(() => {
+    return privateLessonTransactions
+      .map((t) => ({
+        branchOffice: String(t.lessonBranchOffice ?? '').trim(),
+        branch: String(t.lessonDiscipline ?? '').trim(),
+        group: String(t.lessonPackageName ?? '').trim(),
+        date: String(t.date ?? ''),
+      }))
+      .filter((item) => item.branchOffice || item.branch || item.group)
+      .sort((a, b) => b.date.localeCompare(a.date))[0] ?? null;
+  }, [privateLessonTransactions]);
+
+  const headerBranchLabel = student?.branch?.trim() || headerPrivateLessonMeta?.branch || 'Branş Belirtilmemiş';
+  const headerGroupLabel = student?.group?.trim() || headerPrivateLessonMeta?.group || 'Grup Belirtilmemiş';
+
   const privateLessonUsageById = useMemo(() => {
-    const map = new Map<string, { totalLessons?: number; usedLessons: number; remainingLessons?: number }>();
+    const map = new Map<string, { totalLessons?: number; usedLessons: number; attendanceUsedLessons: number; startingUsedLessons: number; remainingLessons?: number }>();
     privateLessonTransactions.forEach((t) => {
       const totalLessons = t.lessonCount;
-      const usedLessons =
-        t.lessonPackageId
-          ? studentAttendances.filter(
-              (record) =>
-                record.lessonId === t.lessonPackageId &&
-                (record.status === 'present' || record.status === 'late'),
-            ).length
-          : 0;
+      const attendanceUsedLessons = countPrivateLessonAttendanceUsage(t, studentAttendances, studentId);
+      const rawStartingUsed = Number(t.startingUsedLessons ?? 0);
+      const startingUsedLessons = Number.isFinite(rawStartingUsed)
+        ? Math.max(0, totalLessons != null ? Math.min(rawStartingUsed, totalLessons) : rawStartingUsed)
+        : 0;
+      const usedLessons = attendanceUsedLessons + startingUsedLessons;
       map.set(t.id, {
         totalLessons,
         usedLessons,
+        attendanceUsedLessons,
+        startingUsedLessons,
         remainingLessons: totalLessons != null ? Math.max(0, totalLessons - usedLessons) : undefined,
       });
     });
     return map;
-  }, [privateLessonTransactions, studentAttendances]);
+  }, [privateLessonTransactions, studentAttendances, studentId]);
+
+  const financePrivateLessonSummary = useMemo(() => {
+    if (!student) return null;
+    const latest = privateLessonTransactions[0];
+    if (!latest) return null;
+    const usage = privateLessonUsageById.get(latest.id);
+    const totalLessons = usage?.totalLessons ?? latest.lessonCount;
+    const usedLessons = usage?.usedLessons ?? Math.max(0, Number(latest.startingUsedLessons ?? 0));
+    const remainingLessons =
+      usage?.remainingLessons ??
+      (totalLessons != null ? Math.max(0, totalLessons - usedLessons) : undefined);
+    return {
+      packageName: String(latest.lessonPackageName ?? latest.description ?? 'Özel Ders Paketi').trim() || 'Özel Ders Paketi',
+      branchOffice: String(latest.lessonBranchOffice ?? '').trim(),
+      discipline: String(latest.lessonDiscipline ?? '').trim(),
+      totalLessons,
+      usedLessons,
+      remainingLessons,
+      attendanceUsedLessons: usage?.attendanceUsedLessons ?? 0,
+      startingUsedLessons: usage?.startingUsedLessons ?? 0,
+      saleDate: String(latest.date ?? ''),
+    };
+  }, [student, privateLessonTransactions, privateLessonUsageById]);
 
   /** Grup galerisi: öğrencinin grubuna veya öğrenciye özel yüklenen görseller */
   const groupGalleryItems = useMemo(() => {
@@ -1404,41 +1524,18 @@ const StudentDetail: React.FC<{
             </h1>
             <div className="flex flex-wrap items-center gap-2 mt-2">
               <span className="inline-flex items-center px-3 py-1 rounded-xl bg-white/5 backdrop-blur-sm text-slate-300 text-xs font-semibold border border-white/[0.05]">
-                {student.branch || 'Branş Belirtilmemiş'}
+                {headerBranchLabel}
               </span>
               <span className="inline-flex items-center px-3 py-1 rounded-xl bg-white/5 backdrop-blur-sm text-slate-300 text-xs font-semibold border border-white/[0.05]">
-                {student.group || 'Grup Belirtilmemiş'}
+                {headerGroupLabel}
               </span>
             </div>
           </div>
         </div>
 
-        {/* Right side: 2x2 Grid of Stats */}
+        {/* Right side: Profile summary cards */}
         <div className="lg:col-span-1 grid grid-cols-2 gap-3 w-full shrink-0 lg:max-w-md">
-          {/* Card 1: Öğrenci No */}
-          <div className="rounded-2xl bg-white/[0.03] backdrop-blur-lg border border-white/[0.06] p-3 hover:bg-white/[0.06] transition-all duration-300 group relative">
-            <div className="flex items-start justify-between">
-              <div>
-                <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">Öğrenci No</span>
-                <span className="text-sm font-extrabold text-indigo-300 mt-1 block font-mono">
-                  #{getDisplayStudentNo(student, students)}
-                </span>
-              </div>
-              <button 
-                type="button" 
-                onClick={() => {
-                  navigator.clipboard.writeText(String(getDisplayStudentNo(student, students)));
-                  showToast('Öğrenci numarası kopyalandı!', 'success');
-                }} 
-                className="p-1 rounded-lg bg-white/5 hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-300 transition-all opacity-0 group-hover:opacity-100"
-                title="Kopyala"
-              >
-                <Copy className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-
-          {/* Card 2: TC No */}
+          {/* Card 1: TC No */}
           <div className="rounded-2xl bg-white/[0.03] backdrop-blur-lg border border-white/[0.06] p-3 hover:bg-white/[0.06] transition-all duration-300">
             <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">T.C. Kimlik</span>
             <span className="text-sm font-extrabold text-white mt-1 block truncate" title={student.tcNo || ''}>
@@ -1446,7 +1543,7 @@ const StudentDetail: React.FC<{
             </span>
           </div>
 
-          {/* Card 3: Yaş */}
+          {/* Card 2: Yaş */}
           <div className="rounded-2xl bg-white/[0.03] backdrop-blur-lg border border-white/[0.06] p-3 hover:bg-white/[0.06] transition-all duration-300">
             <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">Yaş</span>
             <span className="text-sm font-extrabold text-white mt-1 block">
@@ -1454,7 +1551,7 @@ const StudentDetail: React.FC<{
             </span>
           </div>
 
-          {/* Card 4: Şube */}
+          {/* Card 3: Şube */}
           <div className="rounded-2xl bg-white/[0.03] backdrop-blur-lg border border-white/[0.06] p-3 hover:bg-white/[0.06] transition-all duration-300">
             <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">Şube</span>
             <span className="text-sm font-extrabold text-white mt-1 block truncate" title={student.branchOffice || ''}>
@@ -1524,53 +1621,33 @@ const StudentDetail: React.FC<{
  </div>
 
  {(activeDetailTab === 'ukd') && student && (
- <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
- <div className="px-6 py-4 border-b border-slate-700/60 flex items-center justify-between">
- <div className="flex items-center gap-2">
- <Trophy className="w-5 h-5 text-amber-500" />
- <span className="text-sm font-black text-white">UKD & FIDE Bilgileri</span>
- </div>
- <div className="flex items-center gap-2">
- <button type="button" onClick={loadFide} disabled={loadingFide} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 text-xs font-bold disabled:opacity-50">
-   {loadingFide ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Yenile
- </button>
- <a href="https://ukd.tsf.org.tr/ukdsorgulama.php" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">
- <ExternalLink className="w-4 h-4" /> TSF UKD Sorgula
- </a>
- </div>
- </div>
- <div className="p-6 space-y-6">
- {/* UKD — TSF TC sorgusu */}
- <div className="rounded-xl bg-indigo-500/5 border border-indigo-500/20 p-4 space-y-3">
-   <div className="text-xs font-bold text-indigo-400 uppercase tracking-widest">UKD (TSF TC Sorgusu)</div>
-   <p className="text-slate-400 text-sm">UKD puanı <a href="https://ukd.tsf.org.tr/ukdsorgulama.php" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">TSF UKD Bilgi Sistemi</a> üzerinden TC Kimlik No ile sorgulanır. Sorgu sonucuna göre kayıtlı UKD puanını düzenlemeden güncelleyebilirsiniz.</p>
-   <div className="flex flex-wrap items-center gap-2">
-     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">TC Kimlik No:</span>
-     {student.tcNo ? (
-       <span className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-600 text-white font-mono text-sm">{student.tcNo}</span>
-     ) : (
-       <span className="text-slate-500 text-sm">Kayıtlı TC yok — düzenlemeden ekleyin</span>
-     )}
-     {student.tcNo && (
-       <button type="button" onClick={() => navigator.clipboard.writeText(student.tcNo || '')} className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold">
-         <Copy className="w-3.5 h-3.5" /> Kopyala
-       </button>
-     )}
-     <a href="https://ukd.tsf.org.tr/ukdsorgulama.php" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">
-       <ExternalLink className="w-3.5 h-3.5" /> TSF UKD Sorgula
-     </a>
-   </div>
-   <div className="pt-2 border-t border-slate-700/60 flex flex-wrap items-center gap-3">
-     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Kayıtlı UKD puanı:</span>
-     <span className="text-lg font-black text-white">{student.ukd != null && student.ukd > 0 ? student.ukd : '—'}</span>
-     <button type="button" onClick={handleFetchUkd} disabled={loadingUkdFetch} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold disabled:opacity-50">
-       {loadingUkdFetch ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} UKD çek
-     </button>
-     <button type="button" onClick={() => { setUkdImportUkd(String(student.ukd || '')); setUkdImportName(student.name || ''); setUkdImportBirthYear(student.birthDate ? student.birthDate.slice(0, 4) : ''); setUkdImportLastVisa(''); setShowUkdImportModal(true); }} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-400 text-xs font-bold">
-       <Download className="w-3.5 h-3.5" /> TSF verilerini elle aktar
-     </button>
-   </div>
- </div>
+ <>
+ <UkdFideRatingsPanel
+   mode="coach"
+   student={student}
+   fideIdInput={fideIdInput}
+   onFideIdChange={setFideIdInput}
+   onFideIdBlur={() => {
+     const id = fideIdInput.trim().replace(/\D/g, '');
+     if (id) {
+       updateStudent(student.id, { fideId: id });
+       loadFide();
+     }
+   }}
+   onLoadFide={loadFide}
+   loadingFide={loadingFide}
+   fideProfile={fideProfile}
+   onFetchUkd={handleFetchUkd}
+   loadingUkdFetch={loadingUkdFetch}
+   ukdFetchNote={ukdFetchNote}
+   onOpenUkdImport={() => {
+     setUkdImportUkd(String(student.ukd || ''));
+     setUkdImportName(student.name || '');
+     setUkdImportBirthYear(student.birthDate ? student.birthDate.slice(0, 4) : '');
+     setUkdImportLastVisa('');
+     setShowUkdImportModal(true);
+   }}
+ />
 
  {showUkdImportModal && student && (
    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={() => setShowUkdImportModal(false)}>
@@ -1630,95 +1707,7 @@ const StudentDetail: React.FC<{
    </div>
  )}
 
- {/* FIDE — ratings.fide.com */}
- <div>
-   <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">FIDE (ratings.fide.com)</div>
-   <div className="flex flex-wrap items-center gap-2">
-     <input
-       type="text"
-       value={fideIdInput}
-       onChange={(e) => setFideIdInput(e.target.value)}
-       onBlur={() => {
-         const id = fideIdInput.trim().replace(/\D/g, '');
-         if (id) {
-           updateStudent(student.id, { fideId: id });
-           loadFide();
-         }
-       }}
-       placeholder="FIDE ID veya otomatik ara..."
-       className="w-52 min-w-0 px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium placeholder:text-slate-500 focus:ring-2 focus:ring-amber-500/40 outline-none"
-     />
-     <button 
-       type="button" 
-       onClick={loadFide} 
-       disabled={loadingFide}
-       className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm font-medium hover:bg-amber-500/20 transition-colors disabled:opacity-50"
-     >
-       {loadingFide ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-       {!fideIdInput ? 'Otomatik Ara & Çek' : 'Verileri Yenile'}
-     </button>
-     {student.fideId ? (
-       <a href={`https://ratings.fide.com/profile/${student.fideId}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm font-medium hover:bg-amber-500/20 transition-colors">
-         <ExternalLink className="w-3.5 h-3.5" /> ratings.fide.com Profil
-       </a>
-     ) : null}
-   </div>
-   {!fideIdInput && (
-     <p className="text-[10px] text-slate-500 mt-1.5 italic">FIDE ID boşsa, öğrencinin adı ve doğum yılıyla arama yapılır.</p>
-   )}
- </div>
- {fideIdInput.trim() ? (
-   loadingFide && !fideProfile ? (
-     <div className="flex items-center gap-2 py-8 text-slate-400">
-       <Loader2 className="w-5 h-5 animate-spin" /> FIDE verileri çekiliyor...
-     </div>
-   ) : fideProfile ? (
-     <div className="space-y-4">
-       <div className="rounded-xl bg-slate-800/60 border border-slate-700/60 p-4 flex flex-wrap items-center justify-between gap-4">
-         <div>
-           <div className="text-lg font-black text-white">{fideProfile.name}</div>
-           <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 mt-1 text-xs text-slate-400">
-             <span>Federasyon: {federationLabel(fideProfile.federation)}</span>
-             {fideProfile.year != null && <span>Doğum: {fideProfile.year}</span>}
-             {fideProfile.inactive && <span className="text-amber-400">Pasif</span>}
-           </div>
-         </div>
-         <a href={`https://ratings.fide.com/profile/${fideProfile.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/20 text-amber-400 text-sm font-bold">
-           <ExternalLink className="w-4 h-4" /> ratings.fide.com Profil
-         </a>
-       </div>
-       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-         <div className="rounded-lg border border-l-4 border-l-indigo-500 border-slate-700/60 bg-slate-800/40 px-4 py-3">
-           <div className="text-[10px] font-bold text-slate-400 uppercase">Standard</div>
-           <div className="text-2xl font-black text-indigo-400 mt-1">{fideProfile.standard ?? '—'}</div>
-           <div className="text-xs text-slate-500 mt-0.5">Klasik</div>
-         </div>
-         <div className="rounded-lg border border-l-4 border-l-sky-500 border-slate-700/60 bg-slate-800/40 px-4 py-3">
-           <div className="text-[10px] font-bold text-slate-400 uppercase">Rapid</div>
-           <div className="text-2xl font-black text-sky-400 mt-1">{fideProfile.rapid ?? '—'}</div>
-         </div>
-         <div className="rounded-lg border border-l-4 border-l-amber-500 border-slate-700/60 bg-slate-800/40 px-4 py-3">
-           <div className="text-[10px] font-bold text-slate-400 uppercase">Blitz</div>
-           <div className="text-2xl font-black text-amber-400 mt-1">{fideProfile.blitz ?? '—'}</div>
-         </div>
-       </div>
-       <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/5 px-5 py-4">
-         <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">UKD Puanı (TSF)</div>
-         <div className="text-2xl font-black text-indigo-400 mt-1">{student.ukd != null && student.ukd > 0 ? student.ukd : '—'}</div>
-         <div className="text-xs text-slate-400 mt-1">TSF UKD sorgusu ile güncellenir (FIDE ELO değildir)</div>
-       </div>
-     </div>
-   ) : (
-     <div className="rounded-xl bg-slate-800/40 border border-slate-700/60 p-4 text-sm text-slate-500">FIDE ID bulunamadı veya geçersiz.</div>
-   )
- ) : (
-   <div className="p-8 text-center">
-     <Trophy className="w-12 h-12 text-slate-500 mx-auto mb-3" />
-     <p className="text-slate-400 text-sm font-medium">FIDE ID girip kaydettikten sonra bilgiler <a href="https://ratings.fide.com" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline">ratings.fide.com</a> kaynağından çekilecektir (örn: 6334490).</p>
-   </div>
- )}
- </div>
- </div>
+ </>
  )}
 
  {(activeDetailTab === 'lichess' || activeDetailTab === 'chesscom') && student ? (
@@ -1736,7 +1725,7 @@ const StudentDetail: React.FC<{
 
  {(activeDetailTab === 'finans') && (
  <div className="space-y-4 md:space-y-6">
- <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
+<div className={`grid grid-cols-2 gap-2 sm:gap-4 ${financePrivateLessonSummary ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
  <StatTile icon={<CalendarCheck className="w-5 h-5" />} title="Devam Oranı (30 Gün)" value={derived.attendanceRate} accent="indigo" />
 <StatTile
   icon={derived.activeDuesDebt > 0 ? <XCircle className="w-5 h-5" /> : <BadgeCheck className="w-5 h-5" />}
@@ -1763,6 +1752,23 @@ const StudentDetail: React.FC<{
   }
   accent={derived.activeDuesDebt > 0 ? 'rose' : 'emerald'}
 />
+{financePrivateLessonSummary ? (
+  <StatTile
+    icon={<GraduationCap className="w-5 h-5" />}
+    title="Ders Kullanımı"
+    value={
+      financePrivateLessonSummary.totalLessons != null
+        ? `${financePrivateLessonSummary.usedLessons}/${financePrivateLessonSummary.totalLessons}`
+        : `${financePrivateLessonSummary.usedLessons}`
+    }
+    subtitle={
+      financePrivateLessonSummary.remainingLessons != null
+        ? `Kalan ${financePrivateLessonSummary.remainingLessons} ders`
+        : 'Kalan ders bilgisi yok'
+    }
+    accent={financePrivateLessonSummary.remainingLessons === 0 ? 'amber' : 'emerald'}
+  />
+) : null}
  <StatTile icon={<Users className="w-5 h-5" />} title="Toplam Devam" value={derived.totalAttendance} accent="violet" />
  <StatTile icon={<Calendar className="w-5 h-5" />} title="Kayıt Tarihi" value={formatDateTR(student.registrationDate)} accent="amber" />
  </div>
@@ -1775,8 +1781,12 @@ const StudentDetail: React.FC<{
    <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
  </div>
  <div className="min-w-0">
-   <div className="text-sm font-bold text-white">Aidat Takvimi</div>
-   <div className="text-[10px] text-slate-500">{calendarYear} · {student.registrationType === 'package' ? 'Ders Paketi' : student.isScholarshipStudent ? 'Burslu' : 'Aylık Aidat'}</div>
+  <div className="text-sm font-bold text-white">{student.registrationType === 'package' ? 'Özel Ders Özeti' : 'Aidat Takvimi'}</div>
+  <div className="text-[10px] text-slate-500">
+    {student.registrationType === 'package'
+      ? `${calendarYear} · Ders Paketi`
+      : `${calendarYear} · ${student.isScholarshipStudent ? 'Burslu' : 'Aylık Aidat'}`}
+  </div>
  </div>
  </div>
  {student.registrationType !== 'package' && !student.isScholarshipStudent && (
@@ -1795,6 +1805,53 @@ const StudentDetail: React.FC<{
  </button>
  )}
  </div>
+{student.registrationType === 'package' ? (
+  <div className="p-3 sm:p-6">
+    {financePrivateLessonSummary ? (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-indigo-500/15 bg-indigo-500/5 px-4 py-3">
+          <div className="text-sm font-bold text-white">{financePrivateLessonSummary.packageName}</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            {[financePrivateLessonSummary.branchOffice, financePrivateLessonSummary.discipline].filter(Boolean).join(' · ') || 'Özel ders paketi'}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
+          <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Toplam Ders</div>
+            <div className="mt-2 text-xl font-black text-white">{financePrivateLessonSummary.totalLessons ?? '—'}</div>
+          </div>
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-amber-200/80">Kullanılan</div>
+            <div className="mt-2 text-xl font-black text-amber-200">{financePrivateLessonSummary.usedLessons}</div>
+          </div>
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-200/80">Kalan</div>
+            <div className="mt-2 text-xl font-black text-emerald-200">{financePrivateLessonSummary.remainingLessons ?? '—'}</div>
+          </div>
+          <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Satış Tarihi</div>
+            <div className="mt-2 text-base font-black text-white">{formatDateTR(financePrivateLessonSummary.saleDate)}</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:gap-4">
+          <div className="rounded-lg border border-white/[0.06] bg-slate-900/30 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Yoklamadan Kullanılan</div>
+            <div className="mt-2 text-lg font-black text-indigo-200">{financePrivateLessonSummary.attendanceUsedLessons}</div>
+          </div>
+          <div className="rounded-lg border border-white/[0.06] bg-slate-900/30 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Elle Girilen Kullanım</div>
+            <div className="mt-2 text-lg font-black text-indigo-200">{financePrivateLessonSummary.startingUsedLessons}</div>
+          </div>
+        </div>
+      </div>
+    ) : (
+      <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] py-12 text-center">
+        <GraduationCap className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+        <p className="text-slate-400 font-medium">Henüz özel ders satışı bulunamadı.</p>
+      </div>
+    )}
+  </div>
+) : (
 <div className="p-3 sm:p-6 grid grid-cols-3 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4">
 {MONTHS_TR.map((m, idx) => {
  const monthNum = idx + 1;
@@ -1902,6 +1959,7 @@ const StudentDetail: React.FC<{
  );
 })}
 </div>
+)}
 {student.registrationType !== 'package' && (
 <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-slate-700/60 bg-white/[0.02]">
 <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Aidat hatırlatma günleri</div>
@@ -2267,7 +2325,7 @@ return (
 <BarChart3 className="w-5 h-5 text-indigo-400" />
 </div>
 <div className="min-w-0">
-<h4 className="text-sm font-bold text-white truncate">{a.branch}</h4>
+<h4 className="text-sm font-bold text-white truncate">Kişisel Performans Analizi</h4>
 <p className="text-[11px] text-slate-400 font-medium mt-0.5">{formatDateTR(a.analysisDate)}</p>
 </div>
 </div>
@@ -2432,27 +2490,38 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
  <ResponsiveTable minWidth={480}>
  <table className="w-full text-left border-collapse">
  <thead>
- <tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b border-slate-700/60/60">
+<tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b border-slate-700/60/60">
  <th className="py-3 pr-4">Tarih</th>
  <th className="py-3 pr-4">Saat</th>
  <th className="py-3 pr-4">Grup</th>
  <th className="py-3 pr-4">Durum</th>
+<th className="py-3 pr-4 text-right">İşlem</th>
  </tr>
  </thead>
  <tbody className="divide-y divide-slate-200/60">
  {studentAttendances.length === 0 ? (
- <tr><td colSpan={4} className="py-6 text-center text-slate-400 text-sm">Yoklama kaydı yok.</td></tr>
+<tr><td colSpan={5} className="py-6 text-center text-slate-400 text-sm">Yoklama kaydı yok.</td></tr>
  ) : (
  studentAttendances.slice(0, 20).map((r) => (
  <tr key={r.id} className="text-sm odd:bg-slate-900/50/60">
  <td data-label="Tarih" className="py-3 pr-4 font-bold text-white">{formatDateTR(r.date)}</td>
- <td data-label="Saat" className="py-3 pr-4 text-slate-300 font-bold">—</td>
- <td data-label="Grup" className="py-3 pr-4 text-slate-300 font-bold">{student.group}</td>
+<td data-label="Saat" className="py-3 pr-4 text-slate-300 font-bold">{attendanceRecordTime(r)}</td>
+<td data-label="Grup" className="py-3 pr-4 text-slate-300 font-bold">{attendanceRecordGroupName(r, student.group)}</td>
  <td data-label="Durum" className="py-3 pr-4">
  <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest border ${r.status === 'present' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' : r.status === 'late' ? 'bg-amber-500/10 text-amber-600 border-amber-500/20' : r.status === 'excused' ? 'bg-orange-500/10 text-orange-600 border-orange-500/20' : 'bg-slate-500/10 text-slate-400 border-slate-500/20'}`}>
    {r.status === 'present' ? 'Var' : r.status === 'late' ? 'Geç' : r.status === 'excused' ? 'İzinli' : 'Yok'}
  </span>
  </td>
+<td data-label="İşlem" className="py-3 pr-4 text-right">
+  <button
+    type="button"
+    onClick={() => openAttendanceEdit(r)}
+    className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/20 bg-indigo-500/10 px-3 py-1.5 text-[10px] font-black text-indigo-300 transition-colors hover:bg-indigo-500/20"
+  >
+    <Edit2 className="w-3.5 h-3.5" />
+    Düzenle
+  </button>
+</td>
  </tr>
  ))
  )}
@@ -2632,6 +2701,14 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
          onSave={async (updated) => {
            await updateStudent(student.id, updated);
            addActivityLog({ user: 'Sistem', action: 'Öğrenci Güncellendi', target: student.name, type: 'info' });
+           const merged = { ...student, ...updated };
+           const tc = merged.tcNo?.replace(/\D/g, '') || '';
+           if (tc.length === 11) {
+             const sync = await syncStudentRatingsFromExternal(merged);
+             if (Object.keys(sync.patch).length > 0) {
+               await updateStudent(student.id, sync.patch);
+             }
+           }
          }}
          onClose={() => setShowEditModal(false)}
        />,
@@ -2884,10 +2961,10 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
  )}
 
  {showSaleModal && student && (
-   <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={() => setShowSaleModal(false)}>
+  <div className="modal-overlay z-[100]" onClick={() => setShowSaleModal(false)}>
      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden />
-     <div className="relative w-full max-w-lg bg-[#1e293b] border border-slate-700/60 rounded-xl shadow-2xl" onClick={e => e.stopPropagation()}>
-       <div className="p-5 border-b border-slate-700/60 flex items-center justify-between">
+    <div className="modal-panel relative max-w-lg bg-[#1e293b] border border-slate-700/60 rounded-t-2xl sm:rounded-xl shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="shrink-0 p-4 sm:p-5 border-b border-slate-700/60 flex items-center justify-between">
          <h3 className="text-lg font-bold text-white flex items-center gap-2">
            <ShoppingCart className="w-5 h-5 text-emerald-500" /> Paket & Ders Satışı
          </h3>
@@ -2895,7 +2972,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
            <X className="w-5 h-5" />
          </button>
        </div>
-       <div className="p-5 space-y-4">
+      <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4 custom-scrollbar">
          <div className="grid grid-cols-2 gap-3">
            <button
              type="button"
@@ -2991,19 +3068,23 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                 </p>
               ) : null}
             </div>
-             <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                <div>
                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Toplam Saat</label>
                  <input type="number" min="0" placeholder="Örn: 8" value={saleTotalHours} onChange={(e) => setSaleTotalHours(e.target.value)} className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium placeholder:text-slate-500" />
                </div>
                <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Mevcut Kalan</label>
+                <input type="number" min="0" placeholder="Örn: 8 veya 3" value={saleRemainingLessons} onChange={(e) => setSaleRemainingLessons(e.target.value)} className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium placeholder:text-slate-500" />
+              </div>
+              <div>
                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Geçerlilik (Gün)</label>
                  <input type="number" min="0" placeholder="Örn: 45" value={saleValidityDays} onChange={(e) => setSaleValidityDays(e.target.value)} className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium placeholder:text-slate-500" />
                </div>
              </div>
              <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-sm text-amber-200">
                <Clock className="w-4 h-4 text-amber-400 shrink-0" />
-               Süre dolduğunda veya saatler bittiğinde paket kapanır.
+              Süre dolduğunda veya saatler bittiğinde paket kapanır. Diger programdan aktariyorsan kalan hakki buraya 3 gibi girerek 3/8 mantigini baslatabilirsin.
              </div>
            </>
          )}
@@ -3067,6 +3148,19 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                if (Number.isNaN(amount) || amount < 0) return;
                const totalRaw = saleTotalAmount.trim() ? Number(String(saleTotalAmount).replace(/\s/g, '').replace(',', '.')) : NaN;
                const totalAmount = !Number.isNaN(totalRaw) && totalRaw > 0 ? totalRaw : undefined;
+              const lessonCountRaw = saleType === 'ozel-ders' && saleTotalHours.trim() ? Number(saleTotalHours) : NaN;
+              const lessonCount = !Number.isNaN(lessonCountRaw) && lessonCountRaw >= 0 ? Math.round(lessonCountRaw) : undefined;
+              const remainingRaw = saleType === 'ozel-ders' && saleRemainingLessons.trim() ? Number(saleRemainingLessons) : NaN;
+              const currentRemainingLessons =
+                lessonCount != null
+                  ? (!Number.isNaN(remainingRaw) && remainingRaw >= 0
+                      ? Math.min(Math.round(remainingRaw), lessonCount)
+                      : lessonCount)
+                  : undefined;
+              const startingUsedLessons =
+                lessonCount != null && currentRemainingLessons != null
+                  ? Math.max(0, lessonCount - currentRemainingLessons)
+                  : undefined;
                const today = new Date().toISOString().slice(0, 10);
                const category = saleType === 'aylik-paket' ? 'Paket' : 'Özel Ders';
                let desc = salePackageName.trim() || (saleType === 'aylik-paket' ? `${saleStartDate || '—'} - ${saleEndDate || '—'} paket` : `${saleTotalHours || '—'} saat özel ders`);
@@ -3086,12 +3180,22 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                 lessonPackageName: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.name || salePackageName.trim() || undefined) : undefined,
                 lessonDiscipline: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.discipline || saleDiscipline.trim() || undefined) : undefined,
                 lessonBranchOffice: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.branchOffice || saleBranchOffice.trim() || undefined) : undefined,
-                lessonCount: saleType === 'ozel-ders' && saleTotalHours.trim() ? Number(saleTotalHours) : undefined,
+               lessonCount: saleType === 'ozel-ders' ? lessonCount : undefined,
+               startingUsedLessons: saleType === 'ozel-ders' ? startingUsedLessons : undefined,
                 validityDays: saleType === 'ozel-ders' && saleValidityDays.trim() ? Number(saleValidityDays) : undefined,
                  studentId: student.id,
                  date: today,
                });
-               if (saleType === 'aylik-paket') updateStudent(student.id, { registrationType: 'package' });
+               if (saleType === 'aylik-paket') {
+                 updateStudent(student.id, { registrationType: 'package' });
+               } else {
+                 updateStudent(student.id, {
+                   registrationType: 'package',
+                   branchOffice: selectedSaleLessonPackage?.branchOffice || saleBranchOffice.trim() || student.branchOffice,
+                   branch: selectedSaleLessonPackage?.discipline || saleDiscipline.trim() || student.branch,
+                   group: selectedSaleLessonPackage?.name || salePackageName.trim() || student.group,
+                 });
+               }
                addActivityLog({ user: 'Sistem', action: category + ' satışı', target: student.name, type: 'success' });
                setShowSaleModal(false);
                if (salePaymentMethod === 'taksit') setActiveDetailTab('taksitler');
@@ -3107,8 +3211,8 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
  )}
 
  {showStatusModal && student && (
-   <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setShowStatusModal(false)}>
-     <div className="bg-[#1e293b] border border-slate-700/60 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+  <div className="modal-overlay z-[100]" onClick={() => setShowStatusModal(false)}>
+    <div className="modal-panel bg-[#1e293b] border border-slate-700/60 rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
        <div className="p-5 border-b border-slate-700/60 flex items-center justify-between">
          <h3 className="text-lg font-bold text-white">Durum Değiştir</h3>
          <button type="button" onClick={() => setShowStatusModal(false)} className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10">
@@ -3150,26 +3254,22 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
        onClick={(e) => e.stopPropagation()}
      >
        <div className="px-3 py-2.5 border-b border-slate-700/60 flex items-center justify-between shrink-0">
-         <h3 className="text-sm font-bold text-white flex items-center gap-2">
-           <BarChart3 className="w-4 h-4 text-indigo-500" />
-           {editingAnalysisId ? 'Analiz Düzenle' : 'Analiz Ekle'}
-         </h3>
+         <div>
+           <h3 className="text-sm font-bold text-white flex items-center gap-2">
+             <BarChart3 className="w-4 h-4 text-indigo-500" />
+             {editingAnalysisId ? 'Analiz Düzenle' : 'Analiz Ekle'}
+           </h3>
+           <p className="text-[11px] text-slate-400 mt-1">
+             {student.name} · Bu analiz yalnızca bu öğrenciye kaydedilir
+           </p>
+         </div>
          <button type="button" onClick={closeAnalysisModal} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10"><X className="w-4 h-4" /></button>
        </div>
 
        <div className="shrink-0 px-3 py-2.5 border-b border-slate-700/40 bg-slate-900/30">
-         <div className="grid grid-cols-2 gap-2">
-           <div>
-             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Branş *</label>
-             <select value={analysisFormMeta.branch} onChange={(e) => setAnalysisFormMeta((f) => ({ ...f, branch: e.target.value }))} className="w-full px-2.5 py-1.5 rounded-lg border border-slate-600 bg-slate-800 text-white text-xs font-medium [color-scheme:dark]">
-               <option value="">Seçin...</option>
-               {disciplines.map((d) => <option key={d} value={d}>{d}</option>)}
-             </select>
-           </div>
-           <div>
-             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Tarih *</label>
-             <input type="date" value={analysisFormMeta.analysisDate} onChange={(e) => setAnalysisFormMeta((f) => ({ ...f, analysisDate: e.target.value }))} className="w-full px-2.5 py-1.5 rounded-lg border border-slate-600 bg-slate-800 text-white text-xs font-medium [color-scheme:dark]" />
-           </div>
+         <div>
+           <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Tarih *</label>
+           <input type="date" value={analysisFormMeta.analysisDate} onChange={(e) => setAnalysisFormMeta((f) => ({ ...f, analysisDate: e.target.value }))} className="w-full px-2.5 py-1.5 rounded-lg border border-slate-600 bg-slate-800 text-white text-xs font-medium [color-scheme:dark]" />
          </div>
        </div>
 
@@ -3258,7 +3358,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
          <button
            type="button"
            onClick={saveAnalysisModal}
-           disabled={!analysisFormMeta.branch.trim() || !analysisFormMeta.analysisDate}
+           disabled={!analysisFormMeta.analysisDate}
            className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 disabled:opacity-50"
          >
            <CheckCircle className="w-3.5 h-3.5" />
@@ -3273,6 +3373,8 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
  {editingTransactionId && (() => {
    const editingTxn = transactions.find((t) => t.id === editingTransactionId);
    const showSaleTotal = editingTxn ? isPackageSaleCategory(editingTxn.category) : false;
+  const isPrivateLessonSale = editingTxn?.category === 'Özel Ders' || editingTxn?.saleKind === 'private_lesson';
+  const trackedUsage = editingTxn ? privateLessonUsageById.get(editingTxn.id) : undefined;
    return (
    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={() => setEditingTransactionId(null)}>
      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden />
@@ -3296,6 +3398,21 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
              <input type="number" min="0" step="0.01" value={editTxnTotalAmount} onChange={(e) => setEditTxnTotalAmount(e.target.value)} className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium" placeholder="0.00" />
            </div>
          ) : null}
+        {isPrivateLessonSale ? (
+          <>
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Toplam Ders</label>
+              <input type="number" min="0" value={editTxnLessonCount} onChange={(e) => setEditTxnLessonCount(e.target.value)} className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium" placeholder="8" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Su An Kalan Ders</label>
+              <input type="number" min="0" value={editTxnRemainingLessons} onChange={(e) => setEditTxnRemainingLessons(e.target.value)} className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium" placeholder="3" />
+              <p className="mt-1 text-[10px] text-slate-500">
+                Sistemde islenen: {trackedUsage?.attendanceUsedLessons ?? 0} ders. Buraya 3 yazarsan gorunum 3/{editTxnLessonCount || trackedUsage?.totalLessons || 0} olur.
+              </p>
+            </div>
+          </>
+        ) : null}
          <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">{showSaleTotal ? 'Alınan Tutar (₺)' : 'Tutar (₺)'}</label>
            <input type="number" min="0" step="0.01" value={editTxnAmount} onChange={(e) => setEditTxnAmount(e.target.value)} className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium" />
@@ -3319,11 +3436,28 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                if (Number.isNaN(amount) || amount < 0) return;
                const totalRaw = editTxnTotalAmount.trim() ? Number(editTxnTotalAmount.replace(/\s/g, '').replace(',', '.')) : NaN;
                const totalAmount = showSaleTotal && !Number.isNaN(totalRaw) && totalRaw > 0 ? totalRaw : undefined;
+              const lessonCountRaw = isPrivateLessonSale && editTxnLessonCount.trim() ? Number(editTxnLessonCount) : NaN;
+              const lessonCount = isPrivateLessonSale && !Number.isNaN(lessonCountRaw) && lessonCountRaw >= 0 ? Math.round(lessonCountRaw) : undefined;
+              const attendanceUsedLessons = trackedUsage?.attendanceUsedLessons ?? 0;
+              const maxRemainingNow = lessonCount != null ? Math.max(0, lessonCount - attendanceUsedLessons) : undefined;
+              const remainingRaw = isPrivateLessonSale && editTxnRemainingLessons.trim() ? Number(editTxnRemainingLessons) : NaN;
+              const currentRemainingLessons =
+                maxRemainingNow != null
+                  ? (!Number.isNaN(remainingRaw) && remainingRaw >= 0
+                      ? Math.min(Math.round(remainingRaw), maxRemainingNow)
+                      : maxRemainingNow)
+                  : undefined;
+              const startingUsedLessons =
+                lessonCount != null && currentRemainingLessons != null
+                  ? Math.max(0, lessonCount - attendanceUsedLessons - currentRemainingLessons)
+                  : undefined;
                updateTransaction(editingTransactionId, {
                  description: editTxnDescription.trim() || undefined,
                  date: editTxnDate ? normalizeDateInputYear(editTxnDate) : undefined,
                  amount,
                  totalAmount: showSaleTotal ? totalAmount : undefined,
+                lessonCount: isPrivateLessonSale ? lessonCount : undefined,
+                startingUsedLessons: isPrivateLessonSale ? startingUsedLessons : undefined,
                  paymentType: editTxnPaymentType,
                  processedBy: editTxnProcessedBy.trim() || undefined,
                });
@@ -3359,6 +3493,38 @@ const EditStudentModal: React.FC<{
   const [isSaving, setIsSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [tcUkdLookupLoading, setTcUkdLookupLoading] = useState(false);
+  const [tcUkdLookupNote, setTcUkdLookupNote] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    const tc = (fields.tcNo || '').replace(/\D/g, '');
+    if (tc.length !== 11) {
+      setTcUkdLookupNote(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setTcUkdLookupLoading(true);
+      void fetchUkdFromTsf({ tc })
+        .then((res) => {
+          if (res && 'ok' in res && res.ok && res.ukd != null) {
+            setFields((f) => ({
+              ...f,
+              ukd: res.ukd,
+              ...(res.fideId ? { fideId: res.fideId } : {}),
+              ...(res.name?.trim() ? { name: res.name.trim() } : {}),
+              ...(res.dogumYil?.trim().length === 4
+                ? { birthDate: `${res.dogumYil.trim()}-01-01` }
+                : {}),
+            }));
+            setTcUkdLookupNote(`TSF: UKD ${res.ukd} otomatik alındı`);
+          } else {
+            setTcUkdLookupNote(res && 'error' in res ? res.error : 'TSF kaydı bulunamadı');
+          }
+        })
+        .finally(() => setTcUkdLookupLoading(false));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [fields.tcNo]);
 
   const branchOfficeOptions = useMemo(() => {
     const merged = mergeBranchOffices(branchOffices, scopedDisciplineBranches);
@@ -3368,30 +3534,39 @@ const EditStudentModal: React.FC<{
 
   const branchOptions = useMemo(() => {
     const office = fields.branchOffice?.trim() || '';
+    if (fields.registrationType === 'package') {
+      return disciplineNamesForPackages(
+        scopedLessonPackages,
+        office || undefined,
+        fields.branch || undefined,
+      );
+    }
     const names = disciplineNamesForOffice(scopedDisciplineBranches, office || undefined);
     const set = new Set([...names, fields.branch || ''].filter(Boolean));
     return Array.from(set).sort();
-  }, [scopedDisciplineBranches, fields.branchOffice, fields.branch]);
+  }, [fields.registrationType, scopedDisciplineBranches, scopedLessonPackages, fields.branchOffice, fields.branch]);
 
   const lessonPackageOptions = useMemo(() => {
     const office = fields.branchOffice?.trim() || '';
     const discipline = fields.branch?.trim() || '';
-    const filtered = scopedLessonPackages
-      .filter((pkg) => (!office || pkg.branchOffice === office) && (!discipline || pkg.discipline === discipline))
-      .map((pkg) => pkg.name);
-    const set = new Set([...filtered, fields.group || ''].filter(Boolean));
-    return Array.from(set).sort();
+    return lessonPackageNamesForSelection(
+      scopedLessonPackages,
+      office,
+      discipline,
+      fields.group || undefined,
+    );
   }, [scopedLessonPackages, fields.branchOffice, fields.branch, fields.group]);
 
   const groupOptions = useMemo(() => {
     if (fields.registrationType === 'package') return lessonPackageOptions;
     const office = fields.branchOffice?.trim() || '';
     const discipline = fields.branch?.trim() || '';
-    const filtered = scopedTrainingGroups
-      .filter((g) => (!office || g.branchOffice === office) && (!discipline || g.discipline === discipline))
-      .map((g) => g.name);
-    const set = new Set([...filtered, fields.group || ''].filter(Boolean));
-    return Array.from(set).sort();
+    return trainingGroupNamesForSelection(
+      scopedTrainingGroups,
+      office,
+      discipline,
+      fields.group || undefined,
+    );
   }, [fields.registrationType, lessonPackageOptions, scopedTrainingGroups, fields.branchOffice, fields.branch, fields.group]);
 
   const financeBaseFee = useMemo(() => {
@@ -3460,8 +3635,8 @@ const EditStudentModal: React.FC<{
   const labelCls = 'block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5';
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-[#1e293b] border border-slate-700/60 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay z-[110]" onClick={onClose}>
+      <div className="modal-panel bg-[#1e293b] border border-slate-700/60 rounded-t-2xl sm:rounded-xl shadow-2xl w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-slate-700/60 bg-slate-800/40">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-indigo-500/20 flex items-center justify-center border border-indigo-500/30 text-indigo-400">
@@ -3477,7 +3652,7 @@ const EditStudentModal: React.FC<{
           </button>
         </div>
         
-        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+        <div className="modal-scroll-body p-6 space-y-8 custom-scrollbar">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             {/* Left: Photos & Primary */}
             <div className="lg:col-span-4 space-y-6">
@@ -3560,7 +3735,16 @@ const EditStudentModal: React.FC<{
                   </div>
                   <div>
                     <label className={labelCls}>TC Kimlik</label>
-                    <input type="text" value={fields.tcNo || ''} onChange={e => setFields(f => ({ ...f, tcNo: e.target.value }))} className={inputCls} />
+                    <input type="text" value={fields.tcNo || ''} onChange={e => setFields(f => ({ ...f, tcNo: e.target.value.replace(/\D/g, '').slice(0, 11) }))} className={inputCls} inputMode="numeric" />
+                    {tcUkdLookupLoading ? (
+                      <div className="text-[10px] text-indigo-300 mt-1 flex items-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin" /> TSF UKD sorgulanıyor…
+                      </div>
+                    ) : tcUkdLookupNote ? (
+                      <div className="text-[10px] text-slate-400 mt-1">{tcUkdLookupNote}</div>
+                    ) : (fields.tcNo || '').replace(/\D/g, '').length === 11 ? (
+                      <div className="text-[10px] text-slate-500 mt-1">11 hane girildi — TSF UKD otomatik çekilir</div>
+                    ) : null}
                   </div>
                   <div>
                     <label className={labelCls}>Doğum Tarihi</label>
@@ -3600,12 +3784,10 @@ const EditStudentModal: React.FC<{
                       onChange={e => {
                         const groupName = e.target.value;
                         if (fields.registrationType === 'package') {
-                          const selectedPackage = scopedLessonPackages.find(
-                            (pkg) =>
-                              pkg.name === groupName &&
-                              (!fields.branchOffice || pkg.branchOffice === fields.branchOffice) &&
-                              (!fields.branch || pkg.discipline === fields.branch),
-                          );
+                          const selectedPackage = findLessonPackageByName(scopedLessonPackages, groupName, {
+                            branchOffice: fields.branchOffice,
+                            discipline: fields.branch,
+                          });
                           if (selectedPackage) {
                             setFields(f => ({
                               ...f,

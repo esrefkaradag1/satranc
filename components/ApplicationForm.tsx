@@ -6,6 +6,7 @@ import {
 import { useApp } from '../AppContext';
 import { KVKK_TEXT } from '../lib/applicationTypes';
 import { validateTcNo, validateTrPhone, ageFromBirthDate } from '../lib/applicationValidation';
+import { normalizeTrPhoneDigits } from '../lib/phoneUtils';
 import { createApplicationAsync, fetchClientIp } from '../services/applicationStorage';
 import { fetchApplicationFormOptions } from '../lib/applicationFormOptions';
 import {
@@ -96,6 +97,7 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
   const [motherName, setMotherName] = useState('');
   const [motherPhone, setMotherPhone] = useState('');
   const [motherJob, setMotherJob] = useState('');
+  const [primaryPhoneSource, setPrimaryPhoneSource] = useState<'father' | 'mother'>('father');
   const [address, setAddress] = useState('');
   const [phone1, setPhone1] = useState('');
   const [phone2, setPhone2] = useState('');
@@ -107,6 +109,11 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
   useEffect(() => {
     fetchClientIp().then(setClientIp);
   }, []);
+
+  useEffect(() => {
+    const primary = primaryPhoneSource === 'mother' ? motherPhone : fatherPhone;
+    setPhone1(primary);
+  }, [primaryPhoneSource, fatherPhone, motherPhone]);
 
   useEffect(() => {
     if (!clubSlug) {
@@ -185,6 +192,7 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
 
   const validate = (): boolean => {
     const e: Record<string, string> = {};
+    const primaryPhone = primaryPhoneSource === 'mother' ? motherPhone : fatherPhone;
     if (!branchOffice.trim()) e.branchOffice = 'Şube seçiniz';
     if (!tcNo.trim() || !validateTcNo(tcNo)) e.tcNo = 'Geçerli 11 haneli TC Kimlik No giriniz';
     if (!name.trim()) e.name = 'Ad soyad zorunludur';
@@ -193,7 +201,10 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
       const age = ageFromBirthDate(birthDate);
       if (age != null && age < 4) e.birthDate = 'Öğrenci en az 4 yaşında olmalıdır';
     }
-    if (!phone1.trim() || !validateTrPhone(phone1)) e.phone1 = 'Geçerli cep telefonu girin (05XX veya 5XX)';
+    if (!primaryPhone.trim() || !validateTrPhone(primaryPhone)) {
+      e.primaryPhone = 'Birincil numara olarak geçerli anne veya baba telefonu seçin';
+      e.phone1 = 'Birincil numara WhatsApp alanına otomatik eklenir';
+    }
     if (!kvkkAccepted) e.kvkk = 'KVKK metnini onaylamanız gerekir';
     if (!signatureDataUrl) e.signature = 'Dijital imza zorunludur';
     if (!signatureName.trim()) e.signatureName = 'İmzalayan ad soyad zorunludur';
@@ -207,7 +218,17 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
     if (!validate()) return;
     setSubmitting(true);
     try {
-      const phones = [phone1, phone2, phone3].map((p) => p.replace(/\D/g, '')).filter(Boolean);
+      const primaryPhone = primaryPhoneSource === 'mother' ? motherPhone : fatherPhone;
+      const phones = [
+        primaryPhone,
+        phone2,
+        phone3,
+        fatherPhone,
+        motherPhone,
+      ]
+        .map((p) => normalizeTrPhoneDigits(p))
+        .filter(Boolean);
+      const uniquePhones = [...new Set(phones)];
       const now = new Date().toISOString();
       const app = await createApplicationAsync({
         branchOffice: (clubInfo?.name ?? branchOffice).trim(),
@@ -232,7 +253,7 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
         motherPhone: motherPhone.trim(),
         motherJob: motherJob.trim(),
         address: address.trim(),
-        phones,
+        phones: uniquePhones,
         kvkkAccepted: true,
         kvkkAcceptedAt: now,
         clientIp,
@@ -388,8 +409,8 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
             <Field label="Baba ad soyad">
               <input value={fatherName} onChange={(e) => setFatherName(e.target.value)} placeholder="Adı ve soyadı" className={inputCls} />
             </Field>
-            <Field label="Baba telefon" hint="0 ile başlamalı">
-              <input value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value)} placeholder="5xx xxx xx xx" inputMode="tel" className={inputCls} />
+            <Field label="Baba telefon" hint="Örn: 05XX XXX XX XX">
+              <input value={fatherPhone} onChange={(e) => setFatherPhone(e.target.value)} placeholder="05XX XXX XX XX" inputMode="tel" className={inputCls} />
             </Field>
             <Field label="Baba meslek">
               <input value={fatherJob} onChange={(e) => setFatherJob(e.target.value)} placeholder="Meslek" className={inputCls} />
@@ -397,11 +418,45 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
             <Field label="Anne ad soyad">
               <input value={motherName} onChange={(e) => setMotherName(e.target.value)} placeholder="Adı ve soyadı" className={inputCls} />
             </Field>
-            <Field label="Anne telefon" hint="0 ile başlamalı">
-              <input value={motherPhone} onChange={(e) => setMotherPhone(e.target.value)} placeholder="5xx xxx xx xx" inputMode="tel" className={inputCls} />
+            <Field label="Anne telefon" hint="Örn: 05XX XXX XX XX">
+              <input value={motherPhone} onChange={(e) => setMotherPhone(e.target.value)} placeholder="05XX XXX XX XX" inputMode="tel" className={inputCls} />
             </Field>
             <Field label="Anne meslek">
               <input value={motherJob} onChange={(e) => setMotherJob(e.target.value)} placeholder="Meslek" className={inputCls} />
+            </Field>
+            <Field label="Birincil numara" error={errors.primaryPhone} hint="Seçtiğiniz numara WhatsApp alanına otomatik eklenir" className="md:col-span-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className={`flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer transition-all ${
+                  primaryPhoneSource === 'father' ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200 bg-white'
+                }`}>
+                  <input
+                    type="radio"
+                    name="primaryPhoneSource"
+                    checked={primaryPhoneSource === 'father'}
+                    onChange={() => setPrimaryPhoneSource('father')}
+                    className="text-indigo-600"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-800">Baba telefonu</p>
+                    <p className="text-xs text-slate-500 truncate">{fatherPhone.trim() || 'Numara girilmedi'}</p>
+                  </div>
+                </label>
+                <label className={`flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer transition-all ${
+                  primaryPhoneSource === 'mother' ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200 bg-white'
+                }`}>
+                  <input
+                    type="radio"
+                    name="primaryPhoneSource"
+                    checked={primaryPhoneSource === 'mother'}
+                    onChange={() => setPrimaryPhoneSource('mother')}
+                    className="text-indigo-600"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-800">Anne telefonu</p>
+                    <p className="text-xs text-slate-500 truncate">{motherPhone.trim() || 'Numara girilmedi'}</p>
+                  </div>
+                </label>
+              </div>
             </Field>
           </Section>
 
@@ -409,11 +464,11 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
             <Field label="Adres" className="md:col-span-2">
               <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={2} className={inputCls} />
             </Field>
-            <Field label="Telefon 1 (WhatsApp)" required error={errors.phone1}>
-              <input value={phone1} onChange={(e) => setPhone1(e.target.value)} className={inputCls} placeholder="05XX XXX XX XX veya 5XX XXX XX XX" />
+            <Field label="Telefon 1 (WhatsApp)" required error={errors.phone1} hint="Birincil numaradan otomatik gelir">
+              <input value={phone1} readOnly className={`${inputCls} bg-slate-50 text-slate-600 cursor-not-allowed`} placeholder="05XX XXX XX XX" />
             </Field>
-            <Field label="Telefon 2"><input value={phone2} onChange={(e) => setPhone2(e.target.value)} className={inputCls} /></Field>
-            <Field label="Telefon 3"><input value={phone3} onChange={(e) => setPhone3(e.target.value)} className={inputCls} /></Field>
+            <Field label="Telefon 2"><input value={phone2} onChange={(e) => setPhone2(e.target.value)} className={inputCls} placeholder="05XX XXX XX XX" /></Field>
+            <Field label="Telefon 3"><input value={phone3} onChange={(e) => setPhone3(e.target.value)} className={inputCls} placeholder="05XX XXX XX XX" /></Field>
           </Section>
 
           <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">

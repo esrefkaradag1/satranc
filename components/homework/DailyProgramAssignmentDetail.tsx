@@ -12,8 +12,10 @@ import {
   homeworkEndDateLabel,
   homeworkStatusLabel,
 } from '../../lib/homeworkAnalysisUtils';
-import { PlatformGroupResultsTable } from './PlatformGroupResultsTable';
+import { canShowStudentCounts, maskStudentCountDisplay, maskStudentCountPairDisplay } from '../../lib/studentCountVisibility';
+import { useApp } from '../../AppContext';
 import { WeeklyScheduleGrid } from './WeeklyScheduleGrid';
+import { PlatformGroupResultsTable } from './PlatformGroupResultsTable';
 import { isToday, shiftDayKey, todayDayKey } from '../../lib/homeworkDayUtils';
 import type { DayCompletionStatus } from '../../lib/homeworkDayUtils';
 
@@ -64,6 +66,7 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
   dayCompletion,
   dayProgress,
 }) => {
+  const { auth } = useApp();
   const [showSchedule, setShowSchedule] = useState(false);
   const scheduleSectionRef = useRef<HTMLDivElement>(null);
 
@@ -199,7 +202,7 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5 text-xs text-slate-300">
           <p><span className="text-slate-500">Şube:</span> {getHomeworkBranchLabel(homework, students)}</p>
           <p><span className="text-slate-500">Grup:</span> {groupLabel}</p>
-          <p><span className="text-slate-500">Öğrenci:</span> {stats.length} kişi</p>
+          <p><span className="text-slate-500">Öğrenci:</span> {canShowStudentCounts(auth) ? `${stats.length} kişi` : '—'}</p>
           <p><span className="text-slate-500">Gün:</span> {dateLabel}</p>
           <p><span className="text-slate-500">Bitiş:</span> {homeworkEndDateLabel(homework)}</p>
           <p>
@@ -213,10 +216,10 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { label: 'Katılım', value: `${summary.activeCount}/${summary.studentCount}`, icon: Users, color: 'text-sky-300' },
+          { label: 'Katılım', value: maskStudentCountPairDisplay(summary.activeCount, summary.studentCount, auth), icon: Users, color: 'text-sky-300' },
           { label: 'Ort. Tamamlanma', value: `%${summary.avgCompletion}`, icon: Percent, color: 'text-amber-300' },
-          { label: 'Tamamlayan', value: `${summary.completed}/${summary.studentCount}`, icon: Trophy, color: 'text-violet-300' },
-          { label: 'Hedefli Öğrenci', value: summary.studentCount, icon: Target, color: 'text-indigo-300' },
+          { label: 'Tamamlayan', value: maskStudentCountPairDisplay(summary.completed, summary.studentCount, auth), icon: Trophy, color: 'text-violet-300' },
+          { label: 'Hedefli Öğrenci', value: maskStudentCountDisplay(summary.studentCount, auth), icon: Target, color: 'text-indigo-300' },
         ].map((item) => {
           const Icon = item.icon;
           return (

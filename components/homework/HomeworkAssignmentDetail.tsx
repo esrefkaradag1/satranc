@@ -12,8 +12,10 @@ import {
   homeworkSummaryFromStats,
   puzzleDifficultyDistribution,
 } from '../../lib/homeworkAnalysisUtils';
-import { HomeworkGroupResultsTable } from './HomeworkGroupResultsTable';
+import { canShowStudentCounts, maskStudentCountPairDisplay, maskStudentCountDisplay } from '../../lib/studentCountVisibility';
+import { useApp } from '../../AppContext';
 import { StudentProgressCard } from './StudentProgressCard';
+import { HomeworkGroupResultsTable } from './HomeworkGroupResultsTable';
 
 type Props = {
   homework: HomeworkAssignment;
@@ -51,6 +53,7 @@ export const HomeworkAssignmentDetail: React.FC<Props> = ({
   onResetStudent,
   onDelete,
 }) => {
+  const { auth } = useApp();
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('cards');
   const hwPuzzles = useMemo(
     () => puzzles.filter((p) => homework.puzzles.includes(p.id)),
@@ -122,9 +125,9 @@ export const HomeworkAssignmentDetail: React.FC<Props> = ({
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
           { label: 'Toplam Bulmaca', value: summary.totalPuzzles, icon: Grid, color: 'text-indigo-300' },
-          { label: 'Katılım', value: `${summary.participation.started}/${summary.participation.total}`, icon: Users, color: 'text-sky-300' },
+          { label: 'Katılım', value: maskStudentCountPairDisplay(summary.participation.started, summary.participation.total, auth), icon: Users, color: 'text-sky-300' },
           { label: 'Ort. Tamamlanma', value: `%${summary.avgCompletion}`, icon: Percent, color: 'text-amber-300' },
-          { label: 'Tamamlayan', value: `${summary.completed}/${assigneeCount}`, icon: Trophy, color: 'text-violet-300' },
+          { label: 'Tamamlayan', value: maskStudentCountPairDisplay(summary.completed, assigneeCount, auth), icon: Trophy, color: 'text-violet-300' },
         ].map((item) => {
           const Icon = item.icon;
           return (

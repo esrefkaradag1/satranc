@@ -23,7 +23,7 @@ import {
   VS_COMPUTER_SEARCH_DEPTH,
 } from '../services/chessEngine';
 import { logStudyEvent, loadStudyEvents } from '../studyEvents';
-import { studyEventsToMoveAnalysis } from '../lib/studyAnalysisEvents';
+import { studyEventsToMoveAnalysis, mergePracticeLogEntries } from '../lib/studyAnalysisEvents';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, squareMarksToStyles, SQUARE_MARK_BUTTON_PREVIEW, type SquareMarkColor } from '../lib/chessBoardUi';
 import { useStudyCall } from '../hooks/useStudyCall';
@@ -46,7 +46,8 @@ import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
 import { StudyBoardPgnHeader } from './study/StudyBoardPgnHeader';
 import { buildStudyBoardPgnDisplay } from '../lib/studyPgnTags';
-import { loadStudyPresence, subscribeStudyPresence } from '../services/studyActions';
+import { loadStudyPresence, subscribeStudyPresence, upsertPresence } from '../services/studyActions';
+import { serializePath } from '../lib/studySync/types';
 import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, mergeMainlineMoves } from '../lib/studySync/moveList';
 import { liveLessonFenAt } from '../lib/liveLessonVariations';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
@@ -242,9 +243,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const displayedStudies = useMemo(() => {
     const base = studyListCategory === 'mine' ? myStudies : teacherStudies;
+    const sorted = [...base].sort(
+      (a, b) =>
+        (Date.parse(b.updatedAt ?? b.createdAt) || 0) - (Date.parse(a.updatedAt ?? a.createdAt) || 0),
+    );
     const q = listSearch.trim().toLowerCase();
-    if (!q) return base;
-    return base.filter((s) => s.title.toLowerCase().includes(q));
+    if (!q) return sorted;
+    return sorted.filter((s) => s.title.toLowerCase().includes(q));
   }, [studyListCategory, myStudies, teacherStudies, listSearch]);
 
   const createStudentStudy = useCallback(() => {
@@ -517,6 +522,33 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   }, [selectedStudy, studentId, updateStudyMembers]);
 
   const [presenceByUserId, setPresenceByUserId] = useState<Record<string, any>>({});
+  const pendingCoachChapterIdRef = useRef<string | null>(null);
+
+  const followCoachChapter = useCallback((chapterId: string) => {
+    if (!selectedStudy?.syncEnabled || !sticky) return;
+    const idx = selectedStudy.chapters.findIndex((c) => String(c.id) === String(chapterId));
+    if (idx === -1) {
+      pendingCoachChapterIdRef.current = chapterId;
+      refreshStudies();
+      return;
+    }
+    pendingCoachChapterIdRef.current = null;
+    if (idx !== selectedChapterIndex) {
+      setSelectedChapterIndex(idx);
+      setCurrentMoveIndex(0);
+      setCurrentVariation(null);
+      setFeedback(null);
+      setFeedbackText(null);
+    }
+  }, [selectedStudy, sticky, selectedChapterIndex, refreshStudies]);
+
+  useEffect(() => {
+    const pendingId = pendingCoachChapterIdRef.current;
+    if (!pendingId || !selectedStudy?.syncEnabled || !sticky) return;
+    const idx = selectedStudy.chapters.findIndex((c) => String(c.id) === String(pendingId));
+    if (idx >= 0) followCoachChapter(pendingId);
+  }, [selectedStudy?.chapters, selectedStudy?.syncEnabled, sticky, followCoachChapter]);
+
   useEffect(() => {
     if (!selectedStudy?.id) { setPresenceByUserId({}); return; }
     let mounted = true;
@@ -525,16 +557,45 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       const next: Record<string, any> = {};
       for (const r of rows) next[String(r.user_id)] = r;
       setPresenceByUserId(next);
+      if (selectedStudy.syncEnabled && sticky && studentId) {
+        for (const r of rows) {
+          if (String(r.user_id) === String(studentId)) continue;
+          if (!r.chapter_id || !r.sticky) continue;
+          followCoachChapter(String(r.chapter_id));
+          break;
+        }
+      }
     }).catch(() => {});
     const unsub = subscribeStudyPresence({
       studyId: selectedStudy.id,
       onRow: (row) => {
         if (!mounted) return;
         setPresenceByUserId((prev) => ({ ...prev, [String(row.user_id)]: row }));
+        if (!selectedStudy.syncEnabled || !sticky || !studentId) return;
+        if (String(row.user_id) === String(studentId)) return;
+        if (!row.chapter_id || !row.sticky) return;
+        followCoachChapter(String(row.chapter_id));
       },
     });
     return () => { mounted = false; unsub(); };
-  }, [selectedStudy?.id]);
+  }, [selectedStudy?.id, selectedStudy?.syncEnabled, sticky, studentId, followCoachChapter]);
+
+  // Öğrenci presence (antrenör bölüm takibi için)
+  useEffect(() => {
+    if (!selectedStudy?.id || !studentId || !effectiveChapter) return;
+    const push = () => {
+      void upsertPresence({
+        studyId: selectedStudy.id,
+        userId: String(studentId),
+        chapterId: effectiveChapter.id,
+        path: syncState ? serializePath(syncState.currentPath) : null,
+        sticky: !!sticky,
+      });
+    };
+    push();
+    const interval = setInterval(push, 5000);
+    return () => clearInterval(interval);
+  }, [selectedStudy?.id, studentId, effectiveChapter?.id, syncState, sticky]);
 
   const formatPresence = useCallback((row: any) => {
     if (!row) return null;
@@ -591,18 +652,19 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const syncPathFen = useMemo(() => fenAtSyncPath(syncState), [syncState]);
 
+  const totalMoves = chapterMovesForUi.length;
+  const isComplete = isLiveAnalysis ? false : totalMoves > 0 && currentMoveIndex >= totalMoves;
+
   const currentFen = useMemo(() => {
     if (isLiveAnalysis && moveListChapter) {
       return fenToCurrentFen(moveListChapter, currentMoveIndex);
     }
-    // Bulmacada sync ağacı PGN sonuna gidebilir — tahta pozisyonu yerel ply ile hesaplanmalı.
-    if (!isInteractivePuzzle && syncPathFen) return syncPathFen;
+    // Çözüm bittikten veya doğrudan analiz bölümünde antrenör SYNC ile yönlendirir
+    if ((!isInteractivePuzzle || isComplete) && syncPathFen) return syncPathFen;
     if (!moveListChapter) return DEFAULT_FEN;
     return fenToCurrentFen(moveListChapter, currentMoveIndex);
-  }, [isLiveAnalysis, moveListChapter, currentMoveIndex, isInteractivePuzzle, syncPathFen]);
+  }, [isLiveAnalysis, moveListChapter, currentMoveIndex, isInteractivePuzzle, isComplete, syncPathFen]);
 
-  const totalMoves = chapterMovesForUi.length;
-  const isComplete = isLiveAnalysis ? false : totalMoves > 0 && currentMoveIndex >= totalMoves;
   /** Bulmacada çözüm sızmasın: motor, ana hat hamle listesi ve ileri sarma kapalı; ipuçları butonlarla. */
   const hideEngineForStudentPuzzle = useMemo(
     () => isInteractivePuzzle && !isLiveAnalysis && !vsComputer && !isComplete,
@@ -615,11 +677,20 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   useEffect(() => {
     if (hideEngineForStudentPuzzle || vsComputer || isLiveAnalysis) return;
+    if (!sticky) return;
+    if (currentMoveIndexFromSync === currentMoveIndex) return;
     const now = Date.now();
-    if (sticky && currentMoveIndexFromSync !== currentMoveIndex && (now - lastActionMs > 1000)) {
+    if (now - lastActionMs > 350) {
       setCurrentMoveIndex(currentMoveIndexFromSync);
+      setCurrentVariation(null);
+      setFreePlayFen(null);
     }
   }, [hideEngineForStudentPuzzle, vsComputer, isLiveAnalysis, sticky, currentMoveIndexFromSync, currentMoveIndex, lastActionMs]);
+
+  useEffect(() => {
+    if (!sticky || vsComputer || isLiveAnalysis || hideEngineForStudentPuzzle) return;
+    void catchUp();
+  }, [selectedChapter?.id, sticky, vsComputer, isLiveAnalysis, hideEngineForStudentPuzzle, catchUp]);
 
   useEffect(() => {
     if (!hideEngineForStudentPuzzle) return;
@@ -998,6 +1069,35 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     await requestHint();
   }, [effectiveChapter, currentMoveIndex, isLiveAnalysis, requestHint]);
 
+  const persistChapterPracticeLogs = useCallback((entries: ChapterMoveAnalysisItem[]) => {
+    if (previewMode || !studentId || !selectedStudy?.id || !effectiveChapter?.id) return;
+    const logEntries = entries.map((item) => ({
+      id: item.id,
+      chapterId: effectiveChapter.id,
+      moveNo: item.moveNo,
+      playedSan: item.played,
+      expectedSan: item.expected,
+      isCorrect: item.isCorrect,
+      thinkMs: item.thinkMs,
+      atIso: item.atIso,
+    }));
+    setStudies((prev) => {
+      const next = prev.map((study) => {
+        if (study.id !== selectedStudy.id) return study;
+        return {
+          ...study,
+          practiceLogs: {
+            ...(study.practiceLogs ?? {}),
+            [studentId]: mergePracticeLogEntries(study.practiceLogs?.[studentId], effectiveChapter.id, logEntries),
+          },
+        };
+      });
+      const updated = next.find((study) => study.id === selectedStudy.id);
+      if (updated) void saveStudyAsync(updated);
+      return next;
+    });
+  }, [previewMode, studentId, selectedStudy?.id, effectiveChapter?.id]);
+
   const pushStudyChatMessage = useCallback((studyId: string, msg: StudyChatMessage, opts?: { forceSync?: boolean }) => {
     setStudies(prev => {
       const next = prev.map(s => s.id === studyId
@@ -1253,18 +1353,22 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           );
           const nextIdx = auto.nextIndex;
           
-          setChapterMoveAnalysis((prev) => [
-            ...prev,
-            {
-              id: `${now}-${prev.length}`,
-              moveNo: Math.floor(currentMoveIndex / 2) + 1,
-              played: result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
-              expected: expectedSan || 'variation',
-              isCorrect: true,
-              thinkMs,
-              atIso: new Date(now).toISOString(),
-            },
-          ]);
+          setChapterMoveAnalysis((prev) => {
+            const next = [
+              ...prev,
+              {
+                id: `${now}-${prev.length}`,
+                moveNo: Math.floor(currentMoveIndex / 2) + 1,
+                played: result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
+                expected: expectedSan || 'variation',
+                isCorrect: true,
+                thinkMs,
+                atIso: new Date(now).toISOString(),
+              },
+            ];
+            persistChapterPracticeLogs(next);
+            return next;
+          });
 
           logStudyEvent({
             studyId: selectedStudy?.id,
@@ -1293,18 +1397,22 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           }
           return true;
         } else {
-          setChapterMoveAnalysis((prev) => [
-            ...prev,
-            {
-              id: `${now}-${prev.length}`,
-              moveNo: Math.floor(currentMoveIndex / 2) + 1,
-              played: result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
-              expected: expectedSan || '—',
-              isCorrect: false,
-              thinkMs,
-              atIso: new Date(now).toISOString(),
-            },
-          ]);
+          setChapterMoveAnalysis((prev) => {
+            const next = [
+              ...prev,
+              {
+                id: `${now}-${prev.length}`,
+                moveNo: Math.floor(currentMoveIndex / 2) + 1,
+                played: result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
+                expected: expectedSan || '—',
+                isCorrect: false,
+                thinkMs,
+                atIso: new Date(now).toISOString(),
+              },
+            ];
+            persistChapterPracticeLogs(next);
+            return next;
+          });
           showFeedback('wrong');
           logStudyEvent({
             studyId: selectedStudy?.id,
@@ -1343,7 +1451,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, pushLiveSessionMove, syncState, progressKey, makeMove, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle]);
+  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, pushLiveSessionMove, syncState, progressKey, makeMove, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs]);
 
   const puzzleBranchChoices = useMemo(() => {
     if (!hideEngineForStudentPuzzle || !syncState?.tree || isComplete) return [];
@@ -1718,11 +1826,43 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     try {
       const result = game.move({ from: sourceSquare as any, to: targetSquare as any, promotion: 'q' });
       if (!result) return false;
-      const nf = game.fen(); 
-      setVcFen(nf); 
-      const nextHistory = [...vcHistory, result.san];
+      const nf = game.fen();
+      const now = Date.now();
+      const thinkMs = Math.max(0, now - lastActionMs);
+      const playedSan = result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`;
+      const nextHistory = [...vcHistory, playedSan];
+      setVcFen(nf);
       setVcHistory(nextHistory);
       setCurrentMoveIndex(nextHistory.length);
+      setLastActionMs(now);
+
+      setChapterMoveAnalysis((prev) => {
+        const next = [
+          ...prev,
+          {
+            id: `${now}-${prev.length}`,
+            moveNo: Math.floor(vcHistory.length / 2) + 1,
+            played: playedSan,
+            expected: 'Bilgisayara karşı',
+            isCorrect: true,
+            thinkMs,
+            atIso: new Date(now).toISOString(),
+          },
+        ];
+        persistChapterPracticeLogs(next);
+        return next;
+      });
+
+      logStudyEvent({
+        studyId: selectedStudy?.id,
+        chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+        studentId,
+        moveIndex: vcHistory.length,
+        expectedMove: null,
+        playedMove: playedSan,
+        result: 'correct',
+        thinkMs,
+      });
 
       // Immediate sync
       void updatePresencePayload({
@@ -1737,7 +1877,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       if (!(isAutomaticVcGameOver(game) || vcManualGameOver)) doComputerMove(nf);
       return true;
     } catch { return false; }
-  }, [vcFen, vcHistory, vcThinking, vcManualGameOver, doComputerMove, updatePresencePayload]);
+  }, [vcFen, vcHistory, vcThinking, vcManualGameOver, doComputerMove, updatePresencePayload, lastActionMs, selectedStudy?.id, effectiveChapter?.id, selectedChapter?.id, studentId, persistChapterPracticeLogs]);
 
   const canDragStudentPiece = useCallback(({ piece }: { piece?: { pieceType?: string } | string }) => {
     if (vsComputer) return true;

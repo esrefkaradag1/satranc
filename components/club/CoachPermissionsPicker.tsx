@@ -62,9 +62,9 @@ export const CoachPermissionsPicker: React.FC<Props> = ({ value, onChange }) => 
         </div>
       </div>
       <p className="text-[10px] text-slate-500">
-        Antrenör girişinde göreceği menüler. {value.length} / {allKeys.length} izin seçili.
+        Antrenör girişinde göreceği menüler (kulüp panelindeki tüm modüller). {value.length} / {allKeys.length} izin seçili.
       </p>
-      <div className="max-h-52 overflow-y-auto rounded-lg border border-slate-700/60 bg-slate-950/40 p-2 space-y-3 custom-scrollbar">
+      <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-700/60 bg-slate-950/40 p-2 space-y-3 custom-scrollbar">
         {grouped.map(([category, perms]) => (
           <div key={category}>
             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1.5 px-1">

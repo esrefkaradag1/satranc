@@ -32,7 +32,13 @@ export default async function handler(req: Req, res: Res) {
       signal: AbortSignal.timeout(15000),
     });
     if (!upstream.ok) {
-      res.status(upstream.status).json({ error: 'Chess.com oyun arşivi alınamadı' });
+      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
+      res.status(200).json({
+        games: [],
+        unavailable: true,
+        upstreamStatus: upstream.status,
+        error: 'Chess.com oyun arşivi alınamadı',
+      });
       return;
     }
     const data = await upstream.json();
@@ -40,6 +46,7 @@ export default async function handler(req: Req, res: Res) {
     res.status(200).json(data);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Chess.com bağlantı hatası';
-    res.status(502).json({ error: msg });
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
+    res.status(200).json({ games: [], unavailable: true, error: msg });
   }
 }
