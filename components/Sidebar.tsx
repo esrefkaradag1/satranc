@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { NAV_ITEMS, NAV_CATEGORIES, type NavItem, type NavCategory, type NavIconColor } from "../constants";
 import { ChevronDown, ChevronLeft, ChevronRight, LogOut } from "lucide-react";
+import { SatrancEduLogo } from "./brand/SatrancEduLogo";
 
 function categoryKey(cat: NavCategory, index: number) {
   return `${cat.title}::${index}`;
@@ -339,21 +340,13 @@ const Sidebar: React.FC<SidebarProps> = ({
         }}
         title={iconOnly ? "Ana sayfaya git" : "Ana sayfaya git"}
         className={`shrink-0 flex items-center border-b border-white/5 transition-all ${
-          iconOnly ? "justify-center p-4 w-full hover:bg-white/[0.03]" : "gap-3 p-6"
+          iconOnly ? "justify-center p-4 w-full hover:bg-white/[0.03]" : "gap-3 px-5 py-5"
         }`}
       >
-        <div className="w-11 h-11 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg shadow-indigo-500/25 rotate-3 hover:rotate-0 transition-transform shrink-0">
-          S
-        </div>
-        {!iconOnly && (
-          <div className="text-left">
-            <span className="text-lg font-black tracking-tight text-white block leading-none">
-              SatrançEdu
-            </span>
-            <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">
-              Academy
-            </span>
-          </div>
+        {iconOnly ? (
+          <SatrancEduLogo variant="icon" />
+        ) : (
+          <SatrancEduLogo variant="full" />
         )}
       </button>
 

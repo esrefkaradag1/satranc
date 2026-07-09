@@ -171,6 +171,7 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
   );
 
   const chartHasData = chartData.some((d) => d.income > 0);
+  const canFinance = canAccess('finance');
 
   const quickMenus = [
     { tab: studentListTab, icon: <Users className="w-5 h-5" />, label: 'Öğrenciler', color: 'emerald' as const },
@@ -226,14 +227,25 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
               bg="from-emerald-700 to-emerald-900"
               onClick={() => onNavigate(studentListTab)}
             />
-            <QuickStatCard
-              icon={<TrendingUp className="w-5 h-5" />}
-              value={incomeLabel}
-              label="Bu Ay Gelir"
-              sub={balance >= 0 ? 'Kasa pozitif' : 'Dikkat'}
-              bg="from-teal-700 to-cyan-900"
-              onClick={() => onNavigate('finance')}
-            />
+            {canFinance ? (
+              <QuickStatCard
+                icon={<TrendingUp className="w-5 h-5" />}
+                value={incomeLabel}
+                label="Bu Ay Gelir"
+                sub={balance >= 0 ? 'Kasa pozitif' : 'Dikkat'}
+                bg="from-teal-700 to-cyan-900"
+                onClick={() => onNavigate('finance')}
+              />
+            ) : (
+              <QuickStatCard
+                icon={<CheckCircle2 className="w-5 h-5" />}
+                value={homeworkKpis.overdue.toString()}
+                label="Geciken Ödev"
+                sub={`${pendingHomeworks.length} bekleyen`}
+                bg="from-amber-700 to-orange-900"
+                onClick={() => canAccess('homework') && onNavigate('homework')}
+              />
+            )}
             <QuickStatCard
               icon={<GraduationCap className="w-5 h-5" />}
               value={coaches.length.toString()}
@@ -261,6 +273,7 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
           <div className="lg:col-span-8 space-y-4 sm:space-y-6">
+            {canFinance && (
             <div className="bento-card p-5 sm:p-7">
               <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
                 <div>
@@ -272,15 +285,13 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
                   </div>
                   <p className="text-xs text-slate-500 font-medium ml-10">Son 6 ay gelir performansı — {branch}</p>
                 </div>
-                {canAccess('finance') && (
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('finance')}
-                    className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition-colors"
-                  >
-                    Detaylar <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => onNavigate('finance')}
+                  className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition-colors"
+                >
+                  Detaylar <ChevronRight className="w-3.5 h-3.5" />
+                </button>
               </div>
               <div className="h-[280px] sm:h-[300px] w-full min-w-0 relative">
                 {!chartHasData && (
@@ -335,6 +346,7 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
                 </ResponsiveContainer>
               </div>
             </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
               <ClubPanelCard
@@ -452,10 +464,19 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
                 <h3 className="text-base font-bold text-white">Operasyon Özeti</h3>
               </div>
               <div className="grid grid-cols-2 gap-2.5">
-                <MiniKpi label="Bu Ay Gelir" value={`₺${financeKpis.thisMonthIncome.toLocaleString('tr-TR')}`} tone="green" />
-                <MiniKpi label="Bu Ay Gider" value={`₺${financeKpis.thisMonthExpense.toLocaleString('tr-TR')}`} tone="red" />
-                <MiniKpi label="Aylık Net" value={`₺${financeKpis.thisMonthNet.toLocaleString('tr-TR')}`} tone={financeKpis.thisMonthNet >= 0 ? 'green' : 'red'} />
-                <MiniKpi label="Kasa Bakiye" value={`₺${balance.toLocaleString('tr-TR')}`} tone={balance >= 0 ? 'green' : 'red'} />
+                {canFinance ? (
+                  <>
+                    <MiniKpi label="Bu Ay Gelir" value={`₺${financeKpis.thisMonthIncome.toLocaleString('tr-TR')}`} tone="green" />
+                    <MiniKpi label="Bu Ay Gider" value={`₺${financeKpis.thisMonthExpense.toLocaleString('tr-TR')}`} tone="red" />
+                    <MiniKpi label="Aylık Net" value={`₺${financeKpis.thisMonthNet.toLocaleString('tr-TR')}`} tone={financeKpis.thisMonthNet >= 0 ? 'green' : 'red'} />
+                    <MiniKpi label="Kasa Bakiye" value={`₺${balance.toLocaleString('tr-TR')}`} tone={balance >= 0 ? 'green' : 'red'} />
+                  </>
+                ) : (
+                  <>
+                    <MiniKpi label="Geciken Ödev" value={`${homeworkKpis.overdue}`} tone={homeworkKpis.overdue > 0 ? 'red' : 'green'} />
+                    <MiniKpi label="Bugün Ders" value={`${todayLessons.length}`} tone="indigo" suffix="ders" />
+                  </>
+                )}
                 <MiniKpi label="Ödedi" value={`${paid}`} tone="green" suffix="öğrenci" />
                 <MiniKpi label="Ödemedi" value={`${unpaid}`} tone="red" suffix="öğrenci" />
               </div>
@@ -529,15 +550,13 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
               </div>
             )}
 
-            {recentTransactions.length > 0 && (
+            {canFinance && recentTransactions.length > 0 && (
               <div className="bento-card p-5 sm:p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-bold text-white text-sm">Son Kasa İşlemleri</h3>
-                  {canAccess('finance') && (
-                    <button type="button" onClick={() => onNavigate('finance')} className="text-[10px] text-emerald-400 font-semibold uppercase">
-                      Kasa
-                    </button>
-                  )}
+                  <button type="button" onClick={() => onNavigate('finance')} className="text-[10px] text-emerald-400 font-semibold uppercase">
+                    Kasa
+                  </button>
                 </div>
                 <div className="space-y-2">
                   {recentTransactions.map((t) => (

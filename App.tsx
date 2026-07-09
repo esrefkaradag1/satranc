@@ -540,7 +540,7 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       case 'analysis':
         return <Analysis />;
       case 'finance':
-        return <Finance />;
+        return isCoachTabAllowed('finance') ? <Finance /> : <Dashboard />;
       case 'inventory':
         return <Inventory />;
       case 'gallery':

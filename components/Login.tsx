@@ -6,7 +6,6 @@ import {
   UserCircle,
   Loader2,
   ArrowRight,
-  Sparkles,
   Trophy,
   GraduationCap,
 } from 'lucide-react';
@@ -14,6 +13,7 @@ import { useApp } from '../AppContext';
 import { isServerMode } from '../apiConfig';
 import { apiParentLogin } from '../services/backendApi';
 import { useDashboard3DEnabled } from './dashboard/useDashboard3D';
+import { SatrancEduLogo } from './brand/SatrancEduLogo';
 
 const LoginScene3D = React.lazy(() => import('./login/LoginScene3D'));
 
@@ -281,9 +281,8 @@ const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
         {/* Sol: marka paneli */}
         <aside className="hidden lg:flex flex-col justify-between p-10 xl:p-14 min-h-screen">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/10 bg-white/[0.04] text-xs font-bold text-slate-400 mb-8">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              Satranç Akademi Platformu
+            <div className="mb-8">
+              <SatrancEduLogo variant="full" />
             </div>
             <h1 className="text-4xl xl:text-5xl font-black text-white leading-[1.1] tracking-tight max-w-md">
               Geleceğin
@@ -318,11 +317,8 @@ const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
           <div className="w-full max-w-md mx-auto">
             {/* Mobil başlık */}
             <div className="lg:hidden text-center mb-8">
-              <div
-                className="inline-flex items-center justify-center w-12 h-12 rounded-2xl mb-4 ring-1 ring-white/10"
-                style={{ background: `linear-gradient(135deg, ${theme.accent}33, ${theme.accent}11)` }}
-              >
-                <Shield className="w-6 h-6" style={{ color: theme.accent }} />
+              <div className="inline-flex justify-center mb-4">
+                <SatrancEduLogo variant="full" />
               </div>
               <h2 className="text-2xl font-black text-white">{adminOnly ? 'Yönetim Girişi' : 'Hoş Geldiniz'}</h2>
               <p className="text-slate-500 text-sm mt-1">{adminOnly ? activeTabMeta.desc : 'Hesabınıza giriş yapın'}</p>

@@ -174,7 +174,6 @@ const STUDENT_PANEL_REFRESH_TABS = new Set<PanelTab>(['summary', 'schedule', 'pa
 /** Veli panelinde sidebar'dan gizlenecek öğrenci eğitim sekmeleri (izin verilse bile) */
 const PARENT_HIDDEN_TAB_IDS = new Set<PanelTab>([
   'live-lesson',
-  'puzzles',
   'study',
   'tournaments',
   'ukd',
@@ -1408,6 +1407,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           <div className="animate-in fade-in duration-300">
             <StudentHomeworkPanel
               student={student}
+              viewAs={viewAs}
               assignedHomeworks={assignedHomeworks}
               puzzles={puzzles}
               homeworkAttempts={homeworkAttempts}
@@ -1424,8 +1424,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               onRefresh={refreshHomeworkTab}
               onRefreshPlatform={() => void refreshTodayExternalStats()}
               platformStatsFetched={platformStatsFetched}
-              onPlayPuzzle={setPlayingPuzzle}
-              onDailyGoalsComplete={handleDailyGoalsComplete}
+              onPlayPuzzle={viewAs === 'parent' ? () => {} : setPlayingPuzzle}
+              onDailyGoalsComplete={viewAs === 'parent' ? undefined : handleDailyGoalsComplete}
             />
           </div>
         )}

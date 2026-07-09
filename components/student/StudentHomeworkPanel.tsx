@@ -23,6 +23,7 @@ export type HomeworkPlayPayload = {
 
 type Props = {
   student: Student;
+  viewAs?: 'student' | 'parent';
   assignedHomeworks: HomeworkAssignment[];
   puzzles: Puzzle[];
   homeworkAttempts: HomeworkPuzzleAttempt[];
@@ -220,6 +221,7 @@ const STATUS_META = {
 
 export const StudentHomeworkPanel: React.FC<Props> = ({
   student,
+  viewAs = 'student',
   assignedHomeworks,
   puzzles,
   homeworkAttempts,
@@ -239,6 +241,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
   onPlayPuzzle,
   onDailyGoalsComplete,
 }) => {
+  const parentView = viewAs === 'parent';
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -303,7 +306,9 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
   const renderCard = (item: HwProgress) => {
     const meta = STATUS_META[item.status];
     const StatusIcon = meta.icon;
-    const isExpanded = expandedId === item.hw.id || item.hwPuzzles.length <= 4;
+    const isExpanded = parentView
+      ? false
+      : expandedId === item.hw.id || item.hwPuzzles.length <= 4;
     const hasDaily = item.dailyPuzzleTarget > 0 || item.dailyGameTarget > 0;
     const isDailyOnly = item.hwPuzzles.length === 0 && hasDaily;
     const isPlatformProgram = isDailyOnly || (item.hwPuzzles.length === 0 && homeworkHasPlatformGoals(item.hw));
@@ -465,7 +470,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
             </div>
           )}
 
-          {item.nextPuzzle && item.status !== 'Tamamlandı' && (
+          {item.nextPuzzle && item.status !== 'Tamamlandı' && !parentView && (
             <button
               type="button"
               onClick={() => onPlayPuzzle(makePlayPayload(item.nextPuzzle!, item.hw))}
@@ -477,7 +482,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
           )}
         </div>
 
-        {item.hwPuzzles.length > 0 && (
+        {item.hwPuzzles.length > 0 && !parentView && (
           <div className="border-t border-slate-700/50">
             {item.hwPuzzles.length > 4 && (
               <button
@@ -533,12 +538,16 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
             <Grid className="w-5 h-5 text-indigo-400" />
-            Antremanım
+            {parentView ? 'Antrenman' : 'Antremanım'}
           </h2>
           <p className="text-slate-400 text-sm mt-1">
-            {progressList.length > 0
-              ? 'Haftalık antrenman programınız aşağıda listelenir.'
-              : 'Öğretmeninizin atadığı haftalık program burada görünür.'}
+            {parentView
+              ? (progressList.length > 0
+                ? 'Çocuğunuzun haftalık antrenman programı ve tamamlama durumu aşağıda listelenir.'
+                : 'Öğretmenin atadığı haftalık program burada görünür.')
+              : (progressList.length > 0
+                ? 'Haftalık antrenman programınız aşağıda listelenir.'
+                : 'Öğretmeninizin atadığı haftalık program burada görünür.')}
           </p>
         </div>
         <button
@@ -611,8 +620,14 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
       {!homeworksLoading && progressList.length === 0 && (
         <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-10 text-center">
           <Target className="w-12 h-12 text-slate-500 mx-auto mb-3" />
-          <h3 className="text-white font-bold mb-1">Henüz atanmış bulmaca yok</h3>
-          <p className="text-slate-400 text-sm">Yeni ödevler geldiğinde burada görünecek.</p>
+          <h3 className="text-white font-bold mb-1">
+            {parentView ? 'Henüz atanmış antrenman yok' : 'Henüz atanmış bulmaca yok'}
+          </h3>
+          <p className="text-slate-400 text-sm">
+            {parentView
+              ? 'Yeni antrenman programları atandığında burada görünecek.'
+              : 'Yeni ödevler geldiğinde burada görünecek.'}
+          </p>
           <button
             type="button"
             onClick={onRefresh}

@@ -47,6 +47,7 @@ export const PARENT_DEFAULT_PERMISSIONS = [
   'messages',
   'gallery',
   'schedule',
+  'puzzles',
   'analyses',
   'private-lesson',
   'payments',

@@ -8,7 +8,6 @@ import { categoryBadgeClass, getAnalysisCategories } from '../../lib/performance
 import { AiCoachInsightPanel, SkillSnapshot } from '../analysis/AiInsightCards';
 import type { ChessComGame, ChessComPlayer, ChessComStats, LichessGame, LichessUserProfile } from '../../services/chessPlatformService';
 import type { PlatformDayStats } from '../../lib/homeworkPlatformUtils';
-import { StudentPlatformAnalysisSection } from './StudentPlatformAnalysisSection';
 
 type Section = 'performance' | 'coach' | 'homework';
 
@@ -347,15 +346,9 @@ export const StudentAnalysesPanel: React.FC<Props> = ({
                 ) : null}
               </div>
 
-              <StudentPlatformAnalysisSection
-                student={student}
-                lichessProfile={lichessProfile}
-                chessComStats={chessComStats}
-                lichessGames={lichessGames}
-                chessComGames={chessComGames}
-                platformLoading={platformLoading}
-                homeworkAccuracy={homeworkSummary.accuracy}
-              />
+              <p className="text-xs text-slate-500 px-1">
+                Haftalık antrenman tamamlama durumu için sol menüden <strong className="text-slate-400">Antreman</strong> sekmesine gidin.
+              </p>
             </>
           ) : (
           <div className="rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#1b2438]/95 via-[#172033]/90 to-[#0f172a]/95 shadow-2xl overflow-hidden">

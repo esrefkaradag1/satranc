@@ -18,6 +18,7 @@ import { lichessProxyRequest } from './lib/lichessProxyThrottle.mjs';
 import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
 import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
 import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
+import { startTrainingNotifyScheduler, trainingNotifyHandler } from './lib/trainingWhatsAppNotify.mjs';
 
 const DEV_GET_ROUTES = new Set([
   '/api/site-messages',

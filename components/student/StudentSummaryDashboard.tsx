@@ -259,7 +259,13 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {[
               { tab: 'leaderboard', icon: <Trophy className="w-5 h-5" />, title: 'Lider tablosu', sub: 'Haftalık sıralama', color: 'text-amber-400 bg-amber-500/15' },
-              ...(viewAs !== 'parent' ? [{ tab: 'puzzles', icon: <CheckSquare className="w-5 h-5" />, title: 'Ödevler / Bulmaca', sub: 'Ödevlere git', color: 'text-emerald-400 bg-emerald-500/15' }] : []),
+              {
+                tab: 'puzzles',
+                icon: <CheckSquare className="w-5 h-5" />,
+                title: viewAs === 'parent' ? 'Antrenman' : 'Ödevler / Bulmaca',
+                sub: viewAs === 'parent' ? 'Tamamlama durumu' : 'Ödevlere git',
+                color: 'text-emerald-400 bg-emerald-500/15',
+              },
               { tab: 'schedule', icon: <CalendarDays className="w-5 h-5" />, title: 'Ders programı', sub: 'Haftalık program', color: 'text-indigo-400 bg-indigo-500/15' },
               { tab: 'gallery', icon: <ImageIcon className="w-5 h-5" />, title: 'Medya & Galeri', sub: 'Fotoğraflar', color: 'text-violet-400 bg-violet-500/15' },
               ...(viewAs !== 'parent' ? [{ tab: 'live-lesson', icon: <Video className="w-5 h-5" />, title: 'Canlı ders', sub: 'Derse katıl', color: 'text-sky-400 bg-sky-500/15' }] : []),

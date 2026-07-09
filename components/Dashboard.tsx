@@ -14,8 +14,9 @@ import { Dashboard3DBackground } from './dashboard/Dashboard3DBackground';
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 
 const Dashboard: React.FC = () => {
-  const { scopedStudents, scopedTransactions: transactions, scopedHomeworks: homeworks, lessons, auth, coaches, clubs } = useApp();
+  const { scopedStudents, scopedTransactions: transactions, scopedHomeworks: homeworks, lessons, auth, coaches, clubs, hasAuthPermission } = useApp();
   const students = scopedStudents;
+  const canFinance = hasAuthPermission('finance');
   const session = useMemo(
     () => getSessionDisplay(auth, { students, coaches, clubs }),
     [auth, students, coaches, clubs],
@@ -146,20 +147,31 @@ const Dashboard: React.FC = () => {
             sub={`${groupCount} grup`}
             bg="from-rose-700 to-rose-900"
           />
-          <QuickStatBox
-            href="#/kasa-finans"
-            icon={<TrendingUp className="w-5 h-5" />}
-            value={
-              financeKpis.thisMonthIncome > 0
-                ? financeKpis.thisMonthIncome >= 1000
-                  ? `₺${(financeKpis.thisMonthIncome / 1000).toFixed(1)}k`
-                  : `₺${financeKpis.thisMonthIncome.toLocaleString('tr-TR')}`
-                : '₺0'
-            }
-            label="Bu Ay Gelir"
-            sub={balance >= 0 ? 'Kasa pozitif' : 'Dikkat'}
-            bg="from-violet-700 to-purple-900"
-          />
+          {canFinance ? (
+            <QuickStatBox
+              href="#/kasa-finans"
+              icon={<TrendingUp className="w-5 h-5" />}
+              value={
+                financeKpis.thisMonthIncome > 0
+                  ? financeKpis.thisMonthIncome >= 1000
+                    ? `₺${(financeKpis.thisMonthIncome / 1000).toFixed(1)}k`
+                    : `₺${financeKpis.thisMonthIncome.toLocaleString('tr-TR')}`
+                  : '₺0'
+              }
+              label="Bu Ay Gelir"
+              sub={balance >= 0 ? 'Kasa pozitif' : 'Dikkat'}
+              bg="from-violet-700 to-purple-900"
+            />
+          ) : (
+            <QuickStatBox
+              href="#/odev-yonetimi"
+              icon={<CheckCircle2 className="w-5 h-5" />}
+              value={homeworkKpis.overdue.toString()}
+              label="Geciken Ödev"
+              sub={`${homeworkKpis.dueThisWeek} bu hafta`}
+              bg="from-amber-700 to-orange-900"
+            />
+          )}
           <QuickStatBox
             href="#/canli-ders"
             icon={<GraduationCap className="w-5 h-5" />}
@@ -178,13 +190,15 @@ const Dashboard: React.FC = () => {
         <QuickMenuBox href="#/odev-yonetimi" icon={<CheckCircle2 className="w-5 h-5" />} label="Ödevler" color="emerald" />
         <QuickMenuBox href="#/ogrenci-ekle" icon={<UserPlus className="w-5 h-5" />} label="Öğrenci Ekle" color="sky" />
         <QuickMenuBox href="#/qr-yoklama" icon={<QrCode className="w-5 h-5" />} label="QR Yoklama" color="amber" />
-        <QuickMenuBox href="#/kasa-finans" icon={<Wallet className="w-5 h-5" />} label="Kasa" color="rose" />
+        {canFinance && (
+          <QuickMenuBox href="#/kasa-finans" icon={<Wallet className="w-5 h-5" />} label="Kasa" color="rose" />
+        )}
       </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
         {/* Sol kolon */}
         <div className="lg:col-span-8 space-y-4 sm:space-y-6">
-          {/* Grafik */}
+          {canFinance && (
           <div className="bento-card p-5 sm:p-7">
             <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
               <div>
@@ -265,8 +279,9 @@ const Dashboard: React.FC = () => {
               </ResponsiveContainer>
             </div>
           </div>
+          )}
 
-          {/* Ödev + Ders */}
+          {/* Ödev + Ders — finance chart removed above when !canFinance */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
             <PanelCard
               title="Bekleyen Ödevler"
@@ -376,9 +391,19 @@ const Dashboard: React.FC = () => {
               <h3 className="text-base font-bold text-white">Operasyon Özeti</h3>
             </div>
             <div className="grid grid-cols-2 gap-2.5">
-              <MiniKpi label="Bu Ay Gelir" value={`₺${financeKpis.thisMonthIncome.toLocaleString('tr-TR')}`} tone="green" />
-              <MiniKpi label="Bu Ay Gider" value={`₺${financeKpis.thisMonthExpense.toLocaleString('tr-TR')}`} tone="red" />
-              <MiniKpi label="Aylık Net" value={`₺${financeKpis.thisMonthNet.toLocaleString('tr-TR')}`} tone={financeKpis.thisMonthNet >= 0 ? 'green' : 'red'} />
+              {canFinance ? (
+                <>
+                  <MiniKpi label="Bu Ay Gelir" value={`₺${financeKpis.thisMonthIncome.toLocaleString('tr-TR')}`} tone="green" />
+                  <MiniKpi label="Bu Ay Gider" value={`₺${financeKpis.thisMonthExpense.toLocaleString('tr-TR')}`} tone="red" />
+                  <MiniKpi label="Aylık Net" value={`₺${financeKpis.thisMonthNet.toLocaleString('tr-TR')}`} tone={financeKpis.thisMonthNet >= 0 ? 'green' : 'red'} />
+                </>
+              ) : (
+                <>
+                  <MiniKpi label="Geciken Ödev" value={`${homeworkKpis.overdue}`} tone={homeworkKpis.overdue > 0 ? 'red' : 'green'} />
+                  <MiniKpi label="Bugün Ödev" value={`${homeworkKpis.dueToday}`} tone="indigo" />
+                  <MiniKpi label="Bu Hafta" value={`${homeworkKpis.dueThisWeek}`} tone="indigo" suffix="ödev" />
+                </>
+              )}
               <MiniKpi label="Bugün Ders" value={`${todayLessons.length}`} tone="indigo" suffix="ders" />
             </div>
           </div>
@@ -391,7 +416,9 @@ const Dashboard: React.FC = () => {
               <ActionButton icon={<Calendar className="w-4 h-4" />} label="QR Yoklama" href="#/qr-yoklama" accent="sky" />
               <ActionButton icon={<ClipboardCheck className="w-4 h-4" />} label="Yoklama Al" href="#/yoklama-al" accent="emerald" />
               <ActionButton icon={<Box className="w-4 h-4" />} label="Envanter" href="#/depo-envanter" accent="amber" />
-              <ActionButton icon={<Wallet className="w-4 h-4" />} label="Kasa" href="#/kasa-finans" accent="rose" />
+              {canFinance && (
+                <ActionButton icon={<Wallet className="w-4 h-4" />} label="Kasa" href="#/kasa-finans" accent="rose" />
+              )}
               <ActionButton icon={<ImageIcon className="w-4 h-4" />} label="Galeri" href="#/galeri" accent="pink" />
               <ActionButton icon={<Video className="w-4 h-4" />} label="Canlı Ders" href="#/canli-ders" accent="cyan" />
               <ActionButton icon={<MessageSquare className="w-4 h-4" />} label="Mesajlar" href="#/mesajlar" accent="green" />

@@ -613,7 +613,19 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
         );
 
       case 'finance':
-        return <Finance />;
+        return isClubTabAllowed('finance') ? <Finance /> : (
+          <ClubDashboard
+            branch={branch}
+            club={club}
+            students={branchStudents}
+            coaches={branchCoaches}
+            transactions={branchTx}
+            studentListTab={studentListTab}
+            studentAddTab={studentAddTab}
+            onNavigate={setActiveTab}
+            canAccess={isClubTabAllowed}
+          />
+        );
 
       case 'tournaments':
         return <Tournaments role="club" branch={branch} />;
