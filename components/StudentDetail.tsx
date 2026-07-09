@@ -47,6 +47,11 @@ import {
   ChevronDown,
   Sparkles,
   Plus,
+  Phone,
+  Building2,
+  School,
+  MapPin,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { createStudentLoginCredentials } from '../lib/studentCredentials';
@@ -210,6 +215,91 @@ const KV: React.FC<{ label: string; value?: React.ReactNode }> = ({ label, value
   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-0.5 sm:gap-6 py-2.5 sm:py-3 group/kv">
     <div className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider shrink-0">{label}</div>
     <div className="text-sm font-semibold text-slate-200 sm:text-right break-words group-hover/kv:text-white transition-colors">{value ?? '—'}</div>
+  </div>
+);
+
+type InfoAccent = 'indigo' | 'violet' | 'rose' | 'amber' | 'sky';
+
+const infoAccentStyles: Record<InfoAccent, { icon: string; border: string; glow: string }> = {
+  indigo: {
+    icon: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
+    border: 'border-indigo-500/15',
+    glow: 'from-indigo-500/10',
+  },
+  violet: {
+    icon: 'bg-violet-500/20 text-violet-400 border-violet-500/30',
+    border: 'border-violet-500/15',
+    glow: 'from-violet-500/10',
+  },
+  rose: {
+    icon: 'bg-rose-500/20 text-rose-400 border-rose-500/30',
+    border: 'border-rose-500/15',
+    glow: 'from-rose-500/10',
+  },
+  amber: {
+    icon: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+    border: 'border-amber-500/15',
+    glow: 'from-amber-500/10',
+  },
+  sky: {
+    icon: 'bg-sky-500/20 text-sky-400 border-sky-500/30',
+    border: 'border-sky-500/15',
+    glow: 'from-sky-500/10',
+  },
+};
+
+const InfoSectionCard: React.FC<{
+  icon: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  accent?: InfoAccent;
+  onEdit?: () => void;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}> = ({ icon, title, subtitle, accent = 'indigo', onEdit, children, footer }) => {
+  const styles = infoAccentStyles[accent];
+  return (
+    <div className={`rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden bg-gradient-to-br ${styles.glow} to-transparent`}>
+      <div className={`px-4 sm:px-5 py-4 border-b border-white/[0.06] flex items-start justify-between gap-3`}>
+        <div className="flex items-start gap-3 min-w-0">
+          <div className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${styles.icon}`}>
+            {icon}
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-black text-white">{title}</div>
+            {subtitle ? <div className="text-[11px] text-slate-400 mt-0.5 truncate">{subtitle}</div> : null}
+          </div>
+        </div>
+        {onEdit ? (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-indigo-300 text-xs font-bold transition-colors"
+          >
+            <Edit2 className="w-3.5 h-3.5" /> Düzenle
+          </button>
+        ) : null}
+      </div>
+      <div className="p-4 sm:p-5">{children}</div>
+      {footer ? <div className="px-4 sm:px-5 py-3 border-t border-white/[0.06] bg-black/10">{footer}</div> : null}
+    </div>
+  );
+};
+
+const InfoField: React.FC<{
+  label: string;
+  value?: React.ReactNode;
+  icon?: React.ReactNode;
+  fullWidth?: boolean;
+}> = ({ label, value, icon, fullWidth }) => (
+  <div
+    className={`rounded-xl border border-white/[0.05] bg-slate-900/35 px-3.5 py-3 hover:border-white/[0.1] hover:bg-slate-900/50 transition-colors ${fullWidth ? 'col-span-full' : ''}`}
+  >
+    <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+      {icon ? <span className="text-slate-500 [&_svg]:w-3 [&_svg]:h-3">{icon}</span> : null}
+      <span>{label}</span>
+    </div>
+    <div className="mt-1.5 text-sm font-semibold text-slate-100 break-words leading-snug">{value ?? '—'}</div>
   </div>
 );
 
@@ -2548,155 +2638,174 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
  </div>
  )}
 
- {/* Lower grid — sadece Bilgiler sekmesinde galeri; Finans'ta ödeme yukarıda */}
- <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
- <div className="lg:col-span-2 space-y-6">
- {activeDetailTab === 'bilgiler' && (
- <>
- {/* Group gallery — gerçek galeri verisi, tıklanınca büyütme */}
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-slate-700/60 overflow-hidden">
- <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-700/60 bg-white/[0.02] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
- <div className="min-w-0">
- <div className="text-sm font-black text-white">Grup Galerisi</div>
- <div className="text-xs text-slate-400 truncate">{student.group || '—'} – Son yüklenen resimler</div>
- </div>
- <a href="#/galeri" className="shrink-0 inline-flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 text-xs font-bold transition-colors">
- Galeriye git <ExternalLink className="w-3.5 h-3.5" />
- </a>
- </div>
- <div className="p-3 sm:p-6 grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
- {groupGalleryItems.length === 0 ? (
- <div className="col-span-2 md:col-span-4 py-8 text-center text-slate-500 text-sm">
- Bu gruba ait henüz görsel yok. <a href="#/galeri" className="text-indigo-400 hover:underline font-medium">Galeri</a> sayfasından ekleyebilirsiniz.
- </div>
- ) : (
- groupGalleryItems.map((img) => (
- <button
- key={img.id}
- type="button"
- onClick={() => setZoomedImage({ url: img.url, title: img.title })}
- className="rounded-lg overflow-hidden border border-slate-700/60 bg-[#1e293b] hover:border-indigo-500/30 transition-all text-left group"
- >
- <div className="aspect-[4/3] bg-slate-800 relative">
- <img
- src={img.url}
- alt={img.title}
- referrerPolicy="no-referrer"
- className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
- onError={e => { (e.target as HTMLImageElement).src = 'https://picsum.photos/seed/chess/600/450'; }}
- />
- <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors">
- <ZoomIn className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
- </div>
- </div>
- <div className="p-3">
- <div className="text-xs font-bold text-white truncate">{img.title || 'Görsel'}</div>
- <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-slate-400">
- <Camera className="w-3.5 h-3.5" /> {img.date}
- </div>
- </div>
- </button>
- ))
- )}
- </div>
- </div>
- </> )}
- </div>
-
+ {/* Bilgiler sekmesi */}
  {activeDetailTab === 'bilgiler' && (
  <div className="space-y-6">
- <div className="rounded-xl sm:rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl p-4 sm:p-6">
- <div className="flex items-center justify-between gap-2 mb-3">
- <div className="flex items-center gap-2 min-w-0">
- <User className="w-4 h-4 text-indigo-600 shrink-0" />
- <div className="text-sm font-black text-white">İletişim Bilgileri</div>
- </div>
- <button type="button" onClick={() => setShowEditModal(true)} className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
- <Edit2 className="w-3.5 h-3.5" /> Düzenle
- </button>
- </div>
- <div className="divide-y divide-slate-200/60">
- <KV label="Ad Soyad" value={student.name} />
- <KV label="Kullanıcı Adı" value={student.username || '—'} />
- <KV label="TC Kimlik" value={student.tcNo || '—'} />
- <KV label="Doğum Tarihi" value={formatDateTR(student.birthDate)} />
- <KV label="Okulu" value={student.school || '—'} />
- <KV label="Okul Öğretmeni" value={student.teacher || '—'} />
- <KV label="Şube" value={student.branchOffice || '—'} />
- <KV label="Branş" value={student.branch || '—'} />
- <KV label="Grup" value={student.group || '—'} />
- <KV label="Ders programı" value={formatLessonSchedule(resolveStudentLessonSchedule(student, trainingGroups))} />
- </div>
- <button
-   type="button"
-   onClick={() => {
-     setScheduleDraft(student.lessonSchedule?.length ? student.lessonSchedule.map((s) => ({ ...s })) : []);
-     setShowScheduleModal(true);
-   }}
-   className="mt-3 text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
- >
-   <Clock className="w-3.5 h-3.5" /> Ders programını düzenle
- </button>
- </div>
+   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+     <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-3">
+       <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-300/80">Grup</div>
+       <div className="mt-1 text-sm font-black text-white truncate" title={student.group || undefined}>{student.group || '—'}</div>
+     </div>
+     <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 px-4 py-3">
+       <div className="text-[10px] font-bold uppercase tracking-wider text-violet-300/80">Branş</div>
+       <div className="mt-1 text-sm font-black text-white truncate" title={student.branch || undefined}>{student.branch || '—'}</div>
+     </div>
+     <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 px-4 py-3">
+       <div className="text-[10px] font-bold uppercase tracking-wider text-sky-300/80">Şube</div>
+       <div className="mt-1 text-sm font-black text-white truncate" title={student.branchOffice || undefined}>{student.branchOffice || '—'}</div>
+     </div>
+     <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 col-span-2 lg:col-span-1">
+       <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300/80">Ders programı</div>
+       <div className="mt-1 text-xs sm:text-sm font-semibold text-white leading-snug">
+         {formatLessonSchedule(resolveStudentLessonSchedule(student, trainingGroups))}
+       </div>
+     </div>
+   </div>
 
- <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl p-6">
- <div className="flex items-center justify-between gap-2 mb-3">
- <div className="flex items-center gap-2">
- <Users className="w-4 h-4 text-indigo-600" />
- <div className="text-sm font-black text-white">Veli Bilgileri</div>
- </div>
- <button type="button" onClick={() => setShowEditModal(true)} className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
- <Edit2 className="w-3.5 h-3.5" /> Düzenle
- </button>
- </div>
- <div className="divide-y divide-slate-200/60">
- <KV label="Baba Adı"value={student.fatherName || student.parentName || '—'} />
- <KV label="Baba Tel"value={formatPhone(student.fatherPhone || student.parentPhone)} />
- <KV label="Anne Adı"value={student.motherName || '—'} />
- <KV label="Anne Tel"value={formatPhone(student.motherPhone)} />
- </div>
- <div className="mt-6">
- <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Mesaj Telefonları</div>
- <div className="mt-3 space-y-2">
- {(student.contactNumbers?.length ? student.contactNumbers : [student.parentPhone].filter(Boolean)).slice(0, 3).map((p, i) => (
- <div key={i} className="flex items-center justify-between rounded-lg border border-slate-700/60/60 bg-[#1e293b] px-4 py-3">
- <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Telefon {i + 1}</div>
- <div className="text-sm font-black text-white">{formatPhone(p)}</div>
- </div>
- ))}
- {(!student.contactNumbers || student.contactNumbers.length === 0) && !student.parentPhone ? (
- <div className="text-sm text-slate-400">Telefon bulunamadı.</div>
- ) : null}
- </div>
- </div>
+   <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+     <InfoSectionCard
+       icon={<User className="w-5 h-5" />}
+       title="İletişim Bilgileri"
+       subtitle="Öğrenci kayıt ve okul bilgileri"
+       accent="indigo"
+       onEdit={() => setShowEditModal(true)}
+       footer={(
+         <button
+           type="button"
+           onClick={() => {
+             setScheduleDraft(student.lessonSchedule?.length ? student.lessonSchedule.map((s) => ({ ...s })) : []);
+             setShowScheduleModal(true);
+           }}
+           className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-300 hover:text-indigo-200 transition-colors"
+         >
+           <Clock className="w-3.5 h-3.5" /> Ders programını düzenle
+         </button>
+       )}
+     >
+       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+         <InfoField label="Ad Soyad" value={student.name} icon={<User className="w-3 h-3" />} fullWidth />
+         <InfoField label="Kullanıcı Adı" value={student.username || '—'} />
+         <InfoField label="TC Kimlik" value={student.tcNo || '—'} />
+         <InfoField label="Doğum Tarihi" value={formatDateTR(student.birthDate)} icon={<Calendar className="w-3 h-3" />} />
+         <InfoField label="Okulu" value={student.school || '—'} icon={<School className="w-3 h-3" />} fullWidth />
+         <InfoField label="Okul Öğretmeni" value={student.teacher || '—'} fullWidth />
+         <InfoField label="Şube" value={student.branchOffice || '—'} icon={<Building2 className="w-3 h-3" />} />
+         <InfoField label="Branş" value={student.branch || '—'} />
+         <InfoField label="Grup" value={student.group || '—'} icon={<MapPin className="w-3 h-3" />} fullWidth />
+       </div>
+     </InfoSectionCard>
 
-  </div>
+     <InfoSectionCard
+       icon={<Users className="w-5 h-5" />}
+       title="Veli Bilgileri"
+       subtitle="İletişim ve mesaj telefonları"
+       accent="violet"
+       onEdit={() => setShowEditModal(true)}
+     >
+       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+         <InfoField label="Baba Adı" value={student.fatherName || student.parentName || '—'} />
+         <InfoField label="Baba Tel" value={formatPhone(student.fatherPhone || student.parentPhone)} icon={<Phone className="w-3 h-3" />} />
+         <InfoField label="Anne Adı" value={student.motherName || '—'} />
+         <InfoField label="Anne Tel" value={formatPhone(student.motherPhone)} icon={<Phone className="w-3 h-3" />} />
+       </div>
+       <div className="mt-4">
+         <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Mesaj telefonları</div>
+         <div className="flex flex-wrap gap-2">
+           {(student.contactNumbers?.length ? student.contactNumbers : [student.parentPhone].filter(Boolean)).slice(0, 4).map((p, i) => (
+             <div
+               key={i}
+               className="inline-flex items-center gap-2 rounded-full border border-violet-500/25 bg-violet-500/10 px-3 py-1.5 text-sm font-semibold text-violet-100"
+             >
+               <Phone className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+               {formatPhone(p)}
+             </div>
+           ))}
+           {(!student.contactNumbers || student.contactNumbers.length === 0) && !student.parentPhone ? (
+             <span className="text-sm text-slate-500">Telefon bulunamadı.</span>
+           ) : null}
+         </div>
+       </div>
+     </InfoSectionCard>
+   </div>
 
-  <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-slate-700/60 p-6 space-y-6">
-    <div>
-      <div className="flex items-center gap-2 mb-3">
-        <Heart className="w-4 h-4 text-rose-500" />
-        <div className="text-sm font-black text-white">Sağlık Bilgisi</div>
-      </div>
-      <div className="text-sm text-slate-300 leading-relaxed">
-        {student.healthInfo?.trim() ? student.healthInfo : 'Belirtilmemiş'}
-      </div>
-    </div>
-    
-    <div className="pt-4 border-t border-slate-700/60">
-      <div className="flex items-center gap-2 mb-3">
-        <FileText className="w-4 h-4 text-indigo-600" />
-        <div className="text-sm font-black text-white">Özel Notlar</div>
-      </div>
-      <div className="text-sm text-slate-300 leading-relaxed">
-        {student.notes?.trim() ? student.notes : '—'}
-      </div>
-    </div>
-  </div>
-  </div>
+   <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+     <div className="xl:col-span-3 rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
+       <div className="px-4 sm:px-5 py-4 border-b border-white/[0.06] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+         <div className="flex items-start gap-3 min-w-0">
+           <div className="w-10 h-10 rounded-xl border bg-sky-500/20 text-sky-400 border-sky-500/30 flex items-center justify-center shrink-0">
+             <ImageIcon className="w-5 h-5" />
+           </div>
+           <div className="min-w-0">
+             <div className="text-sm font-black text-white">Grup Galerisi</div>
+             <div className="text-[11px] text-slate-400 truncate">{student.group || '—'} · Son yüklenen görseller</div>
+           </div>
+         </div>
+         <a
+           href="#/galeri"
+           className="shrink-0 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/25 text-sky-300 text-xs font-bold transition-colors"
+         >
+           Galeriye git <ExternalLink className="w-3.5 h-3.5" />
+         </a>
+       </div>
+       {groupGalleryItems.length === 0 ? (
+         <div className="px-6 py-14 text-center">
+           <div className="w-14 h-14 rounded-2xl bg-slate-800/80 border border-dashed border-slate-600 flex items-center justify-center mx-auto mb-4">
+             <Camera className="w-7 h-7 text-slate-500" />
+           </div>
+           <p className="text-sm font-semibold text-slate-300">Bu gruba ait henüz görsel yok</p>
+           <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+             <a href="#/galeri" className="text-sky-400 hover:underline font-medium">Galeri</a> sayfasından grup fotoğrafları ekleyebilirsiniz.
+           </p>
+         </div>
+       ) : (
+         <div className="p-4 sm:p-5 grid grid-cols-2 md:grid-cols-3 gap-3">
+           {groupGalleryItems.map((img) => (
+             <button
+               key={img.id}
+               type="button"
+               onClick={() => setZoomedImage({ url: img.url, title: img.title })}
+               className="rounded-xl overflow-hidden border border-white/[0.06] bg-slate-900/50 hover:border-sky-500/35 transition-all text-left group"
+             >
+               <div className="aspect-[4/3] bg-slate-800 relative">
+                 <img
+                   src={img.url}
+                   alt={img.title}
+                   referrerPolicy="no-referrer"
+                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                   onError={e => { (e.target as HTMLImageElement).src = 'https://picsum.photos/seed/chess/600/450'; }}
+                 />
+                 <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/35 transition-colors">
+                   <ZoomIn className="w-7 h-7 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                 </div>
+               </div>
+               <div className="p-2.5">
+                 <div className="text-xs font-bold text-white truncate">{img.title || 'Görsel'}</div>
+                 <div className="flex items-center gap-1.5 mt-0.5 text-[10px] font-medium text-slate-500">
+                   <Camera className="w-3 h-3" /> {img.date}
+                 </div>
+               </div>
+             </button>
+           ))}
+         </div>
+       )}
+     </div>
+
+     <div className="xl:col-span-2 space-y-6">
+       <InfoSectionCard icon={<Heart className="w-5 h-5" />} title="Sağlık Bilgisi" subtitle="Önemli sağlık notları" accent="rose">
+         <div className="rounded-xl border border-rose-500/15 bg-rose-500/5 px-4 py-3.5 text-sm text-slate-200 leading-relaxed min-h-[4.5rem]">
+           {student.healthInfo?.trim() ? student.healthInfo : <span className="text-slate-500">Belirtilmemiş</span>}
+         </div>
+       </InfoSectionCard>
+
+       <InfoSectionCard icon={<FileText className="w-5 h-5" />} title="Özel Notlar" subtitle="Antrenör ve idari notlar" accent="amber">
+         <div className="rounded-xl border border-amber-500/15 bg-amber-500/5 px-4 py-3.5 text-sm text-slate-200 leading-relaxed min-h-[4.5rem] whitespace-pre-wrap">
+           {student.notes?.trim() ? student.notes : <span className="text-slate-500">—</span>}
+         </div>
+       </InfoSectionCard>
+     </div>
+   </div>
+ </div>
  )}
- </div>
- </div>
 
  {zoomedImage && (
  <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm" onClick={() => setZoomedImage(null)}>
@@ -3490,6 +3599,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
    );
  })()}
 
+ </div>
  </div>
  );
 };
