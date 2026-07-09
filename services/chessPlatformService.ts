@@ -49,6 +49,22 @@ function canFetchLichessDirectInBrowser(): boolean {
   return typeof window !== 'undefined' && typeof fetch === 'function';
 }
 
+/** Lichess games/export uçları tarayıcıdan CORS verir; canlıda yalnızca proxy kullan. */
+function shouldUseLichessDirect(apiPath: string): boolean {
+  if (!canFetchLichessDirectInBrowser()) return false;
+  const path = apiPath.replace(/^\/+/, '');
+  if (path.startsWith('games/') || path.startsWith('game/')) return false;
+  const host = window.location.hostname;
+  if (host !== 'localhost' && host !== '127.0.0.1') return false;
+  return true;
+}
+
+function withSoftParam(params?: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(params);
+  if (!next.has('soft')) next.set('soft', '1');
+  return next;
+}
+
 async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -68,10 +84,11 @@ async function lichessApiFetch(
   init?: RequestInit,
   params?: URLSearchParams,
 ): Promise<Response> {
+  const query = withSoftParam(params);
   return runLichessThrottled(async () => {
-    if (canFetchLichessDirectInBrowser()) {
+    if (shouldUseLichessDirect(apiPath)) {
       try {
-        const directRes = await fetchWithTimeout(lichessDirectUrl(apiPath, params), init);
+        const directRes = await fetchWithTimeout(lichessDirectUrl(apiPath, query), init);
         if (directRes.ok || directRes.status === 404) return directRes;
         if (directRes.status !== 429 && directRes.status < 500) return directRes;
       } catch {
@@ -80,14 +97,19 @@ async function lichessApiFetch(
     }
 
     if (isLichessGloballyRateLimited()) {
-      return new Response('[]', {
-        status: 429,
+      const path = apiPath.replace(/^\/+/, '');
+      const emptyBody = path.startsWith('games/') ? '' : '[]';
+      return new Response(emptyBody, {
+        status: 200,
         statusText: 'Lichess rate limit (bekleme)',
-        headers: { 'Content-Type': 'application/json', 'X-Lichess-Rate-Limited': '1' },
+        headers: {
+          'Content-Type': path.startsWith('games/') ? 'application/x-ndjson' : 'application/json',
+          'X-Lichess-Rate-Limited': '1',
+        },
       });
     }
 
-    const proxyUrl = lichessProxyUrl(apiPath, params);
+    const proxyUrl = lichessProxyUrl(apiPath, query);
     const res = await fetchWithTimeout(proxyUrl, init);
     if (res.status === 429) markLichessRateLimited();
     return res;
@@ -672,6 +694,7 @@ export async function fetchLichessGamesForDay(
 ): Promise<LichessGame[]> {
   const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return [];
+  if (isLichessGloballyRateLimited()) return [];
   const target = day.slice(0, 10);
   const [y, m, d] = target.split('-').map(Number);
   if (!y || !m || !d) return [];
@@ -1285,7 +1308,7 @@ export async function fetchLichessActivity(username: string): Promise<LichessAct
       const res = await lichessApiFetch(
         `user/${trimmed}/activity`,
         { headers: { Accept: 'application/json' } },
-        new URLSearchParams({ soft: '1' }),
+        new URLSearchParams(),
       );
       const softlyRateLimited = res.headers.get('X-Lichess-Rate-Limited') === '1';
       if (res.status === 429 || softlyRateLimited) {
@@ -1396,7 +1419,12 @@ export async function fetchLichessDayStats(
     const activityRateLimited = isLichessActivityRateLimited(username);
     let games = lichessGamesForDayFromActivity(activities, day);
     const puzzles = lichessPuzzleStatsForDayFromActivity(activities, day);
-    if (games === 0 && activities.length === 0 && !activityRateLimited) {
+    if (
+      games === 0
+      && activities.length === 0
+      && !activityRateLimited
+      && !isLichessGloballyRateLimited()
+    ) {
       games = await fetchLichessGamesCountForDay(username, day);
     }
     return { games, puzzles, activityRateLimited: isLichessActivityRateLimited(username) };

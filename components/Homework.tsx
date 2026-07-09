@@ -63,7 +63,7 @@ import { puzzleBoardOrientationForFen, puzzleBoardOrientationForStudent, formatP
 /** Platform API otomatik kontrol aralığı (manuel yenileme sonrası / sekme açıkken) */
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
 /** Çoklu öğrenci platform çekiminde istekler arası bekleme (Lichess 429 önleme) */
-const STUDENT_PLATFORM_GAP_MS = 1400;
+const STUDENT_PLATFORM_GAP_MS = 2200;
 
 function weekStatsForDate(
   weekStats: Record<string, Record<string, PlatformDayStats>>,

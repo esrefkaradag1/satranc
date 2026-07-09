@@ -39,11 +39,12 @@ export default async function handler(req: Req, res: Res) {
 
   try {
     const upstream = await lichessProxyRequest(path, qs, accept, process.env);
-    if (softFail && upstream.status === 429) {
-      res.setHeader('Content-Type', 'application/json');
+    if (softFail && (upstream.status === 429 || upstream.rateLimited)) {
+      const isGames = path.startsWith('games/');
+      res.setHeader('Content-Type', isGames ? 'application/x-ndjson' : 'application/json');
       res.setHeader('X-Lichess-Rate-Limited', '1');
       res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
-      res.status(200).send('[]');
+      res.status(200).send(isGames ? '' : '[]');
       return;
     }
     if (upstream.contentType) res.setHeader('Content-Type', upstream.contentType);
