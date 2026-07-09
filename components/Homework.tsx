@@ -35,11 +35,13 @@ import {
   evaluatePlatformDayGoalsFromStats,
   fetchStudentPlatformActivityTimeSeconds,
   fetchStudentPlatformDayStats,
+  fetchStudentPlatformDaysStats,
   mergePlatformDayStats,
   platformSyncSummary,
   resolveDayTargets,
   type PlatformDayStats,
 } from '../lib/homeworkPlatformUtils';
+import { fetchStudentsPlatformWeekStats } from '../services/platformWeekStatsService';
 import {
   mergePlatformActivitySeconds,
   mergePlatformWeekStatsStore,
@@ -62,8 +64,8 @@ import { puzzleBoardOrientationForFen, puzzleBoardOrientationForStudent, formatP
 
 /** Platform API otomatik kontrol aralığı (manuel yenileme sonrası / sekme açıkken) */
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
-/** Çoklu öğrenci platform çekiminde istekler arası bekleme (Lichess 429 önleme) */
-const STUDENT_PLATFORM_GAP_MS = 2200;
+/** Çoklu öğrenci istemci yedeği: öğrenci başına tek batch (gün döngüsü yok) */
+const STUDENT_PLATFORM_GAP_MS = 350;
 
 function weekStatsForDate(
   weekStats: Record<string, Record<string, PlatformDayStats>>,
@@ -448,26 +450,34 @@ const Homework: React.FC = () => {
     const pause = (ms: number) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
     try {
       const platformPatch: Record<string, Record<string, PlatformDayStats>> = {};
-      let requestIndex = 0;
       let hadFreshData = false;
+      const batchStats = await fetchStudentsPlatformWeekStats(scopeAssignees, [dateKey]);
 
-      for (const s of scopeAssignees) {
-        if (requestIndex++ > 0) await pause(STUDENT_PLATFORM_GAP_MS);
-        const prevStats = studentPlatformWeekStatsRef.current[s.id]?.[dateKey];
-        try {
-          const fresh = await fetchStudentPlatformDayStats(s, dateKey);
+      if (batchStats) {
+        for (const s of scopeAssignees) {
+          const fresh = batchStats[s.id]?.[dateKey];
+          if (!fresh) continue;
+          const prevStats = studentPlatformWeekStatsRef.current[s.id]?.[dateKey];
           const merged = mergePlatformDayStats(prevStats, fresh);
           platformPatch[s.id] = { [dateKey]: merged };
-          if (
-            !prevStats
-            || merged.games > prevStats.games
-            || merged.puzzleSolved > prevStats.puzzleSolved
-          ) {
+          if (!prevStats || merged.games > prevStats.games || merged.puzzleSolved > prevStats.puzzleSolved) {
             hadFreshData = true;
           }
-        } catch {
-          if (prevStats) {
-            platformPatch[s.id] = { [dateKey]: prevStats };
+        }
+      } else {
+        let requestIndex = 0;
+        for (const s of scopeAssignees) {
+          if (requestIndex++ > 0) await pause(STUDENT_PLATFORM_GAP_MS);
+          const prevStats = studentPlatformWeekStatsRef.current[s.id]?.[dateKey];
+          try {
+            const fresh = await fetchStudentPlatformDayStats(s, dateKey);
+            const merged = mergePlatformDayStats(prevStats, fresh);
+            platformPatch[s.id] = { [dateKey]: merged };
+            if (!prevStats || merged.games > prevStats.games || merged.puzzleSolved > prevStats.puzzleSolved) {
+              hadFreshData = true;
+            }
+          } catch {
+            if (prevStats) platformPatch[s.id] = { [dateKey]: prevStats };
           }
         }
       }
@@ -714,31 +724,51 @@ const Homework: React.FC = () => {
       if (iso <= today) daysToFetch.push(iso);
     }
     const pause = (ms: number) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
-    let requestIndex = 0;
+    let hadFreshData = false;
     try {
       const platformPatch: Record<string, Record<string, PlatformDayStats>> = {};
-      let hadFreshData = false;
+      const batchStats = await fetchStudentsPlatformWeekStats(programStudents, daysToFetch);
 
-      for (const student of programStudents) {
-        for (const iso of daysToFetch) {
-          if (requestIndex++ > 0) await pause(STUDENT_PLATFORM_GAP_MS);
-          const prevStats = studentPlatformWeekStatsRef.current[student.id]?.[iso];
-          try {
-            const fresh = await fetchStudentPlatformDayStats(student, iso);
+      if (batchStats) {
+        for (const student of programStudents) {
+          const byDay = batchStats[student.id];
+          if (!byDay) continue;
+          for (const iso of daysToFetch) {
+            const fresh = byDay[iso];
+            if (!fresh) continue;
+            const prevStats = studentPlatformWeekStatsRef.current[student.id]?.[iso];
             const merged = mergePlatformDayStats(prevStats, fresh);
             if (!platformPatch[student.id]) platformPatch[student.id] = {};
             platformPatch[student.id][iso] = merged;
-            if (
-              !prevStats
-              || merged.games > prevStats.games
-              || merged.puzzleSolved > prevStats.puzzleSolved
-            ) {
+            if (!prevStats || merged.games > prevStats.games || merged.puzzleSolved > prevStats.puzzleSolved) {
               hadFreshData = true;
             }
-          } catch {
-            if (prevStats) {
+          }
+        }
+      } else {
+        let requestIndex = 0;
+        for (const student of programStudents) {
+          if (requestIndex++ > 0) await pause(STUDENT_PLATFORM_GAP_MS);
+          try {
+            const freshByDay = await fetchStudentPlatformDaysStats(student, daysToFetch);
+            for (const iso of daysToFetch) {
+              const fresh = freshByDay[iso];
+              if (!fresh) continue;
+              const prevStats = studentPlatformWeekStatsRef.current[student.id]?.[iso];
+              const merged = mergePlatformDayStats(prevStats, fresh);
               if (!platformPatch[student.id]) platformPatch[student.id] = {};
-              platformPatch[student.id][iso] = prevStats;
+              platformPatch[student.id][iso] = merged;
+              if (!prevStats || merged.games > prevStats.games || merged.puzzleSolved > prevStats.puzzleSolved) {
+                hadFreshData = true;
+              }
+            }
+          } catch {
+            for (const iso of daysToFetch) {
+              const prevStats = studentPlatformWeekStatsRef.current[student.id]?.[iso];
+              if (prevStats) {
+                if (!platformPatch[student.id]) platformPatch[student.id] = {};
+                platformPatch[student.id][iso] = prevStats;
+              }
             }
           }
         }

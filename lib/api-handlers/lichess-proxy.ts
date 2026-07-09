@@ -60,6 +60,14 @@ export default async function handler(req: Req, res: Res) {
     res.status(upstream.status).send(upstream.body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Lichess bağlantı hatası';
+    if (softFail) {
+      const isGames = path.startsWith('games/');
+      res.setHeader('Content-Type', isGames ? 'application/x-ndjson' : 'application/json');
+      res.setHeader('X-Lichess-Rate-Limited', '1');
+      res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
+      res.status(200).send(isGames ? '' : '[]');
+      return;
+    }
     res.status(502).json({ error: msg });
   }
 }

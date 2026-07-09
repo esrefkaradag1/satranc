@@ -11,7 +11,13 @@ import {
   type ChessComPuzzleTab,
 } from '../lib/chesscomPuzzleParse';
 import { timestampMatchesDay, localDayKeyFromMs } from '../lib/homeworkDayUtils';
-import { parseLichessActivityPuzzles } from '../lib/leaderboardUtils';
+import {
+  lichessGamesForDayFromActivity,
+  lichessPuzzleStatsForDayFromActivity,
+  chessComGamesForDay,
+  chessComPuzzleStatsForDay,
+  uniqueYearMonths,
+} from '../lib/platformWeekStatsDerive';
 
 export type { ChessComPuzzleAttempt, ChessComPuzzleTab };
 export { parseChessComTactics2Puzzles };
@@ -19,6 +25,7 @@ export { parseChessComTactics2Puzzles };
 const LICHESS_DIRECT_API = 'https://lichess.org/api';
 const CHESSCOM_DIRECT_API = 'https://api.chess.com/pub';
 const FETCH_TIMEOUT_MS = 8000;
+const CHESSCOM_FETCH_TIMEOUT_MS = 15000;
 const LICHESS_USERNAME_RE = /^[A-Za-z0-9_-]{1,30}$/;
 const CHESSCOM_USERNAME_RE = /^[a-z0-9_-]{1,25}$/i;
 
@@ -49,14 +56,9 @@ function canFetchLichessDirectInBrowser(): boolean {
   return typeof window !== 'undefined' && typeof fetch === 'function';
 }
 
-/** Lichess games/export uçları tarayıcıdan CORS verir; canlıda yalnızca proxy kullan. */
-function shouldUseLichessDirect(apiPath: string): boolean {
-  if (!canFetchLichessDirectInBrowser()) return false;
-  const path = apiPath.replace(/^\/+/, '');
-  if (path.startsWith('games/') || path.startsWith('game/')) return false;
-  const host = window.location.hostname;
-  if (host !== 'localhost' && host !== '127.0.0.1') return false;
-  return true;
+/** Canlıda paylaşımlı IP 429 verir — her zaman sunucu proxy kullan. */
+function shouldUseLichessDirect(_apiPath: string): boolean {
+  return false;
 }
 
 function withSoftParam(params?: URLSearchParams): URLSearchParams {
@@ -65,14 +67,25 @@ function withSoftParam(params?: URLSearchParams): URLSearchParams {
   return next;
 }
 
-async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+async function fetchChessComRecentPuzzlesApi(username: string): Promise<Response> {
+  const url = `/api/chesscom-recent-puzzles?username=${encodeURIComponent(username)}&type=all`;
+  const init = { headers: { Accept: 'application/json' } };
+  let res = await fetchWithTimeout(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    await sleep(800);
+    res = await fetchWithTimeout(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+  }
+  return res;
 }
 
 /**
@@ -119,7 +132,35 @@ async function lichessApiFetch(
 async function chessComGamesFetch(username: string, year: string, month: string): Promise<Response> {
   const mm = month.padStart(2, '0');
   const q = new URLSearchParams({ username: username.toLowerCase(), year, month: mm });
-  return fetchWithTimeout(`/api/chesscom-games?${q}`, { headers: { Accept: 'application/json' } });
+  const url = `/api/chesscom-games?${q}`;
+  const init = { headers: { Accept: 'application/json' } };
+  let res = await fetchWithTimeout(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    await sleep(800);
+    res = await fetchWithTimeout(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+  }
+  return res;
+}
+
+const CHESSCOM_MONTH_GAMES_CACHE_TTL_MS = 10 * 60 * 1000;
+const chessComMonthGamesCache = new Map<string, { fetchedAt: number; games: ChessComGame[] }>();
+
+async function fetchChessComMonthGamesCached(
+  username: string,
+  year: string,
+  month: string,
+): Promise<ChessComGame[]> {
+  const trimmed = normalizeChessComUsername(username);
+  if (!trimmed) return [];
+  const mm = month.padStart(2, '0');
+  const key = `${trimmed}:${year}-${mm}`;
+  const cached = chessComMonthGamesCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CHESSCOM_MONTH_GAMES_CACHE_TTL_MS) {
+    return cached.games;
+  }
+  const games = await fetchChessComMonthGamesViaProxy(trimmed, year, month);
+  chessComMonthGamesCache.set(key, { fetchedAt: Date.now(), games });
+  return games;
 }
 
 async function fetchChessComMonthGamesViaProxy(
@@ -1047,6 +1088,21 @@ export interface ChessComPuzzlesBundleResult {
   error?: string;
 }
 
+const CHESSCOM_BUNDLE_CACHE_TTL_MS = 5 * 60 * 1000;
+const chessComBundleCache = new Map<string, { fetchedAt: number; bundle: ChessComPuzzlesBundle }>();
+const chessComBundleInFlight = new Map<string, Promise<ChessComPuzzlesBundle | null>>();
+
+function readChessComBundleCache(username: string, allowStale = false): ChessComPuzzlesBundle | null {
+  const hit = chessComBundleCache.get(username);
+  if (!hit) return null;
+  if (!allowStale && Date.now() - hit.fetchedAt > CHESSCOM_BUNDLE_CACHE_TTL_MS) return null;
+  return hit.bundle;
+}
+
+function writeChessComBundleCache(username: string, bundle: ChessComPuzzlesBundle): void {
+  chessComBundleCache.set(username, { fetchedAt: Date.now(), bundle });
+}
+
 function parseChessComPuzzlesBundlePayload(
   data: unknown,
   profileUrl: string,
@@ -1085,21 +1141,27 @@ export async function fetchChessComPuzzlesBundleWithMeta(username: string): Prom
   const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return { data: null, error: 'Kullanıcı adı boş' };
   const profileUrl = `https://www.chess.com/member/${encodeURIComponent(trimmed)}/stats/puzzles`;
+  const cached = readChessComBundleCache(trimmed);
+  if (cached) return { data: cached, error: undefined };
   try {
-    const res = await fetch(`/api/chesscom-recent-puzzles?username=${encodeURIComponent(trimmed)}&type=all`, {
-      headers: { Accept: 'application/json' },
-    });
+    const res = await fetchChessComRecentPuzzlesApi(trimmed);
     if (!res.ok) {
       let msg = `Chess.com yanıtı: ${res.status}`;
       try {
         const errBody = (await res.json()) as { error?: unknown; message?: unknown };
         msg = formatChessComApiError(errBody?.error ?? errBody?.message ?? errBody);
       } catch { /* ignore */ }
+      const stale = readChessComBundleCache(trimmed, true);
+      if (stale) return { data: stale, error: undefined };
       return { data: null, error: msg };
     }
     const data = await res.json();
-    return { data: parseChessComPuzzlesBundlePayload(data, profileUrl), error: undefined };
+    const bundle = parseChessComPuzzlesBundlePayload(data, profileUrl);
+    if (bundle) writeChessComBundleCache(trimmed, bundle);
+    return { data: bundle, error: undefined };
   } catch {
+    const stale = readChessComBundleCache(trimmed, true);
+    if (stale) return { data: stale, error: undefined };
     return { data: null, error: 'Chess.com bağlantı hatası' };
   }
 }
@@ -1108,17 +1170,30 @@ export async function fetchChessComPuzzlesBundleWithMeta(username: string): Prom
 export async function fetchChessComPuzzlesBundle(username: string): Promise<ChessComPuzzlesBundle | null> {
   const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
+  const cached = readChessComBundleCache(trimmed);
+  if (cached) return cached;
+
+  const inflight = chessComBundleInFlight.get(trimmed);
+  if (inflight) return inflight;
+
   const profileUrl = `https://www.chess.com/member/${encodeURIComponent(trimmed)}/stats/puzzles`;
-  try {
-    const res = await fetch(`/api/chesscom-recent-puzzles?username=${encodeURIComponent(trimmed)}&type=all`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return parseChessComPuzzlesBundlePayload(data, profileUrl);
-  } catch {
-    return null;
-  }
+  const promise = (async () => {
+    try {
+      const res = await fetchChessComRecentPuzzlesApi(trimmed);
+      if (!res.ok) return readChessComBundleCache(trimmed, true);
+      const data = await res.json();
+      const bundle = parseChessComPuzzlesBundlePayload(data, profileUrl);
+      if (bundle) writeChessComBundleCache(trimmed, bundle);
+      return bundle;
+    } catch {
+      return readChessComBundleCache(trimmed, true);
+    } finally {
+      chessComBundleInFlight.delete(trimmed);
+    }
+  })();
+
+  chessComBundleInFlight.set(trimmed, promise);
+  return promise;
 }
 
 /** Chess.com callback yanıtından bulmaca denemelerini çıkarır */
@@ -1378,37 +1453,6 @@ function isLichessActivityRateLimited(username: string): boolean {
   return !!cached?.rateLimited;
 }
 
-function lichessGamesForDayFromActivity(activities: LichessActivity[], day: string): number {
-  const target = day.slice(0, 10);
-  for (const row of activities) {
-    if (!row.interval?.start) continue;
-    if (!timestampMatchesDay(row.interval.start, target)) continue;
-    const games = row.games;
-    if (!games) continue;
-    let total = 0;
-    for (const mode of Object.values(games)) {
-      if (!mode || typeof mode !== 'object') continue;
-      total += (mode.win || 0) + (mode.loss || 0) + (mode.draw || 0);
-    }
-    return total;
-  }
-  return 0;
-}
-
-function lichessPuzzleStatsForDayFromActivity(activities: LichessActivity[], day: string): DailyPuzzleActivityStats {
-  const target = day.slice(0, 10);
-  for (const row of activities) {
-    if (!row.interval?.start) continue;
-    if (!timestampMatchesDay(row.interval.start, target)) continue;
-
-    const { total, passed, failed } = parseLichessActivityPuzzles(row);
-    if (total > 0) {
-      return { count: total, passed, failed };
-    }
-  }
-  return { count: 0, passed: 0, failed: 0 };
-}
-
 /** Tek Lichess aktivite isteğiyle günlük maç + bulmaca özeti */
 export async function fetchLichessDayStats(
   username: string,
@@ -1417,24 +1461,31 @@ export async function fetchLichessDayStats(
   try {
     const activities = await fetchLichessActivity(username);
     const activityRateLimited = isLichessActivityRateLimited(username);
-    let games = lichessGamesForDayFromActivity(activities, day);
+    const games = lichessGamesForDayFromActivity(activities, day);
     const puzzles = lichessPuzzleStatsForDayFromActivity(activities, day);
-    if (
-      games === 0
-      && activities.length === 0
-      && !activityRateLimited
-      && !isLichessGloballyRateLimited()
-    ) {
-      games = await fetchLichessGamesCountForDay(username, day);
-    }
-    return { games, puzzles, activityRateLimited: isLichessActivityRateLimited(username) };
+    return { games, puzzles, activityRateLimited };
   } catch {
-    if (isLichessGloballyRateLimited()) {
-      return { games: 0, puzzles: { count: 0, passed: 0, failed: 0 }, activityRateLimited: true };
-    }
-    const games = await fetchLichessGamesCountForDay(username, day).catch(() => 0);
-    return { games, puzzles: { count: 0, passed: 0, failed: 0 }, activityRateLimited: true };
+    return { games: 0, puzzles: { count: 0, passed: 0, failed: 0 }, activityRateLimited: true };
   }
+}
+
+/** Tek aktivite isteğiyle birden fazla günün Lichess özeti */
+export async function fetchLichessDaysStats(
+  username: string,
+  days: string[],
+): Promise<Record<string, { games: number; puzzles: DailyPuzzleActivityStats; activityRateLimited: boolean }>> {
+  const uniqueDays = [...new Set(days.map((d) => d.slice(0, 10)))];
+  const activities = await fetchLichessActivity(username);
+  const activityRateLimited = isLichessActivityRateLimited(username);
+  const out: Record<string, { games: number; puzzles: DailyPuzzleActivityStats; activityRateLimited: boolean }> = {};
+  for (const day of uniqueDays) {
+    out[day] = {
+      games: lichessGamesForDayFromActivity(activities, day),
+      puzzles: lichessPuzzleStatsForDayFromActivity(activities, day),
+      activityRateLimited,
+    };
+  }
+  return out;
 }
 
 function puzzleAttemptOnDay(isoDate: string | undefined, day: string): boolean {
@@ -1470,11 +1521,9 @@ export async function fetchChessComGamesListForDay(
   const [y, m] = target.split('-');
   if (!y || !m) return [];
   try {
-    const res = await chessComGamesFetch(trimmed, y, m);
-    if (!res.ok) return [];
-    const data = (await res.json()) as { games?: ChessComGame[] };
+    const monthGames = await fetchChessComMonthGamesCached(trimmed, y, m);
     return dedupeChessComGames(
-      (data.games ?? []).filter(
+      monthGames.filter(
         (g) =>
           chessComGameInvolvesUser(g, trimmed) &&
           g.end_time &&
@@ -1521,16 +1570,32 @@ export async function fetchChessComDailyPuzzleStats(
 ): Promise<DailyPuzzleActivityStats> {
   const bundle = await fetchChessComPuzzlesBundle(username);
   if (!bundle) return { count: 0, passed: 0, failed: 0 };
-  const target = day.slice(0, 10);
-  const ratedToday = bundle.rated.filter((a) => puzzleAttemptOnDay(a.date, target));
-  const unique = dedupeChessComPuzzleAttempts(ratedToday);
-  const passed = unique.filter((a) => a.passed).length;
-  const failed = unique.filter((a) => !a.passed).length;
-  return {
-    count: unique.length,
-    passed,
-    failed,
-  };
+  return chessComPuzzleStatsForDay(bundle.rated, day);
+}
+
+/** Tek bulmaca bundle + aylık arşivle birden fazla günün Chess.com özeti */
+export async function fetchChessComDaysStats(
+  username: string,
+  days: string[],
+): Promise<Record<string, { games: number; puzzles: DailyPuzzleActivityStats }>> {
+  const uniqueDays = [...new Set(days.map((d) => d.slice(0, 10)))];
+  const trimmed = normalizeChessComUsername(username);
+  if (!trimmed) {
+    return Object.fromEntries(uniqueDays.map((d) => [d, { games: 0, puzzles: { count: 0, passed: 0, failed: 0 } }]));
+  }
+  const bundle = await fetchChessComPuzzlesBundle(trimmed);
+  const rated = bundle?.rated ?? [];
+  const monthGames = new Map<string, ChessComGame[]>();
+  for (const { year, month } of uniqueYearMonths(uniqueDays)) {
+    monthGames.set(`${year}-${month}`, await fetchChessComMonthGamesCached(trimmed, year, month));
+  }
+  const out: Record<string, { games: number; puzzles: DailyPuzzleActivityStats }> = {};
+  for (const day of uniqueDays) {
+    const [year, month] = day.split('-');
+    const games = chessComGamesForDay(monthGames.get(`${year}-${month}`) ?? [], trimmed, day);
+    out[day] = { games, puzzles: chessComPuzzleStatsForDay(rated, day) };
+  }
+  return out;
 }
 
 /** @deprecated fetchLichessDailyPuzzleStats kullanın */

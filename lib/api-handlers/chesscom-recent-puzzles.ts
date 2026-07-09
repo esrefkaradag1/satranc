@@ -1,3 +1,5 @@
+import { fetchChessComUpstream } from '../chesscomUpstreamFetch.mjs';
+
 type Req = { query: Record<string, string | string[] | undefined> };
 type Res = {
   status(code: number): { json(body: unknown): void; end(): void };
@@ -22,6 +24,11 @@ interface PuzzleAttempt {
 }
 
 const VALID_TYPES = ['rated', 'learning', 'rush', 'all'];
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+const responseCache = new Map<string, { expiresAt: number; body: unknown }>();
+
+export const config = { maxDuration: 15 };
 
 const TACTICS2_KEYS: Record<PuzzleTab, string> = {
   rated: 'recentRatedProblems',
@@ -137,17 +144,25 @@ export default async function handler(req: Req, res: Res) {
   }
 
   const profileUrl = `https://www.chess.com/member/${encodeURIComponent(username)}/stats/puzzles`;
+  const cacheKey = `${username}:${type}`;
+  const cached = responseCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+    res.setHeader('X-ChessCom-Cache', 'hit');
+    res.status(200).json(cached.body);
+    return;
+  }
 
   try {
-    const upstream = await fetch(
+    const upstream = await fetchChessComUpstream(
       `https://www.chess.com/callback/stats/tactics2/new/puzzles/${encodeURIComponent(username)}`,
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'NetChessAcademy/1.0',
           Referer: profileUrl,
         },
       },
+      12000,
     );
     if (!upstream.ok) {
       sendSoftUnavailable(res, type, profileUrl, 'Chess.com bulmaca listesi alınamadı', upstream.status);
@@ -162,18 +177,29 @@ export default async function handler(req: Req, res: Res) {
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
 
     if (type === 'all') {
-      res.status(200).json({ rated, learning, rush, profileUrl });
+      const body = { rated, learning, rush, profileUrl };
+      responseCache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, body });
+      res.status(200).json(body);
       return;
     }
 
     const attempts = type === 'learning' ? learning : type === 'rush' ? rush : rated;
 
-    res.status(200).json({
+    const body = {
       attempts,
       unavailable: attempts.length === 0,
       profileUrl,
-    });
+    };
+    responseCache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, body });
+    res.status(200).json(body);
   } catch (err) {
+    const stale = responseCache.get(cacheKey);
+    if (stale?.body) {
+      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
+      res.setHeader('X-ChessCom-Cache', 'stale');
+      res.status(200).json(stale.body);
+      return;
+    }
     const msg = err instanceof Error ? err.message : 'Chess.com bağlantı hatası';
     sendSoftUnavailable(res, type, profileUrl, msg);
   }

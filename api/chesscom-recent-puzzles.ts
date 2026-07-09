@@ -1,1 +1,1 @@
-export { default } from '../lib/api-handlers/chesscom-recent-puzzles';
+export { default, config } from '../lib/api-handlers/chesscom-recent-puzzles';

@@ -19,6 +19,7 @@ import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
 import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
 import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
 import { startTrainingNotifyScheduler, trainingNotifyHandler } from './lib/trainingWhatsAppNotify.mjs';
+import platformWeekStatsHandler from './lib/api-handlers/platform-week-stats';
 
 const DEV_GET_ROUTES = new Set([
   '/api/site-messages',
@@ -42,6 +43,7 @@ const DEV_POST_ROUTES = new Set([
   '/api/lichess-oauth-token',
   '/api/lichess-oauth-disconnect',
   '/api/training-notify',
+  '/api/platform-week-stats',
 ]);
 
 function devApiPlugin(env: Record<string, string>): Plugin {
@@ -222,6 +224,22 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 result = await parentStudentLoginViaEnv(body, env);
               } else if (route === '/api/training-notify') {
                 result = await trainingNotifyHandler(body, env);
+              } else if (route === '/api/platform-week-stats') {
+                let status = 200;
+                let payload: unknown = {};
+                const mockRes = {
+                  status(code: number) {
+                    status = code;
+                    return {
+                      json(data: unknown) {
+                        payload = data;
+                      },
+                    };
+                  },
+                  setHeader() {},
+                };
+                await platformWeekStatsHandler({ method: 'POST', body }, mockRes);
+                result = { status, body: payload };
               } else if (body.replace === true) {
                 result = await replaceSessionMediaViaEnv(body, env);
               } else {

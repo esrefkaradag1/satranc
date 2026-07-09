@@ -8,10 +8,12 @@ import {
 } from '../lib/chesscomPuzzleParse';
 import {
   fetchChessComDailyPuzzleStats,
+  fetchChessComDaysStats,
   fetchChessComGamesForDay,
   fetchChessComGamesListForDay,
   fetchChessComPuzzlesBundle,
   fetchLichessDayStats,
+  fetchLichessDaysStats,
   fetchLichessGamesCountForDay,
   fetchLichessGamesForDay,
   type ChessComGame,
@@ -108,6 +110,82 @@ export async function fetchStudentPlatformDayStats(
     lichessError: lichessUsername ? lichessError : undefined,
     chessComError: chessComUsername ? chessComError : undefined,
   };
+}
+
+/** Öğrenci başına tek Lichess aktivite + tek Chess.com bundle ile çoklu gün özeti (istemci yedeği). */
+export async function fetchStudentPlatformDaysStats(
+  student: Student,
+  dayIsos: string[],
+): Promise<Record<string, PlatformDayStats>> {
+  const days = [...new Set(dayIsos.map((d) => d.slice(0, 10)))];
+  const lichessUsername = student.lichessUsername?.trim();
+  const chessComUsername = student.chessComUsername?.trim();
+
+  let lichessByDay: Record<string, Awaited<ReturnType<typeof fetchLichessDaysStats>>[string]> = {};
+  let chessByDay: Record<string, Awaited<ReturnType<typeof fetchChessComDaysStats>>[string]> = {};
+  let lichessError = false;
+  let chessComError = false;
+
+  if (lichessUsername) {
+    try {
+      let oauthUsed = false;
+      if (student.id?.trim() && isStudentLichessOAuthConnected(student)) {
+        lichessByDay = {};
+        for (const day of days) {
+          const oauth = await fetchLichessOAuthDayPuzzleStats(student.id, day);
+          if (oauth.connected) {
+            oauthUsed = true;
+            lichessByDay[day] = {
+              games: 0,
+              puzzles: { count: oauth.count, passed: oauth.passed, failed: oauth.failed },
+              activityRateLimited: false,
+            };
+          }
+        }
+      }
+      if (!oauthUsed) {
+        lichessByDay = await fetchLichessDaysStats(lichessUsername, days);
+        if (Object.values(lichessByDay).some((d) => d.activityRateLimited)) lichessError = true;
+      }
+    } catch {
+      lichessError = true;
+    }
+  }
+
+  if (chessComUsername) {
+    try {
+      chessByDay = await fetchChessComDaysStats(chessComUsername, days);
+    } catch {
+      chessComError = true;
+    }
+  }
+
+  const out: Record<string, PlatformDayStats> = {};
+  for (const day of days) {
+    const lichessDay = lichessByDay[day] ?? {
+      games: 0,
+      puzzles: { count: 0, passed: 0, failed: 0 },
+      activityRateLimited: false,
+    };
+    const chessDay = chessByDay[day] ?? { games: 0, puzzles: { count: 0, passed: 0, failed: 0 } };
+    out[day] = {
+      games: lichessDay.games + chessDay.games,
+      puzzleSolved: (lichessDay.puzzles.count ?? 0) + (chessDay.puzzles.count ?? 0),
+      puzzlePassed: (lichessDay.puzzles.passed ?? 0) + (chessDay.puzzles.passed ?? 0),
+      puzzleFailed: (lichessDay.puzzles.failed ?? 0) + (chessDay.puzzles.failed ?? 0),
+      lichessGames: lichessDay.games,
+      lichessPuzzles: lichessDay.puzzles.count ?? 0,
+      lichessPuzzlePassed: lichessDay.puzzles.passed ?? 0,
+      lichessPuzzleFailed: lichessDay.puzzles.failed ?? 0,
+      chessComGames: chessDay.games,
+      chessComPuzzles: chessDay.puzzles.count ?? 0,
+      chessComPuzzlePassed: chessDay.puzzles.passed ?? 0,
+      chessComPuzzleFailed: chessDay.puzzles.failed ?? 0,
+      lichessError: lichessUsername ? lichessError : undefined,
+      chessComError: chessComUsername ? chessComError : undefined,
+    };
+  }
+  return out;
 }
 
 export function homeworkAttemptsForDay(

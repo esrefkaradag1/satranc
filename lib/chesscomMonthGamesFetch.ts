@@ -1,10 +1,6 @@
 import type { ChessComGame } from '../services/chessPlatformService';
 import { parseChessComMonthlyPgn } from './chesscomGamesParse';
-
-const UPSTREAM_HEADERS = {
-  Accept: 'application/json',
-  'User-Agent': 'NetChessAcademy/1.0',
-};
+import { fetchChessComUpstream } from './chesscomUpstreamFetch.mjs';
 
 export type ChessComMonthGamesResult = {
   games: ChessComGame[];
@@ -21,10 +17,7 @@ async function fetchMonthlyJson(
 ): Promise<{ ok: boolean; status: number; games: ChessComGame[] }> {
   const mm = month.padStart(2, '0');
   const url = `https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/${year}/${mm}`;
-  const upstream = await fetch(url, {
-    headers: UPSTREAM_HEADERS,
-    signal: AbortSignal.timeout(15000),
-  });
+  const upstream = await fetchChessComUpstream(url, {}, 15000);
   if (!upstream.ok) {
     return { ok: false, status: upstream.status, games: [] };
   }
@@ -35,10 +28,11 @@ async function fetchMonthlyJson(
 async function fetchMonthlyPgn(username: string, year: string, month: string): Promise<ChessComGame[]> {
   const mm = month.padStart(2, '0');
   const url = `https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/${year}/${mm}/pgn`;
-  const upstream = await fetch(url, {
-    headers: { ...UPSTREAM_HEADERS, Accept: 'application/x-chess-pgn, text/plain, */*' },
-    signal: AbortSignal.timeout(20000),
-  });
+  const upstream = await fetchChessComUpstream(
+    url,
+    { headers: { Accept: 'application/x-chess-pgn, text/plain, */*' } },
+    20000,
+  );
   if (!upstream.ok) return [];
   const text = await upstream.text();
   return parseChessComMonthlyPgn(text);
@@ -58,29 +52,37 @@ export async function fetchChessComMonthGames(
     return { games: [], unavailable: true, error: 'username, year, month gerekli' };
   }
 
+  let jsonStatus = 0;
+  let jsonOk = false;
+
   try {
     const json = await fetchMonthlyJson(trimmed, year, month);
+    jsonStatus = json.status;
+    jsonOk = json.ok;
     if (json.ok && json.games.length > 0) {
       return { games: json.games, source: 'json' };
     }
+  } catch {
+    /* JSON arşivi başarısız — PGN yedeğine devam */
+  }
 
+  try {
     const pgnGames = await fetchMonthlyPgn(trimmed, year, month);
     if (pgnGames.length > 0) {
-      return { games: pgnGames, source: 'pgn', upstreamStatus: json.ok ? undefined : json.status };
+      return { games: pgnGames, source: 'pgn', upstreamStatus: jsonOk ? undefined : jsonStatus || undefined };
     }
-
-    if (json.ok) {
-      return { games: [], source: 'json' };
-    }
-
-    return {
-      games: [],
-      unavailable: true,
-      upstreamStatus: json.status,
-      error: 'Chess.com oyun arşivi alınamadı',
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Chess.com bağlantı hatası';
-    return { games: [], unavailable: true, error: msg };
+  } catch {
+    /* PGN yedeği de başarısız */
   }
+
+  if (jsonOk) {
+    return { games: [], source: 'json' };
+  }
+
+  return {
+    games: [],
+    unavailable: true,
+    upstreamStatus: jsonStatus || undefined,
+    error: 'Chess.com oyun arşivi alınamadı',
+  };
 }
