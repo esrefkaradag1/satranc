@@ -1,14 +1,28 @@
-import React, { useState, useMemo } from 'react';
-import { Box, Package, Archive, Plus, Search, Filter, MoreHorizontal, X, Trash2 } from 'lucide-react';
+import React, { useState, useMemo, useRef } from 'react';
+import { Box, Package, Archive, Plus, Search, Filter, X, Trash2, ImageIcon, Upload, Loader2 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { ResponsiveTable } from './ui/ResponsiveTable';
+import { createImageThumbnail } from '../lib/imageThumb';
 import type { InventoryItem } from '../types';
 
+type InventoryForm = {
+  name: string;
+  category: string;
+  stock: number;
+  unit: string;
+  minStock: number;
+  imageUrl: string;
+};
+
+const EMPTY_FORM: InventoryForm = { name: '', category: 'Satranç Takımı', stock: 0, unit: 'Adet', minStock: 10, imageUrl: '' };
+
 const Inventory: React.FC = () => {
-  const { inventory, addInventoryItem, updateInventoryItem, deleteInventoryItem } = useApp();
+  const { inventory, addInventoryItem, deleteInventoryItem, showToast } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', category: 'Malzeme', stock: 0, unit: 'Adet', minStock: 10 });
+  const [form, setForm] = useState<InventoryForm>(EMPTY_FORM);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filtered = useMemo(() => {
     if (!searchTerm.trim()) return inventory;
@@ -24,8 +38,36 @@ const Inventory: React.FC = () => {
     let status: InventoryItem['status'] = 'Yeterli';
     if (form.stock <= min * 0.5) status = 'Kritik';
     else if (form.stock <= min) status = 'Azalıyor';
-    addInventoryItem({ ...form, minStock: min, status });
-    setForm({ name: '', category: 'Malzeme', stock: 0, unit: 'Adet', minStock: 10 });
+    addInventoryItem({
+      name: form.name,
+      category: form.category,
+      stock: form.stock,
+      unit: form.unit,
+      minStock: min,
+      status,
+      imageUrl: form.imageUrl || undefined,
+    });
+    setForm(EMPTY_FORM);
+    setModalOpen(false);
+  };
+
+  const handlePickPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (!file) return;
+    setUploading(true);
+    try {
+      const thumb = await createImageThumbnail(file, 320, 0.82);
+      setForm(f => ({ ...f, imageUrl: thumb }));
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Fotoğraf yüklenemedi.', 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const closeModal = () => {
+    setForm(EMPTY_FORM);
     setModalOpen(false);
   };
 
@@ -88,7 +130,21 @@ const Inventory: React.FC = () => {
               {filtered.map((item) => (
                 <tr key={item.id} className="hover:bg-white/[0.02] transition-colors group">
                   <td data-label="Malzeme Adı" className="px-8 py-5">
-                    <span className="text-sm font-bold text-slate-200 tracking-tight">{item.name}</span>
+                    <div className="flex items-center gap-3">
+                      {item.imageUrl ? (
+                        <img
+                          src={item.imageUrl}
+                          alt={item.name}
+                          className="w-10 h-10 rounded-lg object-cover border border-white/10 shrink-0"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
+                          <ImageIcon className="w-4 h-4 text-slate-500" />
+                        </div>
+                      )}
+                      <span className="text-sm font-bold text-slate-200 tracking-tight">{item.name}</span>
+                    </div>
                   </td>
                   <td data-label="Kategori" className="px-8 py-5">
                     <span className="px-3 py-1 bg-white/5 border border-white/5 rounded-lg text-[10px] font-bold text-slate-400 uppercase tracking-wider">
@@ -136,13 +192,46 @@ const Inventory: React.FC = () => {
       </div>
 
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setModalOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={closeModal}>
           <div className="bg-[#1e293b] border border-white/10 rounded-lg shadow-2xl w-full max-w-md p-8" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-bold text-white">Yeni Malzeme Ekle</h3>
-              <button onClick={() => setModalOpen(false)} className="p-2 rounded-lg hover:bg-white/5 text-slate-400"><X className="w-5 h-5" /></button>
+              <button onClick={closeModal} className="p-2 rounded-lg hover:bg-white/5 text-slate-400"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-1.5">Ürün Fotoğrafı</label>
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-lg bg-slate-900/50 border border-white/10 flex items-center justify-center overflow-hidden shrink-0">
+                    {form.imageUrl ? (
+                      <img src={form.imageUrl} alt="Önizleme" className="w-full h-full object-cover" />
+                    ) : (
+                      <ImageIcon className="w-6 h-6 text-slate-600" />
+                    )}
+                  </div>
+                  <div className="flex-1 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                      className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white text-sm font-bold rounded-lg transition-all disabled:opacity-60"
+                    >
+                      {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                      {form.imageUrl ? 'Değiştir' : 'Fotoğraf Ekle'}
+                    </button>
+                    {form.imageUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setForm(f => ({ ...f, imageUrl: '' }))}
+                        className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 text-sm font-bold rounded-lg transition-all"
+                      >
+                        <Trash2 className="w-4 h-4" /> Kaldır
+                      </button>
+                    )}
+                  </div>
+                  <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePickPhoto} />
+                </div>
+              </div>
               <div>
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-1.5">Malzeme Adı</label>
                 <input required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="w-full px-4 py-3 bg-slate-900/50 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Örn: Satranç Takımı" />
@@ -151,9 +240,12 @@ const Inventory: React.FC = () => {
                 <div>
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-1.5">Kategori</label>
                   <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className="w-full px-4 py-3 bg-slate-900/50 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option>Satranç Takımı</option>
+                    <option>Kitap</option>
+                    <option>Satranç Saati</option>
+                    <option>Kırtasiye</option>
                     <option>Malzeme</option>
                     <option>Elektronik</option>
-                    <option>Kitap</option>
                     <option>Ödül</option>
                   </select>
                 </div>
@@ -177,7 +269,7 @@ const Inventory: React.FC = () => {
                 </div>
               </div>
               <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setModalOpen(false)} className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white font-bold rounded-lg transition-all">İptal</button>
+                <button type="button" onClick={closeModal} className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white font-bold rounded-lg transition-all">İptal</button>
                 <button type="submit" className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg transition-all">Kaydet</button>
               </div>
             </form>

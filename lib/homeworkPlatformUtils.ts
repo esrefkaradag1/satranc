@@ -1,4 +1,5 @@
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, Student, StudentDailyTarget } from '../types';
+import type { HomeworkStudentStatus } from './homeworkAnalysisUtils';
 import { countPerPuzzleResults } from './homeworkAnalysisUtils';
 import {
   dedupeChessComPuzzleAttempts,
@@ -147,6 +148,43 @@ export function resolveDayTargets(
   };
 }
 
+export function resolvePlatformHomeworkStatus(opts: {
+  hasTargets: boolean;
+  done: boolean;
+  hasActivity: boolean;
+  dayClosed: boolean;
+}): HomeworkStudentStatus {
+  if (!opts.hasTargets) return 'Başlamadı';
+  if (opts.done) return 'Tamamlandı';
+  if (opts.dayClosed) return opts.hasActivity ? 'Kısmi yaptı' : 'Yapılmadı';
+  if (opts.hasActivity) return 'Devam Ediyor';
+  return 'Başlamadı';
+}
+
+/** Min doğruluk % yalnızca bulmaca hedefinde geçerlidir; maç hedefi yalnızca adet sayılır. */
+export function minCorrectRequiredForPuzzleGoal(puzzleTarget: number, minAccuracy: number): number {
+  if (puzzleTarget <= 0) return 0;
+  if (minAccuracy <= 0) return 0;
+  return Math.ceil(puzzleTarget * minAccuracy / 100);
+}
+
+/**
+ * Bulmaca hedefi: en az puzzleTarget deneme + min doğruluk oranına göre yeterli doğru.
+ * Örn. 20 bulmaca / %40 → 20 deneme ve en az 8 doğru.
+ */
+export function evaluatePuzzleGoalMet(
+  puzzleTarget: number,
+  minAccuracy: number,
+  puzzleSolved: number,
+  puzzlePassed: number,
+): boolean {
+  if (puzzleTarget <= 0) return true;
+  if (puzzleSolved < puzzleTarget) return false;
+  const minCorrect = minCorrectRequiredForPuzzleGoal(puzzleTarget, minAccuracy);
+  if (minCorrect <= 0) return true;
+  return puzzlePassed >= minCorrect;
+}
+
 export function evaluateDayGoals(
   gameTarget: number,
   puzzleTarget: number,
@@ -167,11 +205,7 @@ export function evaluateDayGoals(
   const puzzleSolved = internal.solved + (platform?.puzzleSolved ?? 0);
   const puzzleAccuracy = puzzleSolved > 0 ? (puzzlePassed / puzzleSolved) * 100 : 0;
   const gamesMet = gameTarget <= 0 || (platform?.games ?? 0) >= gameTarget;
-  const minCorrectRequired =
-    minAccuracy > 0
-      ? Math.max(puzzleTarget, Math.ceil(puzzleTarget * minAccuracy / 100))
-      : puzzleTarget;
-  const puzzlesMet = puzzleTarget <= 0 || puzzlePassed >= minCorrectRequired;
+  const puzzlesMet = evaluatePuzzleGoalMet(puzzleTarget, minAccuracy, puzzleSolved, puzzlePassed);
   return {
     gamesMet,
     puzzlesMet,
@@ -231,12 +265,7 @@ export function evaluatePlatformDailyGoals(
 ): { gamesMet: boolean; puzzlesMet: boolean; done: boolean; puzzleAccuracy: number } {
   const puzzleAccuracy = puzzleSolved > 0 ? (puzzlePassed / puzzleSolved) * 100 : 0;
   const gamesMet = gameTarget <= 0 || games >= gameTarget;
-  // Bulmaca hedefi: doğru çözülen adet (yanlış denemeler hedefi geçtikten sonra tamamlanmayı engellemez).
-  const minCorrectRequired =
-    minAccuracy > 0
-      ? Math.max(puzzleTarget, Math.ceil(puzzleTarget * minAccuracy / 100))
-      : puzzleTarget;
-  const puzzlesMet = puzzleTarget <= 0 || puzzlePassed >= minCorrectRequired;
+  const puzzlesMet = evaluatePuzzleGoalMet(puzzleTarget, minAccuracy, puzzleSolved, puzzlePassed);
   const hasTargets = gameTarget > 0 || puzzleTarget > 0;
   return {
     gamesMet,
@@ -448,24 +477,38 @@ export function mergePlatformDayStats(
   prev: PlatformDayStats | undefined,
   next: PlatformDayStats,
 ): PlatformDayStats {
-  if (!prev) return next;
-  const lichessKept = Math.max(prev.lichessGames, next.lichessGames) > 0
-    || Math.max(prev.lichessPuzzles, next.lichessPuzzles) > 0;
-  const chessKept = Math.max(prev.chessComGames, next.chessComGames) > 0
-    || Math.max(prev.chessComPuzzles, next.chessComPuzzles) > 0;
+  if (!prev) return { ...next };
+
+  const lichessGames = Math.max(prev.lichessGames, next.lichessGames);
+  const chessComGames = Math.max(prev.chessComGames, next.chessComGames);
+  const lichessPuzzles = Math.max(prev.lichessPuzzles, next.lichessPuzzles);
+  const chessComPuzzles = Math.max(prev.chessComPuzzles, next.chessComPuzzles);
+  const lichessPuzzlePassed = Math.max(prev.lichessPuzzlePassed, next.lichessPuzzlePassed);
+  const chessComPuzzlePassed = Math.max(prev.chessComPuzzlePassed, next.chessComPuzzlePassed);
+  const lichessPuzzleFailed = Math.max(prev.lichessPuzzleFailed, next.lichessPuzzleFailed);
+  const chessComPuzzleFailed = Math.max(prev.chessComPuzzleFailed, next.chessComPuzzleFailed);
+
+  const games = Math.max(prev.games, next.games, lichessGames + chessComGames);
+  const puzzleSolved = Math.max(prev.puzzleSolved, next.puzzleSolved, lichessPuzzles + chessComPuzzles);
+  const puzzlePassed = Math.max(prev.puzzlePassed, next.puzzlePassed, lichessPuzzlePassed + chessComPuzzlePassed);
+  const puzzleFailed = Math.max(prev.puzzleFailed, next.puzzleFailed, lichessPuzzleFailed + chessComPuzzleFailed);
+
+  const lichessKept = lichessGames > 0 || lichessPuzzles > 0;
+  const chessKept = chessComGames > 0 || chessComPuzzles > 0;
+
   return {
-    games: Math.max(prev.games, next.games),
-    puzzleSolved: Math.max(prev.puzzleSolved, next.puzzleSolved),
-    puzzlePassed: Math.max(prev.puzzlePassed, next.puzzlePassed),
-    puzzleFailed: Math.max(prev.puzzleFailed, next.puzzleFailed),
-    lichessGames: Math.max(prev.lichessGames, next.lichessGames),
-    lichessPuzzles: Math.max(prev.lichessPuzzles, next.lichessPuzzles),
-    lichessPuzzlePassed: Math.max(prev.lichessPuzzlePassed, next.lichessPuzzlePassed),
-    lichessPuzzleFailed: Math.max(prev.lichessPuzzleFailed, next.lichessPuzzleFailed),
-    chessComGames: Math.max(prev.chessComGames, next.chessComGames),
-    chessComPuzzles: Math.max(prev.chessComPuzzles, next.chessComPuzzles),
-    chessComPuzzlePassed: Math.max(prev.chessComPuzzlePassed, next.chessComPuzzlePassed),
-    chessComPuzzleFailed: Math.max(prev.chessComPuzzleFailed, next.chessComPuzzleFailed),
+    games,
+    puzzleSolved,
+    puzzlePassed,
+    puzzleFailed,
+    lichessGames,
+    lichessPuzzles,
+    lichessPuzzlePassed,
+    lichessPuzzleFailed,
+    chessComGames,
+    chessComPuzzles,
+    chessComPuzzlePassed,
+    chessComPuzzleFailed,
     lichessError: next.lichessError && !lichessKept ? true : (prev.lichessError && !lichessKept ? true : undefined),
     chessComError: next.chessComError && !chessKept ? true : (prev.chessComError && !chessKept ? true : undefined),
   };

@@ -64,10 +64,13 @@ export function isDailyHomeworkDayClosed(isoDate: string, ref = new Date()): boo
 export function resolveDayCompletionStatus(
   isoDate: string,
   done: boolean,
+  hasActivity = false,
   ref = new Date(),
 ): DayCompletionStatus {
   if (done) return 'done';
-  if (isDailyHomeworkDayClosed(isoDate, ref)) return 'missed';
+  if (isDailyHomeworkDayClosed(isoDate, ref)) {
+    return hasActivity ? 'partial' : 'missed';
+  }
   if (isoDate.slice(0, 10) > todayDayKey(ref)) return 'pending';
   return 'pending';
 }
@@ -79,6 +82,8 @@ export function dayCompletionLabel(
   switch (status) {
     case 'done':
       return 'Tamam';
+    case 'partial':
+      return 'Kısmi yaptı';
     case 'missed':
       return 'Yapılmadı';
     case 'pending':
@@ -95,7 +100,7 @@ export function shiftDayKey(isoDate: string, deltaDays: number): string {
   return todayDayKey(d);
 }
 
-export type DayCompletionStatus = 'done' | 'missed' | 'pending' | 'none';
+export type DayCompletionStatus = 'done' | 'missed' | 'partial' | 'pending' | 'none';
 
 /** Haftanın pazartesi günü (öğlen, yerel) */
 export function mondayOfWeek(ref = new Date()): Date {

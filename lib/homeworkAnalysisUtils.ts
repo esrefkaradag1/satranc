@@ -12,6 +12,8 @@ export function sanitizeThinkSeconds(seconds?: number | null): number {
   return Math.round(seconds);
 }
 
+export type HomeworkStudentStatus = 'Tamamlandı' | 'Kısmi yaptı' | 'Devam Ediyor' | 'Başlamadı' | 'Yapılmadı';
+
 export type StudentHwStat = {
   studentId: string;
   name: string;
@@ -22,7 +24,7 @@ export type StudentHwStat = {
   points: number;
   timeSeconds: number;
   progress: number;
-  status: 'Tamamlandı' | 'Devam Ediyor' | 'Başlamadı' | 'Yapılmadı';
+  status: HomeworkStudentStatus;
 };
 
 /** Ödevdeki her bulmaca için doğru / yanlış / çözülmedi sayar */

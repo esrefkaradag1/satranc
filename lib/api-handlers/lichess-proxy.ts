@@ -47,7 +47,11 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     if (upstream.contentType) res.setHeader('Content-Type', upstream.contentType);
-    res.setHeader('Cache-Control', 's-maxage=90, stale-while-revalidate=180');
+    const isUserProfile = /^user\/[A-Za-z0-9_-]{1,30}$/.test(path);
+    res.setHeader(
+      'Cache-Control',
+      isUserProfile ? 's-maxage=600, stale-while-revalidate=1200' : 's-maxage=90, stale-while-revalidate=180',
+    );
     res.status(upstream.status).send(upstream.body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Lichess bağlantı hatası';

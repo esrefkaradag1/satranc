@@ -481,6 +481,8 @@ export interface InventoryItem {
   unit: string;
   status: 'Yeterli' | 'Azalıyor' | 'Kritik';
   minStock?: number;
+  /** Ürün küçük görseli (küçültülmüş data URL veya yüklenmiş URL) */
+  imageUrl?: string;
 }
 
 /** Performans analizi değerlendirme maddesi */

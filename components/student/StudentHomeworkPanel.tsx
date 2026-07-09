@@ -59,7 +59,7 @@ type HwProgress = {
   solvedCount: number;
   wrongCount: number;
   progressPct: number;
-  status: 'Başlamadı' | 'Devam Ediyor' | 'Tamamlandı' | 'Yapılmadı';
+  status: 'Başlamadı' | 'Devam Ediyor' | 'Tamamlandı' | 'Yapılmadı' | 'Kısmi yaptı';
   isOverdue: boolean;
   daysLeft: number | null;
   isUrgent: boolean;
@@ -149,6 +149,8 @@ export function buildHomeworkProgress(
     const todayClosedMissed = isDailyHomeworkDayClosed(todayKey) && hasDailyTargets && !dailyGoalsMet;
     if (weekComplete) {
       status = 'Tamamlandı';
+    } else if (todayClosedMissed && dailyStarted && !dailyGoalsMet) {
+      status = 'Kısmi yaptı';
     } else if (todayClosedMissed && !hasWeekProgress && studentAttempts.length === 0) {
       status = 'Yapılmadı';
     } else if (hasWeekProgress || studentAttempts.length > 0) {
@@ -210,6 +212,7 @@ export function buildHomeworkProgress(
 
 const STATUS_META = {
   Tamamlandı: { pill: 'bg-emerald-500/15 text-emerald-400', icon: CheckCircle2 },
+  'Kısmi yaptı': { pill: 'bg-orange-500/15 text-orange-400', icon: AlertCircle },
   'Devam Ediyor': { pill: 'bg-amber-500/15 text-amber-400', icon: Play },
   Yapılmadı: { pill: 'bg-rose-500/15 text-rose-400', icon: AlertCircle },
   Başlamadı: { pill: 'bg-slate-500/15 text-slate-400', icon: CircleDashed },
@@ -429,7 +432,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               <div className="flex flex-wrap gap-2">
                 {lichessUsername ? (
                   <a
-                    href="https://lichess.org"
+                    href={`https://lichess.org/@/${encodeURIComponent(lichessUsername)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-300 text-xs font-bold hover:bg-sky-500/25"

@@ -56,6 +56,15 @@ let lastMainLineDepth = 0;
 let lastMainLineUpdateMs = 0;
 let activeEngineScript = '';
 
+// Watchdog — sessiz donmaları (çökme hatası vermeden info üretmeyi durduran motor) yakalar
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+let lastStartMs = 0;
+let softRestartCount = 0;
+const WATCHDOG_INTERVAL_MS = 2500;
+const STALL_NO_LINES_MS = 6000;
+const STALL_WITH_LINES_MS = 14000;
+const MAX_SOFT_RESTARTS = 2;
+
 function usesLegacyDepthSearch(): boolean {
   // Eski stockfish.js (2019): go infinite info satırı vermez
   return activeEngineScript.endsWith('/stockfish.js') || activeEngineScript.endsWith('stockfish.js');
@@ -160,6 +169,9 @@ function handleMessage(line: string) {
         if (idx === 0) {
           lastMainLineDepth = parsed.depth;
           lastMainLineUpdateMs = Date.now();
+          // Motor sağlıklı üretiyor — geçici çökme sayaçlarını sıfırla
+          softRestartCount = 0;
+          recoveryRetryCount = 0;
         }
         emitLines();
         const valid = next.filter((l): l is PvLine => l !== null);
@@ -319,6 +331,70 @@ async function doStartAnalysis(fen: string): Promise<void> {
   worker.postMessage(`position fen ${fen}`);
   worker.postMessage(usesLegacyDepthSearch() ? 'go depth 18' : 'go infinite');
   analysisRunning = true;
+  lastStartMs = Date.now();
+  startWatchdog();
+}
+
+function startWatchdog(): void {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(checkEngineHealth, WATCHDOG_INTERVAL_MS);
+}
+
+function stopWatchdog(): void {
+  if (watchdogTimer) {
+    clearInterval(watchdogTimer);
+    watchdogTimer = null;
+  }
+}
+
+/**
+ * Motor "hazır" göründüğü halde info üretmeden donduğunda (sessiz çökme) devreye girer.
+ * Önce yumuşak restart (position + go tekrar), tekrarlarsa worker'ı komple yeniden kurar.
+ */
+function checkEngineHealth(): void {
+  if (subscriberCount === 0) {
+    stopWatchdog();
+    return;
+  }
+  if (!worker || !ready || !analysisRunning || !lastFen) return;
+  // Mat/pat gibi terminal konumlar aramaz — donma sayılmaz
+  if (getTerminalEval(lastFen)) return;
+
+  const filled = pvLines.filter((l): l is PvLine => l !== null).length;
+  const sinceProgress = Date.now() - Math.max(lastMainLineUpdateMs, lastStartMs);
+  const stalled = filled === 0 ? sinceProgress > STALL_NO_LINES_MS : sinceProgress > STALL_WITH_LINES_MS;
+  if (!stalled) return;
+
+  if (softRestartCount < MAX_SOFT_RESTARTS) {
+    softRestartCount += 1;
+    log(`Watchdog: motor donmuş görünüyor, yumuşak yeniden başlatma (${softRestartCount}/${MAX_SOFT_RESTARTS})`);
+    try {
+      worker.postMessage('stop');
+      worker.postMessage(`position fen ${lastFen}`);
+      worker.postMessage(usesLegacyDepthSearch() ? 'go depth 18' : 'go infinite');
+      analysisRunning = true;
+      lastStartMs = Date.now();
+    } catch {
+      hardRestartEngine();
+    }
+    return;
+  }
+
+  log('Watchdog: motor yanıt vermiyor, worker yeniden kuruluyor.');
+  hardRestartEngine();
+}
+
+function hardRestartEngine(): void {
+  softRestartCount = 0;
+  const fenToResume = lastFen;
+  resetEngineState();
+  emitError('Motor yeniden başlatılıyor...');
+  void initAnalysis().then((ok) => {
+    if (ok) {
+      emitReady();
+      if (fenToResume) startAnalysis(fenToResume, true);
+    }
+  });
 }
 
 function tryCreate(url: string, timeoutMs = 12000): Promise<Worker> {
@@ -496,6 +572,7 @@ export function stopAnalysis(force = false): void {
     analysisDebounceTimer = null;
   }
   clearStopWait();
+  stopWatchdog();
   pendingFen = null;
   if (!worker) return;
   if (analysisRunning) {
@@ -506,6 +583,7 @@ export function stopAnalysis(force = false): void {
 
 function resetEngineState(): void {
   clearStopWait();
+  stopWatchdog();
   analysisGeneration += 1;
   try { worker?.terminate(); } catch {}
   worker = null;

@@ -26,6 +26,8 @@ function completionStyles(status: DayCompletionStatus): string {
   switch (status) {
     case 'done':
       return 'border-emerald-500/45 bg-emerald-500/10';
+    case 'partial':
+      return 'border-orange-500/45 bg-orange-500/10';
     case 'missed':
       return 'border-rose-500/45 bg-rose-500/10';
     case 'pending':
@@ -94,6 +96,9 @@ export const StudentWeeklyHomeworkGrid: React.FC<Props> = ({
       puzzleTarget: number;
       games: number;
       puzzles: number;
+      puzzleSolved: number;
+      accuracy: number;
+      minAccuracy: number;
       status: DayCompletionStatus;
       isToday: boolean;
     }> = [];
@@ -106,7 +111,8 @@ export const StudentWeeklyHomeworkGrid: React.FC<Props> = ({
       const platform = weekStatsByDate[iso];
       const evalResult = evaluatePlatformDayGoalsFromStats(gameTarget, puzzleTarget, minAccuracy, platform);
       const isFuture = iso > todayKey;
-      const status = isFuture ? 'pending' : resolveDayCompletionStatus(iso, evalResult.done);
+      const hasActivity = evalResult.games > 0 || evalResult.puzzleSolved > 0;
+      const status = isFuture ? 'pending' : resolveDayCompletionStatus(iso, evalResult.done, hasActivity);
 
       rows.push({
         day,
@@ -117,6 +123,9 @@ export const StudentWeeklyHomeworkGrid: React.FC<Props> = ({
         puzzleTarget,
         games: evalResult.games,
         puzzles: evalResult.puzzleSolved,
+        puzzleSolved: evalResult.puzzleSolved,
+        accuracy: evalResult.puzzleAccuracy,
+        minAccuracy,
         status,
         isToday: iso === todayKey,
       });
@@ -154,10 +163,24 @@ export const StudentWeeklyHomeworkGrid: React.FC<Props> = ({
                 Bulmaca <span className="font-bold text-white tabular-nums">{Math.min(row.puzzles, row.puzzleTarget)}/{row.puzzleTarget}</span>
               </p>
             ) : null}
+            {row.puzzleTarget > 0 && row.puzzleSolved > 0 ? (
+              <p className="text-[10px] text-slate-300">
+                Bulmaca doğruluk{' '}
+                <span
+                  className={`font-bold tabular-nums ${
+                    row.minAccuracy > 0 && row.accuracy < row.minAccuracy ? 'text-rose-400' : 'text-emerald-400'
+                  }`}
+                >
+                  %{Math.round(row.accuracy)}
+                </span>
+                {row.minAccuracy > 0 ? <span className="text-slate-500"> / %{row.minAccuracy}</span> : null}
+              </p>
+            ) : null}
             <span className={`mt-auto text-[9px] font-bold uppercase ${
               row.status === 'done' ? 'text-emerald-400'
-                : row.status === 'missed' ? 'text-rose-400'
-                  : 'text-amber-300'
+                : row.status === 'partial' ? 'text-orange-400'
+                  : row.status === 'missed' ? 'text-rose-400'
+                    : 'text-amber-300'
             }`}>
               {completionLabel(row.status, row.isToday)}
             </span>

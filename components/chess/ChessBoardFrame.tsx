@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React from 'react';
 import { EVAL_BAR_DECISIVE_SCORE, evalBarWhitePercent, formatEvalLabel } from '../../lib/chessBoardUi';
 
 const RANK_SIZE = '1.25rem';
@@ -36,41 +36,9 @@ export function ChessEvalBar({
   pending = false,
 }: EvalBarProps) {
   const targetH = whitePercent ?? evalBarWhitePercent(score);
-  const [smoothH, setSmoothH] = useState(targetH);
-  const smoothRef = useRef(targetH);
-
-  useEffect(() => {
-    smoothRef.current = smoothH;
-  }, [smoothH]);
-
-  useEffect(() => {
-    if (pending) return;
-    let frame = 0;
-    let cancelled = false;
-
-    const step = () => {
-      if (cancelled) return;
-      const diff = targetH - smoothRef.current;
-      if (Math.abs(diff) < 0.12) {
-        smoothRef.current = targetH;
-        setSmoothH(targetH);
-        return;
-      }
-      const next = smoothRef.current + diff * 0.12;
-      smoothRef.current = next;
-      setSmoothH(next);
-      frame = requestAnimationFrame(step);
-    };
-
-    frame = requestAnimationFrame(step);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(frame);
-    };
-  }, [targetH, pending]);
-
-  const whiteH = pending ? targetH : smoothH;
-  const blackH = 100 - whiteH;
+  // Lichess (lila) ile birebir: siyah segment yüksekliği CSS geçişiyle (transition: height 1s)
+  // yumuşakça kayar. JS lerp yok — motor değeri güncellenince bar ~1sn içinde hedefe akar.
+  const blackH = 100 - targetH;
   const flipped = orientation === 'black';
   const display = label ?? formatEvalLabel(score);
   return (
@@ -84,7 +52,10 @@ export function ChessEvalBar({
       <div className={`flex-1 min-h-0 w-full flex ${flipped ? 'flex-col-reverse' : 'flex-col'}`}>
         <div
           className={`${darkClassName} shrink-0`}
-          style={{ height: `${blackH}%` }}
+          style={{
+            height: `${blackH}%`,
+            transition: pending ? 'none' : 'height 1s cubic-bezier(0.4, 0, 0.2, 1)',
+          }}
           title="Siyah avantajı"
           aria-hidden
         />

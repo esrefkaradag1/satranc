@@ -55,6 +55,7 @@ import {
   fetchLichessUser,
   fetchLichessGamesPage,
   fetchLichessActivity,
+  lichessUserLikelyRateLimited,
   fetchChessComPlayer,
   fetchChessComStats,
   fetchChessComMemberStats,
@@ -118,6 +119,7 @@ import {
   findLessonPackageByName,
   findTrainingGroupByName,
   formatLessonSchedule,
+  resolveStudentLessonSchedule,
   getBaseMonthlyFeeForStudent,
   getExpectedDueForMonth,
   getExpectedDuesForYear,
@@ -185,7 +187,10 @@ function initials(name: string) {
 
 function formatPhone(digits?: string) {
  if (!digits) return'—';
- const v = digits.replace(/[^\d]/g, '');
+ let v = digits.replace(/\D/g, '');
+ if (v.startsWith('90') && v.length >= 12) v = v.slice(2);
+ if (v.startsWith('0') && v.length === 11) v = v.slice(1);
+ v = v.slice(0, 10);
  if (v.length < 10) return digits;
  const p1 = v.slice(0, 3);
  const p2 = v.slice(3, 6);
@@ -341,6 +346,7 @@ const LichessChessCard: React.FC<{
   const [chessComGames, setChessComGames] = useState<ChessComGame[]>([]);
   const [loadingLichess, setLoadingLichess] = useState(false);
   const [loadingLichessGames, setLoadingLichessGames] = useState(false);
+  const [lichessLoadError, setLichessLoadError] = useState<'rate_limit' | 'not_found' | null>(null);
   const [lichessGamesProgress, setLichessGamesProgress] = useState(0);
   const [lichessNextUntil, setLichessNextUntil] = useState<number | null>(null);
   const [lichessHasMore, setLichessHasMore] = useState(false);
@@ -396,12 +402,14 @@ const LichessChessCard: React.FC<{
       setLichessGames([]);
       setLichessGamesProgress(0);
       setLichessNextUntil(null);
+      setLichessLoadError(null);
       try {
-        const [profile, activity] = await Promise.all([
-          fetchLichessUser(un),
-          fetchLichessActivity(un)
-        ]);
+        const profile = await fetchLichessUser(un);
         setLichessProfile(profile ?? null);
+        if (!profile) {
+          setLichessLoadError(lichessUserLikelyRateLimited(un) ? 'rate_limit' : 'not_found');
+        }
+        const activity = await fetchLichessActivity(un);
         setLichessActivities(activity ?? []);
       } finally {
         setLoadingLichess(false);
@@ -677,7 +685,15 @@ const LichessChessCard: React.FC<{
                   />
                 </>
           ) : (
-            <div className="rounded-xl bg-slate-800/40 border border-slate-700/60 p-4 text-sm text-slate-500">Profil bulunamadı veya kullanıcı adı yanlış.</div>
+            <div className="rounded-xl bg-slate-800/40 border border-slate-700/60 p-4 text-sm text-slate-500">
+              {lichessLoadError === 'rate_limit' ? (
+                <>
+                  Lichess geçici istek limitine takıldı. Birkaç dakika sonra <span className="text-sky-400 font-medium">Yenile</span> ile tekrar deneyin.
+                </>
+              ) : (
+                <>Profil bulunamadı veya kullanıcı adı yanlış.</>
+              )}
+            </div>
           )}
         </div>
           ) : (
@@ -2609,7 +2625,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
  <KV label="Şube" value={student.branchOffice || '—'} />
  <KV label="Branş" value={student.branch || '—'} />
  <KV label="Grup" value={student.group || '—'} />
- <KV label="Ders programı" value={formatLessonSchedule(student.lessonSchedule)} />
+ <KV label="Ders programı" value={formatLessonSchedule(resolveStudentLessonSchedule(student, trainingGroups))} />
  </div>
  <button
    type="button"

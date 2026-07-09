@@ -11,6 +11,7 @@ import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentA
 import { apiLocalAuthParentLogin } from './services/backendApi';
 import { findClubForLogin } from './lib/clubLoginUtils';
 import { createStudentLoginCredentials } from './lib/studentCredentials';
+import { lessonLogEntriesMaxTs } from './lib/lessonLogUtils';
 import {
   type BranchOfficeRecord,
   branchOfficeToDb,
@@ -375,6 +376,12 @@ function restoreStudentLoginColumnsInSchema() {
 
 const LESSON_LOG_STORAGE_KEY = 'netchess_lesson_logs';
 const GROUP_LESSON_LOG_STORAGE_KEY = 'netchess_group_lesson_logs';
+const GROUP_LESSON_LOG_UPDATED_KEY = 'netchess_group_lesson_logs_updated';
+
+type GroupLessonLogDbBundle = {
+  entries: StudentLessonLogEntry[];
+  updatedAt: string | null;
+};
 
 function loadGroupLessonLogsMap(): Record<string, StudentLessonLogEntry[]> {
   try {
@@ -392,32 +399,109 @@ function loadGroupLessonLogsMap(): Record<string, StudentLessonLogEntry[]> {
   }
 }
 
-function persistGroupLessonLogLocal(groupKey: string, entries: StudentLessonLogEntry[]) {
+function loadGroupLessonLogsUpdatedMap(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(GROUP_LESSON_LOG_UPDATED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof val === 'string' && val.trim()) out[key] = val;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function persistGroupLessonLogLocal(
+  groupKey: string,
+  entries: StudentLessonLogEntry[],
+  updatedAt = new Date().toISOString(),
+) {
   const map = loadGroupLessonLogsMap();
   map[groupKey] = entries;
+  const meta = loadGroupLessonLogsUpdatedMap();
+  meta[groupKey] = updatedAt;
   try {
     localStorage.setItem(GROUP_LESSON_LOG_STORAGE_KEY, JSON.stringify(map));
+    localStorage.setItem(GROUP_LESSON_LOG_UPDATED_KEY, JSON.stringify(meta));
   } catch { /* quota */ }
 }
 
+function groupLessonLogBundleTs(
+  entries: StudentLessonLogEntry[],
+  updatedAt: string | null | undefined,
+): number {
+  const metaTs = Date.parse(updatedAt ?? '');
+  if (Number.isFinite(metaTs) && metaTs > 0) return metaTs;
+  return lessonLogEntriesMaxTs(entries);
+}
+
+function ensureGroupLessonLogsUpdatedMeta(
+  entries: Record<string, StudentLessonLogEntry[]>,
+  meta: Record<string, string>,
+): Record<string, string> {
+  const next = { ...meta };
+  let changed = false;
+  const now = new Date().toISOString();
+  for (const key of Object.keys(entries)) {
+    if (!next[key]) {
+      next[key] = now;
+      changed = true;
+    }
+  }
+  if (changed) {
+    try {
+      localStorage.setItem(GROUP_LESSON_LOG_UPDATED_KEY, JSON.stringify(next));
+    } catch { /* quota */ }
+  }
+  return next;
+}
+
+function resolveLocalGroupLessonTs(
+  key: string,
+  local: StudentLessonLogEntry[],
+  localEntries: Record<string, StudentLessonLogEntry[]>,
+  localUpdated: Record<string, string>,
+): number {
+  const metaTs = Date.parse(localUpdated[key] ?? '');
+  if (Number.isFinite(metaTs) && metaTs > 0) return metaTs;
+  if (Object.prototype.hasOwnProperty.call(localEntries, key)) {
+    // Yerel kayıt var; konu tarihleri DB updated_at ile yarışamaz
+    return lessonLogEntriesMaxTs(local) + 86_400_000;
+  }
+  return lessonLogEntriesMaxTs(local);
+}
+
 function mergeGroupLessonLogsMaps(
-  a: Record<string, StudentLessonLogEntry[]>,
-  b: Record<string, StudentLessonLogEntry[]>,
+  localEntries: Record<string, StudentLessonLogEntry[]>,
+  localUpdated: Record<string, string>,
+  fromDb: Record<string, GroupLessonLogDbBundle>,
 ): Record<string, StudentLessonLogEntry[]> {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  const keys = new Set([...Object.keys(localEntries), ...Object.keys(fromDb)]);
   const out: Record<string, StudentLessonLogEntry[]> = {};
   for (const key of keys) {
-    out[key] = mergeLessonLogEntries(a[key] ?? [], b[key] ?? []);
+    const local = localEntries[key] ?? [];
+    const dbBundle = fromDb[key];
+    const db = dbBundle?.entries ?? [];
+    const localTs = resolveLocalGroupLessonTs(key, local, localEntries, localUpdated);
+    const dbTs = groupLessonLogBundleTs(db, dbBundle?.updatedAt ?? null);
+    out[key] = localTs >= dbTs ? local : db;
   }
   return out;
 }
 
-function groupLessonLogsFromDbRows(rows: Record<string, unknown>[]): Record<string, StudentLessonLogEntry[]> {
-  const out: Record<string, StudentLessonLogEntry[]> = {};
+function groupLessonLogsFromDbRows(rows: Record<string, unknown>[]): Record<string, GroupLessonLogDbBundle> {
+  const out: Record<string, GroupLessonLogDbBundle> = {};
   for (const row of rows) {
     const name = String(row.group_name ?? '').trim();
     if (!name) continue;
-    out[name] = parseLessonLogFromDb(row.entries);
+    out[name] = {
+      entries: parseLessonLogFromDb(row.entries),
+      updatedAt: row.updated_at != null ? String(row.updated_at) : null,
+    };
   }
   return out;
 }
@@ -435,9 +519,9 @@ function isMissingSupabaseTableError(error: { code?: string; message?: string } 
 
 async function loadGroupLessonLogsFromSupabase(
   sb: NonNullable<ReturnType<typeof getServiceSupabase>> | typeof supabase,
-): Promise<Record<string, StudentLessonLogEntry[]>> {
+): Promise<Record<string, GroupLessonLogDbBundle>> {
   try {
-    const { data, error } = await sb.from('group_lesson_logs').select('group_name, entries');
+    const { data, error } = await sb.from('group_lesson_logs').select('group_name, entries, updated_at');
     if (error) {
       if (!isMissingSupabaseTableError(error)) {
         console.warn('[Supabase] group_lesson_logs yükleme:', error.message);
@@ -452,9 +536,28 @@ async function loadGroupLessonLogsFromSupabase(
 }
 
 function applyGroupLessonLogsMerge(
-  fromDb: Record<string, StudentLessonLogEntry[]>,
+  fromDb: Record<string, GroupLessonLogDbBundle>,
 ): Record<string, StudentLessonLogEntry[]> {
-  return mergeGroupLessonLogsMaps(loadGroupLessonLogsMap(), fromDb);
+  const localEntries = loadGroupLessonLogsMap();
+  const localUpdated = ensureGroupLessonLogsUpdatedMeta(localEntries, loadGroupLessonLogsUpdatedMap());
+  const merged = mergeGroupLessonLogsMaps(localEntries, localUpdated, fromDb);
+  const nextMeta: Record<string, string> = { ...localUpdated };
+  for (const key of new Set([...Object.keys(merged), ...Object.keys(fromDb)])) {
+    const local = localEntries[key] ?? [];
+    const dbBundle = fromDb[key];
+    const db = dbBundle?.entries ?? [];
+    const localTs = resolveLocalGroupLessonTs(key, local, localEntries, localUpdated);
+    const dbTs = groupLessonLogBundleTs(db, dbBundle?.updatedAt ?? null);
+    nextMeta[key] =
+      localTs >= dbTs
+        ? (localUpdated[key] ?? new Date().toISOString())
+        : (dbBundle?.updatedAt ?? new Date().toISOString());
+  }
+  try {
+    localStorage.setItem(GROUP_LESSON_LOG_STORAGE_KEY, JSON.stringify(merged));
+    localStorage.setItem(GROUP_LESSON_LOG_UPDATED_KEY, JSON.stringify(nextMeta));
+  } catch { /* quota */ }
+  return merged;
 }
 
 async function migrateLocalGroupLessonLogsToSupabase(
@@ -462,16 +565,17 @@ async function migrateLocalGroupLessonLogsToSupabase(
   merged: Record<string, StudentLessonLogEntry[]>,
 ): Promise<void> {
   const local = loadGroupLessonLogsMap();
-  const keys = Object.keys(local).filter((k) => (local[k]?.length ?? 0) > 0);
+  const localUpdated = loadGroupLessonLogsUpdatedMap();
+  const keys = Object.keys(local).filter((k) => Object.prototype.hasOwnProperty.call(local, k));
   if (keys.length === 0) return;
   for (const key of keys) {
-    const entries = merged[key] ?? [];
-    if (entries.length === 0) continue;
+    const entries = merged[key] ?? local[key] ?? [];
+    const updatedAt = localUpdated[key] ?? new Date().toISOString();
     const { error } = await sb.from('group_lesson_logs').upsert(
       {
         group_name: key,
         entries,
-        updated_at: new Date().toISOString(),
+        updated_at: updatedAt,
       },
       { onConflict: 'group_name' },
     );
@@ -1185,6 +1289,7 @@ function dbToHomeworkAttempt(row: Record<string, unknown>): HomeworkPuzzleAttemp
 }
 
 function mergeHomeworkAttemptsFromStorage(fromDb: HomeworkPuzzleAttempt[]): HomeworkPuzzleAttempt[] {
+  if (isSupabaseBackend()) return fromDb;
   let localAttempts: HomeworkPuzzleAttempt[] = [];
   try {
     const raw = localStorage.getItem('netchess_homework_attempts');
@@ -1524,9 +1629,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [lessonPackages, setLessonPackages] = useState<LessonPackage[]>(() =>
     useSupabase ? [] : loadJSON<LessonPackage[]>('netchess_lesson_packages', []),
   );
-  const [groupLessonLogs, setGroupLessonLogs] = useState<Record<string, StudentLessonLogEntry[]>>(() =>
-    loadGroupLessonLogsMap()
-  );
+  const [groupLessonLogs, setGroupLessonLogs] = useState<Record<string, StudentLessonLogEntry[]>>(() => {
+    const entries = loadGroupLessonLogsMap();
+    ensureGroupLessonLogsUpdatedMeta(entries, loadGroupLessonLogsUpdatedMap());
+    return entries;
+  });
 
   const DEFAULT_CLUBS: Club[] = [
     {
@@ -1633,7 +1740,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const scopedStudents = useMemo(
-    () => resolveScopedStudents(auth, students, trainingGroups, coaches, branchOfficeRecords, clubs),
+    () =>
+      resolveScopedStudents(auth, students, trainingGroups, coaches, branchOfficeRecords, clubs)
+        .slice()
+        .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'tr')),
     [auth, students, trainingGroups, coaches, branchOfficeRecords, clubs],
   );
 
@@ -1956,6 +2066,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [students, useSupabase]);
 
   const [apiStudent, setApiStudent] = useState<Student | null>(() => {
+    if (isSupabaseBackend()) return null;
     try {
       const raw = localStorage.getItem('netchess_api_student');
       return raw ? (JSON.parse(raw) as Student) : null;
@@ -1965,6 +2076,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   useEffect(() => {
+    if (isSupabaseBackend()) return;
     if (apiStudent) localStorage.setItem('netchess_api_student', JSON.stringify(apiStudent));
     else try { localStorage.removeItem('netchess_api_student'); } catch { /* ignore */ }
   }, [apiStudent]);
@@ -2455,7 +2567,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (hydrated.current) {
       try {
+        const meta = loadGroupLessonLogsUpdatedMap();
         localStorage.setItem(GROUP_LESSON_LOG_STORAGE_KEY, JSON.stringify(groupLessonLogs));
+        localStorage.setItem(GROUP_LESSON_LOG_UPDATED_KEY, JSON.stringify(meta));
       } catch { /* quota */ }
     }
   }, [groupLessonLogs]);
@@ -4118,16 +4232,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateGroupLessonLog = useCallback(async (groupKey: string, entries: StudentLessonLogEntry[]) => {
     const key = groupKey.trim();
     if (!key) return;
+    const updatedAt = new Date().toISOString();
     setGroupLessonLogs((prev) => ({ ...prev, [key]: entries }));
-    persistGroupLessonLogLocal(key, entries);
+    persistGroupLessonLogLocal(key, entries, updatedAt);
 
-    const sb = getServiceSupabase();
-    if (sb) {
+    const sb = getServiceSupabase() ?? supabase;
+    if (isSupabaseBackend()) {
       const { error } = await sb.from('group_lesson_logs').upsert(
         {
           group_name: key,
           entries,
-          updated_at: new Date().toISOString(),
+          updated_at: updatedAt,
         },
         { onConflict: 'group_name' },
       );

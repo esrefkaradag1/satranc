@@ -17,7 +17,7 @@ import {
 import { lichessProxyRequest } from './lib/lichessProxyThrottle.mjs';
 import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
 import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
-import { trainingNotifyHandler, startTrainingNotifyScheduler } from './lib/trainingWhatsAppNotify.mjs';
+import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
 
 const DEV_GET_ROUTES = new Set([
   '/api/site-messages',
@@ -121,17 +121,18 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 if (!username || !year || !month) {
                   result = { status: 200, body: { games: [], unavailable: true } };
                 } else {
-                  const mm = month.padStart(2, '0');
-                  const upstream = await fetch(
-                    `https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/${year}/${mm}`,
-                    {
-                      headers: { Accept: 'application/json', 'User-Agent': 'NetChessAcademy/1.0' },
-                      signal: AbortSignal.timeout(15000),
-                    },
-                  );
-                  result = upstream.ok
-                    ? { status: 200, body: await upstream.json() }
-                    : { status: 200, body: { games: [], unavailable: true, upstreamStatus: upstream.status } };
+                  const monthResult = await fetchChessComMonthGames(username, year, month);
+                  result = {
+                    status: 200,
+                    body: monthResult.unavailable
+                      ? {
+                          games: [],
+                          unavailable: true,
+                          upstreamStatus: monthResult.upstreamStatus,
+                          error: monthResult.error ?? 'Chess.com oyun arşivi alınamadı',
+                        }
+                      : { games: monthResult.games, source: monthResult.source },
+                  };
                 }
               } else if (route === '/api/lichess-oauth-status') {
                 result = await lichessOAuthStatusViaEnv(parsed.searchParams.get('studentId'), env);

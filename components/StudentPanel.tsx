@@ -49,7 +49,8 @@ import StudentPuzzlePlayModal from './StudentPuzzlePlayModal';
 import StudentStudyView from './StudentStudyView';
 import LiveLesson, { type LiveLessonRoom } from './LiveLesson';
 import ScheduleWeeklyView from './ScheduleWeeklyView';
-import { filterLessonsToActiveGroups } from '../lib/syncGroupLessons';
+import { filterLessonsToActiveGroups, isTrainingGroupLessonId, trainingGroupIdFromLessonId } from '../lib/syncGroupLessons';
+import { findTrainingGroupForStudent, hasCustomLessonSchedule, WEEKDAY_OPTIONS } from '../lib/trainingGroupUtils';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
 import { LeaderboardPreview } from './leaderboard/LeaderboardPreview';
 import { StudentSummaryDashboard } from './student/StudentSummaryDashboard';
@@ -140,7 +141,10 @@ function initials(name: string) {
 
 function formatPhone(digits?: string) {
   if (!digits) return 'Belirtilmemiş';
-  const v = digits.replace(/[^\d]/g, '');
+  let v = digits.replace(/\D/g, '');
+  if (v.startsWith('90') && v.length >= 12) v = v.slice(2);
+  if (v.startsWith('0') && v.length === 11) v = v.slice(1);
+  v = v.slice(0, 10);
   if (v.length < 10) return digits;
   return `0${v.slice(0, 3)} ${v.slice(3, 6)} ${v.slice(6, 8)} ${v.slice(8, 10)}`;
 }
@@ -165,7 +169,7 @@ function ageFromBirthDate(iso?: string): number | null {
 
 type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages';
 
-const STUDENT_PANEL_REFRESH_TABS = new Set<PanelTab>(['summary', 'payments', 'dues', 'attendance', 'profile', 'analyses', 'private-lesson']);
+const STUDENT_PANEL_REFRESH_TABS = new Set<PanelTab>(['summary', 'schedule', 'payments', 'dues', 'attendance', 'profile', 'analyses', 'private-lesson']);
 
 /** Veli panelinde sidebar'dan gizlenecek öğrenci eğitim sekmeleri (izin verilse bile) */
 const PARENT_HIDDEN_TAB_IDS = new Set<PanelTab>([
@@ -404,29 +408,36 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   const studentWeeklyLessons = useMemo(() => {
     if (!student) return [];
-    
-    // If student has a customized lessonSchedule, use it
-    if (student.lessonSchedule && student.lessonSchedule.length > 0) {
+
+    const privateLessons = lessons.filter((l) => String(l.studentId ?? '') === String(student.id));
+    const trainingGroup = findTrainingGroupForStudent(student, trainingGroups);
+    const useCustomSchedule = hasCustomLessonSchedule(student, trainingGroups);
+
+    if (useCustomSchedule && student.lessonSchedule?.length) {
       const customLessons = student.lessonSchedule.map((slot, idx) => ({
         id: `custom-slot-${student.id}-${idx}`,
-        day: slot.dayLabel || (slot.dayOfWeek === 1 ? 'Pazartesi' : slot.dayOfWeek === 2 ? 'Salı' : slot.dayOfWeek === 3 ? 'Çarşamba' : slot.dayOfWeek === 4 ? 'Perşembe' : slot.dayOfWeek === 5 ? 'Cuma' : slot.dayOfWeek === 6 ? 'Cumartesi' : 'Pazar'),
+        day:
+          slot.dayLabel?.trim() ||
+          WEEKDAY_OPTIONS.find((d) => d.value === slot.dayOfWeek)?.label ||
+          'Pazartesi',
         startTime: slot.startTime || '13:00',
         endTime: slot.endTime || '18:30',
         group: student.group || '',
         topic: student.group || 'Ders',
       }));
-      
-      // Combine with private lessons for this student
-      const privateLessons = lessons.filter((l) => String(l.studentId ?? '') === String(student.id));
       return [...customLessons, ...privateLessons];
     }
-    
-    // Otherwise, fallback to the group's default lessons
-    return filterLessonsToActiveGroups(lessons, trainingGroups).filter((l) => {
-      if (l.studentId) return String(l.studentId) === String(studentId);
+
+    const groupLessons = filterLessonsToActiveGroups(lessons, trainingGroups).filter((l) => {
+      if (l.studentId) return false;
+      if (trainingGroup && isTrainingGroupLessonId(l.id)) {
+        return trainingGroupIdFromLessonId(l.id) === trainingGroup.id;
+      }
       return (l.group || '').trim().toLowerCase() === (student.group || '').trim().toLowerCase();
     });
-  }, [student, lessons, trainingGroups, studentId]);
+
+    return [...groupLessons, ...privateLessons];
+  }, [student, lessons, trainingGroups]);
 
   const refreshTodayExternalStats = useCallback(async () => {
     if (!student) {
@@ -488,7 +499,14 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       }
       weekPlatformStatsRef.current = nextWeek;
       setWeekPlatformStatsByDate(nextWeek);
-      const stats = nextWeek[todayKey] ?? await fetchStudentPlatformDayStats(student, todayKey);
+      let stats = nextWeek[todayKey];
+      if (!stats) {
+        const freshToday = await fetchStudentPlatformDayStats(student, todayKey);
+        stats = mergePlatformDayStats(undefined, freshToday);
+        nextWeek[todayKey] = stats;
+        weekPlatformStatsRef.current = nextWeek;
+        setWeekPlatformStatsByDate({ ...nextWeek });
+      }
       setTodayExternalGameCount(stats.games);
       setTodayExternalPuzzleCount(stats.puzzleSolved);
       setTodayExternalPuzzlePassed(stats.puzzlePassed);
@@ -501,10 +519,15 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         setExternalStatsNote(syncNote);
       }
     } catch {
-      setTodayExternalGameCount(0);
-      setTodayExternalPuzzleCount(0);
-      setTodayExternalPuzzlePassed(0);
-      setExternalStatsNote('Platform verisi alınamadı. Biraz sonra yeniden deneyin.');
+      const todayKey = todayDayKey();
+      const kept = weekPlatformStatsRef.current[todayKey];
+      if (kept) {
+        setTodayExternalGameCount(kept.games);
+        setTodayExternalPuzzleCount(kept.puzzleSolved);
+        setTodayExternalPuzzlePassed(kept.puzzlePassed);
+        setWeekPlatformStatsByDate({ ...weekPlatformStatsRef.current });
+      }
+      setExternalStatsNote('Platform verisi alınamadı; önceki kayıtlar korundu. Biraz sonra yeniden deneyin.');
     } finally {
       setLoadingExternalGameCount(false);
       setPlatformStatsFetched(true);

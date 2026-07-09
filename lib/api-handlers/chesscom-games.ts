@@ -1,3 +1,5 @@
+import { fetchChessComMonthGames } from '../chesscomMonthGamesFetch';
+
 type Req = { query: Record<string, string | string[] | undefined> };
 type Res = {
   status(code: number): { json(body: unknown): void; end(): void };
@@ -23,30 +25,22 @@ export default async function handler(req: Req, res: Res) {
     return;
   }
 
-  const mm = month.padStart(2, '0');
-  const url = `https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/${year}/${mm}`;
+  const result = await fetchChessComMonthGames(username, year, month);
 
-  try {
-    const upstream = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': 'NetChessAcademy/1.0' },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!upstream.ok) {
-      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
-      res.status(200).json({
-        games: [],
-        unavailable: true,
-        upstreamStatus: upstream.status,
-        error: 'Chess.com oyun arşivi alınamadı',
-      });
-      return;
-    }
-    const data = await upstream.json();
-    res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300');
-    res.status(200).json(data);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Chess.com bağlantı hatası';
+  if (result.unavailable) {
     res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
-    res.status(200).json({ games: [], unavailable: true, error: msg });
+    res.status(200).json({
+      games: [],
+      unavailable: true,
+      upstreamStatus: result.upstreamStatus,
+      error: result.error ?? 'Chess.com oyun arşivi alınamadı',
+    });
+    return;
   }
+
+  res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300');
+  res.status(200).json({
+    games: result.games,
+    source: result.source,
+  });
 }

@@ -58,13 +58,24 @@ export function emptyLessonLogDraft(): StudentLessonLogEntry {
   };
 }
 
+export function lessonLogEntriesMaxTs(entries: StudentLessonLogEntry[]): number {
+  let max = 0;
+  for (const e of entries) {
+    const ts = Date.parse(e.updatedAt ?? e.createdAt ?? '') || 0;
+    if (ts > max) max = ts;
+  }
+  return max;
+}
+
 /** Grup kaydı yokken öğrenci bazlı ders günlüklerinden tek listeye birleştirir */
 export function mergeGroupLessonLogsFromStudents(
   groupName: string,
   students: { group?: string; lessonLog?: StudentLessonLogEntry[] }[],
   existing: StudentLessonLogEntry[],
+  /** Grup için kayıt oluşturulduysa (boş liste dahil) öğrenci günlüklerinden geri doldurma */
+  groupLogInitialized = false,
 ): StudentLessonLogEntry[] {
-  if (existing.length > 0) return existing;
+  if (groupLogInitialized || existing.length > 0) return existing;
   const seen = new Set<string>();
   const merged: StudentLessonLogEntry[] = [];
   for (const s of students) {

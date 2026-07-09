@@ -82,11 +82,29 @@ async function chessComGamesFetch(username: string, year: string, month: string)
   const q = new URLSearchParams({ username: username.toLowerCase(), year, month: mm });
   return fetchWithTimeout(`/api/chesscom-games?${q}`, { headers: { Accept: 'application/json' } });
 }
+
+async function fetchChessComMonthGamesViaProxy(
+  username: string,
+  year: string,
+  month: string,
+): Promise<ChessComGame[]> {
+  const trimmed = normalizeChessComUsername(username);
+  if (!trimmed) return [];
+  try {
+    const res = await chessComGamesFetch(trimmed, year, month);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { games?: ChessComGame[] };
+    return data.games ?? [];
+  } catch {
+    return [];
+  }
+}
 const LICHESS_ACTIVITY_CACHE_TTL_MS = 5 * 60 * 1000;
 const LICHESS_ACTIVITY_RATE_LIMIT_MS = 5 * 60 * 1000;
+const LICHESS_USER_CACHE_TTL_MS = 10 * 60 * 1000;
 /** Lichess public API — ardışık istekler arası minimum süre (429 önleme) */
-const LICHESS_MIN_REQUEST_GAP_MS = 1200;
-const LICHESS_GLOBAL_BACKOFF_MS = 90_000;
+const LICHESS_MIN_REQUEST_GAP_MS = 1400;
+const LICHESS_GLOBAL_BACKOFF_MS = 45_000;
 const CHESSCOM_API = CHESSCOM_DIRECT_API;
 
 let lichessRequestChain: Promise<unknown> = Promise.resolve();
@@ -129,6 +147,15 @@ type LichessActivityCacheEntry = {
 
 const lichessActivityCache = new Map<string, LichessActivityCacheEntry>();
 const lichessActivityInFlight = new Map<string, Promise<LichessActivity[]>>();
+
+type LichessUserCacheEntry = {
+  fetchedAt: number;
+  profile: LichessUserProfile | null;
+  rateLimited?: boolean;
+};
+
+const lichessUserCache = new Map<string, LichessUserCacheEntry>();
+const lichessUserInFlight = new Map<string, Promise<LichessUserProfile | null>>();
 
 function lichessActivityCacheKey(username: string): string {
   return username.trim().toLowerCase();
@@ -305,10 +332,9 @@ export async function fetchChessComAllUserGames(
 
     for (const archiveUrl of newestFirst) {
       if (all.length >= maxTotal) break;
-      const gamesRes = await fetch(archiveUrl);
-      if (!gamesRes.ok) continue;
-      const gamesData = (await gamesRes.json()) as { games?: ChessComGame[] };
-      const monthGames = gamesData.games ?? [];
+      const m = archiveUrl.match(/\/games\/(\d{4})\/(\d{1,2})$/);
+      if (!m) continue;
+      const monthGames = await fetchChessComMonthGamesViaProxy(trimmed, m[1], m[2]);
       for (const g of monthGames) {
         if (!chessComGameInvolvesUser(g, trimmed)) continue;
         all.push(g);
@@ -346,10 +372,9 @@ export async function fetchChessComGamesPage(
     const collected: ChessComGame[] = [];
     for (const archiveUrl of newestFirst) {
       if (collected.length >= pageSize) break;
-      const gamesRes = await fetch(archiveUrl);
-      if (!gamesRes.ok) continue;
-      const gamesData = (await gamesRes.json()) as { games?: ChessComGame[] };
-      const monthGames = (gamesData.games ?? [])
+      const m = archiveUrl.match(/\/games\/(\d{4})\/(\d{1,2})$/);
+      if (!m) continue;
+      const monthGames = (await fetchChessComMonthGamesViaProxy(trimmed, m[1], m[2]))
         .filter((g) => chessComGameInvolvesUser(g, trimmed))
         .filter((g) => {
           const t = g.end_time ?? 0;
@@ -381,15 +406,58 @@ export async function fetchChessComGamesPage(
 export async function fetchLichessUser(username: string): Promise<LichessUserProfile | null> {
   const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return null;
-  try {
-    const res = await lichessApiFetch(`user/${trimmed}`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as LichessUserProfile;
-  } catch {
-    return null;
+  const key = trimmed.toLowerCase();
+  const now = Date.now();
+  const cached = lichessUserCache.get(key);
+  if (cached && now - cached.fetchedAt < LICHESS_USER_CACHE_TTL_MS) {
+    return cached.profile;
   }
+  if (isLichessGloballyRateLimited()) {
+    return cached?.profile ?? null;
+  }
+
+  const inflight = lichessUserInFlight.get(key);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const res = await lichessApiFetch(`user/${trimmed}`, {
+        headers: { Accept: 'application/json' },
+      });
+      const softlyRateLimited = res.headers.get('X-Lichess-Rate-Limited') === '1';
+      if (res.status === 429 || softlyRateLimited) {
+        markLichessRateLimited();
+        const fallback = cached?.profile ?? null;
+        lichessUserCache.set(key, { fetchedAt: Date.now(), profile: fallback, rateLimited: true });
+        return fallback;
+      }
+      if (res.status === 404) {
+        lichessUserCache.set(key, { fetchedAt: Date.now(), profile: null });
+        return null;
+      }
+      if (!res.ok) {
+        return cached?.profile ?? null;
+      }
+      const profile = (await res.json()) as LichessUserProfile;
+      lichessUserCache.set(key, { fetchedAt: Date.now(), profile });
+      return profile;
+    } catch {
+      return cached?.profile ?? null;
+    } finally {
+      lichessUserInFlight.delete(key);
+    }
+  })();
+
+  lichessUserInFlight.set(key, promise);
+  return promise;
+}
+
+/** Profil yüklenemediğinde limit mi yoksa gerçekten bulunamadı mı ayırır. */
+export function lichessUserLikelyRateLimited(username: string): boolean {
+  const key = normalizeLichessUsername(username).toLowerCase();
+  if (!key) return isLichessGloballyRateLimited();
+  const cached = lichessUserCache.get(key);
+  return isLichessGloballyRateLimited() || cached?.rateLimited === true;
 }
 
 /** Oyun kaydında beyaz veya siyah olarak bu kullanıcı var mı (yalnızca istenen hesabın maçları) */
@@ -652,10 +720,9 @@ export async function fetchChessComRecentGames(username: string, max = 10): Prom
     const archives = archivesData.archives ?? [];
     if (archives.length === 0) return [];
     const lastArchiveUrl = archives[archives.length - 1];
-    const gamesRes = await fetch(lastArchiveUrl);
-    if (!gamesRes.ok) return [];
-    const gamesData = (await gamesRes.json()) as { games?: ChessComGame[] };
-    const games = gamesData.games ?? [];
+    const m = lastArchiveUrl.match(/\/games\/(\d{4})\/(\d{1,2})$/);
+    if (!m) return [];
+    const games = await fetchChessComMonthGamesViaProxy(trimmed, m[1], m[2]);
     const sorted = games.slice().sort((a, b) => (b.end_time ?? 0) - (a.end_time ?? 0));
     return sorted
       .filter((g) => chessComGameInvolvesUser(g, trimmed))

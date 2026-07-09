@@ -40,28 +40,14 @@ function chancesFromLine(
   return pvLineToWinningChances(line, turn);
 }
 
-function applyBarHysteresis(prevPercent: number, nextPercent: number): number {
-  const prevChances = (prevPercent - 50) / 50;
-  const nextChances = (nextPercent - 50) / 50;
-
-  if (nextChances >= 0.92 && prevChances >= 0.85) return Math.max(prevPercent, nextPercent);
-  if (nextChances <= -0.92 && prevChances <= -0.85) return Math.min(prevPercent, nextPercent);
-
-  const delta = Math.abs(nextPercent - prevPercent);
-  if (delta > 18 && prevChances * nextChances > 0) {
-    const maxStep = 12;
-    return prevPercent + Math.sign(nextPercent - prevPercent) * maxStep;
-  }
-
-  return nextPercent;
-}
-
 /**
- * Lichess tarzı eval çubuğu:
- * - Yalnızca derinlik arttığında güncellenir (sığ arama titremesi yok)
+ * Lichess (lila) eval çubuğu mantığı — birebir:
+ * - Değer = en iyi hattın `povChances` (kazanma şansı) değeri; ham cp titremesi değil
+ * - Yalnızca daha derin bir değerlendirme geldiğinde hedef güncellenir
  * - Mat bulunduktan sonra cp skoruna geri dönülmez
  * - Pozisyon değişince çubuk sıfırlanmaz; son değer korunur
- * - Kesin avantajda histerezis ile uç değerlerde zıplama azaltılır
+ * - Yumuşatma tek katmanda yapılır: ChessEvalBar CSS geçişi (transition: height 1s)
+ *   Lichess'te olduğu gibi hedef doğrudan atanır, histerezis/step-cap yoktur.
  */
 export function useStableEvalDisplay(
   fen: string,
@@ -127,14 +113,11 @@ export function useStableEvalDisplay(
         ? { ...line, mate: turn === 'b' ? -lockedMateRef.current : lockedMateRef.current }
         : line;
 
-    setDisplay((prev) => {
-      const whitePercent = applyBarHysteresis(prev.whitePercent, rawPercent);
-      return {
-        whitePercent,
-        label: labelOverride ?? formatEngineEvalLabel(labelLine, turn),
-        winningChances: chances,
-        pending: false,
-      };
+    setDisplay({
+      whitePercent: rawPercent,
+      label: labelOverride ?? formatEngineEvalLabel(labelLine, turn),
+      winningChances: chances,
+      pending: false,
     });
 
     committedDepthRef.current = depth;

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Chessboard } from 'react-chessboard';
 import { Settings2, ChevronDown, Plus, FlipHorizontal, BarChart2, Info, Menu, Share2, Download, Highlighter, Hand } from 'lucide-react';
@@ -6,6 +6,7 @@ import { Chess } from 'chess.js';
 import { useStockfish, type PvLine } from '../../hooks/useStockfish';
 import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
 import { useStableEvalDisplay, type EvalBarDisplay } from '../../hooks/useStableEvalDisplay';
+import { evalWinningChances } from '../../lib/winningChances';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
 import type { StudentPlaysColor } from '../../lib/studyTypes';
 import { studentPlaysColorLabel } from '../../lib/studyUtils';
@@ -585,9 +586,20 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   const hasFreshLines = !!mainLine && depth > 0;
   const filledPvCount = pvLines.filter((l): l is PvLine => l !== null).length;
 
+  // Lichess sortPvsInPlace mantığı: eval çubuğu için hatların en iyisini (sıra
+  // gelen tarafın kazanma şansı en yüksek olanı) kullan; ham multipv[0] geçici
+  // olarak sıralanmamış/eski olabildiğinden çubuk zıplamasın.
+  const bestEvalLine = useMemo(() => {
+    const valid = pvLines.filter((l): l is PvLine => l !== null);
+    if (valid.length === 0) return null;
+    return valid.reduce((best, l) =>
+      evalWinningChances(l) > evalWinningChances(best) ? l : best,
+    );
+  }, [pvLines]);
+
   const evalBarDisplay = useStableEvalDisplay(
     fen,
-    enabled && hasFreshLines ? mainLine : null,
+    enabled && hasFreshLines ? bestEvalLine : null,
     turn,
     enabled && !!onEvalBarChange,
   );

@@ -40,7 +40,10 @@ function initials(name: string): string {
 
 function formatPhone(digits?: string) {
   if (!digits) return null;
-  const v = digits.replace(/\D/g, '');
+  let v = digits.replace(/\D/g, '');
+  if (v.startsWith('90') && v.length >= 12) v = v.slice(2);
+  if (v.startsWith('0') && v.length === 11) v = v.slice(1);
+  v = v.slice(0, 10);
   if (v.length < 10) return digits;
   return `0${v.slice(0, 3)} ${v.slice(3, 6)} ${v.slice(6, 8)} ${v.slice(8, 10)}`;
 }

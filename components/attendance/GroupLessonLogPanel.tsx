@@ -33,7 +33,20 @@ export const GroupLessonLogPanel: React.FC<Props> = ({
     setLocalEntries(sortLessonLogEntries(entries));
     setDraft(emptyLessonLogDraft());
     setEditingId(null);
-  }, [groupName, entries]);
+  }, [groupName]);
+
+  useEffect(() => {
+    setLocalEntries((prev) => {
+      const next = sortLessonLogEntries(entries);
+      if (
+        prev.length === next.length &&
+        prev.every((row, idx) => row.id === next[idx]?.id)
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [entries]);
 
   const sorted = useMemo(() => sortLessonLogEntries(localEntries), [localEntries]);
 

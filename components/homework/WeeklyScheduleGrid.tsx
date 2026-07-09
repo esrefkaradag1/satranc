@@ -35,6 +35,8 @@ function completionStyles(status: DayCompletionStatus | undefined): string {
   switch (status) {
     case 'done':
       return 'border-emerald-500/50 bg-emerald-500/10';
+    case 'partial':
+      return 'border-orange-500/45 bg-orange-500/10';
     case 'missed':
       return 'border-rose-500/50 bg-rose-500/10';
     case 'pending':
@@ -268,6 +270,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
             {!isBulk && showProgress ? (
               <div className="flex flex-wrap gap-3 text-[10px] text-slate-500">
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Tamam</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" /> Kısmi yaptı</span>
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Bekliyor</span>
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" /> Eksik</span>
               </div>
@@ -298,7 +301,9 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                       </p>
                       {completionText ? (
                         <span className={`text-[8px] font-black uppercase ${
-                          completion === 'done' ? 'text-emerald-400' : completion === 'missed' ? 'text-rose-400' : 'text-amber-400'
+                          completion === 'done' ? 'text-emerald-400'
+                            : completion === 'partial' ? 'text-orange-400'
+                              : completion === 'missed' ? 'text-rose-400' : 'text-amber-400'
                         }`}>
                           {completionText}
                         </span>
@@ -331,7 +336,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                       />
                     </div>
                     <div>
-                      <label className="text-[9px] text-slate-500 block mb-0.5">Min %</label>
+                      <label className="text-[9px] text-slate-500 block mb-0.5" title="Yalnızca bulmaca hedefi için">Bulmaca min %</label>
                       <input
                         type="number"
                         min={0}
@@ -392,7 +397,7 @@ export const WeeklyScheduleGrid: React.FC<Props> = ({
                 />
               </div>
               <div>
-                <label className="text-[9px] text-slate-500 block mb-1">Min doğruluk %</label>
+                <label className="text-[9px] text-slate-500 block mb-1" title="Yalnızca bulmaca hedefi için">Bulmaca min doğruluk %</label>
                 <input
                   type="number"
                   min={0}

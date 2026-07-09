@@ -30,7 +30,7 @@ import {
 } from '../services/chessPlatformService';
 import type { Student, StudentLessonLogEntry } from '../types';
 import { GroupLessonLogPanel } from './attendance/GroupLessonLogPanel';
-import { mergeGroupLessonLogsFromStudents, isoDateToTr } from '../lib/lessonLogUtils';
+import { isoDateToTr } from '../lib/lessonLogUtils';
 import { findTrainingGroupByName, studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { normalizeClubKey } from '../lib/clubScope';
 import {
@@ -43,6 +43,7 @@ import {
   buildLessonAttendanceSessionId,
   parseAttendanceSessionId,
 } from '../lib/attendanceSession';
+import { computePrivateLessonBalance } from '../lib/privateLessonUsage';
 import { consumeAttendanceEditBridge } from '../lib/attendanceEditBridge';
 import { StudentLessonLogInline } from './attendance/StudentLessonLogInline';
 import { ResponsiveTable } from './ui/ResponsiveTable';
@@ -65,6 +66,28 @@ function normalizePrivateLessonText(value?: string | null): string {
     .trim()
     .toLocaleLowerCase('tr-TR')
     .replace(/\s+/g, ' ');
+}
+
+function saleMatchesSelectedLessonPackage(
+  sale: { lessonPackageId?: string; lessonPackageName?: string; description?: string; lessonDiscipline?: string; lessonBranchOffice?: string },
+  opts: { packageId?: string; packageName: string; branchOffice: string; discipline: string },
+): boolean {
+  if (opts.packageId && sale.lessonPackageId === opts.packageId) return true;
+  const normalizedPackageName = normalizePrivateLessonText(opts.packageName);
+  if (!normalizedPackageName) return false;
+  const normalizedSaleName = normalizePrivateLessonText(sale.lessonPackageName);
+  const normalizedDescription = normalizePrivateLessonText(sale.description);
+  const normalizedSaleBranch = normalizePrivateLessonText(sale.lessonDiscipline);
+  const normalizedSaleOffice = normalizeClubKey(sale.lessonBranchOffice ?? '');
+  const normalizedOffice = normalizeClubKey(opts.branchOffice);
+  const normalizedBranch = normalizePrivateLessonText(opts.discipline);
+  const sameOffice = !normalizedOffice || !normalizedSaleOffice || normalizedSaleOffice === normalizedOffice;
+  const sameBranch = !normalizedBranch || !normalizedSaleBranch || normalizedSaleBranch === normalizedBranch;
+  if (!sameOffice || !sameBranch) return false;
+  return (
+    normalizedSaleName === normalizedPackageName ||
+    normalizedDescription === normalizedPackageName
+  );
 }
 
 /* ── Alt bileşenler ─────────────────────────────────────────── */
@@ -458,36 +481,17 @@ const Attendance: React.FC = () => {
 
   const selectedLessonPackageSalesByStudentId = useMemo(() => {
     const map = new Map<string, (typeof transactions)[number]>();
-    const normalizedGroup = normalizePrivateLessonText(group);
-    const normalizedPackageName = normalizePrivateLessonText(selectedLessonPackage?.name ?? group);
-    const normalizedBranch = normalizePrivateLessonText(selectedLessonPackage?.discipline ?? branch);
-    const normalizedOffice = normalizeClubKey(selectedLessonPackage?.branchOffice ?? branchOffice);
-    const selectedLessonCount = Number(selectedLessonPackage?.lessonCount ?? 0) || 0;
+    const packageName = (selectedLessonPackage?.name ?? group).trim();
+    if (!packageName) return map;
+    const matchOpts = {
+      packageId: selectedLessonPackage?.id,
+      packageName,
+      branchOffice: selectedLessonPackage?.branchOffice ?? branchOffice,
+      discipline: selectedLessonPackage?.discipline ?? branch,
+    };
     transactions
       .filter((t) => t.category === 'Özel Ders' && t.studentId)
-      .filter((t) => {
-        if (selectedLessonPackage?.id && t.lessonPackageId === selectedLessonPackage.id) return true;
-        const normalizedSaleName = normalizePrivateLessonText(t.lessonPackageName);
-        const normalizedDescription = normalizePrivateLessonText(t.description);
-        const normalizedSaleBranch = normalizePrivateLessonText(t.lessonDiscipline);
-        const normalizedSaleOffice = normalizeClubKey(t.lessonBranchOffice ?? '');
-        const saleLessonCount = Number(t.lessonCount ?? 0) || 0;
-        const sameOffice = !normalizedOffice || !normalizedSaleOffice || normalizedSaleOffice === normalizedOffice;
-        const sameBranch = !normalizedBranch || !normalizedSaleBranch || normalizedSaleBranch === normalizedBranch;
-        const nameMatches =
-          !!normalizedPackageName &&
-          (!!normalizedSaleName && normalizedPackageName.includes(normalizedSaleName) ||
-            normalizedSaleName.includes(normalizedPackageName) ||
-            normalizedDescription.includes(normalizedPackageName) ||
-            normalizedDescription === normalizedPackageName);
-        const groupMatches =
-          !!normalizedGroup &&
-          (normalizedSaleName.includes(normalizedGroup) ||
-            normalizedDescription.includes(normalizedGroup) ||
-            normalizedDescription === normalizedGroup);
-        const countMatches = selectedLessonCount > 0 && saleLessonCount > 0 && saleLessonCount === selectedLessonCount;
-        return sameOffice && sameBranch && (nameMatches || groupMatches || countMatches);
-      })
+      .filter((t) => saleMatchesSelectedLessonPackage(t, matchOpts))
       .sort((a, b) => b.date.localeCompare(a.date))
       .forEach((sale) => {
         if (!sale.studentId || map.has(sale.studentId)) return;
@@ -497,27 +501,21 @@ const Attendance: React.FC = () => {
   }, [transactions, selectedLessonPackage, group, branch, branchOffice]);
 
   const filteredStudents = useMemo(() => {
-    if (!group.trim()) return [];
+    const byName = (list: typeof students) =>
+      [...list].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'tr'));
+    const groupName = group.trim();
+    if (!groupName) return [];
     if (attendanceType === 'lesson') {
-      if (!selectedLessonPackage) {
-        return students.filter((s) => {
+      return byName(
+        students.filter((s) => {
           if (selectedLessonPackageSalesByStudentId.has(s.id)) return true;
-          return (s.group ?? '').trim() === group.trim();
-        });
-      }
-      const officeKey = normalizeClubKey(branchOffice);
-      const discipline = branch.trim();
-      return students.filter((s) => {
-        if (selectedLessonPackageSalesByStudentId.has(s.id)) return true;
-        if ((s.group ?? '').trim() === group.trim()) return true;
-        if (officeKey && normalizeClubKey(s.branchOffice ?? '') !== officeKey) return false;
-        if (discipline && (s.branch ?? '').trim() !== discipline) return false;
-        return s.registrationType === 'package';
-      });
+          return (s.group ?? '').trim() === groupName;
+        }),
+      );
     }
-    if (selectedTrainingGroup) return studentsInTrainingGroup(students, selectedTrainingGroup);
-    return students.filter((s) => (s.group ?? '').trim() === group.trim());
-  }, [students, group, branch, branchOffice, attendanceType, selectedTrainingGroup, trainingGroups, selectedLessonPackage, selectedLessonPackageSalesByStudentId]);
+    if (selectedTrainingGroup) return byName(studentsInTrainingGroup(students, selectedTrainingGroup));
+    return byName(students.filter((s) => (s.group ?? '').trim() === groupName));
+  }, [students, group, attendanceType, selectedTrainingGroup, selectedLessonPackageSalesByStudentId]);
 
   const privateLessonBalanceByStudentId = useMemo(() => {
     const map = new Map<string, { totalLessons: number; usedLessons: number; remainingLessons: number }>();
@@ -526,40 +524,16 @@ const Attendance: React.FC = () => {
     filteredStudents.forEach((student) => {
       const sale = selectedLessonPackageSalesByStudentId.get(student.id);
       if (!sale) return;
-      const totalLessons = sale.lessonCount ?? selectedLessonPackage?.lessonCount ?? 0;
-      const historicalUsed = attendanceRecords.filter(
-        (record) =>
-          record.studentId === student.id &&
-          attendanceRecordsShareSession(record, lessonSessionRecord) &&
-          (record.status === 'present' || record.status === 'late') &&
-          String(record.date ?? '').slice(0, 10) !== currentDay,
-      ).length;
-      const existingToday = attendanceRecords.find(
-        (record) =>
-          record.studentId === student.id &&
-          attendanceRecordsShareSession(record, lessonSessionRecord) &&
-          String(record.date ?? '').slice(0, 10) === currentDay,
-      );
-      const pendingStatus = attendance[student.id];
-      const todayUsed =
-        pendingStatus === 'Present'
-          ? 1
-          : pendingStatus === 'Late'
-            ? 1
-            : pendingStatus === 'Absent' || pendingStatus === 'Excused'
-              ? 0
-              : existingToday && (existingToday.status === 'present' || existingToday.status === 'late')
-                ? 1
-                : 0;
-      const usedLessons = historicalUsed + todayUsed;
-      map.set(student.id, {
-        totalLessons,
-        usedLessons,
-        remainingLessons: Math.max(0, totalLessons - usedLessons),
+      const balance = computePrivateLessonBalance(sale, attendanceRecords, {
+        studentId: student.id,
+        fallbackTotalLessons: selectedLessonPackage?.lessonCount,
+        pendingTodayStatus: attendance[student.id] ?? null,
+        todayIso: currentDay,
       });
+      if (balance) map.set(student.id, balance);
     });
     return map;
-  }, [attendanceType, selectedLessonPackage, date, filteredStudents, selectedLessonPackageSalesByStudentId, attendanceRecords, attendance, lessonSessionRecord]);
+  }, [attendanceType, selectedLessonPackage, date, filteredStudents, selectedLessonPackageSalesByStudentId, attendanceRecords, attendance]);
 
   const sessionDraftRecord = useMemo(
     () => ({
@@ -584,9 +558,8 @@ const Attendance: React.FC = () => {
   const hasExistingSession = existingSessionRecords.length > 0;
 
   const groupLogEntries = useCallback(
-    (groupKey: string) =>
-      mergeGroupLessonLogsFromStudents(groupKey, students, groupLessonLogs[groupKey] ?? []),
-    [students, groupLessonLogs],
+    (groupKey: string) => groupLessonLogs[groupKey] ?? [],
+    [groupLessonLogs],
   );
 
   /** Yoklama listesi: seçilen tarih (ve isteğe bağlı grup) için kayıtlar */

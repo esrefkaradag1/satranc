@@ -54,6 +54,7 @@ import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
 import type { EvalBarDisplay } from '../hooks/useStableEvalDisplay';
 import { cpWinningChances, winningChancesToBarPercent } from '../lib/winningChances';
 import { useStudyBoardSettings } from '../hooks/useStudyBoardSettings';
+import { engineMasterTogglePatch } from '../lib/studyBoardSettings';
 import { useStudyKeyboardShortcuts } from '../hooks/useStudyKeyboardShortcuts';
 import { StudyKeyboardHelpModal } from './study/StudyKeyboardHelpModal';
 import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
@@ -172,7 +173,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Motor analizi için state
-  const { settings: boardSettings, toggleSetting: toggleBoardSetting } = useStudyBoardSettings();
+  const { settings: boardSettings, toggleSetting: toggleBoardSetting, updateSettings: updateBoardSettings } = useStudyBoardSettings();
   const [showStudyHelp, setShowStudyHelp] = useState(false);
   const [showStudySettings, setShowStudySettings] = useState(false);
   const [engineHoverMove, setEngineHoverMove] = useState<{ from: string; to: string } | null>(null);
@@ -1609,6 +1610,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     });
   }, [engineTopMove, canPlayBestMove, handlePieceDrop]);
 
+  const clearBoardDrawings = useCallback(() => {
+    setCircleMarks({});
+    setBoardArrows([]);
+  }, []);
+
   useStudyKeyboardShortcuts({
     enabled: !!selectedStudyId && !!selectedStudy && !vsComputer,
     goPrev: goStudyPrev,
@@ -1626,6 +1632,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     openHelp: () => setShowStudyHelp(true),
     playBestMove,
     canPlayBestMove,
+    clearDrawings: clearBoardDrawings,
+    hasDrawings: Object.keys(circleMarks).length > 0 || boardArrows.length > 0,
   });
 
   const handleCopyText = useCallback((text: string) => {
@@ -2534,10 +2542,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         {/* ── RIGHT ── */}
         <div className="hidden lg:flex w-80 shrink-0 flex-col min-h-0 rounded-sm bg-[#0f172a] border border-[rgba(255,255,255,0.05)] overflow-hidden">
           {!hideEngineForStudentPuzzle && (!vsComputer || isVcGameOver) && (
-            (boardSettings.showEngineAnalysis
-              || boardSettings.showEvalBar
-              || boardSettings.showBestMoveArrows
-              || boardSettings.showVariationArrows) && (
             <EngineAnalysis
               fen={studyBoardFen}
               enabled={
@@ -2546,13 +2550,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                 || boardSettings.showBestMoveArrows
                 || boardSettings.showVariationArrows
               }
-              onToggle={() => toggleBoardSetting('showEngineAnalysis')}
+              onToggle={() => updateBoardSettings(engineMasterTogglePatch(boardSettings))}
               onHoverMove={setEngineHoverMove}
               onTopMoveUpdate={setEngineTopMove}
               onEvalBarChange={boardSettings.showEvalBar ? setEvalBar : undefined}
               onOpenBoardPrefs={() => setShowStudySettings(true)}
             />
-          ))}
+          )}
 
           <div className="flex-1 overflow-y-auto bg-[#1e293b] border-t border-[rgba(255,255,255,0.05)]">
             {!vsComputer ? (

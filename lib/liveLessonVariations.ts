@@ -98,3 +98,49 @@ export function sanitizeLiveVariations(raw: unknown): Record<number, string[][]>
   }
   return out;
 }
+
+/** Canlı dersten çalışmaya aktarım: hamle listesiyle uyumlu başlangıç FEN'ini bul. */
+export function inferLiveLessonExportBaseFen(
+  currentFen: string,
+  moves: string[],
+  hintBaseFens: string[] = [],
+): string {
+  const target = normalizeLiveLessonFen(currentFen);
+  if (moves.length === 0) {
+    try {
+      return makeBuilderGame(currentFen).fen();
+    } catch {
+      return currentFen;
+    }
+  }
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const raw of hintBaseFens) {
+    if (!raw?.trim()) continue;
+    try {
+      const fen = makeBuilderGame(raw).fen();
+      if (!seen.has(fen)) {
+        seen.add(fen);
+        candidates.push(fen);
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  for (const base of candidates) {
+    try {
+      const g = makeBuilderGame(base);
+      let ok = true;
+      for (const m of moves) {
+        if (!applyMove(g, m)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok && normalizeLiveLessonFen(g.fen()) === target) return base;
+    } catch {
+      /* next */
+    }
+  }
+  return candidates[0] ?? currentFen;
+}

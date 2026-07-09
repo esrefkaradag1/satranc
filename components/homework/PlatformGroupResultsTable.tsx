@@ -1,11 +1,12 @@
 import React from 'react';
-import { CheckCircle2, CircleDashed, Play, Clock, ChevronRight, XCircle } from 'lucide-react';
+import { CheckCircle2, CircleDashed, Play, Clock, ChevronRight, XCircle, MinusCircle } from 'lucide-react';
 import type { PlatformStudentStat } from '../../lib/homeworkStatsBuilders';
 import { StudentCountText, StudentCountPairText } from '../ui/StudentCountText';
 import { formatHomeworkDuration } from '../../lib/homeworkAnalysisUtils';
 
 const STATUS_ICON = {
   Tamamlandı: CheckCircle2,
+  'Kısmi yaptı': MinusCircle,
   'Devam Ediyor': Play,
   Başlamadı: CircleDashed,
   Yapılmadı: XCircle,
@@ -25,7 +26,7 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
   onSelect,
 }) => {
   const sorted = [...stats].sort((a, b) => {
-    const order = { 'Devam Ediyor': 0, Başlamadı: 1, Yapılmadı: 2, Tamamlandı: 3 };
+    const order = { 'Devam Ediyor': 0, 'Kısmi yaptı': 1, Başlamadı: 2, Yapılmadı: 3, Tamamlandı: 4 };
     const ao = order[a.status as keyof typeof order] ?? 1;
     const bo = order[b.status as keyof typeof order] ?? 1;
     if (ao !== bo) return ao - bo;
@@ -72,11 +73,13 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
               const statusColor =
                 stat.status === 'Tamamlandı'
                   ? 'text-emerald-400'
-                  : stat.status === 'Devam Ediyor'
-                    ? 'text-amber-400'
-                    : stat.status === 'Yapılmadı'
-                      ? 'text-rose-400'
-                      : 'text-slate-500';
+                  : stat.status === 'Kısmi yaptı'
+                    ? 'text-orange-400'
+                    : stat.status === 'Devam Ediyor'
+                      ? 'text-amber-400'
+                      : stat.status === 'Yapılmadı'
+                        ? 'text-rose-400'
+                        : 'text-slate-500';
               const Icon = STATUS_ICON[stat.status] ?? CircleDashed;
               const gameTarget = stat.dailyGameTarget ?? 0;
               const games = stat.todayGames ?? 0;

@@ -227,7 +227,8 @@ CREATE TABLE IF NOT EXISTS public.inventory (
   stock integer,
   unit text,
   status text,
-  "minStock" integer
+  "minStock" integer,
+  "imageUrl" text
 );
 
 -- -----------------------------------------------------------------------------

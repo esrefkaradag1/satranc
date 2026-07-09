@@ -327,6 +327,75 @@ export function formatLessonSchedule(slots: GroupLessonSlot[] | undefined): stri
   return slots.map(formatLessonSlot).join(', ');
 }
 
+function normalizeLessonSlot(slot: GroupLessonSlot) {
+  return {
+    dayOfWeek: Number(slot.dayOfWeek) || 0,
+    dayLabel: (slot.dayLabel || '').trim(),
+    startTime: (slot.startTime || '').trim(),
+    endTime: (slot.endTime || '').trim(),
+  };
+}
+
+export function lessonSchedulesEqual(
+  a: GroupLessonSlot[] | undefined,
+  b: GroupLessonSlot[] | undefined,
+): boolean {
+  const left = (a ?? []).filter((s) => s.startTime?.trim());
+  const right = (b ?? []).filter((s) => s.startTime?.trim());
+  if (left.length !== right.length) return false;
+  const norm = (slots: GroupLessonSlot[]) =>
+    [...slots]
+      .map(normalizeLessonSlot)
+      .sort((x, y) => x.dayOfWeek - y.dayOfWeek || x.startTime.localeCompare(y.startTime, 'tr'));
+  const sa = norm(left);
+  const sb = norm(right);
+  return sa.every(
+    (slot, i) =>
+      slot.dayOfWeek === sb[i].dayOfWeek &&
+      slot.startTime === sb[i].startTime &&
+      slot.endTime === sb[i].endTime,
+  );
+}
+
+export function findTrainingGroupForStudent(
+  student: Pick<Student, 'trainingGroupId' | 'group'>,
+  trainingGroups: TrainingGroup[],
+): TrainingGroup | undefined {
+  if (student.trainingGroupId) {
+    const byId = trainingGroups.find((g) => g.id === student.trainingGroupId);
+    if (byId) return byId;
+  }
+  const groupName = (student.group || '').trim().toLowerCase();
+  if (!groupName) return undefined;
+  return trainingGroups.find((g) => g.name.trim().toLowerCase() === groupName);
+}
+
+/** Öğrenciye özel kayıtlı program, gruptan farklı mı? */
+export function hasCustomLessonSchedule(
+  student: Pick<Student, 'lessonSchedule' | 'trainingGroupId' | 'group'>,
+  trainingGroups: TrainingGroup[],
+): boolean {
+  const stored = student.lessonSchedule ?? [];
+  if (!stored.length) return false;
+  const group = findTrainingGroupForStudent(student, trainingGroups);
+  const groupSlots = group?.lessonSlots ?? [];
+  if (!groupSlots.length) return true;
+  return !lessonSchedulesEqual(stored, groupSlots);
+}
+
+/** Görüntüleme: önce canlı grup programı; yalnızca özelleştirilmişse öğrenci kaydı. */
+export function resolveStudentLessonSchedule(
+  student: Pick<Student, 'lessonSchedule' | 'trainingGroupId' | 'group'>,
+  trainingGroups: TrainingGroup[],
+): GroupLessonSlot[] {
+  const group = findTrainingGroupForStudent(student, trainingGroups);
+  const groupSlots = group?.lessonSlots ?? [];
+  const stored = student.lessonSchedule ?? [];
+  if (hasCustomLessonSchedule(student, trainingGroups)) return stored.map((s) => ({ ...s }));
+  if (groupSlots.length) return groupSlots.map((s) => ({ ...s }));
+  return stored.map((s) => ({ ...s }));
+}
+
 export function studentsInTrainingGroup(students: Student[], group: TrainingGroup): Student[] {
   const name = group.name.trim();
   return students.filter(

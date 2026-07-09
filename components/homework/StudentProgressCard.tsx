@@ -1,5 +1,6 @@
 import React from 'react';
-import { CheckCircle2, Clock, Play, CircleDashed, RotateCcw, ChevronRight } from 'lucide-react';
+import { CheckCircle2, Clock, Play, CircleDashed, RotateCcw, ChevronRight, MinusCircle } from 'lucide-react';
+import type { HomeworkStudentStatus } from '../../lib/homeworkAnalysisUtils';
 
 export interface StudentProgressCardStat {
   studentId: string;
@@ -11,7 +12,7 @@ export interface StudentProgressCardStat {
   points: number;
   timeSeconds: number;
   progress: number;
-  status: 'Tamamlandı' | 'Devam Ediyor' | 'Başlamadı';
+  status: HomeworkStudentStatus;
   dailyGoalDone?: boolean;
   todayGames?: number;
   todayPuzzleSolved?: number;
@@ -28,12 +29,23 @@ function formatTime(seconds: number): string {
   return m > 0 ? `${m}dk ${s}sn` : `${s}sn`;
 }
 
-const STATUS_META = {
+const STATUS_META: Record<HomeworkStudentStatus, {
+  icon: typeof CheckCircle2;
+  pill: string;
+  ring: string;
+  bar: string;
+}> = {
   Tamamlandı: {
     icon: CheckCircle2,
     pill: 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/25',
     ring: 'stroke-emerald-400',
     bar: 'from-emerald-500 to-teal-400',
+  },
+  'Kısmi yaptı': {
+    icon: MinusCircle,
+    pill: 'bg-orange-500/15 text-orange-300 ring-orange-500/25',
+    ring: 'stroke-orange-400',
+    bar: 'from-orange-500 to-amber-500',
   },
   'Devam Ediyor': {
     icon: Play,
@@ -47,7 +59,13 @@ const STATUS_META = {
     ring: 'stroke-slate-600',
     bar: 'from-slate-600 to-slate-500',
   },
-} as const;
+  Yapılmadı: {
+    icon: CircleDashed,
+    pill: 'bg-rose-500/15 text-rose-300 ring-rose-500/25',
+    ring: 'stroke-rose-400',
+    bar: 'from-rose-600 to-rose-500',
+  },
+};
 
 type Props = {
   stat: StudentProgressCardStat;
@@ -152,7 +170,11 @@ export const StudentProgressCard: React.FC<Props> = ({
 
         {accuracy !== null && stat.status !== 'Başlamadı' && (
           <p className="mt-2 text-[10px] text-slate-500">
-            Doğruluk <span className="text-slate-300 font-semibold">%{accuracy}</span>
+            {showDailyTracking ? 'Bulmaca doğruluk' : 'Doğruluk'}{' '}
+            <span className="text-slate-300 font-semibold">%{accuracy}</span>
+            {showDailyTracking && (stat.minPuzzleAccuracyPct ?? 0) > 0 ? (
+              <span className="text-slate-500"> / %{stat.minPuzzleAccuracyPct}</span>
+            ) : null}
           </p>
         )}
 
@@ -162,9 +184,9 @@ export const StudentProgressCard: React.FC<Props> = ({
             {(stat.dailyPuzzleTarget ?? 0) > 0 && (
               <> · Bulmaca {stat.todayPuzzleSolved ?? 0}/{stat.dailyPuzzleTarget ?? 0}</>
             )}
-            {(stat.dailyPuzzleTarget ?? 0) > 0 && (
-              <> · %{Math.round(stat.todayPuzzleAccuracy ?? 0)} doğruluk</>
-            )}
+            {(stat.dailyPuzzleTarget ?? 0) > 0 && (stat.todayPuzzleSolved ?? 0) > 0 ? (
+              <> · Bulmaca doğruluk %{Math.round(stat.todayPuzzleAccuracy ?? 0)}</>
+            ) : null}
           </div>
         )}
       </div>

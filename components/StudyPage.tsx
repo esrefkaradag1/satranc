@@ -57,6 +57,7 @@ import { ResponsiveTable } from './ui/ResponsiveTable';
 
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
 import { useStudyBoardSettings } from '../hooks/useStudyBoardSettings';
+import { engineMasterTogglePatch } from '../lib/studyBoardSettings';
 import { useStudyKeyboardShortcuts } from '../hooks/useStudyKeyboardShortcuts';
 import { StudyKeyboardHelpModal } from './study/StudyKeyboardHelpModal';
 import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
@@ -284,7 +285,7 @@ const StudyPage: React.FC = () => {
   const [selectedAnnotationPly, setSelectedAnnotationPly] = useState<number | null>(null);
 
   // Evaluation bar
-  const { settings: boardSettings, toggleSetting: toggleBoardSetting } = useStudyBoardSettings();
+  const { settings: boardSettings, toggleSetting: toggleBoardSetting, updateSettings: updateBoardSettings } = useStudyBoardSettings();
   const [showStudyHelp, setShowStudyHelp] = useState(false);
   const [showStudyBoardSettings, setShowStudyBoardSettings] = useState(false);
   const OFF_EVAL_BAR: EvalBarDisplay = { whitePercent: 50, label: '—', winningChances: 0, pending: false };
@@ -2229,6 +2230,12 @@ const StudyPage: React.FC = () => {
     setMoveFrom(null);
   }, [jumpToMoveIndex]);
 
+  const clearBoardDrawings = useCallback(() => {
+    setCircleMarks({});
+    setBoardArrows([]);
+    if (selectedChapter) updateChapterAtIndex(selectedChapterIndex, { circles: {}, arrows: [] });
+  }, [selectedChapter, selectedChapterIndex, updateChapterAtIndex]);
+
   const handleBoardSquareClick = useCallback((arg: unknown) => {
     const square = pickSquare(arg);
     if (!square) return;
@@ -2253,6 +2260,16 @@ const StudyPage: React.FC = () => {
     }
 
     if (drawingTool === 'mouse') {
+      // Lichess gibi: seçili taş yokken boş bir kareye sol tıklayınca tüm işaretleri temizle
+      const hasDrawings = Object.keys(circleMarks).length > 0 || boardArrows.length > 0;
+      if (hasDrawings && !moveFrom) {
+        let squareEmpty = true;
+        try { squareEmpty = !makeBuilderGame(boardDisplayFen).get(square as any); } catch { squareEmpty = true; }
+        if (squareEmpty) {
+          clearBoardDrawings();
+          return;
+        }
+      }
       handleSquareClickInner(square);
       return;
     }
@@ -2295,6 +2312,11 @@ const StudyPage: React.FC = () => {
     canAnnotateMoves,
     chapterMovesForUi,
     selectMoveForAnnotation,
+    circleMarks,
+    boardArrows,
+    moveFrom,
+    boardDisplayFen,
+    clearBoardDrawings,
   ]);
 
   const applySquareMarkAt = useCallback((square: string, markType: 'circle' | 'square') => {
@@ -2490,6 +2512,8 @@ const StudyPage: React.FC = () => {
     canPlayBestMove,
     undo: () => { void undoMove(); },
     canUndo: canStudyUndo,
+    clearDrawings: clearBoardDrawings,
+    hasDrawings: Object.keys(circleMarks).length > 0 || boardArrows.length > 0,
   });
 
   useEffect(() => {
@@ -4256,10 +4280,7 @@ const StudyPage: React.FC = () => {
                         setDrawingTool(t);
                         setDrawingColor(c);
                       }}
-                      onClear={() => {
-                        setCircleMarks({});
-                        updateChapterAtIndex(selectedChapterIndex, { circles: {}, arrows: [] });
-                      }}
+                      onClear={clearBoardDrawings}
                       onCopy={() => {
                         navigator.clipboard.writeText(boardDisplayFen);
                       }}
@@ -4439,7 +4460,7 @@ const StudyPage: React.FC = () => {
               || boardSettings.showBestMoveArrows
               || boardSettings.showVariationArrows
             }
-            onToggle={() => toggleBoardSetting('showEngineAnalysis')}
+            onToggle={() => updateBoardSettings(engineMasterTogglePatch(boardSettings))}
             onEvalBarChange={boardSettings.showEvalBar ? setEvalBar : undefined}
             boardSettings={{
               showEvalBar: boardSettings.showEvalBar,

@@ -265,6 +265,54 @@ export function setFenTurn(fen: string, turn: 'w' | 'b'): string {
   return parts.join(' ');
 }
 
+export type FenCastlingRights = { K: boolean; Q: boolean; k: boolean; q: boolean };
+
+export function parseTurnFromFen(fen: string): 'w' | 'b' {
+  const turn = fen.trim().split(/\s+/)[1];
+  return turn === 'b' ? 'b' : 'w';
+}
+
+export function parseCastlingFromFen(fen: string): FenCastlingRights {
+  const castling = fen.trim().split(/\s+/)[2] || '-';
+  return {
+    K: castling.includes('K'),
+    Q: castling.includes('Q'),
+    k: castling.includes('k'),
+    q: castling.includes('q'),
+  };
+}
+
+export function updateFenMeta(fen: string, turn: 'w' | 'b', castling: FenCastlingRights): string {
+  const parts = fen.trim().split(/\s+/);
+  if (parts.length < 6) return fen;
+  parts[1] = turn;
+  let c = '';
+  if (castling.K) c += 'K';
+  if (castling.Q) c += 'Q';
+  if (castling.k) c += 'k';
+  if (castling.q) c += 'q';
+  parts[2] = c || '-';
+  return parts.join(' ');
+}
+
+/** react-chessboard v5 onPieceDrop: { piece: { pieceType: 'wP', ... }, sourceSquare, targetSquare } */
+export function parsePieceFromChessboardDrag(
+  piece: unknown,
+): { color: 'w' | 'b'; type: 'p' | 'n' | 'b' | 'r' | 'q' | 'k' } | null {
+  let code: string | null = null;
+  if (typeof piece === 'string' && piece.length >= 2) code = piece;
+  else if (piece && typeof piece === 'object' && 'pieceType' in piece) {
+    const pt = (piece as { pieceType?: unknown }).pieceType;
+    if (typeof pt === 'string' && pt.length >= 2) code = pt;
+  }
+  if (!code) return null;
+  const color = code[0];
+  const t = code[1]?.toLowerCase();
+  if (color !== 'w' && color !== 'b') return null;
+  if (!t || !'pnbrqk'.includes(t)) return null;
+  return { color, type: t as 'p' | 'n' | 'b' | 'r' | 'q' | 'k' };
+}
+
 export function makeBuilderGame(fen: string): Chess {
   try {
     return new Chess(fen);

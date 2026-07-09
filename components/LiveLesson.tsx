@@ -6,10 +6,12 @@ import {
   Move, LayoutGrid, Upload, FileText, ChevronRight, Plus, Link2, Copy, Check,
   Users, BookMarked, Trash2, AlertTriangle, MessageCircle, Send, Loader2, X, Puzzle,
   Library, BookOpen, ChevronDown, ChevronUp, ChevronLeft,
-  Settings2, Search, Compass, FolderOpen, GraduationCap, Pencil,
+  Settings2, Search, FolderOpen, GraduationCap, Pencil,
   ChevronFirst, ChevronLast, Play, Pause, Download, Zap, MoreVertical, HelpCircle, Minus, Focus,
-  MousePointer2, PanelRight, Hand,
+  MousePointer2, PanelRight, Hand, Grid2X2,
 } from 'lucide-react';
+import { LiveLessonBoardGrid, type GridLayoutMode } from './live-lesson/LiveLessonBoardGrid';
+import { LiveLessonStudentBoardsPanel } from './live-lesson/LiveLessonStudentBoardsPanel';
 import { useStockfish } from '../hooks/useStockfish';
 import type { PvLine } from '../hooks/useStockfish';
 import { useApp } from '../AppContext';
@@ -40,12 +42,15 @@ import { saveStudyAsync } from '../studyStorage';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES } from '../lib/chessBoardUi';
 import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStableEvalDisplay } from '../hooks/useStableEvalDisplay';
+import { evalWinningChances } from '../lib/winningChances';
 import { Study, StudyChapter } from '../lib/studyTypes';
-import type { Puzzle as PuzzleType, Student } from '../types';
+import type { Student } from '../types';
 import { makeBuilderGame, applyMove, studyDisplayEmoji } from '../lib/studyUtils';
+import { BoardPositionBuilder, type BoardPositionBuilderApplyPayload } from './BoardPositionBuilder';
 import {
   liveLessonFenAt,
   inferLiveLessonNavFromFen,
+  inferLiveLessonExportBaseFen,
   sanitizeLiveVariations,
   type LiveVariationRef,
 } from '../lib/liveLessonVariations';
@@ -60,7 +65,11 @@ import {
   type PvHoverState,
   type LinePreviewState,
 } from '../lib/enginePvPreview';
-import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
+import {
+  isBoardFlipShortcutKey,
+  keyboardTargetAllowsBoardShortcut,
+  keyboardTargetAllowsReplayNav,
+} from '../lib/boardFlipShortcut';
 import { promoteVariationLines } from '../lib/studySync/moveList';
 import { triggerWhatsAppAuto } from '../services/whatsappClient';
 import { normalizeSearchText, searchIncludesText } from '../lib/searchText';
@@ -104,6 +113,7 @@ const liveLessonStudyTargetKey = (roomId: string) => `live_lesson_study_target_$
 type StudyExportPayload = {
   fen: string;
   moves: string[];
+  variations?: Record<number, string[][]>;
   defaultChapterTitle: string;
 };
 
@@ -1305,6 +1315,7 @@ function isStudentClassroomAnalysisEnabled(sm: SessionMediaState): boolean {
 }
 
 function isStudentBoardEvalBarEnabled(sm: SessionMediaState): boolean {
+  if (!sm.studentAnalysisVisible) return false;
   return !!sm.studentEvalBarVisible;
 }
 
@@ -1653,6 +1664,26 @@ function parseCoachSideFromRow(raw: unknown): CollaborativeBoardSide | null | un
   return undefined;
 }
 
+function turnFromFen(fen: string): 'w' | 'b' | null {
+  try {
+    return new Chess(fen).turn();
+  } catch {
+    return null;
+  }
+}
+
+/** Antrenör / öğrenci taş oynatma — hem taş rengi hem sıra kontrolü. */
+function pieceMayMoveForPlaySide(
+  pieceColor: 'w' | 'b',
+  turn: 'w' | 'b',
+  playSide: PlayBoardSide | CollaborativeBoardSide | null,
+  freeWhenNull = false,
+): boolean {
+  if (playSide == null) return freeWhenNull && pieceColor === turn;
+  if (playSide === 'both') return pieceColor === turn;
+  return pieceColor === playSide && turn === playSide;
+}
+
 function formatCoachSeatLabel(side: CollaborativeBoardSide | null): string {
   if (side === 'w') return 'Beyaz';
   if (side === 'b') return 'Siyah';
@@ -1781,8 +1812,8 @@ export type ClassroomSidebarTab =
   | 'katilimcilar'
   | 'goruntu'
   | 'sohbet'
-  | 'oyunlar'
-  | 'kesfet';
+  | 'tahtalar'
+  | 'oyunlar';
 
 function formatStudentSeatLabel(side: PlayBoardSide | null): string {
   if (side === 'w') return 'Beyaz';
@@ -1867,7 +1898,7 @@ function ClassroomToggle({
 }
 
 const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: roomIdProp, studentId: studentIdProp }) => {
-  const { scopedStudents: students, puzzles, refreshStudentsFromSupabase, addAttendanceRecord, showToast, confirmDialog, alertDialog, auth } = useApp();
+  const { scopedStudents: students, refreshStudentsFromSupabase, addAttendanceRecord, showToast, confirmDialog, alertDialog, auth } = useApp();
   const showStudentCounts = canShowStudentCounts(auth);
   /** Admin: seçilen oda (null = sınıf listesi göster) */
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -1916,8 +1947,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const [enginePvLinePreview, setEnginePvLinePreview] = useState<LinePreviewState>(null);
   const boardWheelNavTsRef = useRef(0);
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
+  const moveHistoryRef = useRef<string[]>([]);
+  moveHistoryRef.current = moveHistory;
   const [variations, setVariations] = useState<Record<number, string[][]>>({});
   const [currentVariation, setCurrentVariation] = useState<LiveVariationRef | null>(null);
+  const replayNavPlyRef = useRef<number | null>(null);
+  const currentVariationRef = useRef<LiveVariationRef | null>(null);
   const variationsRef = useRef(variations);
   variationsRef.current = variations;
   /** Kamera varsayılan açık; öğrenci mikrofonu söz hakkı gelene kadar kapalı */
@@ -1987,9 +2022,17 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const [mobileClassroomPanel, setMobileClassroomPanel] = useState<'board' | 'sidebar'>('board');
   /** Oyunlar sekmesi alt bölümü */
   const [oyunlarSection, setOyunlarSection] = useState<'library' | 'pgn' | 'position'>('library');
+  const [gridPage, setGridPage] = useState(0);
+  const [focusedGridStudentId, setFocusedGridStudentId] = useState<string | null>(null);
+  const [gridBoardsPerPage, setGridBoardsPerPage] = useState<GridLayoutMode>(4);
+  const [gridAutoFollow, setGridAutoFollow] = useState(true);
+  const [gridAutoPage, setGridAutoPage] = useState(false);
+  const [gridSyncNonce, setGridSyncNonce] = useState(0);
   /** Notasyon zaman çizelgesinde gezinme; null = güncel (son ply) */
   const [replayNavPly, setReplayNavPly] = useState<number | null>(null);
   const [replayIsPlaying, setReplayIsPlaying] = useState(false);
+  replayNavPlyRef.current = replayNavPly;
+  currentVariationRef.current = currentVariation;
   /** Motor göstergesi (sidebar) */
   const [engineEvalVisible, setEngineEvalVisible] = useState(true);
   const [engineLinesVisible, setEngineLinesVisible] = useState(true);
@@ -2008,18 +2051,18 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   /** Sağ üst masaüstü saati */
   const [wallClock, setWallClock] = useState(() =>
     typeof window !== 'undefined' ? new Date().toLocaleTimeString('tr-TR') : '');
-  const [puzzleSearch, setPuzzleSearch] = useState('');
-  const [selectedPoolPuzzleId, setSelectedPoolPuzzleId] = useState<string | null>(null);
-  const [showPoolSolution, setShowPoolSolution] = useState(false);
   const [fenInput, setFenInput] = useState('');
   const [pgnInput, setPgnInput] = useState('');
   const [positionError, setPositionError] = useState('');
   const [pgnError, setPgnError] = useState('');
+  const [showPositionBuilder, setShowPositionBuilder] = useState(false);
   const sessionStartRef = useRef(Date.now());
   const [sessionTime, setSessionTime] = useState('00:00');
   const lastSyncRef = useRef<string>('');
   const lastAnnoSyncRef = useRef<string>('');
   const lastLocalMoveTimeRef = useRef<number>(0);
+  /** Antrenör taraf seçiminden sonra kısa süre uzak coach_side ile üzerine yazmayı engelle. */
+  const coachLocalSideShieldUntilRef = useRef<number>(0);
   const [analysisMode, setAnalysisMode] = useState(false);
   const [drawingTool, setDrawingTool] = useState<DrawingTool>('mouse');
   /** Tıklanan taşa göre yasal hamle noktaları (sürükleyerek de uyumlu) */
@@ -2661,29 +2704,45 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         const syncKey = `${data.fen}|${JSON.stringify(data.variations ?? {})}|${data.updated_at}|${annoKey}|${JSON.stringify(data.session_media ?? '')}|${JSON.stringify(data.chat_messages ?? '')}`;
         if (syncKey !== lastSyncRef.current) {
           lastSyncRef.current = syncKey;
+          const coachReviewingHistory =
+            !isStudentView &&
+            (replayNavPlyRef.current !== null || currentVariationRef.current !== null);
           try {
-            const c = new Chess(data.fen as string);
-            const syncedFen = c.fen();
             const moves = Array.isArray(data.moves) ? (data.moves as string[]) : [];
             const vars = 'variations' in data
               ? sanitizeLiveVariations(data.variations)
               : {};
+            if (coachReviewingHistory) {
+              if (JSON.stringify(moves) !== JSON.stringify(moveHistoryRef.current)) {
+                setMoveHistory(moves);
+                setVariations(vars);
+              }
+            } else {
+            const c = new Chess(data.fen as string);
+            const syncedFen = c.fen();
+            const prevMoveCount = moveHistoryRef.current.length;
             setGame(c);
             setFen(syncedFen);
             setMoveHistory(moves);
             setVariations(vars);
             const nav = inferLiveLessonNavFromFen(baseFenRef.current, moves, vars, syncedFen);
+            const atHead = nav.mainLinePly >= moves.length && !nav.currentVariation;
             setCurrentVariation(nav.currentVariation);
             setReplayNavPly(
               nav.currentVariation
                 ? null
-                : nav.mainLinePly >= moves.length
+                : atHead
                   ? null
                   : nav.mainLinePly,
             );
+            if (!isStudentView && moves.length > prevMoveCount) {
+              setReplayNavPly(null);
+              setCurrentVariation(null);
+            }
             if (isStudentView) {
               setHoverFen(null);
               setReplayIsPlaying(false);
+            }
             }
           } catch {
             // ignore invalid fen
@@ -2693,7 +2752,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
       if ('coach_side' in data) {
         const parsedCoachSide = parseCoachSideFromRow(data.coach_side);
-        if (parsedCoachSide !== undefined) {
+        const mayApplyCoachSideRemote = isStudentView || Date.now() >= coachLocalSideShieldUntilRef.current;
+        if (parsedCoachSide !== undefined && mayApplyCoachSideRemote) {
           if (parsedCoachSide) {
             try { sessionStorage.setItem(COACH_SIDE_STORAGE_KEY, parsedCoachSide); } catch { /* ignore */ }
             setCoachSide(parsedCoachSide);
@@ -2761,7 +2821,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     fetchState();
     const interval = setInterval(fetchState, SYNC_POLL_MS);
     return () => clearInterval(interval);
-  }, [effectiveRoomId, isStudentView, studentIdProp, isPgColumnError]);
+  }, [effectiveRoomId, isStudentView, studentIdProp, isPgColumnError, gridSyncNonce]);
 
   useEffect(() => {
     setLessonRoomClosed(false);
@@ -3020,6 +3080,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       return;
     }
     const moves = Array.isArray(studyExportPayload.moves) ? studyExportPayload.moves : [];
+    const exportVariations = studyExportPayload.variations ?? {};
     setStudyExportSaving(true);
     setStudyExportMessage('');
     try {
@@ -3044,7 +3105,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           tags: ['canlı ders'],
           moveComments: {},
           moveAnnotations: {},
-          variations: {},
+          variations: exportVariations,
         };
         const newStudy: Study = {
           id: studyId,
@@ -3082,7 +3143,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           return;
         }
         updatedChapters = study.chapters.map((c) =>
-          c.id === studyExportChapterId ? { ...c, fen: fenOk, moves } : c
+          c.id === studyExportChapterId
+            ? { ...c, fen: fenOk, moves, variations: exportVariations }
+            : c
         );
         const updated: Study = { ...study, chapters: updatedChapters, updatedAt: now };
         await saveStudyAsync(updated);
@@ -3101,7 +3164,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           tags: ['canlı ders'],
           moveComments: {},
           moveAnnotations: {},
-          variations: {},
+          variations: exportVariations,
         };
         updatedChapters = [...study.chapters, newChapter];
         const updated: Study = { ...study, chapters: updatedChapters, updatedAt: now };
@@ -3147,11 +3210,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       rooms.find((r) => r.id === effectiveRoomId)?.room_name?.trim() ||
       `Oda ${effectiveRoomId}`;
     void openStudyExportModal({
-      fen,
+      fen: baseFen,
       moves: moveHistory,
+      variations,
       defaultChapterTitle: name,
     });
-  }, [rooms, effectiveRoomId, fen, moveHistory, openStudyExportModal]);
+  }, [rooms, effectiveRoomId, baseFen, moveHistory, variations, openStudyExportModal]);
 
   const downloadCurrentPgnFile = useCallback(() => {
     try {
@@ -3205,7 +3269,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (!sb) return;
       const { data, error } = await sb
         .from('live_lesson_state')
-        .select('fen, moves, room_name')
+        .select('fen, moves, room_name, variations')
         .eq('id', room.id)
         .maybeSingle();
       if (error || !data || typeof data !== 'object') {
@@ -3213,15 +3277,17 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         return;
       }
       const rec = data as Record<string, unknown>;
-      const fenStr = typeof rec.fen === 'string' ? rec.fen : START_FEN;
+      const currentFen = typeof rec.fen === 'string' ? rec.fen : START_FEN;
       const moves = Array.isArray(rec.moves) ? (rec.moves as string[]) : [];
+      const vars = sanitizeLiveVariations(rec.variations);
+      const startFen = inferLiveLessonExportBaseFen(currentFen, moves, [START_FEN, baseFen]);
       const title = (typeof rec.room_name === 'string' && rec.room_name.trim()) || room.room_name || `Oda ${room.id}`;
       void openStudyExportModal(
-        { fen: fenStr, moves, defaultChapterTitle: title },
+        { fen: startFen, moves, variations: vars, defaultChapterTitle: title },
         room.id
       );
     },
-    [openStudyExportModal]
+    [openStudyExportModal, baseFen, showToast]
   );
 
   const openDeleteRoomModal = useCallback((room: LiveLessonRoom) => {
@@ -4315,10 +4381,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   /** Oynanabilir uç pozisyon (notasyon gezintisinde değiliz) */
   const atLiveGameHead = isStudentView || liveLessonCurrentPly === activeLineLength;
   const studentPlaySideResolved = resolveStudentPlaySide(studentIdProp, sessionMedia);
-  /** Öğrenci: antrenör izin verdiyse tahta oynanır; antrenör: analiz / canlı uç / analiz sekmesi */
-  const boardExploreMode = isStudentView
-    ? studentPlaySideResolved != null
-    : (analysisMode || atLiveGameHead || sidebarTab === 'analiz');
   const replayNavActive = !isStudentView && (replayNavPly !== null || currentVariation !== null);
 
   const boardDisplayFen = useMemo(() => {
@@ -4326,6 +4388,17 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (isStudentView) return fen;
     return liveLessonFenAt(displayBaseFen, displayMoveHistory, displayVariations, mainLinePly, currentVariation);
   }, [isStudentView, fen, hoverFen, replayNavActive, displayBaseFen, displayMoveHistory, displayVariations, mainLinePly, currentVariation]);
+
+  /** Öğrenci: antrenör izin verdiyse tahta oynanır; antrenör: analiz / canlı uç / sırası gelince */
+  const turnOnBoard = turnFromFen(boardDisplayFen) ?? game.turn();
+  const coachTurnPlay =
+    !isStudentView &&
+    atLiveGameHead &&
+    coachSide != null &&
+    (coachSide === 'both' || coachSide === turnOnBoard);
+  const boardExploreMode = isStudentView
+    ? studentPlaySideResolved != null
+    : (analysisMode || atLiveGameHead || sidebarTab === 'analiz' || coachTurnPlay);
 
   useEffect(() => {
     setMoveHintSquare(null);
@@ -4364,7 +4437,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const studentClassroomAnalysisOn = isStudentClassroomAnalysisEnabled(sessionMedia);
   const studentBoardEvalOn = isStudentBoardEvalBarEnabled(sessionMedia);
   const showBoardEvalBar = isStudentView ? studentBoardEvalOn : engineEvalVisible;
-  const coachEngineActive = engineEvalVisible && sidebarTab === 'analiz';
+  const coachEngineActive = !isStudentView && sidebarTab === 'analiz';
   const studentEngineActive = studentClassroomAnalysisOn && sidebarTab === 'analiz';
   const enginePanelActive = isStudentView ? studentEngineActive : coachEngineActive;
   const engineLineSlotCount = isStudentView
@@ -4391,13 +4464,15 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     error: engineError,
   } = useStockfish({
     numPv: enginePanelActive ? engineLineSlotCount : 1,
-    enabled: studentAnalyseBoard || (!isStudentView && (engineEvalVisible || coachEngineActive)),
+    enabled:
+      (isStudentView && (studentAnalyseBoard || studentBoardEvalOn)) ||
+      (!isStudentView && (engineEvalVisible || sidebarTab === 'analiz')),
   });
 
   /** Tahta / analiz sekmesi FEN değişince motoru güncelle (tek giriş noktası) */
   useEffect(() => {
     const shouldAnalyse = isStudentView
-      ? studentAnalyseBoard
+      ? studentAnalyseBoard || studentBoardEvalOn
       : showBoardEvalBar || enginePanelActive;
     if (!shouldAnalyse) return;
     const fen = boardDisplayFen.trim();
@@ -4407,7 +4482,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       return;
     }
     analyseEngineFen(fen);
-  }, [isStudentView, studentAnalyseBoard, showBoardEvalBar, enginePanelActive, boardDisplayFen, analyseEngineFen]);
+  }, [isStudentView, studentAnalyseBoard, studentBoardEvalOn, showBoardEvalBar, enginePanelActive, boardDisplayFen, analyseEngineFen]);
 
   const onEnginePvHoverPly = useMemo(
     () =>
@@ -4553,12 +4628,24 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
   }, [sidebarTab, isStudentView]);
 
+  useEffect(() => {
+    if (!isStudentView && sidebarTab === 'tahtalar') {
+      setMobileClassroomPanel('board');
+    }
+  }, [sidebarTab, isStudentView]);
+
   const applyChapterContent = useCallback((ch: StudyChapter) => {
     try {
       const initFen = ch.fen || START_FEN;
       const newGame = makeBuilderGame(initFen);
       const chapterMoves = Array.isArray(ch.moves) ? ch.moves : [];
-      // Çalışmadan yüklerken tahtayı sadece başlangıç FEN'ine değil, hamlelerin son konumuna getir.
+      const chapterVars = sanitizeLiveVariations(ch.variations ?? {});
+      const chapterArrows = sanitizeArrows(ch.arrows ?? []);
+      const chapterMarks =
+        ch.circles && typeof ch.circles === 'object' && !Array.isArray(ch.circles)
+          ? (ch.circles as Record<string, { color: SquareMarkColor; type: 'square' | 'circle' | 'x' }>)
+          : {};
+      // Çalışmadan yüklerken tahtayı hamlelerin son konumuna getir.
       for (const san of chapterMoves) {
         if (!applyMove(newGame, String(san))) break;
       }
@@ -4567,87 +4654,43 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setFen(finalFen);
       setBaseFen(initFen);
       setMoveHistory(chapterMoves);
-      // Push to remote seans
+      setVariations(chapterVars);
+      setArrows(chapterArrows);
+      setMarks(chapterMarks);
+      setBoardDrawRevision((r) => r + 1);
+      setReplayNavPly(null);
+      setCurrentVariation(null);
+      setHoverFen(null);
+      setReplayIsPlaying(false);
+      setCoachSide('both');
+      coachLocalSideShieldUntilRef.current = Date.now() + 5000;
+      try {
+        sessionStorage.setItem(COACH_SIDE_STORAGE_KEY, 'both');
+      } catch {
+        /* ignore */
+      }
+      lastLocalMoveTimeRef.current = Date.now();
       void pushState(
         finalFen,
         chapterMoves,
-        ch.arrows || [],
-        (ch as any).circles || {},
-        ch.orientation === 'black' ? 'b' : 'w'
+        chapterArrows,
+        chapterMarks,
+        'both',
+        chapterVars,
       );
-      setReplayNavPly(null);
       setSidebarTab('analiz');
+      setMobileClassroomPanel('board');
     } catch (e) {
       console.error("[LiveLesson] Failed to apply chapter:", e);
     }
   }, [pushState]);
 
-  const applyPuzzleContent = useCallback((puzzle: PuzzleType) => {
-    try {
-      const initFen = (puzzle.fen || START_FEN).trim();
-      const newGame = makeBuilderGame(initFen);
-      const finalFen = newGame.fen();
-      setGame(newGame);
-      setFen(finalFen);
-      setBaseFen(initFen);
-      // Canli derste ogrenciler bulmacayi tahtada cozsun diye hamle listesi sifirdan baslar.
-      setMoveHistory([]);
-      setSelectedPoolPuzzleId(puzzle.id);
-      void pushSessionMediaRemote({
-        activePuzzleId: puzzle.id,
-      });
-      setReplayNavPly(null);
-      setSidebarTab('analiz');
-      void pushState(finalFen, [], [], {}, coachSide ?? undefined);
-    } catch (e) {
-      console.error('[LiveLesson] Failed to apply puzzle:', e);
-    }
-  }, [pushState, coachSide, pushSessionMediaRemote]);
-
-  const filteredPuzzles = useMemo(() => {
-    const q = puzzleSearch.trim().toLowerCase();
-    if (!q) return puzzles.slice(0, 200);
-    return puzzles
-      .filter((p) =>
-        p.title.toLowerCase().includes(q) ||
-        (p.category || '').toLowerCase().includes(q) ||
-        (p.theme || '').toLowerCase().includes(q)
-      )
-      .slice(0, 200);
-  }, [puzzles, puzzleSearch]);
-
-  const selectedPoolPuzzle = useMemo(
-    () => puzzles.find((p) => p.id === selectedPoolPuzzleId) ?? null,
-    [puzzles, selectedPoolPuzzleId]
-  );
-
-  useEffect(() => {
-    if (sessionMedia.activePuzzleId) {
-      setSelectedPoolPuzzleId(sessionMedia.activePuzzleId);
-    }
-  }, [sessionMedia.activePuzzleId]);
-
-  const sendSelectedPuzzleToStudy = useCallback(() => {
-    if (!selectedPoolPuzzle) return;
-    const title = (selectedPoolPuzzle.title || 'Bulmaca').trim();
-    void openStudyExportModal({
-      fen: selectedPoolPuzzle.fen,
-      moves: selectedPoolPuzzle.solution ?? [],
-      defaultChapterTitle: title,
-    });
-  }, [selectedPoolPuzzle, openStudyExportModal]);
-
-  const toggleStudentPuzzleSolutionVisibility = useCallback(() => {
-    if (isStudentView) return;
-    void pushSessionMediaRemote({
-      studentCanSeePuzzleSolution: !sessionMediaRef.current.studentCanSeePuzzleSolution,
-    });
-  }, [isStudentView, pushSessionMediaRemote]);
-
   const toggleStudentAnalysisVisibility = useCallback(() => {
     if (isStudentView) return;
+    const next = !(sessionMediaRef.current.studentAnalysisVisible ?? false);
     void pushSessionMediaRemote({
-      studentAnalysisVisible: !(sessionMediaRef.current.studentAnalysisVisible ?? false),
+      studentAnalysisVisible: next,
+      ...(next ? {} : { studentEvalBarVisible: false }),
     });
   }, [isStudentView, pushSessionMediaRemote]);
 
@@ -4768,11 +4811,16 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     const nextFen = liveLessonFenAt(baseFen, moveHistory, variations, mainPly, nextVar);
     setCurrentVariation(nextVar);
     setReplayNavPly(nextReplay);
-    setFen(nextFen);
-    setGame(new Chess(nextFen));
-    lastLocalMoveTimeRef.current = Date.now();
-    pushState(nextFen, moveHistory, undefined, undefined, coachSide ?? undefined, variations);
-  }, [isStudentView, baseFen, moveHistory, variations, pushState, coachSide]);
+    try {
+      const g = makeBuilderGame(nextFen);
+      setFen(g.fen());
+      setGame(g);
+    } catch {
+      setFen(nextFen);
+      setGame(new Chess(nextFen));
+    }
+    // Notasyon gezintisi yalnızca yerel — sunucuya yazılmaz; öğrenci canlı uçta kalır.
+  }, [isStudentView, baseFen, moveHistory, variations]);
 
   const selectLiveMove = useCallback((idx: number, varInfo?: LiveVariationRef) => {
     if (isStudentView) return;
@@ -4782,6 +4830,67 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
     publishCoachBoardNav(null, Math.max(0, idx));
   }, [isStudentView, publishCoachBoardNav]);
+
+  const stepLiveLessonReplay = useCallback((
+    direction: 'prev' | 'next' | 'start' | 'end',
+  ) => {
+    if (isStudentView) return;
+    if (displayMoveHistory.length === 0 && !currentVariation) return;
+    setReplayIsPlaying(false);
+    setHoverFen(null);
+
+    if (direction === 'start') {
+      publishCoachBoardNav(null, 0);
+      return;
+    }
+    if (direction === 'end') {
+      if (currentVariation) {
+        const [mainLinePos, varGroupIdx] = currentVariation;
+        const varLine = displayVariations[mainLinePos]?.[varGroupIdx] ?? [];
+        if (varLine.length === 0) publishCoachBoardNav(null, null);
+        else publishCoachBoardNav([mainLinePos, varGroupIdx, varLine.length - 1], null);
+      } else {
+        publishCoachBoardNav(null, null);
+      }
+      return;
+    }
+
+    if (currentVariation) {
+      const [mainLinePos, varGroupIdx, varMoveIdx] = currentVariation;
+      const varLine = displayVariations[mainLinePos]?.[varGroupIdx] ?? [];
+      if (direction === 'prev') {
+        if (varMoveIdx > 0) {
+          publishCoachBoardNav([mainLinePos, varGroupIdx, varMoveIdx - 1], null);
+        } else {
+          publishCoachBoardNav(null, mainLinePos);
+        }
+      } else if (varMoveIdx < varLine.length - 1) {
+        publishCoachBoardNav([mainLinePos, varGroupIdx, varMoveIdx + 1], null);
+      } else {
+        publishCoachBoardNav(
+          null,
+          mainLinePos + 1 >= displayMoveHistory.length ? null : mainLinePos + 1,
+        );
+      }
+      return;
+    }
+
+    const len = displayMoveHistory.length;
+    const cur = replayNavPly ?? len;
+    if (direction === 'prev') {
+      publishCoachBoardNav(null, Math.max(0, cur - 1));
+      return;
+    }
+    const next = Math.min(len, cur + 1);
+    publishCoachBoardNav(null, next >= len ? null : next);
+  }, [
+    isStudentView,
+    displayMoveHistory.length,
+    displayVariations,
+    currentVariation,
+    replayNavPly,
+    publishCoachBoardNav,
+  ]);
 
   const deleteLiveMoveFromHere = useCallback((idx: number) => {
     if (isStudentView) return;
@@ -4862,20 +4971,20 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
     if (!analysisMode && isStudentView) {
       if (playSide == null) return false;
-      if (playSide !== 'both') {
-        try {
-          const g0 = new Chess(boardDisplayFen);
-          const pc0 = g0.get(sourceSquare as any);
-          if (!pc0 || pc0.color !== playSide || turnNow !== playSide) return false;
-        } catch {
-          return false;
-        }
-      }
-    } else if (!analysisMode && !isStudentView && coachSide != null && coachSide !== 'both') {
       try {
         const g0 = new Chess(boardDisplayFen);
         const pc0 = g0.get(sourceSquare as any);
-        if (!pc0 || pc0.color !== coachSide || turnNow !== coachSide) return false;
+        if (!pc0) return false;
+        if (!pieceMayMoveForPlaySide(pc0.color, turnNow, playSide)) return false;
+      } catch {
+        return false;
+      }
+    } else if (!analysisMode && !isStudentView) {
+      try {
+        const g0 = new Chess(boardDisplayFen);
+        const pc0 = g0.get(sourceSquare as any);
+        if (!pc0) return false;
+        if (!pieceMayMoveForPlaySide(pc0.color, turnNow, coachSide, true)) return false;
       } catch {
         return false;
       }
@@ -4988,9 +5097,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const handleDrop = useCallback((a: unknown, b?: unknown) => onPieceDrop(a, b), [onPieceDrop]);
 
-  const applyFen = useCallback(() => {
+  const applyFenString = useCallback((fenStr: string) => {
     setPositionError('');
-    const trimmed = fenInput.trim() || START_FEN;
+    const trimmed = fenStr.trim() || START_FEN;
     try {
       const c = new Chess(trimmed);
       setReplayNavPly(null);
@@ -5002,10 +5111,55 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setVariations({});
       setCurrentVariation(null);
       pushState(c.fen(), [], arrows, marks, coachSide ?? undefined, {});
+      return true;
     } catch {
       setPositionError('Geçersiz FEN. Standart başlangıç veya geçerli bir konum girin.');
+      return false;
     }
-  }, [fenInput, pushState, arrows, coachSide]);
+  }, [pushState, arrows, coachSide]);
+
+  const applyFen = useCallback(() => {
+    applyFenString(fenInput);
+  }, [fenInput, applyFenString]);
+
+  const handlePositionBuilderApply = useCallback((payload: BoardPositionBuilderApplyPayload) => {
+    if (payload.kind === 'pgn') {
+      setPgnInput(payload.pgn);
+      setPgnError('');
+      try {
+        const trimmed = payload.pgn.trim();
+        if (trimmed.includes('1.') || trimmed.includes('[Event')) {
+          const c = new Chess();
+          const loaded = (c.loadPgn as (pgn: string, opts?: { strict?: boolean }) => boolean)(trimmed, { strict: false });
+          if (loaded) {
+            const moves = c.history();
+            setReplayNavPly(null);
+            setGame(c);
+            setFen(c.fen());
+            setMoveHistory(moves);
+            setPgnInput('');
+            pushState(c.fen(), moves, arrows, marks, coachSide ?? undefined);
+            setShowPositionBuilder(false);
+            setSidebarTab('analiz');
+            return;
+          }
+          setPositionError('PGN ayrıştırılamadı.');
+          return;
+        }
+        if (applyFenString(trimmed)) {
+          setShowPositionBuilder(false);
+          setSidebarTab('analiz');
+        }
+      } catch {
+        setPositionError('Geçersiz PGN veya FEN.');
+      }
+      return;
+    }
+    if (applyFenString(payload.fen)) {
+      setShowPositionBuilder(false);
+      setSidebarTab('analiz');
+    }
+  }, [applyFenString, pushState, arrows, coachSide]);
 
   const loadPgn = useCallback(() => {
     setPgnError('');
@@ -5061,7 +5215,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     pushState(c.fen(), [], [], {}, coachSide ?? undefined, {});
   }, [pushState, coachSide]);
 
-  // Arrow Key Navigation (replay gezinme — hamle silmez)
+  const stepLiveLessonReplayRef = useRef(stepLiveLessonReplay);
+  stepLiveLessonReplayRef.current = stepLiveLessonReplay;
+
+  // Klavye ile notasyon gezintisi (←/→, k/j, Home/End) — capture fazında, metin alanı hariç
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!keyboardTargetAllowsBoardShortcut(e)) return;
@@ -5081,59 +5238,36 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         return;
       }
 
+      if (!keyboardTargetAllowsReplayNav(e)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isStudentView) return;
       if (displayMoveHistory.length === 0 && !currentVariation) return;
 
-      if (isStudentView) return;
+      const key = e.key;
+      const lower = key.toLowerCase();
+      let direction: 'prev' | 'next' | 'start' | 'end' | null = null;
+      if (key === 'ArrowLeft' || lower === 'k') direction = 'prev';
+      else if (key === 'ArrowRight' || lower === 'j') direction = 'next';
+      else if (key === 'ArrowDown' || key === 'Home') direction = 'start';
+      else if (key === 'ArrowUp' || key === 'End') direction = 'end';
+      if (!direction) return;
 
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        e.preventDefault();
-        setReplayIsPlaying(false);
-        if (currentVariation) {
-          const [mainLinePos, varGroupIdx, varMoveIdx] = currentVariation;
-          const varLine = displayVariations[mainLinePos]?.[varGroupIdx] ?? [];
-          let nextVar: LiveVariationRef | null = currentVariation;
-          let nextReplay: number | null = null;
-          if (e.key === 'ArrowLeft') {
-            if (varMoveIdx > 0) {
-              nextVar = [mainLinePos, varGroupIdx, varMoveIdx - 1];
-            } else {
-              nextVar = null;
-              nextReplay = mainLinePos;
-            }
-          } else if (varMoveIdx < varLine.length - 1) {
-            nextVar = [mainLinePos, varGroupIdx, varMoveIdx + 1];
-          } else {
-            nextVar = null;
-            nextReplay = mainLinePos + 1 >= displayMoveHistory.length ? null : mainLinePos + 1;
-          }
-          publishCoachBoardNav(nextVar, nextReplay);
-          return;
-        }
-        const len = displayMoveHistory.length;
-        const cur = replayNavPly ?? len;
-        if (e.key === 'ArrowLeft') {
-          publishCoachBoardNav(null, Math.max(0, cur - 1));
-        } else {
-          const next = Math.min(len, cur + 1);
-          publishCoachBoardNav(null, next >= len ? null : next);
-        }
-      }
+      e.preventDefault();
+      stepLiveLessonReplayRef.current(direction);
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [
     moveHistory.length,
     displayMoveHistory.length,
-    displayVariations,
     currentVariation,
-    replayNavPly,
     isStudentView,
     deleteLiveMoveFromHere,
-    publishCoachBoardNav,
   ]);
 
   const setCoachPlaySide = useCallback(
     (side: CollaborativeBoardSide | null) => {
+      coachLocalSideShieldUntilRef.current = Date.now() + 5000;
       if (side) {
         try {
           sessionStorage.setItem(COACH_SIDE_STORAGE_KEY, side);
@@ -5232,23 +5366,31 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     isSparePiece?: boolean
   ): boolean => {
     if (isSparePiece || !square || !piece?.pieceType) return false;
-    if (!moveHintsToolOk) return false;
     if (!boardExploreMode) return false;
     if (isStudentView) {
       if (playSide == null) return false;
-      if (playSide !== 'both') {
-        const pt = piece.pieceType;
-        if (typeof pt !== 'string' || pt.charAt(0) !== playSide) return false;
+      const pt = piece.pieceType;
+      if (typeof pt !== 'string' || pt.length < 1) return false;
+      const pieceColor = pt.charAt(0) as 'w' | 'b';
+      try {
+        const fenPos = (hoverFen || boardDisplayFen).trim();
+        const g = new Chess(fenPos);
+        const turn = g.turn();
+        if (!pieceMayMoveForPlaySide(pieceColor, turn, playSide)) return false;
+        const pc = g.get(square as any);
+        if (!pc || pc.color !== turn) return false;
+        return true;
+      } catch {
+        return false;
       }
-    } else if (drawingTool !== 'mouse') return false;
+    }
+    if (!moveHintsToolOk) return false;
     try {
       const fenPos = (hoverFen || boardDisplayFen).trim();
       const g = new Chess(fenPos);
       const pc = g.get(square as any);
       if (!pc || pc.color !== g.turn()) return false;
-      if (!analysisMode && isStudentView && playSide != null && playSide !== 'both') {
-        if (g.turn() !== playSide || pc.color !== playSide) return false;
-      }
+      if (!analysisMode && !pieceMayMoveForPlaySide(pc.color, g.turn(), coachSide, true)) return false;
       return true;
     } catch {
       return false;
@@ -5266,7 +5408,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (!piece || piece.color !== g.turn()) return empty;
       if (!analysisMode && isStudentView) {
         if (playSide == null) return empty;
-        if (playSide !== 'both' && (g.turn() !== playSide || piece.color !== playSide)) return empty;
+        if (!pieceMayMoveForPlaySide(piece.color, g.turn(), playSide)) return empty;
+      } else if (!analysisMode && !isStudentView) {
+        if (!pieceMayMoveForPlaySide(piece.color, g.turn(), coachSide, true)) return empty;
       }
       const moves = g.moves({ square: moveHintSquare as any, verbose: true });
       if (moves.length === 0) return empty;
@@ -5438,14 +5582,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     canDragPiece: ({ piece }: { piece?: { pieceType?: string }; isSparePiece?: boolean; square?: string | null }) => {
       const pieceType = piece?.pieceType ?? (piece as unknown as string);
       const pt = typeof pieceType === 'string' ? pieceType : '';
-      const color = pt.charAt(0);
+      const color = pt.charAt(0) as 'w' | 'b';
+      if (color !== 'w' && color !== 'b') return false;
+      const turn = turnFromFen(boardDisplayFen) ?? game.turn();
       if (!isStudentView) {
-        if (coachSide == null || coachSide === 'both') return true;
-        return color === coachSide;
+        return pieceMayMoveForPlaySide(color, turn, coachSide, true);
       }
-      if (playSide == null) return false;
-      if (playSide === 'both') return true;
-      return color === playSide;
+      return pieceMayMoveForPlaySide(color, turn, playSide);
     },
   };
 
@@ -5459,9 +5602,17 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const showLiveEvalBar = showBoardEvalBar;
   const terminalEval = useMemo(() => getTerminalEval(boardDisplayFen), [boardDisplayFen]);
+  // Lichess sortPvsInPlace: eval çubuğu için en iyi (kazanma şansı en yüksek) hattı seç
+  const bestLiveEvalLine = useMemo(() => {
+    const valid = enginePvLines.filter((l): l is NonNullable<typeof l> => l != null);
+    if (valid.length === 0) return enginePvLines[0];
+    return valid.reduce((best, l) =>
+      evalWinningChances(l) > evalWinningChances(best) ? l : best,
+    );
+  }, [enginePvLines]);
   const stableEngineEval = useStableEvalDisplay(
     boardDisplayFen,
-    enginePvLines[0],
+    bestLiveEvalLine,
     displayTurn,
     showLiveEvalBar && !terminalEval,
   );
@@ -5498,6 +5649,60 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         return Number.isFinite(t) && Date.now() - t < STALE_ROOM_MS;
       }),
     [rooms],
+  );
+
+  const gridMonitorStudents = useMemo(() => {
+    const admittedSet = new Set((sessionMedia.admittedStudentIds ?? []).map(normalizeStudentId));
+    const admitted = classroomRosterStudents.filter((s) => admittedSet.has(normalizeStudentId(s.id)));
+    return admitted.length > 0 ? admitted : classroomRosterStudents;
+  }, [classroomRosterStudents, sessionMedia.admittedStudentIds]);
+
+  const focusGridStudent = useCallback(
+    (studentId: string) => {
+      const sid = normalizeStudentId(studentId);
+      setFocusedGridStudentId(sid);
+      const idx = gridMonitorStudents.findIndex((s) => normalizeStudentId(s.id) === sid);
+      if (idx >= 0) setGridPage(Math.floor(idx / gridBoardsPerPage));
+    },
+    [gridMonitorStudents, gridBoardsPerPage],
+  );
+
+  const handleGridBoardsPerPageChange = useCallback((n: GridLayoutMode) => {
+    setGridBoardsPerPage(n);
+    setGridPage(0);
+  }, []);
+
+  const requestGridSync = useCallback(() => {
+    setGridSyncNonce((v) => v + 1);
+  }, []);
+
+  const gridOnlineStudentIds = useMemo(() => {
+    const online = new Set<string>();
+    for (const s of gridMonitorStudents) {
+      const sid = normalizeStudentId(s.id);
+      if (!sid) continue;
+      const uid = agoraUidForStudent(s.id);
+      if (uid && remoteStreamsByUid[uid]) {
+        online.add(sid);
+        continue;
+      }
+      if ((sessionMedia.admittedStudentIds ?? []).some((kid) => idsEqual(kid, sid))) {
+        online.add(sid);
+      }
+    }
+    return online;
+  }, [gridMonitorStudents, remoteStreamsByUid, sessionMedia.admittedStudentIds]);
+
+  const followGridStudent = useCallback(
+    (studentId: string) => {
+      const sid = normalizeStudentId(studentId);
+      focusGridStudent(sid);
+      setFocusedVideoTileId(`student-${sid}`);
+      setParticipantMenuStudentId(sid);
+      setSidebarTab('analiz');
+      setMobileClassroomPanel('board');
+    },
+    [focusGridStudent],
   );
 
   /** Admin: Sınıf listesi ekranı (oda seç veya yeni oda oluştur) */
@@ -6029,13 +6234,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const setBoardScalePct = isStudentView ? setStudentBoardScalePct : setCoachBoardScalePct;
   const sidebarTabDefs: { id: ClassroomSidebarTab; Icon: typeof Search; label: string; coachOnly?: boolean }[] = [
     { id: 'analiz', Icon: Search, label: 'Analiz' },
+    { id: 'tahtalar', Icon: Grid2X2, label: 'Tahtalar', coachOnly: true },
     { id: 'katilimcilar', Icon: Users, label: 'Katılımcılar' },
     { id: 'goruntu', Icon: Video, label: 'Görüntü' },
     { id: 'sohbet', Icon: MessageCircle, label: 'Sohbet' },
     { id: 'oyunlar', Icon: FolderOpen, label: 'Oyunlar', coachOnly: true },
-    { id: 'kesfet', Icon: Compass, label: 'Keşfet', coachOnly: true },
   ];
   const visibleSidebarTabs = sidebarTabDefs.filter((t) => !t.coachOnly || !isStudentView);
+  const showStudentBoardGrid = !isStudentView && sidebarTab === 'tahtalar';
 
   return (
     <div
@@ -6048,13 +6254,45 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             className={`flex-1 flex flex-col min-h-0 items-stretch px-2 sm:px-3 lg:px-5 py-1 sm:py-2 overflow-x-hidden ${
               isStudentView
                 ? 'overflow-y-auto overflow-x-hidden custom-scrollbar justify-center'
-                : 'overflow-y-auto custom-scrollbar justify-start xl:justify-center'
+                : 'overflow-y-auto custom-scrollbar justify-start'
             }`}
             >
             <div
               ref={boardVideoRowRef}
               className="flex flex-1 min-h-0 w-full max-w-full flex-col lg:flex-row items-stretch lg:items-start justify-center gap-0 lg:gap-1 xl:gap-2"
             >
+            {showStudentBoardGrid ? (
+              <div className="flex-1 min-h-0 w-full flex flex-col py-1">
+                <LiveLessonBoardGrid
+                  students={gridMonitorStudents}
+                  studentBoards={sessionMedia.studentBoards ?? {}}
+                  coachBoardFen={boardDisplayFen}
+                  boardsPerPage={gridBoardsPerPage}
+                  page={gridPage}
+                  onPageChange={setGridPage}
+                  onBoardsPerPageChange={handleGridBoardsPerPageChange}
+                  focusedStudentId={focusedGridStudentId}
+                  onFocusStudent={focusGridStudent}
+                  onFollowStudent={followGridStudent}
+                  autoFollow={gridAutoFollow}
+                  onAutoFollowChange={setGridAutoFollow}
+                  autoPageTransition={gridAutoPage}
+                  onAutoPageTransitionChange={setGridAutoPage}
+                  onRefresh={requestGridSync}
+                  onSyncMoves={requestGridSync}
+                  onOpenAllAnalysis={() => {
+                    setSidebarTab('analiz');
+                    setMobileClassroomPanel('sidebar');
+                  }}
+                  onAddBoard={() => {
+                    setSidebarTab('katilimcilar');
+                    setMobileClassroomPanel('sidebar');
+                  }}
+                  onlineStudentIds={gridOnlineStudentIds}
+                />
+              </div>
+            ) : (
+            <>
             <div
               className={`${lessonBoardSizing} min-h-0 min-w-0 flex flex-col gap-2 ${
                 isStudentView ? 'flex-1 min-h-0' : 'shrink-0 lg:flex-1'
@@ -6221,6 +6459,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </div>
             </div>
 
+            {!showStudentBoardGrid ? (
+            <>
             <ClassroomVideoDockResizeHandle onResizeStart={handleVideoDockResizeStart} />
 
             {!isStudentView ? (
@@ -6282,6 +6522,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   : undefined
               }
             />
+            )}
+            </>
+            ) : null}
+            </>
             )}
             </div>
 
@@ -6381,7 +6625,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             </div>
           </header>
 
-          <nav className="flex overflow-x-auto scrollbar-none snap-x snap-mandatory border-b border-white/10 bg-slate-900/40 row-start-2 sm:grid sm:grid-cols-6 sm:overflow-visible">
+          <nav className="flex overflow-x-auto scrollbar-none snap-x snap-mandatory border-b border-white/10 bg-slate-900/40 row-start-2 sm:grid sm:grid-cols-7 sm:overflow-visible">
             {visibleSidebarTabs.map(({ id, Icon: Ico, label }) => (
               <button
                 key={id}
@@ -6589,54 +6833,32 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                     <button
                       type="button"
                       className="p-2 rounded text-slate-300 hover:bg-indigo-500/20 hover:text-white"
-                      title="Başa dön"
-                      onClick={() => {
-                        publishCoachBoardNav(null, 0);
-                      }}
+                      title="Başa dön (Home / ↓)"
+                      onClick={() => stepLiveLessonReplay('start')}
                     >
                       <ChevronFirst className="w-5 h-5" />
                     </button>
                     <button
                       type="button"
                       className="p-2 rounded text-slate-300 hover:bg-indigo-500/20 hover:text-white"
-                      title="Önceki hamle"
-                      onClick={() => {
-                        const cur = replayNavPly ?? displayMoveHistory.length;
-                        publishCoachBoardNav(null, Math.max(0, cur - 1));
-                      }}
+                      title="Önceki hamle (← / k)"
+                      onClick={() => stepLiveLessonReplay('prev')}
                     >
                       <ChevronLeft className="w-5 h-5" />
                     </button>
                     <button
                       type="button"
                       className="p-2 rounded text-slate-300 hover:bg-indigo-500/20 hover:text-white"
-                      title="Sonraki hamle"
-                      onClick={() => {
-                        const len = displayMoveHistory.length;
-                        const cur = replayNavPly ?? len;
-                        const next = Math.min(len, cur + 1);
-                        publishCoachBoardNav(null, next >= len ? null : next);
-                      }}
+                      title="Sonraki hamle (→ / j)"
+                      onClick={() => stepLiveLessonReplay('next')}
                     >
                       <ChevronRight className="w-5 h-5" />
                     </button>
                     <button
                       type="button"
                       className="p-2 rounded text-slate-300 hover:bg-indigo-500/20 hover:text-white"
-                      title="Son konum"
-                      onClick={() => {
-                        if (currentVariation) {
-                          const [mainLinePos, varGroupIdx] = currentVariation;
-                          const varLine = displayVariations[mainLinePos]?.[varGroupIdx] ?? [];
-                          if (varLine.length === 0) {
-                            publishCoachBoardNav(null, null);
-                          } else {
-                            publishCoachBoardNav([mainLinePos, varGroupIdx, varLine.length - 1], null);
-                          }
-                        } else {
-                          publishCoachBoardNav(null, null);
-                        }
-                      }}
+                      title="Son konum (End / ↑)"
+                      onClick={() => stepLiveLessonReplay('end')}
                     >
                       <ChevronLast className="w-5 h-5" />
                     </button>
@@ -7183,17 +7405,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                                     >
                                       Oyunları yükleyin
                                     </button>
-                                    <button
-                                      type="button"
-                                      role="menuitem"
-                                      className="w-full text-left px-3 py-2 text-slate-200 hover:bg-indigo-500/15"
-                                      onClick={() => {
-                                        setParticipantMenuStudentId(null);
-                                        setSidebarTab('kesfet');
-                                      }}
-                                    >
-                                      Keşfet
-                                    </button>
                                   </div>
                                 ) : null}
                               </div>
@@ -7418,30 +7629,30 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                           return (
                           <div
                             key={msg.id}
-                            className={`text-[13px] rounded-xl px-3 py-2 border ${
+                            className={`text-[13px] leading-snug rounded-xl px-3 py-2 border ${
                               isCoachMsg
                                 ? 'bg-indigo-500/10 border-indigo-500/25 text-slate-200'
                                 : 'bg-violet-500/10 border-violet-500/25 text-slate-200 ml-4'
                             } ${msg.privateWithStudentId ? 'ring-1 ring-indigo-400/30' : ''}`}
                           >
-                            {canOpenPrivate ? (
-                              <button
-                                type="button"
-                                onClick={() => openPrivateChatWithStudent(msg.studentId)}
-                                className="text-[10px] font-bold text-indigo-300 hover:text-indigo-200 mb-0.5 inline-flex items-center gap-1"
-                              >
+                            <span className="inline-flex items-center gap-1 align-middle">
+                              {!isCoachMsg ? (
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" aria-hidden />
-                                {sender}
-                              </button>
-                            ) : (
-                              <p className="text-[10px] font-bold text-slate-400 mb-0.5 inline-flex items-center gap-1">
-                                {!isCoachMsg ? (
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" aria-hidden />
-                                ) : null}
-                                {sender}
-                              </p>
-                            )}
-                            {msg.text}
+                              ) : null}
+                              {canOpenPrivate ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openPrivateChatWithStudent(msg.studentId)}
+                                  className="text-[10px] font-bold text-indigo-300 hover:text-indigo-200"
+                                >
+                                  {sender}
+                                </button>
+                              ) : (
+                                <span className="text-[10px] font-bold text-slate-400">{sender}</span>
+                              )}
+                              <span className="text-slate-500 font-normal">: </span>
+                            </span>
+                            <span className="text-slate-200">{msg.text}</span>
                           </div>
                           );
                         })
@@ -7476,13 +7687,25 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </div>
             )}
 
+            {sidebarTab === 'tahtalar' && (
+              <LiveLessonStudentBoardsPanel
+                students={gridMonitorStudents}
+                studentBoards={sessionMedia.studentBoards ?? {}}
+                coachBoardFen={boardDisplayFen}
+                focusedStudentId={focusedGridStudentId}
+                onlineStudentIds={gridOnlineStudentIds}
+                onSelectStudent={focusGridStudent}
+                onFollowStudent={followGridStudent}
+              />
+            )}
+
             {sidebarTab === 'oyunlar' && (
               <div className="p-3 flex flex-col gap-3 h-full min-h-0 overflow-y-auto custom-scrollbar">
                 <div className="flex gap-1 p-1 rounded-xl bg-slate-800/50 border border-white/10">
                   {([
                     ['library' as const, 'Çalışmalar'],
                     ['pgn' as const, 'PGN'],
-                    ['position' as const, 'FEN'],
+                    ['position' as const, 'Konum'],
                   ]).map(([k, lab]) => (
                     <button
                       key={k}
@@ -7556,12 +7779,23 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   </div>
                 )}
                 {oyunlarSection === 'position' && (
-                  <div className="space-y-2">
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowPositionBuilder(true)}
+                      className="w-full py-3 rounded-xl premium-gradient text-white font-semibold text-[13px] shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Tahta yapıcı — Kurulum Konumu
+                    </button>
+                    <p className="text-[11px] text-slate-500 text-center">
+                      Taşları sürükleyerek konum dizin veya FEN yapıştırın.
+                    </p>
                     <textarea
                       value={fenInput}
                       onChange={(e) => setFenInput(e.target.value)}
-                      placeholder="FEN…"
-                      className="w-full bg-slate-900/80 border border-white/10 rounded-xl p-3 text-[13px] text-slate-300 min-h-[6rem] focus:border-indigo-500/50 outline-none"
+                      placeholder="FEN yapıştır…"
+                      className="w-full bg-slate-900/80 border border-white/10 rounded-xl p-3 text-[13px] text-slate-300 min-h-[4.5rem] focus:border-indigo-500/50 outline-none font-mono"
                     />
                     {positionError ? <p className="text-xs text-red-400">{positionError}</p> : null}
                     <button
@@ -7569,67 +7803,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       onClick={() => applyFen()}
                       className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-[13px] shadow-md shadow-indigo-500/20 transition-colors"
                     >
-                      Konumu uygula
+                      FEN uygula
                     </button>
                   </div>
                 )}
-              </div>
-            )}
-
-            {sidebarTab === 'kesfet' && (
-              <div className="p-3 flex flex-col gap-2 h-full min-h-0 overflow-y-auto custom-scrollbar">
-                <input
-                  value={puzzleSearch}
-                  onChange={(e) => setPuzzleSearch(e.target.value)}
-                  placeholder="Bulmaca ara…"
-                  className="w-full bg-slate-900/80 border border-white/10 rounded-xl px-3 py-2 text-[13px] text-white focus:border-indigo-500/50 outline-none"
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowPoolSolution((v) => !v)}
-                    className="flex-1 py-2 rounded-xl bg-slate-800/50 border border-white/10 text-[12px] text-slate-300 hover:bg-slate-800/70"
-                  >
-                    {showPoolSolution ? 'Çözümü gizle' : 'Çözüm'}
-                  </button>
-                  {!isStudentView ? (
-                    <button
-                      type="button"
-                      onClick={() => toggleStudentPuzzleSolutionVisibility()}
-                      className="flex-1 py-2 rounded-xl bg-slate-800/50 border border-white/10 text-[12px] text-slate-300 hover:bg-slate-800/70"
-                    >
-                      {sessionMedia.studentCanSeePuzzleSolution ? 'Öğrenci: açık' : 'Öğrenci: kapalı'}
-                    </button>
-                  ) : null}
-                </div>
-                <div className="flex flex-col gap-1 max-h-[40vh] overflow-y-auto custom-scrollbar">
-                  {filteredPuzzles.length === 0 ? (
-                    <p className="text-xs text-slate-600 text-center py-6">Bulmaca yok.</p>
-                  ) : (
-                    filteredPuzzles.map((pz) => (
-                      <button
-                        key={pz.id}
-                        type="button"
-                        onClick={() => applyPuzzleContent(pz)}
-                        className={`text-left px-3 py-2 rounded-xl border text-[13px] transition-colors ${
-                          selectedPoolPuzzleId === pz.id ? 'border-indigo-500/50 bg-indigo-500/15 text-white' : 'border-white/10 bg-slate-800/40 text-slate-300 hover:border-indigo-500/30'
-                        }`}
-                      >
-                        <span className="font-semibold text-white block truncate">{pz.title}</span>
-                        <span className="text-[11px] text-slate-500">{pz.difficulty}</span>
-                      </button>
-                    ))
-                  )}
-                </div>
-                {!isStudentView && selectedPoolPuzzle ? (
-                  <button
-                    type="button"
-                    onClick={() => void sendSelectedPuzzleToStudy()}
-                    className="py-2 rounded-xl premium-gradient text-white text-[12px] font-semibold shadow-md shadow-indigo-500/20"
-                  >
-                    Çalışmaya aktar
-                  </button>
-                ) : null}
               </div>
             )}
           </div>
@@ -8105,6 +8282,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
       {/* ── STUDENT ANALYSIS MODAL ────────────────────────────────────────── */}
       <EngineLinePreviewPortal preview={enginePvLinePreview} boardOrientation={boardOrientation} />
+
+      <BoardPositionBuilder
+        open={showPositionBuilder}
+        initialFen={boardDisplayFen || baseFen || fen}
+        boardOrientation={boardOrientation as 'white' | 'black'}
+        onClose={() => setShowPositionBuilder(false)}
+        onApply={handlePositionBuilderApply}
+      />
 
       {selectedAnalysisStudentId && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-8 lg:p-12 animate-in fade-in duration-300">

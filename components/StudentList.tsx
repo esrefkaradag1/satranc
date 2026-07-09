@@ -22,7 +22,6 @@ import {
 import { Student } from'../types';
 import {
  applyGroupDefaultsToStudent,
- applySiblingDiscount,
  disciplineNamesForOffice,
  findTrainingGroupByName,
  mergeBranchOffices,
@@ -304,6 +303,17 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setSelectedIds([]);
  };
 
+ const handleDeleteStudent = async (student: { id: string; name?: string }) => {
+ const ok = await confirmDialog({
+ title: 'Öğrenciyi sil',
+ message: `${student.name || 'Bu öğrenciyi'} silmek istediğinize emin misiniz? Bu işlem geri alınamaz.`,
+ confirmLabel: 'Sil',
+ variant: 'danger',
+ });
+ if (!ok) return;
+ deleteStudent(student.id);
+ };
+
  const handleBulkUpdateGroup = () => {
  bulkUpdateStudentGroup(selectedIds, newBulkGroup);
  setIsBulkGroupModalOpen(false);
@@ -461,12 +471,17 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
       );
     }
 
-    let fee = '—';
-    if (s.monthlyFee != null) {
-      const net = applySiblingDiscount(Number(s.monthlyFee), s).finalFee;
-      fee = `₺${Number(net).toLocaleString('tr-TR')}`;
+    // Borç yoksa: aylık ücreti değil, gerçekte tahsil edilen tutarı göster (finans kayıtlarıyla tutarlı)
+    if (totalPaidThisYear > 0) {
+      return (
+        <span className="text-emerald-400">
+          ₺{Number(totalPaidThisYear).toLocaleString('tr-TR')} Ödendi
+        </span>
+      );
     }
-    return <span className="text-emerald-400">{fee} Ödendi</span>;
+
+    // Bu ana kadar beklenen aidat yok (ücret tanımsız / kayıt öncesi) ve ödeme de yok
+    return <span className="text-slate-500">—</span>;
   };
 
  return (
@@ -768,7 +783,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <button type="button" onClick={() => setSignedFormsStudent(student)} title="Başvuru formu" className="p-2.5 rounded-lg text-slate-400 hover:bg-violet-500/10 hover:text-violet-400"><PenLine className="w-4 h-4" /></button>
  <button type="button" onClick={() => handleOpenModal(student)} title="Düzenle" className="p-2.5 rounded-lg text-slate-400 hover:bg-amber-500/10 hover:text-amber-400"><Edit2 className="w-4 h-4" /></button>
  {!isCoach && (
- <button type="button" onClick={() => deleteStudent(student.id)} title="Sil" className="p-2.5 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-400"><Trash2 className="w-4 h-4" /></button>
+ <button type="button" onClick={() => handleDeleteStudent(student)} title="Sil" className="p-2.5 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-400"><Trash2 className="w-4 h-4" /></button>
  )}
  </div>
  </div>
@@ -917,7 +932,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  {!isCoach && (
  <button
  type="button"
- onClick={() => deleteStudent(student.id)}
+ onClick={() => handleDeleteStudent(student)}
  title="Sil"
  className="p-2 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-600 transition-all"
  >

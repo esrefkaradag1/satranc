@@ -63,7 +63,7 @@ import { puzzleBoardOrientationForFen, puzzleBoardOrientationForStudent, formatP
 /** Platform API otomatik kontrol aralığı (manuel yenileme sonrası / sekme açıkken) */
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
 /** Çoklu öğrenci platform çekiminde istekler arası bekleme (Lichess 429 önleme) */
-const STUDENT_PLATFORM_GAP_MS = 700;
+const STUDENT_PLATFORM_GAP_MS = 1400;
 
 function weekStatsForDate(
   weekStats: Record<string, Record<string, PlatformDayStats>>,
@@ -689,6 +689,7 @@ const Homework: React.FC = () => {
     inProgress: filteredStats.filter((s) => s.status === 'Devam Ediyor').length,
     notStarted: filteredStats.filter((s) => s.status === 'Başlamadı').length,
     missed: filteredStats.filter((s) => s.status === 'Yapılmadı').length,
+    partial: filteredStats.filter((s) => s.status === 'Kısmi yaptı').length,
     avgProgress: filteredStats.length
       ? Math.round(filteredStats.reduce((sum, st) => sum + st.progress, 0) / filteredStats.length)
       : 0,
@@ -781,7 +782,8 @@ const Homework: React.FC = () => {
       const iso = isoDateForWeekday(monday, day);
       const platform = programPlatformForDay(studentId, iso);
       const goalEval = evaluatePlatformDayGoalsFromStats(gameTarget, puzzleTarget, minAccuracy, platform);
-      out[day] = resolveDayCompletionStatus(iso, goalEval.done);
+      const hasActivity = goalEval.games > 0 || goalEval.puzzleSolved > 0;
+      out[day] = resolveDayCompletionStatus(iso, goalEval.done, hasActivity);
     }
     return out;
   }, [programHomework, programStudentId, programStudents, dailyTargetDrafts, programPlatformForDay, dayCloseClock]);
@@ -911,9 +913,10 @@ const Homework: React.FC = () => {
     const inProgress = effectiveStats.filter(s => s.status === 'Devam Ediyor').length;
     const notStarted = effectiveStats.filter(s => s.status === 'Başlamadı').length;
     const missed = effectiveStats.filter(s => s.status === 'Yapılmadı').length;
+    const partial = effectiveStats.filter(s => s.status === 'Kısmi yaptı').length;
     const avgPoints = effectiveStats.length > 0 ? Math.round(effectiveStats.reduce((s, st) => s + st.points, 0) / effectiveStats.length) : 0;
     const avgProgress = effectiveStats.length > 0 ? Math.round(effectiveStats.reduce((s, st) => s + st.progress, 0) / effectiveStats.length) : 0;
-    return { completed, inProgress, notStarted, missed, avgPoints, avgProgress };
+    return { completed, inProgress, notStarted, missed, partial, avgPoints, avgProgress };
   }, [effectiveStats]);
 
   useEffect(() => {
@@ -1716,7 +1719,7 @@ const Homework: React.FC = () => {
             <div className="bg-black/20 border border-indigo-500/20 rounded-lg p-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-[10px] text-slate-500">
-                  Maç ve bulmaca: sistem + Lichess + Chess.com · Tüm günler için aynı varsayılan
+                  Maç ve bulmaca: sistem + Lichess + Chess.com · Min doğruluk yalnızca bulmaca için · Tüm günler için aynı varsayılan
                 </p>
               </div>
               <div className="flex flex-wrap items-end gap-2 p-3 rounded-lg bg-slate-900/60 border border-white/5">
@@ -1745,7 +1748,7 @@ const Homework: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <p className="text-[9px] text-slate-500 uppercase mb-1">Min %</p>
+                  <p className="text-[9px] text-slate-500 uppercase mb-1">Bulmaca min %</p>
                   <input
                     type="number"
                     min={0}
@@ -1780,7 +1783,7 @@ const Homework: React.FC = () => {
                       <th className="text-left py-2 pr-2">Öğrenci</th>
                       <th className="text-left py-2 px-2">Günlük maç</th>
                       <th className="text-left py-2 px-2">Günlük bulmaca</th>
-                      <th className="text-left py-2 pl-2">Min. doğruluk %</th>
+                      <th className="text-left py-2 pl-2">Bulmaca min doğruluk %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1833,7 +1836,7 @@ const Homework: React.FC = () => {
                               className="input-base w-24"
                             />
                           </td>
-                          <td data-label="Min. doğruluk %" className="py-2 pl-2">
+                          <td data-label="Bulmaca min doğruluk %" className="py-2 pl-2">
                             <input
                               type="number"
                               min={0}
@@ -2180,7 +2183,7 @@ const Homework: React.FC = () => {
                 </div>
                 <div className="min-w-0">
                   <h3 className="text-lg sm:text-xl font-bold text-white truncate">{detailStat.name}</h3>
-                  <span className={`inline-block mt-1 px-3 py-1 rounded-lg text-xs font-bold uppercase ${detailStat.status === 'Tamamlandı' ? 'bg-emerald-500/20 text-emerald-400' : detailStat.status === 'Devam Ediyor' ? 'bg-amber-500/20 text-amber-400' : detailStat.status === 'Yapılmadı' ? 'bg-rose-500/20 text-rose-400' : 'bg-slate-600/50 text-slate-400'}`}>
+                  <span className={`inline-block mt-1 px-3 py-1 rounded-lg text-xs font-bold uppercase ${detailStat.status === 'Tamamlandı' ? 'bg-emerald-500/20 text-emerald-400' : detailStat.status === 'Kısmi yaptı' ? 'bg-orange-500/20 text-orange-400' : detailStat.status === 'Devam Ediyor' ? 'bg-amber-500/20 text-amber-400' : detailStat.status === 'Yapılmadı' ? 'bg-rose-500/20 text-rose-400' : 'bg-slate-600/50 text-slate-400'}`}>
                     {detailStat.status}
                   </span>
                 </div>
@@ -2217,7 +2220,7 @@ const Homework: React.FC = () => {
                     <span className="text-white">%{detailStat.progress}</span>
                   </div>
                   <div className="h-3 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                    <div className={`h-full rounded-full transition-all ${detailStat.status === 'Tamamlandı' ? 'bg-emerald-500' : detailStat.status === 'Devam Ediyor' ? 'bg-amber-500' : detailStat.status === 'Yapılmadı' ? 'bg-rose-500' : 'bg-slate-600'}`} style={{ width: `${Math.min(detailStat.progress, 100)}%` }} />
+                    <div className={`h-full rounded-full transition-all ${detailStat.status === 'Tamamlandı' ? 'bg-emerald-500' : detailStat.status === 'Kısmi yaptı' ? 'bg-orange-500' : detailStat.status === 'Devam Ediyor' ? 'bg-amber-500' : detailStat.status === 'Yapılmadı' ? 'bg-rose-500' : 'bg-slate-600'}`} style={{ width: `${Math.min(detailStat.progress, 100)}%` }} />
                   </div>
                 </div>
 

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Square, X as CloseIcon, MousePointer2, Eraser, MoveUpRight, Brush, Copy, ChevronRight, Circle, Pencil } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { Square, X as CloseIcon, MousePointer2, Eraser, MoveUpRight, Brush, Copy, ChevronRight, Circle } from 'lucide-react';
 import { SquareMarkColor, COLOR_VALUES } from '../lib/chessBoardUi';
 
 export type DrawingTool = 'square' | 'circle' | 'x' | 'arrow' | 'highlighter' | 'eraser' | 'mouse';
@@ -24,6 +25,9 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   orientation = 'horizontal',
 }) => {
   const [openSubMenu, setOpenSubMenu] = useState<DrawingTool | null>(null);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const btnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const tools: { id: DrawingTool; icon: React.ReactNode; hasColor?: boolean; label: string }[] = [
     { id: 'mouse', icon: <MousePointer2 className="w-4 h-4" />, label: 'Seç' },
@@ -33,11 +37,17 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
     { id: 'arrow', icon: <MoveUpRight className="w-4 h-4" />, hasColor: true, label: 'Ok' },
   ];
 
+  const closeSubMenu = () => {
+    setOpenSubMenu(null);
+    setAnchorRect(null);
+  };
+
   const handleToolClick = (toolId: DrawingTool) => {
     if (openSubMenu === toolId) {
-      setOpenSubMenu(null);
+      closeSubMenu();
     } else {
       setOpenSubMenu(toolId);
+      setAnchorRect(btnRefs.current[toolId]?.getBoundingClientRect() ?? null);
       onToolSelect(toolId, currentColor);
     }
   };
@@ -45,13 +55,51 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   const handleColorSelect = (color: SquareMarkColor) => {
     if (openSubMenu) {
       onToolSelect(openSubMenu, color);
-      setOpenSubMenu(null);
+      closeSubMenu();
     }
   };
+
+  // Dışarı tıklama / scroll / resize ile renk menüsünü kapat
+  useEffect(() => {
+    if (!openSubMenu) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t)) return;
+      if (Object.values(btnRefs.current).some((b) => b?.contains(t))) return;
+      closeSubMenu();
+    };
+    const onReflow = () => closeSubMenu();
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('scroll', onReflow, true);
+    window.addEventListener('resize', onReflow);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('scroll', onReflow, true);
+      window.removeEventListener('resize', onReflow);
+    };
+  }, [openSubMenu]);
 
   const btnSize = 'w-9 h-9 sm:w-10 sm:h-10';
   const isVertical = orientation === 'vertical';
   const dividerClass = isVertical ? 'h-px w-6 bg-white/10 my-1' : 'w-px h-6 bg-white/10 mx-1';
+
+  const menuStyle: React.CSSProperties | null = anchorRect
+    ? isVertical
+      ? {
+          position: 'fixed',
+          left: anchorRect.right + 8,
+          top: anchorRect.top + anchorRect.height / 2,
+          transform: 'translateY(-50%)',
+          zIndex: 300,
+        }
+      : {
+          position: 'fixed',
+          left: anchorRect.left + anchorRect.width / 2,
+          bottom: window.innerHeight - anchorRect.top + 8,
+          transform: 'translateX(-50%)',
+          zIndex: 300,
+        }
+    : null;
 
   return (
     <div className={`flex shrink-0 ${isVertical ? 'flex-col items-center gap-0.5' : 'items-center gap-0.5'}`}>
@@ -60,6 +108,7 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
         <div key={tool.id} className="relative shrink-0">
           <button
             type="button"
+            ref={(el) => { btnRefs.current[tool.id] = el; }}
             onClick={() => handleToolClick(tool.id)}
             className={`${btnSize} flex flex-col items-center justify-center rounded-lg transition-all relative ${
               currentTool === tool.id
@@ -73,40 +122,39 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
             </div>
             {tool.hasColor && (
               <ChevronRight
-                className={`w-2 h-2 absolute opacity-40 ${
-                  isVertical ? 'bottom-1 right-1 rotate-90' : 'bottom-1 right-1 rotate-90'
-                }`}
+                className={`w-2 h-2 absolute opacity-40 bottom-1 right-1 rotate-90`}
               />
             )}
           </button>
-
-          {/* Color Sub-Menu */}
-          {openSubMenu === tool.id && tool.hasColor && (
-            <div
-              className={`absolute z-[110] flex bg-[#1b1e23] backdrop-blur-xl p-1.5 rounded-xl shadow-2xl border border-white/10 gap-1 animate-in fade-in zoom-in-95 duration-200 ${
-                isVertical
-                  ? 'left-full top-1/2 -translate-y-1/2 ml-2 flex-row flex-wrap max-w-[9.5rem]'
-                  : 'bottom-full left-1/2 -translate-x-1/2 mb-2 items-center slide-in-from-bottom-2'
-              }`}
-            >
-              {COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => handleColorSelect(c)}
-                  className={`w-7 h-7 rounded-lg border transition-all hover:scale-110 ${
-                    currentColor === c && currentTool === tool.id
-                      ? 'ring-2 ring-indigo-400 border-white'
-                      : 'border-white/10 hover:border-white/30'
-                  }`}
-                  style={{ backgroundColor: COLOR_VALUES[c] }}
-                  title={c}
-                />
-              ))}
-            </div>
-          )}
         </div>
       ))}
+
+      {/* Color Sub-Menu (portal — ata overflow'u kırpmaz) */}
+      {openSubMenu && menuStyle && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={menuRef}
+          style={menuStyle}
+          className={`flex bg-[#1b1e23] backdrop-blur-xl p-1.5 rounded-xl shadow-2xl border border-white/10 gap-1 animate-in fade-in zoom-in-95 duration-150 ${
+            isVertical ? 'flex-row flex-wrap max-w-[9.5rem]' : 'items-center'
+          }`}
+        >
+          {COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => handleColorSelect(c)}
+              className={`w-7 h-7 rounded-lg border transition-all hover:scale-110 ${
+                currentColor === c && currentTool === openSubMenu
+                  ? 'ring-2 ring-indigo-400 border-white'
+                  : 'border-white/10 hover:border-white/30'
+              }`}
+              style={{ backgroundColor: COLOR_VALUES[c] }}
+              title={c}
+            />
+          ))}
+        </div>,
+        document.body,
+      )}
 
       {/* Divider */}
       <div className={dividerClass} />
@@ -114,7 +162,7 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
       {/* Eraser */}
       <button
         type="button"
-        onClick={() => { setOpenSubMenu(null); onToolSelect('eraser', currentColor); }}
+        onClick={() => { closeSubMenu(); onToolSelect('eraser', currentColor); }}
         className={`${btnSize} shrink-0 flex items-center justify-center rounded-lg transition-all ${
           currentTool === 'eraser'
             ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30 ring-1 ring-indigo-400/40'

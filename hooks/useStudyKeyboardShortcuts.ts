@@ -20,6 +20,10 @@ export type StudyKeyboardActions = {
   canPlayBestMove?: boolean;
   undo?: () => void;
   canUndo?: boolean;
+  /** Tahtadaki işaretleri (daire/kare/x + oklar) temizler */
+  clearDrawings?: () => void;
+  /** Temizlenecek işaret var mı? */
+  hasDrawings?: boolean;
 };
 
 export function useStudyKeyboardShortcuts(actions: StudyKeyboardActions) {
@@ -54,6 +58,12 @@ export function useStudyKeyboardShortcuts(actions: StudyKeyboardActions) {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       if (key === ' ' || key === 'Spacebar') {
+        // Önce tahtadaki işaretleri temizle; işaret yoksa en iyi hamleyi oyna
+        if (a.hasDrawings && a.clearDrawings) {
+          e.preventDefault();
+          a.clearDrawings();
+          return;
+        }
         if (a.canPlayBestMove && a.playBestMove) {
           e.preventDefault();
           a.playBestMove();

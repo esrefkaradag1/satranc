@@ -47,3 +47,34 @@ export function patchStudyBoardSettings(patch: Partial<StudyBoardSettings>): Stu
   saveStudyBoardSettings(next);
   return next;
 }
+
+/**
+ * Motoru (Stockfish) çalıştıran tüm ayarlar. Bunlardan herhangi biri açıksa
+ * motor arka planda çalışır ve EngineAnalysis başlığındaki anahtar "açık" görünür.
+ */
+export const ENGINE_FEATURE_KEYS: (keyof StudyBoardSettings)[] = [
+  'showEngineAnalysis',
+  'showEvalBar',
+  'showBestMoveArrows',
+  'showVariationArrows',
+];
+
+/** Motor şu an aktif mi (herhangi bir motor özelliği açık mı)? */
+export function isEngineActive(settings: StudyBoardSettings): boolean {
+  return ENGINE_FEATURE_KEYS.some((key) => settings[key]);
+}
+
+/**
+ * Başlıktaki ana Stockfish aç/kapa anahtarı için patch üretir.
+ * Motor açıksa hepsini kapatır; kapalıysa hepsini açar. Böylece tek anahtar
+ * gerçekten motoru başlatır/durdurur (tek bir bayrağa takılıp kalmaz).
+ */
+export function engineMasterTogglePatch(settings: StudyBoardSettings): Partial<StudyBoardSettings> {
+  const turnOff = isEngineActive(settings);
+  return {
+    showEngineAnalysis: !turnOff,
+    showEvalBar: !turnOff,
+    showBestMoveArrows: !turnOff,
+    showVariationArrows: !turnOff,
+  };
+}
