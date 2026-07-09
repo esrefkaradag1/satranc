@@ -39,6 +39,16 @@ function lichessProxyUrl(apiPath: string, params?: URLSearchParams): string {
   return `/api/lichess-proxy?${q.toString()}`;
 }
 
+function lichessDirectUrl(apiPath: string, params?: URLSearchParams): string {
+  const path = apiPath.replace(/^\/+/, '');
+  const qs = params?.toString();
+  return `${LICHESS_DIRECT_API}/${path}${qs ? `?${qs}` : ''}`;
+}
+
+function canFetchLichessDirectInBrowser(): boolean {
+  return typeof window !== 'undefined' && typeof fetch === 'function';
+}
+
 async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -49,20 +59,26 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   }
 }
 
-/** Lichess API — sunucu proxy üzerinden (tarayıcıdan doğrudan erişim çoğu ağda zaman aşımı verir). */
+/**
+ * Lichess public API — önce tarayıcıdan doğrudan (kullanıcı IP'si; Vercel paylaşımlı IP 429 verir),
+ * ağ/CORS sorununda sunucu proxy'sine düşer.
+ */
 async function lichessApiFetch(
   apiPath: string,
   init?: RequestInit,
   params?: URLSearchParams,
 ): Promise<Response> {
-  if (isLichessGloballyRateLimited()) {
-    return new Response('[]', {
-      status: 429,
-      statusText: 'Lichess rate limit (bekleme)',
-      headers: { 'Content-Type': 'application/json', 'X-Lichess-Rate-Limited': '1' },
-    });
-  }
   return runLichessThrottled(async () => {
+    if (canFetchLichessDirectInBrowser()) {
+      try {
+        const directRes = await fetchWithTimeout(lichessDirectUrl(apiPath, params), init);
+        if (directRes.ok || directRes.status === 404) return directRes;
+        if (directRes.status !== 429 && directRes.status < 500) return directRes;
+      } catch {
+        /* proxy fallback */
+      }
+    }
+
     if (isLichessGloballyRateLimited()) {
       return new Response('[]', {
         status: 429,
@@ -70,6 +86,7 @@ async function lichessApiFetch(
         headers: { 'Content-Type': 'application/json', 'X-Lichess-Rate-Limited': '1' },
       });
     }
+
     const proxyUrl = lichessProxyUrl(apiPath, params);
     const res = await fetchWithTimeout(proxyUrl, init);
     if (res.status === 429) markLichessRateLimited();
@@ -634,14 +651,15 @@ export async function fetchLichessGamePgn(gameId: string): Promise<string | null
   const id = String(gameId ?? '').trim();
   if (!id) return null;
   const load = async (url: string) => {
-    const res = await fetch(url, { headers: { Accept: 'application/x-chess-pgn' } });
+    const res = await fetchWithTimeout(url, { headers: { Accept: 'application/x-chess-pgn' } });
     if (!res.ok) return null;
     const text = await res.text();
     return text.trim() || null;
   };
   try {
-    return await load(`/api/lichess-proxy?path=${encodeURIComponent(`game/export/${id}`)}`)
-      ?? await load(`https://lichess.org/game/export/${encodeURIComponent(id)}`);
+    const direct = `https://lichess.org/game/export/${encodeURIComponent(id)}`;
+    return await load(direct)
+      ?? await load(`/api/lichess-proxy?path=${encodeURIComponent(`game/export/${id}`)}`);
   } catch {
     return null;
   }
