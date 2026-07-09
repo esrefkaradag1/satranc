@@ -150,6 +150,7 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                   parsed.searchParams.get('path') ?? '',
                   searchParams,
                   Array.isArray(accept) ? accept[0] : accept,
+                  env,
                 );
                 if (softFail && upstream.status === 429) {
                   res.statusCode = 200;

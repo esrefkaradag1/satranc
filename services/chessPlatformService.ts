@@ -101,10 +101,10 @@ async function fetchChessComMonthGamesViaProxy(
 }
 const LICHESS_ACTIVITY_CACHE_TTL_MS = 5 * 60 * 1000;
 const LICHESS_ACTIVITY_RATE_LIMIT_MS = 5 * 60 * 1000;
-const LICHESS_USER_CACHE_TTL_MS = 10 * 60 * 1000;
+const LICHESS_USER_CACHE_TTL_MS = 30 * 60 * 1000;
 /** Lichess public API — ardışık istekler arası minimum süre (429 önleme) */
-const LICHESS_MIN_REQUEST_GAP_MS = 1400;
-const LICHESS_GLOBAL_BACKOFF_MS = 45_000;
+const LICHESS_MIN_REQUEST_GAP_MS = 2000;
+const LICHESS_GLOBAL_BACKOFF_MS = 60_000;
 const CHESSCOM_API = CHESSCOM_DIRECT_API;
 
 let lichessRequestChain: Promise<unknown> = Promise.resolve();

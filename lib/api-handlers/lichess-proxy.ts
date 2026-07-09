@@ -38,7 +38,7 @@ export default async function handler(req: Req, res: Res) {
   const accept = (Array.isArray(acceptRaw) ? acceptRaw[0] : acceptRaw) || 'application/json';
 
   try {
-    const upstream = await lichessProxyRequest(path, qs, accept);
+    const upstream = await lichessProxyRequest(path, qs, accept, process.env);
     if (softFail && upstream.status === 429) {
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('X-Lichess-Rate-Limited', '1');
@@ -50,8 +50,12 @@ export default async function handler(req: Req, res: Res) {
     const isUserProfile = /^user\/[A-Za-z0-9_-]{1,30}$/.test(path);
     res.setHeader(
       'Cache-Control',
-      isUserProfile ? 's-maxage=600, stale-while-revalidate=1200' : 's-maxage=90, stale-while-revalidate=180',
+      isUserProfile ? 's-maxage=1800, stale-while-revalidate=3600' : 's-maxage=300, stale-while-revalidate=600',
     );
+    if (upstream.status === 429 || upstream.rateLimited) {
+      res.setHeader('X-Lichess-Rate-Limited', '1');
+      res.setHeader('Retry-After', '60');
+    }
     res.status(upstream.status).send(upstream.body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Lichess bağlantı hatası';

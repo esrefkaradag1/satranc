@@ -656,11 +656,12 @@ const Attendance: React.FC = () => {
           setAnalysisError('Öğrenci kartında Lichess kullanıcı adı yok.');
           return;
         }
-        const [profile, games] = await Promise.all([fetchLichessUser(username), fetchLichessRecentGames(username, 10)]);
+        const profile = await fetchLichessUser(username);
         if (!profile) {
           setAnalysisError('Lichess profili bulunamadı.');
           return;
         }
+        const games = await fetchLichessRecentGames(username, 10);
         setLichessProfile(profile);
         setLichessGames(games ?? []);
       } else {

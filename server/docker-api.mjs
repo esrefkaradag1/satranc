@@ -351,7 +351,7 @@ async function handleLichessProxy(url, req, res) {
     const searchParams = new URLSearchParams(url.searchParams);
     searchParams.delete('path');
     searchParams.delete('soft');
-    const upstream = await lichessProxyRequest(path, searchParams, accept);
+    const upstream = await lichessProxyRequest(path, searchParams, accept, process.env);
     if (softFail && upstream.status === 429) {
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -361,7 +361,19 @@ async function handleLichessProxy(url, req, res) {
       res.end('[]');
       return;
     }
-    return sendText(res, upstream.status, upstream.body, upstream.contentType, 's-maxage=90, stale-while-revalidate=180');
+    const isUserProfile = /^user\/[A-Za-z0-9_-]{1,30}$/.test(path);
+    const cacheControl = isUserProfile
+      ? 's-maxage=1800, stale-while-revalidate=3600'
+      : 's-maxage=300, stale-while-revalidate=600';
+    res.writeHead(upstream.status, {
+      'Content-Type': upstream.contentType || 'application/json; charset=utf-8',
+      'Cache-Control': cacheControl,
+      ...(upstream.status === 429 || upstream.rateLimited
+        ? { 'X-Lichess-Rate-Limited': '1', 'Retry-After': '60' }
+        : {}),
+    });
+    res.end(upstream.body);
+    return;
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Lichess bağlantı hatası';
     return sendJson(res, 502, { error: msg });
