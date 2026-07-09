@@ -41,7 +41,7 @@ const LichessGameViewerModal: React.FC<{
 
   return createPortal(
     <div
-      className="modal-overlay z-[200]"
+      className="modal-overlay z-[200] sm:!items-center sm:!justify-center sm:!py-8"
       role="dialog"
       aria-modal="true"
       aria-labelledby="lichess-viewer-title"

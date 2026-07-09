@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Chessboard } from 'react-chessboard';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
@@ -525,8 +526,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     onPieceDrop: handleDrop,
   };
 
-  return (
-    <div className="modal-overlay z-[100]" onClick={handleClose}>
+  return createPortal(
+    <div className="modal-overlay z-[100] sm:!items-center sm:!justify-center sm:!py-8" onClick={handleClose}>
       {showSuccessToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[101] flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm shadow-lg border border-emerald-500/50 animate-in fade-in slide-in-from-top-2 duration-300">
           <CheckCircle2 className="w-5 h-5 shrink-0" />
@@ -758,7 +759,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
