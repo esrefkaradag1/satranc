@@ -13,6 +13,9 @@ import {
   lichessOAuthTokenViaEnv,
   lichessPuzzleActivityViaEnv,
   lichessPuzzleDashboardViaEnv,
+  lichessPuzzleLatestViaEnv,
+  lichessPuzzleNextViaEnv,
+  lichessOAuthAccountViaEnv,
 } from './lib/lichessOAuthApi.mjs';
 import { lichessProxyRequest } from './lib/lichessProxyThrottle.mjs';
 import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
@@ -20,6 +23,23 @@ import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
 import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
 import { startTrainingNotifyScheduler, trainingNotifyHandler } from './lib/trainingWhatsAppNotify.mjs';
 import platformWeekStatsHandler from './lib/api-handlers/platform-week-stats';
+import externalGameSnapshotHandler from './lib/api-handlers/external-game-snapshot';
+import chesscomPuzzleLatestHandler from './lib/api-handlers/chesscom-puzzle-latest';
+import chesscomPuzzleHandler from './lib/api-handlers/chesscom-puzzle';
+
+/** Vite dev: TS API handler'ları process.env yerine loadEnv çıktısını kullanır */
+function syncSupabaseProcessEnv(env: Record<string, string>) {
+  const url = (env.VITE_SUPABASE_URL ?? env.SUPABASE_URL ?? '').trim();
+  const key = (env.VITE_SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (url) {
+    process.env.VITE_SUPABASE_URL = url;
+    process.env.SUPABASE_URL = url;
+  }
+  if (key) {
+    process.env.VITE_SUPABASE_SERVICE_ROLE_KEY = key;
+    process.env.SUPABASE_SERVICE_ROLE_KEY = key;
+  }
+}
 
 const DEV_GET_ROUTES = new Set([
   '/api/site-messages',
@@ -28,8 +48,14 @@ const DEV_GET_ROUTES = new Set([
   '/api/chesscom-recent-puzzles',
   '/api/chesscom-games',
   '/api/lichess-oauth-status',
+  '/api/lichess-oauth-account',
   '/api/lichess-puzzle-activity',
   '/api/lichess-puzzle-dashboard',
+  '/api/lichess-puzzle-next',
+  '/api/lichess-puzzle-latest',
+  '/api/chesscom-puzzle-latest',
+  '/api/chesscom-puzzle',
+  '/api/external-game-snapshot',
   '/api/lichess-proxy',
 ]);
 const DEV_POST_ROUTES = new Set([
@@ -139,10 +165,77 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 }
               } else if (route === '/api/lichess-oauth-status') {
                 result = await lichessOAuthStatusViaEnv(parsed.searchParams.get('studentId'), env);
+              } else if (route === '/api/lichess-oauth-account') {
+                result = await lichessOAuthAccountViaEnv(parsed.searchParams, env);
               } else if (route === '/api/lichess-puzzle-activity') {
                 result = await lichessPuzzleActivityViaEnv(parsed.searchParams, env);
               } else if (route === '/api/lichess-puzzle-dashboard') {
                 result = await lichessPuzzleDashboardViaEnv(parsed.searchParams, env);
+              } else if (route === '/api/lichess-puzzle-next') {
+                result = await lichessPuzzleNextViaEnv(parsed.searchParams, env);
+              } else if (route === '/api/lichess-puzzle-latest') {
+                result = await lichessPuzzleLatestViaEnv(parsed.searchParams, env);
+              } else if (route === '/api/chesscom-puzzle') {
+                let status = 200;
+                let payload: unknown = {};
+                const mockRes = {
+                  status(code: number) {
+                    status = code;
+                    return {
+                      json(data: unknown) {
+                        payload = data;
+                      },
+                      end() {},
+                    };
+                  },
+                  setHeader() {},
+                };
+                const query: Record<string, string | string[] | undefined> = {};
+                parsed.searchParams.forEach((value, key) => {
+                  query[key] = value;
+                });
+                await chesscomPuzzleHandler({ query }, mockRes);
+                result = { status, body: payload };
+              } else if (route === '/api/chesscom-puzzle-latest') {
+                syncSupabaseProcessEnv(env);
+                let status = 200;
+                let payload: unknown = {};
+                const mockRes = {
+                  status(code: number) {
+                    status = code;
+                    return {
+                      json(data: unknown) {
+                        payload = data;
+                      },
+                    };
+                  },
+                };
+                const query: Record<string, string | string[] | undefined> = {};
+                parsed.searchParams.forEach((value, key) => {
+                  query[key] = value;
+                });
+                await chesscomPuzzleLatestHandler({ method: 'GET', query }, mockRes);
+                result = { status, body: payload };
+              } else if (route === '/api/external-game-snapshot') {
+                syncSupabaseProcessEnv(env);
+                let status = 200;
+                let payload: unknown = {};
+                const mockRes = {
+                  status(code: number) {
+                    status = code;
+                    return {
+                      json(data: unknown) {
+                        payload = data;
+                      },
+                    };
+                  },
+                };
+                const query: Record<string, string | string[] | undefined> = {};
+                parsed.searchParams.forEach((value, key) => {
+                  query[key] = value;
+                });
+                await externalGameSnapshotHandler({ method: 'GET', query }, mockRes);
+                result = { status, body: payload };
               } else {
                 const accept = req.headers.accept || 'application/json';
                 const softFail = parsed.searchParams.get('soft') === '1';
@@ -267,14 +360,6 @@ export default defineConfig(({ mode }) => {
         port: 3000,
         host: '127.0.0.1',
         proxy: {
-          '/api/chesscom-puzzle': {
-            target: 'https://www.chess.com',
-            changeOrigin: true,
-            rewrite: (path) => {
-              const id = new URL(path, 'http://local').searchParams.get('id');
-              return id ? `/callback/puzzle/tactics/${id}` : path;
-            },
-          },
           '/api/chesscom-member-stats': {
             target: 'https://www.chess.com',
             changeOrigin: true,

@@ -164,19 +164,23 @@ function handleMessage(line: string) {
         const next: (PvLine | null)[] = [...pvLines];
         while (next.length < currentNumPv) next.push(null);
         next.length = currentNumPv;
-        next[idx] = parsed;
-        pvLines = next;
-        if (idx === 0) {
-          lastMainLineDepth = parsed.depth;
+        const prev = next[idx];
+        if (!prev || parsed.depth >= prev.depth) {
+          next[idx] = parsed;
+          pvLines = next;
+          if (idx === 0) {
+            lastMainLineDepth = parsed.depth;
+          }
           lastMainLineUpdateMs = Date.now();
-          // Motor sağlıklı üretiyor — geçici çökme sayaçlarını sıfırla
-          softRestartCount = 0;
-          recoveryRetryCount = 0;
+          if (idx === 0) {
+            softRestartCount = 0;
+            recoveryRetryCount = 0;
+          }
+          emitLines();
+          const valid = next.filter((l): l is PvLine => l !== null);
+          const maxD = valid.reduce((m, l) => Math.max(m, l.depth), 0);
+          if (maxD > 0) emitDepth(maxD);
         }
-        emitLines();
-        const valid = next.filter((l): l is PvLine => l !== null);
-        const maxD = valid.reduce((m, l) => Math.max(m, l.depth), 0);
-        if (maxD > 0) emitDepth(maxD);
       }
     }
     return;

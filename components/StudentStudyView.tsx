@@ -60,7 +60,7 @@ import { StudyKeyboardHelpModal } from './study/StudyKeyboardHelpModal';
 import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
 import { computeThreatOverlay } from '../lib/chessThreats';
 import { ResponsiveTable } from './ui/ResponsiveTable';
-import { resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
+import { coachIdFromMemberId, isCoachMemberId, resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
 
 const OFF_EVAL_BAR: EvalBarDisplay = { whitePercent: 50, label: '—', winningChances: 0, pending: false };
 
@@ -75,7 +75,7 @@ function materialEvalToBarDisplay(pawns: number): EvalBarDisplay {
 }
 
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+const PRESENCE_FOLLOW_MAX_AGE_MS = 3 * 60 * 1000;
 type Feedback = 'correct' | 'wrong' | 'solved' | null;
 
 const isAutomaticVcGameOver = (game: any): boolean => {
@@ -327,9 +327,51 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     chapter: selectedChapter,
     actorId: String(studentId ?? 'student'),
     actorRole: 'student',
-    initialSticky: true,
+    initialSticky: false,
     initialWrite: false,
   });
+
+  const coachPresenceUserIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of coaches) ids.add(String(c.id));
+    for (const mid of selectedStudy?.memberIds ?? []) {
+      if (isCoachMemberId(mid)) {
+        const cid = coachIdFromMemberId(mid);
+        if (cid) ids.add(cid);
+      }
+    }
+    return ids;
+  }, [coaches, selectedStudy?.memberIds]);
+
+  const isCoachPresenceRow = useCallback((row: { user_id?: unknown } | null | undefined) => {
+    if (!row?.user_id) return false;
+    const uid = String(row.user_id);
+    if (coachPresenceUserIds.has(uid)) return true;
+    return uid.startsWith('coach:');
+  }, [coachPresenceUserIds]);
+
+  const shouldFollowPresenceRow = useCallback((row: {
+    user_id?: unknown;
+    chapter_id?: unknown;
+    sticky?: unknown;
+    last_seen?: unknown;
+  } | null | undefined) => {
+    if (!row?.chapter_id || !row.sticky) return false;
+    if (String(row.user_id) === String(studentId)) return false;
+    if (!isCoachPresenceRow(row)) return false;
+    const lastSeen = row.last_seen ? new Date(String(row.last_seen)).getTime() : 0;
+    if (lastSeen && Date.now() - lastSeen > PRESENCE_FOLLOW_MAX_AGE_MS) return false;
+    return true;
+  }, [studentId, isCoachPresenceRow]);
+
+  const selectChapterIndex = useCallback((idx: number) => {
+    setSelectedChapterIndex(idx);
+    setCurrentMoveIndex(0);
+    setCurrentVariation(null);
+    setFeedback(null);
+    setFeedbackText(null);
+    void setSticky(false);
+  }, [setSticky]);
 
   const effectiveChapter = legacyChapter;
 
@@ -560,8 +602,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       setPresenceByUserId(next);
       if (selectedStudy.syncEnabled && sticky && studentId) {
         for (const r of rows) {
-          if (String(r.user_id) === String(studentId)) continue;
-          if (!r.chapter_id || !r.sticky) continue;
+          if (!shouldFollowPresenceRow(r)) continue;
           followCoachChapter(String(r.chapter_id));
           break;
         }
@@ -573,13 +614,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         if (!mounted) return;
         setPresenceByUserId((prev) => ({ ...prev, [String(row.user_id)]: row }));
         if (!selectedStudy.syncEnabled || !sticky || !studentId) return;
-        if (String(row.user_id) === String(studentId)) return;
-        if (!row.chapter_id || !row.sticky) return;
+        if (!shouldFollowPresenceRow(row)) return;
         followCoachChapter(String(row.chapter_id));
       },
     });
     return () => { mounted = false; unsub(); };
-  }, [selectedStudy?.id, selectedStudy?.syncEnabled, sticky, studentId, followCoachChapter]);
+  }, [selectedStudy?.id, selectedStudy?.syncEnabled, sticky, studentId, followCoachChapter, shouldFollowPresenceRow]);
 
   // Öğrenci presence (antrenör bölüm takibi için)
   useEffect(() => {
@@ -1516,8 +1556,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const goNextChapter = useCallback(() => {
     if (!selectedStudy) return;
     const next = selectedChapterIndex + 1;
-    if (next < selectedStudy.chapters.length) { setSelectedChapterIndex(next); setCurrentMoveIndex(0); setFeedback(null); setFeedbackText(null); }
-  }, [selectedStudy, selectedChapterIndex]);
+    if (next < selectedStudy.chapters.length) selectChapterIndex(next);
+  }, [selectedStudy, selectedChapterIndex, selectChapterIndex]);
 
   const goToMove = useCallback((idx: number) => {
     if (vsComputer && effectiveChapter) {
@@ -2058,7 +2098,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                 <button
                   key={ch.id}
                   title={`${ch.id}`}
-                  onClick={() => { setSelectedChapterIndex(idx); setCurrentMoveIndex(0); setFeedback(null); setFeedbackText(null); }}
+                  onClick={() => { selectChapterIndex(idx); }}
                   className={`w-full flex items-center gap-2 p-2.5 rounded-sm text-left text-xs transition-colors ${
                     selectedChapterIndex === idx
                       ? 'bg-[#6366f1]/20 text-[#6366f1]'
@@ -2273,12 +2313,39 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
              <select
                className="lg:hidden w-full sm:w-auto max-w-full text-xs bg-slate-800 border border-white/10 rounded-lg px-2 py-1.5 text-slate-200"
                value={selectedChapterIndex}
-               onChange={(e) => { setSelectedChapterIndex(Number(e.target.value)); setCurrentMoveIndex(0); }}
+               onChange={(e) => { selectChapterIndex(Number(e.target.value)); }}
              >
                {selectedStudy.chapters.map((ch, i) => (
                  <option key={ch.id} value={i}>{i + 1}. {ch.title}</option>
                ))}
              </select>
+             {selectedStudy.syncEnabled ? (
+               <button
+                 type="button"
+                 onClick={() => {
+                   if (sticky) {
+                     void setSticky(false);
+                     return;
+                   }
+                   void (async () => {
+                     await setSticky(true);
+                     for (const row of Object.values(presenceByUserId)) {
+                       if (!shouldFollowPresenceRow(row)) continue;
+                       followCoachChapter(String(row.chapter_id));
+                       break;
+                     }
+                   })();
+                 }}
+                 className={`shrink-0 px-2.5 py-1 rounded-sm text-[10px] font-bold uppercase tracking-wider border transition-colors ${
+                   sticky
+                     ? 'text-indigo-200 bg-indigo-500/15 border-indigo-500/30'
+                     : 'text-slate-400 bg-white/5 border-white/10 hover:text-slate-200'
+                 }`}
+                 title={sticky ? 'Serbest çalış (bölüm seçimi kilidi kalkar)' : 'Antrenörü takip et (SYNC)'}
+               >
+                 {sticky ? 'SYNC' : 'Serbest'}
+               </button>
+             ) : null}
              {!sticky && behind > 0 && (
                <button
                  type="button"
@@ -2525,7 +2592,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                  onSetPgnTag={() => {}}
                  onSaveComment={() => {}}
                  onAddAnnotation={() => {}}
-                 onSelectChapter={(idx) => { setSelectedChapterIndex(idx); setCurrentMoveIndex(0); }}
+                 onSelectChapter={(idx) => { selectChapterIndex(idx); }}
                  onDownloadPgn={handleDownloadPgn}
                  canExportPgn={canExportCurrentStudy}
                  onCopyText={handleCopyText}

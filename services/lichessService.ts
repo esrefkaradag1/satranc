@@ -248,6 +248,13 @@ function puzzleTitleFromThemes(themes: string[], rating: number): string {
 }
 
 /** Lichess /api/puzzle/daily ve /api/puzzle/{id} JSON → uygulama Puzzle */
+export function puzzleFromLichessApiResponse(
+  data: { game?: { pgn?: string }; puzzle: Record<string, unknown> },
+  titleOverride?: string,
+): Puzzle | null {
+  return lichessApiResponseToPuzzle(data, titleOverride);
+}
+
 function lichessApiResponseToPuzzle(
   data: { game?: { pgn?: string }; puzzle: Record<string, unknown> },
   titleOverride?: string

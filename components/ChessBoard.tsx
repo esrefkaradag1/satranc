@@ -478,8 +478,12 @@ const ChessBoard: React.FC = () => {
     const gameFen = game.fen();
     let cancelled = false;
     (async () => {
-      const move = await getBestMoveAsync(new Chess(gameFen), computerLevel);
-      if (!cancelled && move) makeAMove(move);
+      try {
+        const move = await getBestMoveAsync(new Chess(gameFen), computerLevel);
+        if (!cancelled && move) makeAMove(move);
+      } catch (e) {
+        console.warn('[AI] Motor hamlesi alınamadı:', e);
+      }
       if (!cancelled) setIsThinking(false);
     })();
     return () => { cancelled = true; };
@@ -543,11 +547,43 @@ const ChessBoard: React.FC = () => {
         return;
       }
     }
-    for (let i = 0; i < prevHistory.length - 1; i++) {
+    // Replay all moves to verify gameInitialFen is in sync
+    for (let i = 0; i < prevHistory.length; i++) {
       try {
         if (!c.move(prevHistory[i])) break;
       } catch {
         break;
+      }
+    }
+    // If replay doesn't match current position, gameInitialFen is stale — sync it
+    if (c.fen() !== game.fen()) {
+      setGameInitialFen(game.fen());
+      try {
+        c = new Chess(game.fen());
+      } catch {
+        c = new Chess(game.fen(), { skipValidation: true });
+      }
+      // Replay all but last from the corrected starting point
+      for (let i = 0; i < prevHistory.length - 1; i++) {
+        try {
+          if (!c.move(prevHistory[i])) break;
+        } catch {
+          break;
+        }
+      }
+    } else {
+      // In sync: rebuild from gameInitialFen replaying all but last
+      try {
+        c = new Chess(gameInitialFen);
+      } catch {
+        c = new Chess(gameInitialFen, { skipValidation: true });
+      }
+      for (let i = 0; i < prevHistory.length - 1; i++) {
+        try {
+          if (!c.move(prevHistory[i])) break;
+        } catch {
+          break;
+        }
       }
     }
     setGame(c);

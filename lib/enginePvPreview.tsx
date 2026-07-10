@@ -1,9 +1,11 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Chessboard } from 'react-chessboard';
-import { Chess } from 'chess.js';
 import { ChessBoardFrame } from '../components/chess/ChessBoardFrame';
 import { CHESSBOARD_NO_NOTATION } from './chessBoardUi';
+import { makeBuilderGame } from './studyUtils';
+
+export const CLASSROOM_ENGINE_PV_MAX_MOVES = 18;
 
 export const ENGINE_LINE_PREVIEW_SIZE = 176;
 export const ENGINE_LINE_PREVIEW_OFFSET = 12;
@@ -13,7 +15,7 @@ export type LinePreviewState = { fen: string; x: number; y: number } | null;
 
 export function fenAfterUciPlies(startFen: string, uciMoves: string[], plies: number): string | null {
   try {
-    const game = new Chess(startFen);
+    const game = makeBuilderGame(startFen);
     const n = Math.min(Math.max(0, plies), uciMoves.length);
     for (let i = 0; i < n; i++) {
       const uci = uciMoves[i];
@@ -31,7 +33,7 @@ export function fenAfterUciPlies(startFen: string, uciMoves: string[], plies: nu
 
 export function uciPvToSanList(fen: string, uciMoves: string[]): string[] {
   try {
-    const game = new Chess(fen);
+    const game = makeBuilderGame(fen);
     const result: string[] = [];
     for (const uci of uciMoves) {
       const from = uci.slice(0, 2);
@@ -47,7 +49,7 @@ export function uciPvToSanList(fen: string, uciMoves: string[]): string[] {
     }
     return result;
   } catch {
-    return uciMoves.slice(0, 8);
+    return uciMoves.slice(0, 12);
   }
 }
 
@@ -73,7 +75,7 @@ export function EnginePvInteractiveMoves({
   hovered,
   onHoverPly,
   onClickPly,
-  maxMoves = 12,
+  maxMoves = CLASSROOM_ENGINE_PV_MAX_MOVES,
   theme = 'study',
   readOnly = false,
 }: InteractiveMovesProps): React.ReactNode[] {
@@ -122,10 +124,10 @@ export function EnginePvInteractiveMoves({
         : 'bg-sky-500/35 text-white font-bold'
       : i === 0
         ? isClassroom
-          ? 'font-bold text-white hover:bg-indigo-500/20'
+          ? 'font-bold text-white hover:bg-indigo-500/25'
           : 'font-bold text-[#e8e8e8] hover:bg-white/10'
         : isClassroom
-          ? 'text-slate-400 hover:bg-indigo-500/15 hover:text-white'
+          ? 'text-slate-200 hover:bg-indigo-500/20 hover:text-white'
           : 'text-[#bababa] hover:bg-white/10 hover:text-white';
 
     if (readOnly) {
@@ -144,7 +146,7 @@ export function EnginePvInteractiveMoves({
         <button
           type="button"
           key={`m-${i}`}
-          className={`mr-0.5 px-1 py-0.5 rounded cursor-pointer transition-colors font-mono leading-tight ${hoverClass} ${
+          className={`mr-0.5 px-0.5 rounded cursor-pointer transition-colors font-mono leading-normal ${hoverClass} ${
             isClassroom ? 'text-[12px]' : 'text-[12px]'
           }`}
           onMouseEnter={(e) => onHoverPly(lineIndex, i, e.clientX, e.clientY)}

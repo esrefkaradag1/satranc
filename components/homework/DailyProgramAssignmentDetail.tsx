@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Users, Percent, Trophy, Calendar, RefreshCw, ChevronDown, ChevronUp, Target,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Swords, CheckCircle2, XCircle,
 } from 'lucide-react';
 import type { HomeworkAssignment, Student, StudentDailyTarget } from '../../types';
 import type { PlatformStudentStat } from '../../lib/homeworkStatsBuilders';
@@ -226,6 +226,23 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
             <div key={item.label} className="rounded-xl border border-white/[0.08] bg-[#1a2332]/80 p-4 text-center">
               <Icon className={`w-5 h-5 mx-auto mb-2 ${item.color}`} />
               <p className={`text-2xl font-black ${item.color}`}>{item.value}</p>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">{item.label}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: 'Bulmaca Doğru', value: String(summary.totalCorrect), icon: CheckCircle2, color: 'text-emerald-400' },
+          { label: 'Bulmaca Yanlış', value: String(summary.totalWrong), icon: XCircle, color: 'text-rose-400' },
+          { label: 'Toplam Maç', value: String(summary.totalGames), icon: Swords, color: 'text-sky-300' },
+        ].map((item) => {
+          const Icon = item.icon;
+          return (
+            <div key={item.label} className="rounded-xl border border-white/[0.08] bg-[#1a2332]/80 p-4 text-center">
+              <Icon className={`w-5 h-5 mx-auto mb-2 ${item.color}`} />
+              <p className={`text-2xl font-black tabular-nums ${item.color}`}>{item.value}</p>
               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">{item.label}</p>
             </div>
           );

@@ -672,6 +672,7 @@ const LichessChessCard: React.FC<{
                       <LichessPuzzlesSection
                         username={student.lichessUsername}
                         studentId={student.id}
+                        student={student}
                         dailyPuzzle={dailyLichessPuzzle}
                         practicePuzzles={lichessPracticePuzzles}
                         loadingDaily={loadingDailyLichessPuzzle}

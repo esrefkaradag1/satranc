@@ -11,6 +11,7 @@ import {
   resolvePlatformHomeworkStatus,
   type PlatformDayStats,
 } from './homeworkPlatformUtils';
+import { resolvePlatformActivityTimeSeconds } from './platformActivityTime';
 
 export function studentDailyTargetHasGoals(
   target?: StudentDailyTarget,
@@ -238,7 +239,7 @@ export function buildPlatformHomeworkStats(
       wrong: goalEval.puzzleFailed,
       skipped: 0,
       points: 0,
-      timeSeconds: platformTimeByStudent[student.id] ?? 0,
+      timeSeconds: resolvePlatformActivityTimeSeconds(platform, platformTimeByStudent[student.id]),
       progress: dailyGoalDone ? 100 : progress,
       status,
       todayGames,
@@ -255,26 +256,41 @@ export function platformSummaryFromStats(stats: PlatformStudentStat[]) {
   const withTargets = stats.filter(
     (s) => (s.dailyGameTarget ?? 0) > 0 || (s.dailyPuzzleTarget ?? 0) > 0,
   );
-  const active = withTargets.filter(
-    (s) => (s.todayGames ?? 0) > 0 || (s.todayPuzzleSolved ?? 0) > 0,
+  const activeAmongTargeted = withTargets.filter(
+    (s) => (s.todayGames ?? 0) > 0 || (s.todayPuzzleSolved ?? 0) > 0 || s.correct > 0 || s.wrong > 0,
   );
-  const completed = withTargets.filter((s) => s.dailyGoalDone || s.status === 'Tamamlandı').length;
+  const activeAll = stats.filter(
+    (s) => (s.todayGames ?? 0) > 0 || (s.todayPuzzleSolved ?? 0) > 0 || s.correct > 0 || s.wrong > 0,
+  );
+  const completedAmongTargeted = withTargets.filter((s) => s.dailyGoalDone || s.status === 'Tamamlandı').length;
+  const completedAll = stats.filter((s) => s.dailyGoalDone || s.status === 'Tamamlandı').length;
   const partial = withTargets.filter((s) => s.status === 'Kısmi yaptı').length;
   const missed = withTargets.filter((s) => s.status === 'Yapılmadı').length;
   const avgCompletion = withTargets.length
     ? Math.round(withTargets.reduce((sum, s) => sum + s.progress, 0) / withTargets.length)
-    : 0;
+    : stats.length
+      ? Math.round(stats.reduce((sum, s) => sum + s.progress, 0) / stats.length)
+      : 0;
   const gameTargetSum = withTargets.reduce((sum, s) => sum + (s.dailyGameTarget ?? 0), 0);
   const puzzleTargetSum = withTargets.reduce((sum, s) => sum + (s.dailyPuzzleTarget ?? 0), 0);
+  const totalCorrect = stats.reduce((sum, s) => sum + (s.correct ?? 0), 0);
+  const totalWrong = stats.reduce((sum, s) => sum + (s.wrong ?? 0), 0);
+  const totalGames = stats.reduce((sum, s) => sum + (s.todayGames ?? 0), 0);
+  const targetedCount = withTargets.length > 0 ? withTargets.length : stats.length;
+  const activeCount = withTargets.length > 0 ? activeAmongTargeted.length : activeAll.length;
+  const completed = withTargets.length > 0 ? completedAmongTargeted : completedAll;
 
   return {
-    studentCount: stats.length,
-    activeCount: active.length,
+    studentCount: targetedCount,
+    activeCount,
     completed,
     partial,
     missed,
     avgCompletion,
     gameTargetSum,
     puzzleTargetSum,
+    totalCorrect,
+    totalWrong,
+    totalGames,
   };
 }

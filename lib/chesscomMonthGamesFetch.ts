@@ -1,6 +1,7 @@
 import type { ChessComGame } from '../services/chessPlatformService';
 import { parseChessComMonthlyPgn } from './chesscomGamesParse';
 import { fetchChessComUpstream } from './chesscomUpstreamFetch.mjs';
+import { chessComGameDurationSeconds } from './chesscomGameDuration';
 
 export type ChessComMonthGamesResult = {
   games: ChessComGame[];
@@ -38,6 +39,29 @@ async function fetchMonthlyPgn(username: string, year: string, month: string): P
   return parseChessComMonthlyPgn(text);
 }
 
+function gameMergeKey(game: ChessComGame): string {
+  return game.uuid?.trim() || game.url?.trim() || String(game.end_time ?? '');
+}
+
+function jsonGamesNeedPgnDuration(games: ChessComGame[]): boolean {
+  return games.some((g) => chessComGameDurationSeconds(g) <= 0);
+}
+
+function mergeJsonGamesWithPgn(jsonGames: ChessComGame[], pgnGames: ChessComGame[]): ChessComGame[] {
+  const pgnByKey = new Map<string, ChessComGame>();
+  for (const g of pgnGames) {
+    const key = gameMergeKey(g);
+    if (key) pgnByKey.set(key, g);
+  }
+  return jsonGames.map((g) => {
+    if (chessComGameDurationSeconds(g) > 0) return g;
+    const key = gameMergeKey(g);
+    const pgn = key ? pgnByKey.get(key) : undefined;
+    if (pgn?.pgn) return { ...g, pgn: pgn.pgn };
+    return g;
+  });
+}
+
 /**
  * Chess.com aylık oyun arşivi — JSON boş/404 olduğunda PGN yedeği.
  * Güncel ay arşivi pub API'de gecikmeli yayınlanır; PGN genelde daha erken gelir.
@@ -60,6 +84,17 @@ export async function fetchChessComMonthGames(
     jsonStatus = json.status;
     jsonOk = json.ok;
     if (json.ok && json.games.length > 0) {
+      if (!jsonGamesNeedPgnDuration(json.games)) {
+        return { games: json.games, source: 'json' };
+      }
+      try {
+        const pgnGames = await fetchMonthlyPgn(trimmed, year, month);
+        if (pgnGames.length > 0) {
+          return { games: mergeJsonGamesWithPgn(json.games, pgnGames), source: 'json' };
+        }
+      } catch {
+        /* PGN birleştirme başarısız — JSON ile devam */
+      }
       return { games: json.games, source: 'json' };
     }
   } catch {

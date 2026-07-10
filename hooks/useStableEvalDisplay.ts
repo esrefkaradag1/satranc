@@ -21,7 +21,7 @@ const OFF: EvalBarDisplay = {
   pending: false,
 };
 
-const MIN_DEPTH_TO_SHOW = 8;
+const MIN_DEPTH_TO_SHOW = 6;
 
 /** Beyaz perspektifinde mat mesafesi (+ = beyaz mat eder) */
 function whitePovMate(line: EngineScoreLine, turn: 'w' | 'b'): number | null {
@@ -45,7 +45,7 @@ function chancesFromLine(
  * - Değer = en iyi hattın `povChances` (kazanma şansı) değeri; ham cp titremesi değil
  * - Yalnızca daha derin bir değerlendirme geldiğinde hedef güncellenir
  * - Mat bulunduktan sonra cp skoruna geri dönülmez
- * - Pozisyon değişince çubuk sıfırlanmaz; son değer korunur
+ * - Pozisyon değişince çubuk nötr (%50) olur; yeni motor sonucu gelene kadar bekler
  * - Yumuşatma tek katmanda yapılır: ChessEvalBar CSS geçişi (transition: height 1s)
  *   Lichess'te olduğu gibi hedef doğrudan atanır, histerezis/step-cap yoktur.
  */
@@ -74,11 +74,12 @@ export function useStableEvalDisplay(
       fenRef.current = fen;
       committedDepthRef.current = 0;
       lockedMateRef.current = null;
-      setDisplay((prev) => ({
-        ...prev,
-        pending: true,
+      setDisplay({
+        whitePercent: 50,
         label: '…',
-      }));
+        winningChances: 0,
+        pending: true,
+      });
     }
 
     if (!line) return;
@@ -90,7 +91,7 @@ export function useStableEvalDisplay(
       committedDepthRef.current = 0;
     }
 
-    if (depth <= committedDepthRef.current) return;
+    if (depth < committedDepthRef.current) return;
 
     if (depth < MIN_DEPTH_TO_SHOW && committedDepthRef.current === 0) return;
 

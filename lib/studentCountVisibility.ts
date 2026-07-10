@@ -1,8 +1,8 @@
 import type { AuthUser } from '../types';
 
-/** Öğrenci sayısı yalnızca yönetici ve antrenör tarafından görülebilir (kendi kapsamları). */
+/** Öğrenci sayısı yönetici, antrenör ve kulüp panelinde görünür. */
 export function canShowStudentCounts(auth: AuthUser | null | undefined): boolean {
-  return auth?.role === 'admin' || auth?.role === 'coach';
+  return auth?.role === 'admin' || auth?.role === 'coach' || auth?.role === 'club';
 }
 
 export function maskStudentCount(

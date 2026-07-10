@@ -6,7 +6,8 @@ import { studyDisplayEmoji } from '../../lib/studyUtils';
 import { loadStudiesAsync, saveStudyAsync, subscribeToStudies } from '../../studyStorage';
 import { normalizeSearchText, searchIncludesText } from '../../lib/searchText';
 import { loadStudyEvents, type StudyEvent } from '../../studyEvents';
-import { mergeStudyAnalysisEvents } from '../../lib/studyAnalysisEvents';
+import { mergeStudyAnalysisEvents, buildOrphanChapterMap, resolveEventChapterId } from '../../lib/studyAnalysisEvents';
+import { extractVsComputerHistory } from '../../lib/studyReplayUtils';
 import { loadStudyPresence, subscribeStudyPresence } from '../../services/studyActions';
 import { buildStudyStudentStats, type StudyStudentStat } from '../../lib/studyHomeworkStats';
 import { useApp } from '../../AppContext';
@@ -28,9 +29,9 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [studentSearch, setStudentSearch] = useState('');
   const [activeStudyLog, setActiveStudyLog] = useState<{ study: Study; student: Student } | null>(null);
+  const [activeStudyPresenceRows, setActiveStudyPresenceRows] = useState<unknown[]>([]);
   const [activeStudyEvents, setActiveStudyEvents] = useState<StudyEvent[]>([]);
   const [loadingStudyEvents, setLoadingStudyEvents] = useState(false);
-  const [selectedResultsStudyId, setSelectedResultsStudyId] = useState('');
   const [resultsStudyEvents, setResultsStudyEvents] = useState<StudyEvent[]>([]);
   const [loadingResults, setLoadingResults] = useState(false);
 
@@ -164,6 +165,11 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
     }
     let cancelled = false;
     setLoadingResults(true);
+    void loadStudiesAsync()
+      .then((all) => {
+        if (!cancelled && all.length > 0) setStudies(all);
+      })
+      .catch(() => { /* mevcut liste korunur */ });
     void loadStudyEvents(selectedResultsStudyId)
       .then((events) => { if (!cancelled) setResultsStudyEvents(events); })
       .catch(() => { if (!cancelled) setResultsStudyEvents([]); })
@@ -201,12 +207,17 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   };
 
   const openStudyLog = async (study: Study, student: Student) => {
-    setActiveStudyLog({ study, student });
+    const freshStudies = await loadStudiesAsync();
+    const freshStudy = freshStudies.find((s) => s.id === study.id) ?? study;
+    if (freshStudies.length > 0) setStudies(freshStudies);
+    setActiveStudyPresenceRows([]);
+    setActiveStudyLog({ study: freshStudy, student });
   };
 
   const closeStudyLog = () => {
     setActiveStudyLog(null);
     setActiveStudyEvents([]);
+    setActiveStudyPresenceRows([]);
     setLoadingStudyEvents(false);
   };
 
@@ -223,6 +234,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
           loadStudyPresence(study.id),
         ]);
         if (cancelled) return;
+        setActiveStudyPresenceRows(presenceRows);
         const persisted = mergeStudyAnalysisEvents(dbEvents, study).filter(
           (event) => String(event.studentId) === String(student.id),
         );
@@ -259,10 +271,21 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
 
   const activeStudyEventsByChapter = useMemo(() => {
     if (!activeStudyLog) return [];
-    const chapterById = new Map(activeStudyLog.study.chapters.map((chapter) => [chapter.id, chapter]));
-    const grouped = new Map<string, { chapterId: string; chapterTitle: string; chapterType: string; chapter: typeof activeStudyLog.study.chapters[0] | undefined; events: StudyEvent[] }>();
+    const { study } = activeStudyLog;
+    const orphanMap = buildOrphanChapterMap(activeStudyEvents, study);
+    const chapterById = new Map(study.chapters.map((chapter) => [chapter.id, chapter]));
+    const grouped = new Map<string, {
+      chapterId: string;
+      chapterTitle: string;
+      chapterType: string;
+      chapter: typeof study.chapters[0] | undefined;
+      events: StudyEvent[];
+      vsMoveHistory: string[];
+    }>();
+
     activeStudyEvents.forEach((event) => {
-      const chapterId = event.chapterId || 'unknown';
+      const resolvedChapterId = resolveEventChapterId(event.chapterId, study, orphanMap);
+      const chapterId = resolvedChapterId || event.chapterId || 'unknown';
       if (!grouped.has(chapterId)) {
         const chapter = chapterById.get(chapterId);
         const interactiveType = chapter?.interactiveType ?? 'puzzle';
@@ -278,12 +301,18 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
           chapterType,
           chapter,
           events: [],
+          vsMoveHistory: extractVsComputerHistory(
+            activeStudyPresenceRows,
+            activeStudyLog.student.id,
+            chapterId,
+          ),
         });
       }
-      grouped.get(chapterId)!.events.push(event);
+      grouped.get(chapterId)!.events.push({ ...event, chapterId });
     });
+
     return [...grouped.values()];
-  }, [activeStudyLog, activeStudyEvents]);
+  }, [activeStudyLog, activeStudyEvents, activeStudyPresenceRows]);
 
   const assignStudyToGroup = async () => {
     if (!assignStudyId || students.length === 0) return;
@@ -526,7 +555,12 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
                       <p className="text-[10px] text-slate-500 mt-1">
                         {chapter.events.length} hamle kaydı
                         {chapter.chapterType === 'Bilgisayara karşı'
-                          ? ` · ${chapter.events.filter((e) => !e.expectedMove).length} öğrenci hamlesi`
+                          ? ` · ${chapter.vsMoveHistory.length > 0
+                            ? chapter.vsMoveHistory.filter((_m, plyIdx) => {
+                              const studentIsWhite = (chapter.chapter?.orientation ?? 'white') === 'white';
+                              return studentIsWhite ? plyIdx % 2 === 0 : plyIdx % 2 === 1;
+                            }).length
+                            : chapter.events.filter((e) => !e.id.startsWith('presence-') && e.expectedMove == null).length} öğrenci hamlesi`
                           : ` · ${chapter.events.filter((e) => e.result === 'wrong').length} yanlış`}
                       </p>
                     </div>
@@ -535,6 +569,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
                       events={chapter.events}
                       studentId={activeStudyLog.student.id}
                       studyId={activeStudyLog.study.id}
+                      vsMoveHistory={chapter.vsMoveHistory}
                     />
                   </div>
                 ))

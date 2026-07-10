@@ -15,6 +15,9 @@ import {
   lichessOAuthTokenViaEnv,
   lichessPuzzleActivityViaEnv,
   lichessPuzzleDashboardViaEnv,
+  lichessPuzzleLatestViaEnv,
+  lichessPuzzleNextViaEnv,
+  lichessOAuthAccountViaEnv,
 } from '../lib/lichessOAuthApi.mjs';
 import { lichessProxyRequest } from '../lib/lichessProxyThrottle.mjs';
 import { parentStudentLoginViaEnv } from '../lib/studentParentAuth.mjs';
@@ -137,6 +140,11 @@ async function handleLichessOAuthStatus(url, res) {
   return sendJson(res, result.status, result.body);
 }
 
+async function handleLichessOAuthAccount(url, res) {
+  const result = await lichessOAuthAccountViaEnv(url.searchParams, process.env);
+  return sendJson(res, result.status, result.body);
+}
+
 async function handleLichessOAuthDisconnect(req, res) {
   const body = await readJsonBody(req);
   const result = await lichessOAuthDisconnectViaEnv(body, process.env);
@@ -150,6 +158,16 @@ async function handleLichessPuzzleActivity(url, res) {
 
 async function handleLichessPuzzleDashboard(url, res) {
   const result = await lichessPuzzleDashboardViaEnv(url.searchParams, process.env);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLichessPuzzleNext(url, res) {
+  const result = await lichessPuzzleNextViaEnv(url.searchParams, process.env);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleLichessPuzzleLatest(url, res) {
+  const result = await lichessPuzzleLatestViaEnv(url.searchParams, process.env);
   return sendJson(res, result.status, result.body);
 }
 
@@ -215,12 +233,10 @@ function parseTactics2Puzzles(data, type) {
   const list = data[TACTICS2_KEYS[type]];
   if (!Array.isArray(list)) return [];
   const out = [];
-  const seen = new Set();
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const parsed = normalizeAttempt(item);
-    if (!parsed || seen.has(parsed.id)) continue;
-    seen.add(parsed.id);
+    if (!parsed) continue;
     out.push(parsed);
   }
   return out.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -271,19 +287,115 @@ async function handleChessComRecentPuzzles(url, res) {
 
 async function handleChessComPuzzle(url, res) {
   const id = qp(url, 'id');
-  if (!id || !/^\d+$/.test(id)) return sendJson(res, 400, { error: 'Geçersiz puzzle id' });
-  try {
-    const upstream = await fetch(`https://www.chess.com/callback/puzzle/tactics/${encodeURIComponent(id)}`, {
-      headers: { Accept: 'application/json', 'User-Agent': 'NetChessAcademy/1.0' },
-      signal: AbortSignal.timeout(15000),
+  const { fetchChessComPuzzleDetailUpstream } = await import('../lib/chesscomPuzzleDetailFetch.mjs');
+  const result = await fetchChessComPuzzleDetailUpstream(id);
+  if (!result.ok) {
+    const status = result.status === 429 ? 429 : result.status || 502;
+    return sendJson(res, status, {
+      error: status === 429 ? 'Chess.com istek limiti — biraz sonra tekrar deneyin' : 'Bulmaca bulunamadı',
     });
-    if (!upstream.ok) return sendJson(res, upstream.status, { error: 'Bulmaca bulunamadı' });
-    const data = await upstream.json();
-    const pgn = data.pgn?.trim();
-    if (!pgn) return sendJson(res, 404, { error: 'PGN yok' });
-    return sendJson(res, 200, { pgn, isHumanPlayerWhite: Boolean(data.isHumanPlayerWhite) }, 's-maxage=3600, stale-while-revalidate=86400');
-  } catch {
-    return sendJson(res, 502, { error: 'Chess.com yanıt vermedi' });
+  }
+  return sendJson(res, 200, result.body, 's-maxage=3600, stale-while-revalidate=86400');
+}
+
+function puzzleSetupFenFromPgn(pgn) {
+  const m = String(pgn ?? '').match(/\[FEN\s+"([^"]+)"\]/i);
+  return m?.[1]?.trim() ?? null;
+}
+
+function pickLatestChessComAttempt(data) {
+  const rated = parseTactics2Puzzles(data, 'rated');
+  const learning = parseTactics2Puzzles(data, 'learning');
+  const rush = parseTactics2Puzzles(data, 'rush');
+  const all = [...rated, ...learning, ...rush].sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  );
+  return all[0] ?? null;
+}
+
+async function createSupabaseClient() {
+  const url = (process.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '').trim();
+  const key = (process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!url || !key) return null;
+  const { createClient } = await import('@supabase/supabase-js');
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+}
+
+async function handleChessComPuzzleLatest(url, res) {
+  const studentId = qp(url, 'studentId');
+  if (!studentId) return sendJson(res, 400, { error: 'studentId gerekli' });
+
+  const sb = await createSupabaseClient();
+  if (!sb) return sendJson(res, 200, { ok: false, error: 'Öğrenci profili bulunamadı' });
+
+  const { data, error } = await sb
+    .from('students')
+    .select('chess_com_username')
+    .eq('id', studentId)
+    .maybeSingle();
+  if (error || !data) return sendJson(res, 200, { ok: false, error: 'Öğrenci profili bulunamadı' });
+
+  const username = String(data.chess_com_username ?? '').trim().toLowerCase();
+  if (!username) return sendJson(res, 200, { ok: false, error: 'Chess.com kullanıcı adı tanımlı değil' });
+
+  const profileUrl = `https://www.chess.com/member/${encodeURIComponent(username)}/stats/puzzles`;
+  try {
+    const upstream = await fetch(
+      `https://www.chess.com/callback/stats/tactics2/new/puzzles/${encodeURIComponent(username)}`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'NetChessAcademy/1.0',
+          Referer: profileUrl,
+        },
+        signal: AbortSignal.timeout(12000),
+      },
+    );
+    if (!upstream.ok) {
+      return sendJson(res, 200, { ok: false, error: 'Chess.com bulmaca listesi alınamadı' });
+    }
+    const bundle = await upstream.json();
+    const attempt = pickLatestChessComAttempt(bundle);
+    if (!attempt) {
+      return sendJson(res, 200, { ok: false, error: 'Son Chess.com bulmacası bulunamadı' });
+    }
+
+    let fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    const puzzleRes = await fetch(
+      `https://www.chess.com/callback/puzzle/tactics/${encodeURIComponent(String(attempt.id))}`,
+      {
+        headers: { Accept: 'application/json', 'User-Agent': 'NetChessAcademy/1.0' },
+        signal: AbortSignal.timeout(12000),
+      },
+    );
+    if (puzzleRes.ok) {
+      const puzzleData = await puzzleRes.json();
+      const setup = puzzleSetupFenFromPgn(puzzleData.pgn ?? '');
+      if (setup) fen = setup;
+    } else if (attempt.fen?.trim()) {
+      fen = attempt.fen.trim();
+    }
+
+    const rating = attempt.puzzleRating > 0 ? ` · ${attempt.puzzleRating}` : '';
+    const resultLabel = attempt.passed ? 'doğru' : 'yanlış';
+    return sendJson(res, 200, {
+      ok: true,
+      attempt,
+      snapshot: {
+        fen,
+        moves: [],
+        baseFen: fen,
+        source: 'chesscom',
+        gameId: String(attempt.id),
+        gameUrl: `https://www.chess.com/puzzles/problem/${encodeURIComponent(String(attempt.id))}`,
+        label: `Chess.com bulmaca${rating} · ${resultLabel}`,
+        boardOrientation: attempt.flipBoard ? 'black' : 'white',
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Bulmaca çekilemedi';
+    return sendJson(res, 200, { ok: false, error: msg });
   }
 }
 
@@ -397,6 +509,10 @@ export async function dispatchApi(req, res, url) {
       await handleChessComPuzzle(url, res);
       return true;
     }
+    if (path === '/api/chesscom-puzzle-latest' && req.method === 'GET') {
+      await handleChessComPuzzleLatest(url, res);
+      return true;
+    }
     if (path === '/api/chesscom-member-stats') {
       await handleChessComMemberStats(url, res);
       return true;
@@ -441,6 +557,10 @@ export async function dispatchApi(req, res, url) {
       await handleLichessOAuthStatus(url, res);
       return true;
     }
+    if (path === '/api/lichess-oauth-account' && req.method === 'GET') {
+      await handleLichessOAuthAccount(url, res);
+      return true;
+    }
     if (path === '/api/lichess-oauth-disconnect' && req.method === 'POST') {
       await handleLichessOAuthDisconnect(req, res);
       return true;
@@ -451,6 +571,14 @@ export async function dispatchApi(req, res, url) {
     }
     if (path === '/api/lichess-puzzle-dashboard' && req.method === 'GET') {
       await handleLichessPuzzleDashboard(url, res);
+      return true;
+    }
+    if (path === '/api/lichess-puzzle-next' && req.method === 'GET') {
+      await handleLichessPuzzleNext(url, res);
+      return true;
+    }
+    if (path === '/api/lichess-puzzle-latest' && req.method === 'GET') {
+      await handleLichessPuzzleLatest(url, res);
       return true;
     }
     if (path === '/api/training-notify' && req.method === 'POST') {

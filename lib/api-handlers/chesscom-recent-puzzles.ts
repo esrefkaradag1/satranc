@@ -94,12 +94,10 @@ function parseTactics2Puzzles(data: unknown, type: PuzzleTab): PuzzleAttempt[] {
   const list = (data as Record<string, unknown>)[TACTICS2_KEYS[type]];
   if (!Array.isArray(list)) return [];
   const out: PuzzleAttempt[] = [];
-  const seen = new Set<number>();
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const parsed = normalizeAttempt(item as Record<string, unknown>);
-    if (!parsed || seen.has(parsed.id)) continue;
-    seen.add(parsed.id);
+    if (!parsed) continue;
     out.push(parsed);
   }
   return out.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());

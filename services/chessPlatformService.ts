@@ -12,6 +12,11 @@ import {
 } from '../lib/chesscomPuzzleParse';
 import { timestampMatchesDay, localDayKeyFromMs } from '../lib/homeworkDayUtils';
 import {
+  chessComDailyStatsFromLifetimeTracker,
+  preferRicherChessComDayStats,
+  tacticsLifetimeFromMemberStats,
+} from '../lib/chesscomDailyTacticsTracker';
+import {
   lichessGamesForDayFromActivity,
   lichessPuzzleStatsForDayFromActivity,
   chessComGamesForDay,
@@ -1283,20 +1288,29 @@ export async function fetchChessComRecentPuzzles(
 }
 
 /** Tek bulmaca PGN + tahta yönü (proxy veya doğrudan callback) */
+const chessComPuzzleDetailClientCache = new Map<string, { expiresAt: number; body: ChessComPuzzleDetail }>();
+
 export async function fetchChessComPuzzleDetail(puzzleId: number | string): Promise<ChessComPuzzleDetail | null> {
   const id = String(puzzleId ?? '').trim();
   if (!id) return null;
+
+  const cached = chessComPuzzleDetailClientCache.get(id);
+  if (cached && cached.expiresAt > Date.now()) return cached.body;
 
   try {
     const proxyRes = await fetch(`/api/chesscom-puzzle?id=${encodeURIComponent(id)}`, {
       headers: { Accept: 'application/json' },
     });
+    if (proxyRes.status === 429) return cached?.body ?? null;
     if (!proxyRes.ok) return null;
     const body = (await proxyRes.json()) as ChessComPuzzleDetail;
-    if (body?.pgn?.trim()) return body;
+    if (body?.pgn?.trim()) {
+      chessComPuzzleDetailClientCache.set(id, { expiresAt: Date.now() + 60 * 60 * 1000, body });
+      return body;
+    }
     return null;
   } catch {
-    return null;
+    return cached?.body ?? null;
   }
 }
 
@@ -1568,9 +1582,24 @@ export async function fetchChessComDailyPuzzleStats(
   username: string,
   day: string = new Date().toISOString().slice(0, 10),
 ): Promise<DailyPuzzleActivityStats> {
-  const bundle = await fetchChessComPuzzlesBundle(username);
-  if (!bundle) return { count: 0, passed: 0, failed: 0 };
-  return chessComPuzzleStatsForDay(bundle.rated, day);
+  const trimmed = normalizeChessComUsername(username);
+  if (!trimmed) return { count: 0, passed: 0, failed: 0 };
+
+  const bundle = await fetchChessComPuzzlesBundle(trimmed);
+  const listStats = chessComPuzzleStatsForDay(bundle?.rated ?? [], day);
+
+  try {
+    const member = await fetchChessComMemberStats(trimmed);
+    const lifetime = tacticsLifetimeFromMemberStats(member?.tactics);
+    if (lifetime) {
+      const deltaStats = chessComDailyStatsFromLifetimeTracker(trimmed, day, lifetime);
+      return preferRicherChessComDayStats(listStats, deltaStats);
+    }
+  } catch {
+    /* member stats yedek */
+  }
+
+  return listStats;
 }
 
 /** Tek bulmaca bundle + aylık arşivle birden fazla günün Chess.com özeti */

@@ -86,7 +86,10 @@ function normalizeChessComPuzzleAttempt(raw: Record<string, unknown>): ChessComP
   const myRatingAfter = Number(raw.my_rating ?? raw.myRating ?? raw.ratingAfter ?? raw.rating_after ?? 0);
   const puzzleRating = Number(raw.rating ?? raw.puzzle_rating ?? raw.puzzleRating ?? 0);
 
-  const passed = Boolean(raw.is_passed ?? raw.isPassed ?? raw.passed ?? (raw.result === 1 || raw.result === 'win'));
+  const passedExplicit = raw.is_passed ?? raw.isPassed ?? raw.passed;
+  const passed = passedExplicit != null
+    ? Boolean(passedExplicit)
+    : Boolean(raw.result === 1 || raw.result === 'win' || ratingChange > 0);
   const dateRaw = raw.date ?? raw.createDate ?? raw.create_date ?? raw.last_date ?? '';
   const date = chessComTimestampToIso(dateRaw);
 
@@ -122,12 +125,10 @@ export function parseChessComTactics2Puzzles(data: unknown, type: ChessComPuzzle
   const list = root[key];
   if (!Array.isArray(list)) return [];
   const out: ChessComPuzzleAttempt[] = [];
-  const seen = new Set<number>();
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const parsed = normalizeChessComPuzzleAttempt(item as Record<string, unknown>);
-    if (!parsed || seen.has(parsed.id)) continue;
-    seen.add(parsed.id);
+    if (!parsed) continue;
     out.push(parsed);
   }
   return out.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -164,6 +165,56 @@ export function selectHomeworkGoalPuzzles(
   );
   // Günlük hedef: kronolojik sırayla doğru + yanlış tüm denemeler (yalnızca doğrular değil).
   return sorted.slice(0, puzzleTarget);
+}
+
+/** Chess.com callback member/stats/puzzles → tactics lifetime sayıları (sunucu/istemci). */
+export function parseChessComTacticsLifetimeFromMemberPayload(data: unknown): {
+  attemptCount: number;
+  passedCount: number;
+  failedCount: number;
+  totalSeconds: number;
+} | null {
+  if (!data || typeof data !== 'object') return null;
+  const raw = data as { stats?: Array<{ key: string; stats: Record<string, unknown> }> };
+  const tactics = raw.stats?.find((s) => s.key === 'tactics')?.stats;
+  if (!tactics) return null;
+  const attemptCount = Number(tactics.attempt_count ?? 0);
+  const passedCount = Number(tactics.passed_count ?? 0);
+  const failedCount = Number(tactics.failed_count ?? 0);
+  const totalSeconds = Number(tactics.total_seconds ?? 0);
+  if (![attemptCount, passedCount, failedCount, totalSeconds].every((n) => Number.isFinite(n))) return null;
+  return {
+    attemptCount: Math.max(0, attemptCount),
+    passedCount: Math.max(0, passedCount),
+    failedCount: Math.max(0, failedCount),
+    totalSeconds: Math.max(0, totalSeconds),
+  };
+}
+
+/** tactics2 bundle statsInfo yedeği */
+export function parseChessComTacticsLifetimeFromTactics2Bundle(data: unknown): {
+  attemptCount: number;
+  passedCount: number;
+  failedCount: number;
+  totalSeconds: number;
+} | null {
+  if (!data || typeof data !== 'object') return null;
+  const statsInfo = (data as Record<string, unknown>).statsInfo;
+  if (!statsInfo || typeof statsInfo !== 'object') return null;
+  const stats = (statsInfo as Record<string, unknown>).stats;
+  if (!stats || typeof stats !== 'object') return null;
+  const s = stats as Record<string, unknown>;
+  const attemptCount = Number(s.attempt_count ?? 0);
+  const passedCount = Number(s.passed_count ?? 0);
+  const failedCount = Number(s.failed_count ?? 0);
+  const totalSeconds = Number(s.total_seconds ?? 0);
+  if (![attemptCount, passedCount, failedCount, totalSeconds].every((n) => Number.isFinite(n))) return null;
+  return {
+    attemptCount: Math.max(0, attemptCount),
+    passedCount: Math.max(0, passedCount),
+    failedCount: Math.max(0, failedCount),
+    totalSeconds: Math.max(0, totalSeconds),
+  };
 }
 
 export function formatChessComApiError(value: unknown): string {

@@ -1,6 +1,8 @@
 /** Lichess OAuth PKCE (Authorization Code + S256) — tarayıcı tarafı yardımcıları */
 
 export const LICHESS_OAUTH_SCOPES = 'puzzle:read';
+/** Canlı oyun paylaşımı (account/playing + board stream) */
+export const LICHESS_OAUTH_SCOPES_BOARD = 'puzzle:read board:play';
 export const LICHESS_PKCE_STORAGE_KEY = 'netchess_lichess_pkce_v1';
 
 export type LichessPkceSession = {
@@ -87,7 +89,11 @@ export function buildLichessAuthorizeUrl(params: {
   return `https://lichess.org/oauth?${qs.toString()}`;
 }
 
-export async function startLichessOAuthFlow(studentId: string, returnPath = '#/ogrenci'): Promise<void> {
+export async function startLichessOAuthFlow(
+  studentId: string,
+  returnPath = '#/ogrenci',
+  scope = LICHESS_OAUTH_SCOPES,
+): Promise<void> {
   const verifier = generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
   const state = btoa(JSON.stringify({ studentId, t: Date.now() }))
@@ -100,5 +106,5 @@ export async function startLichessOAuthFlow(studentId: string, returnPath = '#/o
     returnPath,
     createdAt: Date.now(),
   });
-  window.location.href = buildLichessAuthorizeUrl({ codeChallenge: challenge, state });
+  window.location.href = buildLichessAuthorizeUrl({ codeChallenge: challenge, state, scope });
 }

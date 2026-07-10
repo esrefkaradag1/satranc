@@ -1,6 +1,10 @@
 import { fetchChessComMonthGames } from '../chesscomMonthGamesFetch';
 import { fetchChessComUpstream } from '../chesscomUpstreamFetch.mjs';
-import { parseChessComTactics2Puzzles } from '../chesscomPuzzleParse';
+import {
+  parseChessComTactics2Puzzles,
+  parseChessComTacticsLifetimeFromMemberPayload,
+  parseChessComTacticsLifetimeFromTactics2Bundle,
+} from '../chesscomPuzzleParse';
 import { lichessProxyRequest } from '../lichessProxyThrottle.mjs';
 import {
   buildPlatformDayStats,
@@ -9,9 +13,16 @@ import {
   lichessGamesForDayFromActivity,
   lichessPuzzleStatsForDayFromActivity,
   uniqueYearMonths,
+  type LichessActivityRow,
   type PlatformDayStatsPayload,
 } from '../platformWeekStatsDerive';
-import type { LichessActivity } from '../../services/chessPlatformService';
+import {
+  chessComDailyStatsFromLifetimeTracker,
+  preferRicherChessComDayStats,
+  tacticsLifetimeFromMemberStats,
+} from '../chesscomDailyTacticsTracker';
+import { computeChessComActivityTimeSeconds } from '../platformActivityTime';
+import { fetchLichessGamesTimeSecondsForDay } from '../lichessDayGamesFetch';
 
 type Req = {
   method?: string;
@@ -32,6 +43,7 @@ export const config = { maxDuration: 60 };
 
 const LICHESS_USER_RE = /^[A-Za-z0-9_-]{1,30}$/;
 const CHESSCOM_USER_RE = /^[a-z0-9_-]{1,25}$/i;
+const CHESSCOM_FETCH_TIMEOUT_MS = 10_000;
 
 function normalizeLichess(username: string | undefined): string {
   const trimmed = username?.trim() ?? '';
@@ -53,34 +65,82 @@ function parseBody(req: Req): { students: StudentInput[]; days: string[] } {
   return { students, days };
 }
 
-async function fetchLichessActivity(username: string): Promise<LichessActivity[]> {
-  const qs = new URLSearchParams();
-  qs.set('soft', '1');
-  const upstream = await lichessProxyRequest(`user/${username}/activity`, qs, 'application/json', process.env);
-  if (upstream.rateLimited || upstream.status === 429) return [];
-  if (upstream.status < 200 || upstream.status >= 300) return [];
+async function fetchLichessActivity(username: string): Promise<LichessActivityRow[]> {
   try {
+    const qs = new URLSearchParams();
+    qs.set('soft', '1');
+    const upstream = await lichessProxyRequest(`user/${username}/activity`, qs, 'application/json', process.env);
+    if (upstream.rateLimited || upstream.status === 429) return [];
+    if (upstream.status < 200 || upstream.status >= 300) return [];
     const data = JSON.parse(upstream.body);
-    return Array.isArray(data) ? (data as LichessActivity[]) : [];
+    return Array.isArray(data) ? (data as LichessActivityRow[]) : [];
   } catch {
     return [];
   }
 }
 
+async function fetchChessComMemberTacticsLifetime(username: string) {
+  const profileUrl = `https://www.chess.com/member/${encodeURIComponent(username)}/stats/puzzles`;
+  try {
+    const upstream = await fetchChessComUpstream(
+      `https://www.chess.com/callback/member/stats/puzzles/${encodeURIComponent(username)}?type=rated`,
+      { headers: { Accept: 'application/json', Referer: profileUrl } },
+      CHESSCOM_FETCH_TIMEOUT_MS,
+    );
+    if (!upstream.ok) return null;
+    const data = await upstream.json();
+    return tacticsLifetimeFromMemberStats(parseChessComTacticsLifetimeFromMemberPayload(data));
+  } catch {
+    return null;
+  }
+}
+
 async function fetchChessComPuzzlesRated(username: string) {
   const profileUrl = `https://www.chess.com/member/${encodeURIComponent(username)}/stats/puzzles`;
-  const upstream = await fetchChessComUpstream(
-    `https://www.chess.com/callback/stats/tactics2/new/puzzles/${encodeURIComponent(username)}`,
-    { headers: { Accept: 'application/json', Referer: profileUrl } },
-    12000,
-  );
-  if (!upstream.ok) return [];
   try {
+    const upstream = await fetchChessComUpstream(
+      `https://www.chess.com/callback/stats/tactics2/new/puzzles/${encodeURIComponent(username)}`,
+      { headers: { Accept: 'application/json', Referer: profileUrl } },
+      CHESSCOM_FETCH_TIMEOUT_MS,
+    );
+    if (!upstream.ok) return { attempts: [], lifetimeFromBundle: null as ReturnType<typeof tacticsLifetimeFromMemberStats> };
     const data = await upstream.json();
-    return parseChessComTactics2Puzzles(data, 'rated');
+    return {
+      attempts: parseChessComTactics2Puzzles(data, 'rated'),
+      lifetimeFromBundle: tacticsLifetimeFromMemberStats(parseChessComTacticsLifetimeFromTactics2Bundle(data)),
+    };
   } catch {
-    return [];
+    return { attempts: [], lifetimeFromBundle: null as ReturnType<typeof tacticsLifetimeFromMemberStats> };
   }
+}
+
+async function loadChessComUserData(
+  username: string,
+  months: Array<{ year: string; month: string }>,
+) {
+  const monthFetches = months.map(async ({ year, month }) => {
+    const key = `${username}:${year}-${month.padStart(2, '0')}`;
+    try {
+      const result = await fetchChessComMonthGames(username, year, month);
+      return { key, games: result.games ?? [] };
+    } catch {
+      return { key, games: [] };
+    }
+  });
+
+  const [ratedBundle, lifetimeMember, ...monthResults] = await Promise.all([
+    fetchChessComPuzzlesRated(username),
+    fetchChessComMemberTacticsLifetime(username),
+    ...monthFetches,
+  ]);
+  const lifetime = lifetimeMember ?? ratedBundle.lifetimeFromBundle;
+
+  const monthGames = new Map<string, Awaited<ReturnType<typeof fetchChessComMonthGames>>['games']>();
+  for (const row of monthResults) {
+    monthGames.set(row.key, row.games);
+  }
+
+  return { rated: ratedBundle.attempts, lifetime, monthGames };
 }
 
 export default async function handler(req: Req, res: Res) {
@@ -110,25 +170,30 @@ export default async function handler(req: Req, res: Res) {
   const uniqueDays = [...new Set(days.map((d) => d.slice(0, 10)))].sort();
   const months = uniqueYearMonths(uniqueDays);
 
-  const lichessActivityByUser = new Map<string, LichessActivity[]>();
-  const chessPuzzlesByUser = new Map<string, Awaited<ReturnType<typeof fetchChessComPuzzlesRated>>>();
+  const lichessActivityByUser = new Map<string, LichessActivityRow[]>();
+  const chessPuzzlesByUser = new Map<string, Awaited<ReturnType<typeof loadChessComUserData>>['rated']>();
+  const chessLifetimeByUser = new Map<string, Awaited<ReturnType<typeof fetchChessComMemberTacticsLifetime>>>();
   const chessMonthGamesByUserMonth = new Map<string, Awaited<ReturnType<typeof fetchChessComMonthGames>>['games']>();
 
   const lichessUsers = [...new Set(students.map((s) => normalizeLichess(s.lichessUsername)).filter(Boolean))];
   const chessUsers = [...new Set(students.map((s) => normalizeChessCom(s.chessComUsername)).filter(Boolean))];
 
-  for (const username of lichessUsers) {
-    lichessActivityByUser.set(username, await fetchLichessActivity(username));
-  }
+  await Promise.all(
+    lichessUsers.map(async (username) => {
+      lichessActivityByUser.set(username, await fetchLichessActivity(username));
+    }),
+  );
 
-  for (const username of chessUsers) {
-    chessPuzzlesByUser.set(username, await fetchChessComPuzzlesRated(username));
-    for (const { year, month } of months) {
-      const key = `${username}:${year}-${month.padStart(2, '0')}`;
-      const result = await fetchChessComMonthGames(username, year, month);
-      chessMonthGamesByUserMonth.set(key, result.games ?? []);
-    }
-  }
+  await Promise.all(
+    chessUsers.map(async (username) => {
+      const loaded = await loadChessComUserData(username, months);
+      chessPuzzlesByUser.set(username, loaded.rated);
+      chessLifetimeByUser.set(username, loaded.lifetime);
+      for (const [key, games] of loaded.monthGames.entries()) {
+        chessMonthGamesByUserMonth.set(key, games);
+      }
+    }),
+  );
 
   const stats: Record<string, Record<string, PlatformDayStatsPayload>> = {};
 
@@ -150,12 +215,32 @@ export default async function handler(req: Req, res: Res) {
 
       let chessGames = 0;
       let chessPuzzles = { count: 0, passed: 0, failed: 0 };
+      let activityTimeSeconds = 0;
       if (chessUser) {
         const [year, month] = day.split('-');
         const monthKey = `${chessUser}:${year}-${month}`;
         const monthGames = chessMonthGamesByUserMonth.get(monthKey) ?? [];
         chessGames = chessComGamesForDay(monthGames, chessUser, day);
-        chessPuzzles = chessComPuzzleStatsForDay(ratedPuzzles, day);
+        const listStats = chessComPuzzleStatsForDay(ratedPuzzles, day);
+        const lifetime = chessLifetimeByUser.get(chessUser);
+        chessPuzzles = lifetime
+          ? preferRicherChessComDayStats(
+              listStats,
+              chessComDailyStatsFromLifetimeTracker(chessUser, day, lifetime),
+            )
+          : listStats;
+        activityTimeSeconds += computeChessComActivityTimeSeconds(
+          chessUser,
+          day,
+          ratedPuzzles,
+          monthGames,
+          lifetime,
+          chessPuzzles.count,
+        );
+      }
+
+      if (lichessUser && lichessGames > 0) {
+        activityTimeSeconds += await fetchLichessGamesTimeSecondsForDay(lichessUser, day, process.env);
       }
 
       stats[sid][day] = buildPlatformDayStats(
@@ -169,6 +254,7 @@ export default async function handler(req: Req, res: Res) {
           puzzles: chessPuzzles,
           error: chessUser ? ratedPuzzles.length === 0 && chessGames === 0 : undefined,
         },
+        activityTimeSeconds,
       );
     }
   }

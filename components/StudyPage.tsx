@@ -1249,6 +1249,7 @@ const StudyPage: React.FC = () => {
   const wheelNext = useCallback(() => { setHoverState(null); goNext(); }, [goNext]);
   const hasMovesForWheel = chapterMovesForUi.length > 0;
   const boardWheelRef = useChessWheelNavigation(wheelPrev, wheelNext, hasMovesForWheel);
+  const studyDrawingToolbarWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     activeMoveBtnRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -2235,6 +2236,19 @@ const StudyPage: React.FC = () => {
     setBoardArrows([]);
     if (selectedChapter) updateChapterAtIndex(selectedChapterIndex, { circles: {}, arrows: [] });
   }, [selectedChapter, selectedChapterIndex, updateChapterAtIndex]);
+
+  const handleStudyAnnotationClearBackdropClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!canEditStudy) return;
+      if (e.button !== 0) return;
+      const t = e.target as HTMLElement;
+      if (t.closest('[data-study-board-area]')) return;
+      if (studyDrawingToolbarWrapRef.current?.contains(t)) return;
+      if (Object.keys(circleMarks).length === 0 && boardArrows.length === 0) return;
+      clearBoardDrawings();
+    },
+    [canEditStudy, circleMarks, boardArrows.length, clearBoardDrawings],
+  );
 
   const handleBoardSquareClick = useCallback((arg: unknown) => {
     const square = pickSquare(arg);
@@ -4065,12 +4079,15 @@ const StudyPage: React.FC = () => {
         {/* ── CENTER COLUMN: Board & Tools (Lichess style) ──────────────────────── */}
         <div className={`${mobilePanel === 'board' ? 'flex' : 'hidden'} xl:flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden relative`}>
 
-          <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar">
+          <div
+            className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar"
+            onMouseDown={canEditStudy ? handleStudyAnnotationClearBackdropClick : undefined}
+          >
             <div className="flex flex-col items-stretch sm:items-center py-2 px-2 sm:px-3 gap-2 sm:gap-1 w-full min-w-0">
 
               {/* Board with eval bar */}
-              <div className="w-full max-w-full sm:max-w-[min(72vh,68vw)] group/board relative px-1">
-                <div className="flex justify-end items-center gap-1.5 mb-1.5">
+              <div className="w-full max-w-full sm:max-w-[min(72vh,68vw)] group/board relative px-1" data-study-board-area>
+                <div className="flex justify-end items-center gap-1.5 mb-1.5" data-board-chrome>
                   <button
                     type="button"
                     onClick={() => setShowStudyHelp(true)}
@@ -4102,6 +4119,12 @@ const StudyPage: React.FC = () => {
                 ) : null}
                 <ChessBoardFrame
                   boardOrientation={boardOrientation}
+                  onShellClick={
+                    canEditStudy &&
+                    (Object.keys(circleMarks).length > 0 || boardArrows.length > 0)
+                      ? clearBoardDrawings
+                      : undefined
+                  }
                   shellClassName="bg-[#0f172a] border-r border-white/5 shadow-inner"
                   evalBar={
                     boardSettings.showEvalBar ? (
@@ -4271,7 +4294,10 @@ const StudyPage: React.FC = () => {
 
               {/* Drawing Toolbar Row (Coach Only) - Outside Board */}
               {canEditStudy && (
-                <div className="w-full flex justify-center overflow-x-auto scrollbar-none mb-1 sm:mb-3">
+                <div
+                  ref={studyDrawingToolbarWrapRef}
+                  className="w-full flex justify-center overflow-x-auto scrollbar-none mb-1 sm:mb-3"
+                >
                   <div className="inline-flex bg-[#1b1e23]/95 backdrop-blur-xl p-1 sm:p-2 rounded-xl border border-white/10 shadow-2xl">
                     <DrawingToolbar
                       currentTool={drawingTool}

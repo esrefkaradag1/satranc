@@ -1,5 +1,6 @@
 import type { LichessPuzzleActivityRow, LichessPuzzleDashboard } from '../lib/lichessOAuthServer';
 import { puzzleStatsFromActivityRows } from '../lib/lichessOAuthServer';
+import { puzzleFromLichessApiResponse } from './lichessService';
 
 export type { LichessPuzzleActivityRow, LichessPuzzleDashboard };
 export type PlatformLichessPuzzleRow = {
@@ -23,6 +24,22 @@ export async function fetchLichessOAuthStatus(studentId: string): Promise<{
     return (await res.json()) as { connected: boolean; lichessUsername?: string };
   } catch {
     return { connected: false };
+  }
+}
+
+export async function fetchLichessOAuthProfile(
+  studentId: string,
+): Promise<import('../services/chessPlatformService').LichessUserProfile | null> {
+  try {
+    const res = await fetch(`/api/lichess-oauth-account?studentId=${encodeURIComponent(studentId)}`);
+    const data = (await res.json().catch(() => ({}))) as {
+      connected?: boolean;
+      profile?: import('../services/chessPlatformService').LichessUserProfile;
+    };
+    if (!res.ok || data.connected === false || !data.profile?.username) return null;
+    return data.profile;
+  } catch {
+    return null;
   }
 }
 
@@ -121,5 +138,104 @@ export async function fetchLichessPuzzlesForDay(
     return picked.map((attempt) => ({ source: 'lichess' as const, attempt }));
   } catch {
     return [];
+  }
+}
+
+export type LichessOAuthNextPuzzleResult = {
+  connected: boolean;
+  puzzle?: import('../types').Puzzle;
+  error?: string;
+};
+
+export async function fetchLichessOAuthNextPuzzle(
+  studentId: string,
+  options?: { difficulty?: string; angle?: string; color?: string },
+): Promise<LichessOAuthNextPuzzleResult> {
+  try {
+    const qs = new URLSearchParams({ studentId });
+    if (options?.difficulty?.trim()) qs.set('difficulty', options.difficulty.trim());
+    if (options?.angle?.trim()) qs.set('angle', options.angle.trim());
+    if (options?.color?.trim()) qs.set('color', options.color.trim());
+    const res = await fetch(`/api/lichess-puzzle-next?${qs.toString()}`);
+    const data = (await res.json().catch(() => ({}))) as {
+      connected?: boolean;
+      puzzle?: { game?: { pgn?: string }; puzzle: Record<string, unknown> };
+      error?: string;
+    };
+    if (data.connected === false) {
+      return { connected: false, error: data.error || 'Lichess hesabı bağlı değil' };
+    }
+    if (!res.ok || !data.puzzle) {
+      return { connected: true, error: data.error || 'Bulmaca alınamadı' };
+    }
+    const puzzle = puzzleFromLichessApiResponse(data.puzzle, 'Lichess antrenmanı');
+    if (!puzzle) {
+      return { connected: true, error: 'Bulmaca yüklenemedi' };
+    }
+    return { connected: true, puzzle };
+  } catch (err) {
+    return {
+      connected: false,
+      error: err instanceof Error ? err.message : 'Ağ hatası',
+    };
+  }
+}
+
+export type LichessLatestPuzzlePullResult = {
+  ok: boolean;
+  snapshot?: {
+    fen: string;
+    moves: string[];
+    baseFen: string;
+    source: 'lichess';
+    gameId: string;
+    gameUrl: string;
+    label: string;
+    updatedAt: string;
+  };
+  attempt?: LichessPuzzleActivityRow;
+  error?: string;
+};
+
+export async function fetchStudentLichessCurrentPuzzleBoard(
+  studentId: string,
+): Promise<LichessLatestPuzzlePullResult> {
+  const result = await fetchLichessOAuthNextPuzzle(studentId);
+  if (!result.connected) {
+    return { ok: false, error: result.error || 'Lichess hesabı bağlı değil' };
+  }
+  if (!result.puzzle) {
+    return { ok: false, error: result.error || 'Aktif Lichess bulmacası yok' };
+  }
+  const p = result.puzzle;
+  const puzzleId = String(p.lichessId || p.id || '').trim();
+  if (!puzzleId) {
+    return { ok: false, error: 'Bulmaca kimliği alınamadı' };
+  }
+  return {
+    ok: true,
+    snapshot: {
+      fen: p.fen,
+      moves: [],
+      baseFen: p.fen,
+      source: 'lichess',
+      gameId: puzzleId,
+      gameUrl: `https://lichess.org/training/${encodeURIComponent(puzzleId)}`,
+      label: `Lichess bulmaca · çözülüyor`,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export async function fetchStudentLatestLichessPuzzle(
+  studentId: string,
+): Promise<LichessLatestPuzzlePullResult> {
+  try {
+    const res = await fetch(`/api/lichess-puzzle-latest?studentId=${encodeURIComponent(studentId)}`);
+    const data = (await res.json().catch(() => ({}))) as LichessLatestPuzzlePullResult;
+    if (!res.ok) return { ok: false, error: data.error || 'Bulmaca çekilemedi' };
+    return data;
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Ağ hatası' };
   }
 }

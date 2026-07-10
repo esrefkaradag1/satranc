@@ -3,91 +3,60 @@ import { Chessboard } from 'react-chessboard';
 import { ChevronLeft, ChevronRight, SkipBack, SkipForward } from 'lucide-react';
 import type { StudyChapter } from '../../lib/studyTypes';
 import type { StudyEvent } from '../../studyEvents';
-import { DEFAULT_FEN, makeBuilderGame, applyMove } from '../../lib/studyUtils';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
-
-type ReplayStep = {
-  fen: string;
-  eventIndex: number | null;
-  label: string;
-  isWrong: boolean;
-};
-
-function sortEvents(events: StudyEvent[]): StudyEvent[] {
-  return [...events].sort((a, b) => {
-    const timeDiff = (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0);
-    if (timeDiff !== 0) return timeDiff;
-    return (a.moveIndex ?? 0) - (b.moveIndex ?? 0);
-  });
-}
-
-function dedupeEvents(events: StudyEvent[]): StudyEvent[] {
-  const sorted = sortEvents(events);
-  const out: StudyEvent[] = [];
-  let lastKey = '';
-  for (const event of sorted) {
-    const key = `${event.moveIndex ?? 0}|${event.playedMove ?? ''}`;
-    if (key === lastKey) continue;
-    lastKey = key;
-    out.push(event);
-  }
-  return out;
-}
-
-function buildReplaySteps(startFen: string, events: StudyEvent[]): ReplayStep[] {
-  const steps: ReplayStep[] = [{ fen: startFen, eventIndex: null, label: 'Başlangıç', isWrong: false }];
-  const game = makeBuilderGame(startFen || DEFAULT_FEN);
-  const ordered = dedupeEvents(events);
-
-  ordered.forEach((event, idx) => {
-    const san = (event.playedMove ?? '').trim();
-    if (!san) return;
-    if (event.result === 'wrong') {
-      steps.push({
-        fen: game.fen(),
-        eventIndex: idx,
-        label: `${san} (yanlış)`,
-        isWrong: true,
-      });
-      return;
-    }
-    if (applyMove(game, san)) {
-      steps.push({
-        fen: game.fen(),
-        eventIndex: idx,
-        label: san,
-        isWrong: false,
-      });
-    }
-  });
-
-  return steps;
-}
+import {
+  buildChapterReplaySteps,
+  chapterReplayStartFen,
+  dedupeStudyEvents,
+  displayStudyEventMoveNo,
+  studentOnlyStudyEvents,
+} from '../../lib/studyReplayUtils';
 
 type Props = {
   chapter: StudyChapter | undefined;
   events: StudyEvent[];
   studentId: string;
   studyId: string;
+  vsMoveHistory?: string[];
 };
 
-export const StudyChapterReplayPanel: React.FC<Props> = ({ chapter, events, studentId, studyId }) => {
-  const startFen = chapter?.fen || DEFAULT_FEN;
+export const StudyChapterReplayPanel: React.FC<Props> = ({
+  chapter,
+  events,
+  studentId,
+  studyId,
+  vsMoveHistory = [],
+}) => {
+  const startFen = chapterReplayStartFen(chapter);
   const orientation = chapter?.orientation ?? 'white';
 
-  const steps = useMemo(() => buildReplaySteps(startFen, events), [startFen, events]);
+  const tableEvents = useMemo(
+    () => studentOnlyStudyEvents(events, chapter, vsMoveHistory),
+    [events, chapter, vsMoveHistory],
+  );
+
+  const steps = useMemo(
+    () => buildChapterReplaySteps(chapter, events, vsMoveHistory),
+    [chapter, events, vsMoveHistory],
+  );
   const [stepIndex, setStepIndex] = useState(0);
 
   useEffect(() => {
     setStepIndex(Math.max(0, steps.length - 1));
-  }, [steps.length, events]);
+  }, [steps.length, events, vsMoveHistory]);
 
   const current = steps[stepIndex] ?? steps[0];
-  const orderedEvents = useMemo(() => dedupeEvents(events), [events]);
 
-  const jumpToEvent = (eventListIndex: number) => {
-    const target = steps.findIndex((step) => step.eventIndex === eventListIndex);
+  const jumpToEvent = (event: StudyEvent, replayIdx: number) => {
+    if (vsMoveHistory.length > 0 && event.playedMove) {
+      const ply = vsMoveHistory.findIndex((move) => move === event.playedMove);
+      if (ply >= 0) {
+        setStepIndex(ply + 1);
+        return;
+      }
+    }
+    const target = steps.findIndex((step) => step.eventIndex === replayIdx);
     if (target >= 0) setStepIndex(target);
   };
 
@@ -175,38 +144,51 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({ chapter, events, stud
             </tr>
           </thead>
           <tbody>
-            {orderedEvents.map((event, eventIdx) => {
-              const stepForEvent = steps.findIndex((step) => step.eventIndex === eventIdx);
-              const isActive = stepForEvent === stepIndex;
-              return (
-                <tr
-                  key={event.id}
-                  onClick={() => jumpToEvent(eventIdx)}
-                  className={`border-b border-white/5 last:border-b-0 cursor-pointer transition-colors ${
-                    isActive ? 'bg-violet-500/15' : 'hover:bg-white/[0.04]'
-                  }`}
-                >
-                  <td className="px-4 py-2.5 text-slate-300 font-bold">{Math.floor(event.moveIndex / 2) + 1}</td>
-                  <td className="px-4 py-2.5 text-white font-medium">{event.playedMove || '—'}</td>
-                  <td className="px-4 py-2.5 text-slate-300">{event.expectedMove || 'Serbest oyun'}</td>
-                  <td className="px-4 py-2.5">
-                    <span className={`inline-flex rounded-lg px-2 py-0.5 text-[10px] font-bold border ${
-                      event.result === 'wrong'
-                        ? 'border-rose-500/30 bg-rose-500/15 text-rose-300'
-                        : event.result === 'solution'
-                          ? 'border-sky-500/30 bg-sky-500/15 text-sky-300'
-                          : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
-                    }`}>
-                      {event.result === 'wrong' ? 'Yanlış' : event.result === 'solution' ? 'Çözüm' : 'Doğru'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-slate-300">{Math.max(0, Math.round((event.thinkMs ?? 0) / 1000))} sn</td>
-                  <td className="px-4 py-2.5 text-slate-500">
-                    {new Date(event.createdAt).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' })}
-                  </td>
-                </tr>
-              );
-            })}
+            {tableEvents.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-6 text-center text-slate-500">
+                  Hamle kaydı yok
+                </td>
+              </tr>
+            ) : (
+              tableEvents.map((event, eventIdx) => {
+                const orderedSource = dedupeStudyEvents(events);
+                const sourceIdx = orderedSource.findIndex((e) => e.id === event.id);
+                const replayIdx = sourceIdx >= 0 ? sourceIdx : eventIdx;
+                const stepForEvent = steps.findIndex((step) => step.eventIndex === replayIdx);
+                const isActive = stepForEvent === stepIndex;
+                return (
+                  <tr
+                    key={event.id}
+                    onClick={() => jumpToEvent(event, replayIdx)}
+                    className={`border-b border-white/5 last:border-b-0 cursor-pointer transition-colors ${
+                      isActive ? 'bg-violet-500/15' : 'hover:bg-white/[0.04]'
+                    }`}
+                  >
+                    <td className="px-4 py-2.5 text-slate-300 font-bold">
+                      {displayStudyEventMoveNo(event, eventIdx, chapter)}
+                    </td>
+                    <td className="px-4 py-2.5 text-white font-medium">{event.playedMove || '—'}</td>
+                    <td className="px-4 py-2.5 text-slate-300">{event.expectedMove || 'Serbest oyun'}</td>
+                    <td className="px-4 py-2.5">
+                      <span className={`inline-flex rounded-lg px-2 py-0.5 text-[10px] font-bold border ${
+                        event.result === 'wrong'
+                          ? 'border-rose-500/30 bg-rose-500/15 text-rose-300'
+                          : event.result === 'solution'
+                            ? 'border-sky-500/30 bg-sky-500/15 text-sky-300'
+                            : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                      }`}>
+                        {event.result === 'wrong' ? 'Yanlış' : event.result === 'solution' ? 'Çözüm' : 'Doğru'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-300">{Math.max(0, Math.round((event.thinkMs ?? 0) / 1000))} sn</td>
+                    <td className="px-4 py-2.5 text-slate-500">
+                      {new Date(event.createdAt).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' })}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>

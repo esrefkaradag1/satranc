@@ -6,11 +6,6 @@ import {
 } from 'lucide-react';
 import type { Student } from '../../types';
 import type { ChessComPuzzleAttempt, ChessComPuzzleTab } from '../../lib/chesscomPuzzleParse';
-import {
-  puzzleMoveListFromPgn,
-  puzzleSetupFenFromPgn,
-  sanitizeChessComPuzzlePgn,
-} from '../../lib/chesscomPuzzleParse';
 import type { PlatformDayStats } from '../../lib/homeworkPlatformUtils';
 import {
   fetchChessComPuzzlesForDay,
@@ -22,7 +17,6 @@ import { selectHomeworkGoalPuzzles } from '../../lib/chesscomPuzzleParse';
 import {
   chessComPuzzleAnalysisUrl,
   fetchChessComGamesListForDay,
-  fetchChessComPuzzleDetail,
   fetchLichessGamePgn,
   fetchLichessGamesForDay,
   formatChessComAttemptTime,
@@ -156,44 +150,11 @@ type ChessComCardProps = {
 
 const ChessComPuzzleCard: React.FC<ChessComCardProps> = ({ row, username, onOpenViewer }) => {
   const { attempt, tab } = row;
-  const [loading, setLoading] = useState(true);
-  const [pgn, setPgn] = useState('');
-  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setLoadError(null);
-    setPgn('');
-
-    fetchChessComPuzzleDetail(attempt.id)
-      .then((detail) => {
-        if (cancelled) return;
-        if (!detail?.pgn?.trim()) {
-          setLoadError('Hamle verisi yüklenemedi');
-          return;
-        }
-        setPgn(sanitizeChessComPuzzlePgn(detail.pgn));
-      })
-      .catch(() => {
-        if (!cancelled) setLoadError('Hamle verisi yüklenemedi');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => { cancelled = true; };
-  }, [attempt.id]);
-
-  const moves = useMemo(() => (pgn ? puzzleMoveListFromPgn(pgn) : []), [pgn]);
   const boardFen = useMemo(() => {
-    if (pgn) {
-      const setup = puzzleSetupFenFromPgn(pgn);
-      if (setup) return setup;
-    }
     if (attempt.fen?.trim()) return attempt.fen.trim();
     return START_FEN;
-  }, [pgn, attempt.fen]);
+  }, [attempt.fen]);
 
   const resultMeta = attempt.passed
     ? { label: 'Doğru', icon: CheckCircle2, badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', border: 'border-emerald-500/35' }
@@ -280,19 +241,8 @@ const ChessComPuzzleCard: React.FC<ChessComCardProps> = ({ row, username, onOpen
           <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
             Oynanan Hamleler
           </p>
-          {loading ? (
-            <div className="flex items-center gap-2 text-xs text-slate-500 py-2">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Hamleler yükleniyor…
-            </div>
-          ) : loadError ? (
-            <p className="text-xs text-amber-400/90">{loadError}</p>
-          ) : moves.length > 0 ? (
-            <p className="font-mono text-[11px] text-slate-300 break-all leading-relaxed">
-              {moves.join(' · ')}
-            </p>
-          ) : attempt.movesTotal > 0 ? (
-            <p className="text-xs text-slate-400">
+          {attempt.movesTotal > 0 ? (
+            <p className="text-xs text-slate-300">
               Chess.com özeti: {attempt.movesCorrect}/{attempt.movesTotal} hamle doğru
               {attempt.passed ? ' · çözüldü' : ' · tamamlanamadı'}
             </p>

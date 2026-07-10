@@ -106,6 +106,7 @@ import LichessOpeningsSection from './LichessOpeningsSection';
 import { fetchFidePlayer, federationLabel, resolveFideProfileForStudent, type FidePlayer } from '../services/fideService';
 import { fetchUkdFromTsf } from '../services/ukdService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
+import { fetchLichessOAuthProfile, fetchLichessOAuthStatus } from '../services/lichessOAuthClient';
 import { formatMidnightCountdown, isoDateForWeekday, mondayOfWeek, todayDayKey } from '../lib/homeworkDayUtils';
 import {
   fetchStudentPlatformDayStats,
@@ -371,6 +372,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const lichessLastLoadRef = useRef<{ username: string; at: number } | null>(null);
+  const [lichessResolvedUsername, setLichessResolvedUsername] = useState('');
   const [todayExternalGameCount, setTodayExternalGameCount] = useState(0);
   const [todayExternalPuzzleCount, setTodayExternalPuzzleCount] = useState(0);
   const [todayExternalPuzzlePassed, setTodayExternalPuzzlePassed] = useState(0);
@@ -787,6 +789,13 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   const lichessPuzzlesCount = (dailyLichessPuzzle ? 1 : 0) + lichessPracticePuzzles.length;
 
+  const effectiveLichessUsername = (
+    lichessResolvedUsername
+    || student?.lichessUsername
+    || lichessProfile?.username
+    || ''
+  ).trim();
+
   useEffect(() => {
     if (activeTab !== 'tournaments') return;
     if (joinedTournaments.length === 0) {
@@ -832,7 +841,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if (activeTab !== 'lichess') return;
     let cancelled = false;
     setLoadingDailyLichessPuzzle(true);
-    const un = student?.lichessUsername?.trim();
+    const un = (lichessResolvedUsername || student?.lichessUsername || '').trim();
     Promise.all([
       fetchLichessDailyPuzzle(),
       un ? fetchLichessActivity(un).catch(() => [] as LichessActivity[]) : Promise.resolve([] as LichessActivity[]),
@@ -850,7 +859,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       })
       .finally(() => { if (!cancelled) setLoadingDailyLichessPuzzle(false); });
     return () => { cancelled = true; };
-  }, [activeTab, student?.lichessUsername]);
+  }, [activeTab, student?.lichessUsername, lichessResolvedUsername]);
 
   useEffect(() => {
     lichessNextUntilRef.current = lichessNextUntil;
@@ -870,8 +879,22 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   const loadLichess = useCallback(async (force = false, append = false, options?: { includeGames?: boolean }) => {
     const includeGames = options?.includeGames !== false;
-    const un = student?.lichessUsername?.trim();
-    if (!un) {
+    const sid = student?.id?.trim() ?? '';
+    let un = student?.lichessUsername?.trim() || '';
+
+    if (sid) {
+      try {
+        const oauthStatus = await fetchLichessOAuthStatus(sid);
+        if (oauthStatus.lichessUsername?.trim()) {
+          un = oauthStatus.lichessUsername.trim();
+        }
+      } catch {
+        /* OAuth durumu opsiyonel */
+      }
+    }
+
+    if (!un && !sid) {
+      setLichessResolvedUsername('');
       setLichessProfile(null);
       setLichessGames([]);
       setLichessGamesProgress(0);
@@ -879,13 +902,14 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       setLichessHasMore(false);
       return;
     }
+
     if (append && (!lichessHasMoreRef.current || lichessNextUntilRef.current == null)) return;
     const now = Date.now();
-    if (!append && !force && lichessLastLoadRef.current && lichessLastLoadRef.current.username === un && now - lichessLastLoadRef.current.at < 30_000) {
+    if (!append && !force && un && lichessLastLoadRef.current && lichessLastLoadRef.current.username === un && now - lichessLastLoadRef.current.at < 30_000) {
       return;
     }
     if (!append) {
-      lichessLastLoadRef.current = { username: un, at: now };
+      if (un) lichessLastLoadRef.current = { username: un, at: now };
       setLoadingLichess(true);
       if (includeGames) {
         setLichessGames([]);
@@ -894,16 +918,32 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         setLichessHasMore(false);
       }
       try {
-        const profile = await fetchLichessUser(un);
+        let profile: LichessUserProfile | null = null;
+        if (sid) {
+          profile = await fetchLichessOAuthProfile(sid);
+          if (profile?.username?.trim()) {
+            un = profile.username.trim();
+          }
+        }
+        if (!profile && un) {
+          profile = await fetchLichessUser(un);
+        }
         setLichessProfile(profile ?? null);
+        if (profile?.username?.trim()) {
+          un = profile.username.trim();
+        }
+        setLichessResolvedUsername(un);
       } finally {
         setLoadingLichess(false);
       }
     }
-    if (!includeGames) return;
+
+    const gamesUsername = un || lichessProfile?.username?.trim() || '';
+    if (!gamesUsername || !includeGames) return;
+
     setLoadingLichessGames(true);
     try {
-      const page = await fetchLichessGamesPage(un, {
+      const page = await fetchLichessGamesPage(gamesUsername, {
         max: LICHESS_PAGE_SIZE,
         until: append ? lichessNextUntilRef.current ?? undefined : undefined,
       });
@@ -924,7 +964,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     } finally {
       setLoadingLichessGames(false);
     }
-  }, [student?.lichessUsername]);
+  }, [student?.lichessUsername, student?.id, lichessProfile?.username]);
 
   const loadChessCom = useCallback(async (append = false, options?: { includeGames?: boolean }) => {
     const includeGames = options?.includeGames !== false;
@@ -996,10 +1036,10 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [student?.chessComUsername]);
 
   useEffect(() => {
-    if (!student?.lichessUsername) return;
+    if (!student?.id && !student?.lichessUsername) return;
     if (activeTab === 'lichess') loadLichess(false, false, { includeGames: true });
     else if (activeTab === 'analyses') loadLichess(false, false, { includeGames: true });
-  }, [activeTab, student?.lichessUsername, loadLichess]);
+  }, [activeTab, student?.lichessUsername, student?.id, loadLichess]);
 
   useEffect(() => {
     if (!student?.chessComUsername) return;
@@ -1766,10 +1806,10 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                   <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Lichess Kullanıcı Adı</div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium">
-                      {student.lichessUsername || '—'}
+                      {effectiveLichessUsername || student.lichessUsername || '—'}
                     </span>
-                    {student.lichessUsername ? (
-                      <a href={`https://lichess.org/@/${encodeURIComponent(student.lichessUsername)}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-400 text-sm font-medium hover:bg-sky-500/20 transition-colors">
+                    {effectiveLichessUsername ? (
+                      <a href={`https://lichess.org/@/${encodeURIComponent(effectiveLichessUsername)}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-400 text-sm font-medium hover:bg-sky-500/20 transition-colors">
                         <ExternalLink className="w-3.5 h-3.5" /> Profili Aç
                       </a>
                     ) : null}
@@ -1777,11 +1817,14 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                       student={student}
                       variant="inline"
                       onConnected={() => { void loadLichess(true); }}
-                      onDisconnected={() => { void loadLichess(true); }}
+                      onDisconnected={() => {
+                        setLichessResolvedUsername('');
+                        void loadLichess(true);
+                      }}
                     />
                   </div>
                 </div>
-                {student.lichessUsername ? (
+                {student.id || effectiveLichessUsername ? (
                   <div className="space-y-4">
                     {loadingLichess && !lichessProfile ? (
                       <div className="flex items-center gap-2 py-8 text-slate-400">
@@ -1829,8 +1872,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                           statsContent={<LichessStatsSection profile={lichessProfile} activities={lichessActivities} />}
                           puzzlesContent={
                             <LichessPuzzlesSection
-                              username={student.lichessUsername}
+                              username={effectiveLichessUsername}
                               studentId={student.id}
+                              student={student}
                               dailyPuzzle={dailyLichessPuzzle}
                               practicePuzzles={lichessPracticePuzzles}
                               loadingDaily={loadingDailyLichessPuzzle}
@@ -1839,14 +1883,14 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                           }
                           gamesContent={
                             <>
-                        {lichessGames.length > 0 && student.lichessUsername?.trim() ? (
-                          <LichessOpeningsSection games={lichessGames} username={student.lichessUsername} />
+                        {lichessGames.length > 0 && effectiveLichessUsername ? (
+                          <LichessOpeningsSection games={lichessGames} username={effectiveLichessUsername} />
                         ) : null}
                         {loadingLichessGames && (
                           <div className="rounded-lg bg-slate-800/50 border border-sky-500/20 px-4 py-3 text-sm text-sky-300 flex items-center gap-2">
                             <Loader2 className="w-4 h-4 animate-spin shrink-0" />
                             <span>
-                              @{student.lichessUsername?.trim() || '?'} hesabının Lichess maçları yükleniyor...
+                              @{effectiveLichessUsername || '?'} hesabının Lichess maçları yükleniyor...
                               {lichessGamesProgress > 0 ? ` ${lichessGamesProgress.toLocaleString('tr-TR')} oyun` : ''}
                             </span>
                           </div>
@@ -1859,7 +1903,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                             </div>
                             <div className="space-y-2 max-h-[min(60vh,520px)] overflow-y-auto pr-1">
                               {lichessGames.map((g) => {
-                                const me = (student.lichessUsername || lichessProfile.username || '').toLowerCase();
+                                const me = (effectiveLichessUsername || lichessProfile.username || '').toLowerCase();
                                 const whiteName = g.players?.white?.user?.name?.toLowerCase() ?? '';
                                 const blackName = g.players?.black?.user?.name?.toLowerCase() ?? '';
                                 const whiteId = g.players?.white?.user?.id?.toLowerCase() ?? '';
@@ -1923,13 +1967,18 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                         />
                       </>
                     ) : (
-                      <div className="rounded-xl bg-slate-800/40 border border-slate-700/60 p-4 text-sm text-slate-500">Profil bulunamadı veya kullanıcı adı yanlış.</div>
+                      <div className="rounded-xl bg-slate-800/40 border border-slate-700/60 p-4 text-sm text-slate-500">
+                        Profil bulunamadı. Lichess hesabınız bağlıysa <strong className="text-slate-300">Yenile</strong> butonuna basın;
+                        sorun sürerse bağlantıyı kaldırıp yeniden bağlayın.
+                      </div>
                     )}
                   </div>
                 ) : (
                   <div className="p-8 text-center">
                     <ExternalLink className="w-12 h-12 text-slate-500 mx-auto mb-3" />
-                    <p className="text-slate-400 text-sm font-medium">Lichess kullanıcı adı antrenör tarafından tanımlandığında veriler burada görünecektir.</p>
+                    <p className="text-slate-400 text-sm font-medium">
+                      Lichess hesabınızı yukarıdan bağlayın veya antrenör kullanıcı adınızı tanımlasın.
+                    </p>
                   </div>
                 )}
               </div>

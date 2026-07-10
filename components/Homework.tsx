@@ -423,6 +423,28 @@ const Homework: React.FC = () => {
     const nextStats = mergePlatformWeekStatsStore(studentPlatformWeekStatsRef.current, patch);
     studentPlatformWeekStatsRef.current = nextStats;
     setStudentPlatformWeekStats(nextStats);
+
+    const timeFromStats: Record<string, Record<string, number>> = {};
+    for (const [sid, byDate] of Object.entries(patch)) {
+      for (const [iso, stats] of Object.entries(byDate)) {
+        const sec = stats.activityTimeSeconds;
+        if (sec != null && sec > 0) {
+          if (!timeFromStats[sid]) timeFromStats[sid] = {};
+          timeFromStats[sid][iso] = mergePlatformActivitySeconds(
+            studentPlatformWeekTimeSecondsRef.current[sid]?.[iso],
+            sec,
+          );
+        }
+      }
+    }
+    if (Object.keys(timeFromStats).length > 0) {
+      const nextTime = mergePlatformWeekTimeStore(studentPlatformWeekTimeSecondsRef.current, timeFromStats);
+      studentPlatformWeekTimeSecondsRef.current = nextTime;
+      setStudentPlatformWeekTimeSeconds(nextTime);
+      writeCoachPlatformCache(nextStats, nextTime);
+      return;
+    }
+
     writeCoachPlatformCache(nextStats, studentPlatformWeekTimeSecondsRef.current);
   }, []);
 
@@ -487,17 +509,43 @@ const Homework: React.FC = () => {
       }
 
       const timePatch: Record<string, Record<string, number>> = {};
-      for (const s of scopeAssignees) {
-        try {
-          const sec = await fetchStudentPlatformActivityTimeSeconds(s, dateKey);
-          const prevSec = studentPlatformWeekTimeSecondsRef.current[s.id]?.[dateKey];
-          timePatch[s.id] = {
-            [dateKey]: mergePlatformActivitySeconds(prevSec, sec),
-          };
-        } catch {
-          /* önceki süre korunur */
+      if (batchStats) {
+        for (const s of scopeAssignees) {
+          const merged = platformPatch[s.id]?.[dateKey];
+          const batchSec = batchStats[s.id]?.[dateKey]?.activityTimeSeconds;
+          const sec = merged?.activityTimeSeconds ?? batchSec;
+          if (sec != null && sec > 0) {
+            const prevSec = studentPlatformWeekTimeSecondsRef.current[s.id]?.[dateKey];
+            timePatch[s.id] = { [dateKey]: mergePlatformActivitySeconds(prevSec, sec) };
+          }
         }
-        await pause(300);
+      }
+
+      const needsSlowTimeFetch = !batchStats || scopeAssignees.some((s) => {
+        const merged = platformPatch[s.id]?.[dateKey];
+        const hasActivity = (merged?.puzzleSolved ?? 0) > 0 || (merged?.games ?? 0) > 0;
+        const sec = merged?.activityTimeSeconds ?? batchStats?.[s.id]?.[dateKey]?.activityTimeSeconds ?? 0;
+        return hasActivity && sec <= 0;
+      });
+
+      if (needsSlowTimeFetch) {
+        for (const s of scopeAssignees) {
+          const merged = platformPatch[s.id]?.[dateKey];
+          const existing = timePatch[s.id]?.[dateKey]
+            ?? studentPlatformWeekTimeSecondsRef.current[s.id]?.[dateKey]
+            ?? 0;
+          const hasActivity = (merged?.puzzleSolved ?? 0) > 0 || (merged?.games ?? 0) > 0;
+          if (!hasActivity || existing > 0) continue;
+          try {
+            const sec = await fetchStudentPlatformActivityTimeSeconds(s, dateKey);
+            timePatch[s.id] = {
+              [dateKey]: mergePlatformActivitySeconds(existing, sec),
+            };
+          } catch {
+            /* önceki süre korunur */
+          }
+          await pause(300);
+        }
       }
       if (Object.keys(timePatch).length > 0) {
         applyPlatformTimePatch(timePatch);
@@ -776,6 +824,25 @@ const Homework: React.FC = () => {
 
       if (Object.keys(platformPatch).length > 0) {
         applyPlatformStatsPatch(platformPatch);
+      }
+
+      const timePatch: Record<string, Record<string, number>> = {};
+      if (batchStats) {
+        for (const student of programStudents) {
+          for (const iso of daysToFetch) {
+            const merged = platformPatch[student.id]?.[iso];
+            const batchSec = batchStats[student.id]?.[iso]?.activityTimeSeconds;
+            const sec = merged?.activityTimeSeconds ?? batchSec;
+            if (sec != null && sec > 0) {
+              const prevSec = studentPlatformWeekTimeSecondsRef.current[student.id]?.[iso];
+              if (!timePatch[student.id]) timePatch[student.id] = {};
+              timePatch[student.id][iso] = mergePlatformActivitySeconds(prevSec, sec);
+            }
+          }
+        }
+      }
+      if (Object.keys(timePatch).length > 0) {
+        applyPlatformTimePatch(timePatch);
       }
 
       if (!opts?.silent) {

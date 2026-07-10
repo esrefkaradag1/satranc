@@ -332,3 +332,29 @@
     padding-bottom: 0.35rem !important;
   }
 }
+
+/* ── Canlı ders (SatrançEdu) kart düzeni ── */
+.ll-live-card {
+  @apply rounded-2xl border border-white/[0.08] bg-[#1a1f2e]/90 p-3 shadow-[0_8px_32px_rgba(0,0,0,0.35)] ring-1 ring-white/[0.04];
+}
+
+.ll-live-card-title {
+  @apply text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400;
+}
+
+.ll-live-badge {
+  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] sm:text-[11px] font-black uppercase tracking-[0.12em] text-white border border-indigo-400/30 shadow-[0_0_24px_rgba(99,102,241,0.4)];
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 45%, #7c3aed 100%);
+}
+
+.ll-media-btn {
+  @apply flex flex-col items-center justify-center gap-1.5 min-h-[4.5rem] rounded-xl border text-[10px] font-bold uppercase tracking-wide transition-all active:scale-[0.98];
+}
+
+.ll-media-btn-on {
+  @apply bg-indigo-600/30 text-indigo-100 border-indigo-500/35 hover:bg-indigo-600/40;
+}
+
+.ll-media-btn-off {
+  @apply bg-rose-950/50 text-rose-200 border-rose-800/40 hover:bg-rose-900/55;
+}

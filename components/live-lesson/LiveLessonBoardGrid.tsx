@@ -8,12 +8,13 @@ import {
   ChevronLast,
   Eye,
   RefreshCw,
-  RotateCcw,
   Search,
   LayoutGrid,
   Grid2X2,
   Grid3X3,
+  Download,
   Plus,
+  Sparkles,
 } from 'lucide-react';
 import type { Student } from '../../types';
 import type { LiveStudentBoardSnapshot } from '../LiveLesson';
@@ -52,10 +53,21 @@ function fenAtPly(baseFen: string, moves: string[], ply: number | null): string 
   }
 }
 
-function studentPlatformLabel(student: Student): string {
+function studentPlatformLabel(student: Student, snap?: LiveStudentBoardSnapshot): string {
+  if (snap?.source === 'lichess') return 'Lichess.org';
+  if (snap?.source === 'chesscom') return 'Chess.com';
   if (student.chessComUsername?.trim()) return 'Chess.com';
   if (student.lichessUsername?.trim()) return 'Lichess.org';
   return 'SatrancEdu';
+}
+
+function snapshotLinkLabel(snap?: LiveStudentBoardSnapshot): string | null {
+  if (!snap?.gameUrl?.trim()) return null;
+  const url = snap.gameUrl.toLowerCase();
+  if (url.includes('/puzzles/') || url.includes('/training/') || snap.label?.toLowerCase().includes('bulmaca')) {
+    return 'bulmaca';
+  }
+  return 'canlı';
 }
 
 function studentRating(student: Student): string {
@@ -80,7 +92,15 @@ type Props = {
   autoPageTransition: boolean;
   onAutoPageTransitionChange: (v: boolean) => void;
   onRefresh: () => void;
-  onSyncMoves: () => void;
+  onPullAllStudents: () => void;
+  onPullStudent: (studentId: string) => void;
+  onPullAllStudentPuzzles: () => void;
+  onPullStudentPuzzle: (studentId: string) => void;
+  pullLoading?: boolean;
+  pullingStudentIds?: Set<string>;
+  pullingPuzzleStudentIds?: Set<string>;
+  autoPull: boolean;
+  onAutoPullChange: (v: boolean) => void;
   onOpenAllAnalysis: () => void;
   onAddBoard: () => void;
   onlineStudentIds?: Set<string>;
@@ -126,7 +146,15 @@ export function LiveLessonBoardGrid({
   autoPageTransition,
   onAutoPageTransitionChange,
   onRefresh,
-  onSyncMoves,
+  onPullAllStudents,
+  onPullStudent,
+  onPullAllStudentPuzzles,
+  onPullStudentPuzzle,
+  pullLoading = false,
+  pullingStudentIds,
+  pullingPuzzleStudentIds,
+  autoPull,
+  onAutoPullChange,
   onOpenAllAnalysis,
   onAddBoard,
   onlineStudentIds,
@@ -191,11 +219,21 @@ export function LiveLessonBoardGrid({
           </button>
           <button
             type="button"
-            onClick={onSyncMoves}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/10 bg-slate-800/50 text-[10px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white"
+            onClick={onPullAllStudents}
+            disabled={pullLoading}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-500/30 bg-indigo-600/20 text-[10px] font-semibold text-indigo-200 hover:bg-indigo-600/30 hover:text-white disabled:opacity-40"
           >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Hamleleri senkronize et
+            <Download className={`w-3.5 h-3.5 ${pullLoading ? 'animate-pulse' : ''}`} />
+            Oyunu çek
+          </button>
+          <button
+            type="button"
+            onClick={onPullAllStudentPuzzles}
+            disabled={pullLoading}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-violet-500/30 bg-violet-600/20 text-[10px] font-semibold text-violet-200 hover:bg-violet-600/30 hover:text-white disabled:opacity-40"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${pullLoading ? 'animate-pulse' : ''}`} />
+            Bulmaca çek
           </button>
           <button
             type="button"
@@ -232,6 +270,10 @@ export function LiveLessonBoardGrid({
               ))}
             </div>
           </div>
+          <label className="flex items-center gap-2 cursor-pointer" title="Lichess/Chess.com oyun ve bulmacaları 3 sn'de bir çeker">
+            <span className="text-[10px] font-semibold text-slate-500">Otomatik çek</span>
+            <GridToggle on={autoPull} onToggle={() => onAutoPullChange(!autoPull)} />
+          </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <span className="text-[10px] font-semibold text-slate-500">Otomatik takip</span>
             <GridToggle on={autoFollow} onToggle={() => onAutoFollowChange(!autoFollow)} />
@@ -254,6 +296,8 @@ export function LiveLessonBoardGrid({
           const theme = BOARD_THEMES[idx % BOARD_THEMES.length];
           const isOnline = onlineStudentIds?.has(sid) ?? true;
           const statusBar = isOnline ? 'bg-emerald-500' : 'bg-amber-500';
+          const linkLabel = snapshotLinkLabel(snap);
+          const boardOrientation = snap?.boardOrientation ?? 'white';
 
           return (
             <div
@@ -278,7 +322,18 @@ export function LiveLessonBoardGrid({
                       <p className="text-[10px] text-slate-500 truncate flex items-center gap-1.5">
                         <span className="font-semibold text-slate-400 tabular-nums">{studentRating(student)}</span>
                         <span className="text-slate-600">·</span>
-                        <span>{studentPlatformLabel(student)}</span>
+                        <span>{studentPlatformLabel(student, snap)}</span>
+                        {linkLabel && snap?.gameUrl ? (
+                          <a
+                            href={snap.gameUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-400 hover:text-indigo-300 truncate max-w-[6rem]"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {linkLabel}
+                          </a>
+                        ) : null}
                       </p>
                     </div>
                   </div>
@@ -302,7 +357,7 @@ export function LiveLessonBoardGrid({
                         position: fen,
                         allowDragging: false,
                         showNotation: CHESSBOARD_NO_NOTATION.showNotation,
-                        boardOrientation: 'white',
+                        boardOrientation,
                         darkSquareStyle: { backgroundColor: theme.dark },
                         lightSquareStyle: { backgroundColor: theme.light },
                       }}
@@ -348,17 +403,37 @@ export function LiveLessonBoardGrid({
                       <ChevronLast className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onFocusStudent(sid);
-                      onFollowStudent(sid);
-                    }}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold"
-                  >
-                    <Eye className="w-3 h-3" />
-                    Takip et
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={pullingStudentIds?.has(sid)}
+                      onClick={() => onPullStudent(sid)}
+                      className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg border border-white/10 text-slate-300 hover:text-white hover:bg-white/10 text-[10px] font-semibold disabled:opacity-40"
+                      title="Platformdan oyunu çek"
+                    >
+                      <Download className={`w-3 h-3 ${pullingStudentIds?.has(sid) ? 'animate-pulse' : ''}`} />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pullingPuzzleStudentIds?.has(sid)}
+                      onClick={() => onPullStudentPuzzle(sid)}
+                      className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg border border-violet-500/20 text-violet-300 hover:text-violet-100 hover:bg-violet-500/10 text-[10px] font-semibold disabled:opacity-40"
+                      title="Son Lichess bulmacasını çek"
+                    >
+                      <Sparkles className={`w-3 h-3 ${pullingPuzzleStudentIds?.has(sid) ? 'animate-pulse' : ''}`} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onFocusStudent(sid);
+                        onFollowStudent(sid);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold"
+                    >
+                      <Eye className="w-3 h-3" />
+                      Takip et
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

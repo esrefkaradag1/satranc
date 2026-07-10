@@ -237,6 +237,81 @@ export function puzzleStatsFromActivityRows(rows: LichessPuzzleActivityRow[]): {
   return { count: rows.length, passed, failed };
 }
 
+export type LichessPuzzleAndGame = {
+  game?: { pgn?: string };
+  puzzle: Record<string, unknown>;
+};
+
+export async function fetchLichessPuzzleNext(params: {
+  token: string;
+  difficulty?: string;
+  angle?: string;
+  color?: string;
+}): Promise<LichessPuzzleAndGame | null> {
+  const qs = new URLSearchParams();
+  if (params.difficulty?.trim()) qs.set('difficulty', params.difficulty.trim());
+  if (params.angle?.trim()) qs.set('angle', params.angle.trim());
+  if (params.color?.trim()) qs.set('color', params.color.trim());
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const res = await fetch(`https://lichess.org/api/puzzle/next${suffix}`, {
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      Accept: 'application/json',
+    },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) {
+    throw new Error(`Lichess sıradaki bulmaca alınamadı (${res.status})`);
+  }
+  const data = (await res.json()) as LichessPuzzleAndGame;
+  if (!data?.puzzle || typeof data.puzzle !== 'object') return null;
+  return data;
+}
+
+export type LichessOAuthAccountProfile = {
+  id: string;
+  username: string;
+  createdAt?: number;
+  playTime?: { total: number; tv?: number };
+  perfs?: Record<string, { games?: number; rating?: number; rd?: number; prog?: number; prov?: boolean }>;
+  profile?: { country?: string; bio?: string };
+  url?: string;
+  count?: { all?: number; rated?: number; win?: number; loss?: number; draw?: number };
+};
+
+export async function fetchLichessOAuthAccountProfile(token: string): Promise<LichessOAuthAccountProfile | null> {
+  const res = await fetch('https://lichess.org/api/account', {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as LichessOAuthAccountProfile;
+  if (!data?.username?.trim()) return null;
+  return data;
+}
+
+export async function fetchLichessLatestPuzzleActivity(params: {
+  token: string;
+  lookbackDays?: number;
+}): Promise<LichessPuzzleActivityRow | null> {
+  const lookback = Math.min(14, Math.max(1, Math.floor(params.lookbackDays ?? 7)));
+  const all: LichessPuzzleActivityRow[] = [];
+  for (let i = 0; i < lookback; i += 1) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dayIso = d.toISOString().slice(0, 10);
+    const rows = await fetchLichessPuzzleActivityForDay({ token: params.token, dayIso, max: 80 });
+    all.push(...rows);
+    if (all.length >= 80) break;
+  }
+  if (!all.length) return null;
+  all.sort((a, b) => a.date - b.date);
+  return all[all.length - 1] ?? null;
+}
+
 export async function fetchLichessPuzzleDashboard(params: {
   token: string;
   days?: number;

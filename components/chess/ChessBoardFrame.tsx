@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { EVAL_BAR_DECISIVE_SCORE, evalBarWhitePercent, formatEvalLabel } from '../../lib/chessBoardUi';
 
 const RANK_SIZE = '1.25rem';
@@ -81,6 +81,8 @@ export type ChessBoardFrameProps = {
   className?: string;
   boardClassName?: string;
   shellClassName?: string;
+  /** Boş alana (tahta dışı: koordinatlar, eval bar) sol tıklandığında çağrılır */
+  onShellClick?: () => void;
 };
 
 /**
@@ -96,7 +98,9 @@ export function ChessBoardFrame({
   className = '',
   boardClassName = '',
   shellClassName = '',
+  onShellClick,
 }: ChessBoardFrameProps) {
+  const boardContainerRef = useRef<HTMLDivElement>(null);
   const ranks = boardOrientation === 'white' ? [8, 7, 6, 5, 4, 3, 2, 1] : [1, 2, 3, 4, 5, 6, 7, 8];
   const files = boardOrientation === 'white'
     ? ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
@@ -125,6 +129,11 @@ export function ChessBoardFrame({
         gridTemplateRows: showCoords ? 'auto auto' : 'auto',
         alignItems: 'stretch',
       }}
+      onClick={(e) => {
+        if (onShellClick && boardContainerRef.current && !boardContainerRef.current.contains(e.target as HTMLElement)) {
+          onShellClick();
+        }
+      }}
     >
       {hasEval && (
         <div
@@ -150,6 +159,7 @@ export function ChessBoardFrame({
       )}
 
       <div
+        ref={boardContainerRef}
         className={`relative w-full min-w-0 aspect-square ${boardClassName}`}
         style={{ gridColumn: boardCol, gridRow: 1 }}
       >

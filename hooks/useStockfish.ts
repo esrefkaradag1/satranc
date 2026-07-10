@@ -25,6 +25,8 @@ interface UseStockfishReturn {
   error: string | null;
   pvLines: (PvLine | null)[];
   depth: number;
+  /** Son `analyseFen` çağrısındaki FEN (eski motor satırlarını ayırt etmek için) */
+  analysisFen: string | null;
   analyseFen: (fen: string) => void;
   stop: () => void;
   sendCommand: (cmd: string) => void;
@@ -40,6 +42,7 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
   const [error, setError] = useState<string | null>(null);
   const [pvLines, setPvLines] = useState<(PvLine | null)[]>([]);
   const [depth, setDepth] = useState<number>(0);
+  const [analysisFen, setAnalysisFen] = useState<string | null>(null);
   const pendingFenRef = useRef<string | null>(null);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
@@ -102,6 +105,7 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
     if (!enabledRef.current) return;
     const trimmed = fen.trim();
     if (!trimmed) return;
+    setAnalysisFen(trimmed);
     setPvLines((prev) => (prev.length ? prev.map(() => null) : prev));
     setDepth(0);
     if (!isAnalysisReady()) {
@@ -127,6 +131,7 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
     error,
     pvLines,
     depth,
+    analysisFen,
     analyseFen,
     stop,
     sendCommand,

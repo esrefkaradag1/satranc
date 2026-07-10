@@ -1,6 +1,5 @@
 import type { ChessComPuzzleAttempt } from './chesscomPuzzleParse';
-import { dedupeChessComPuzzleAttempts } from './chesscomPuzzleParse';
-import { localDayKeyFromMs, timestampMatchesDay } from './homeworkDayUtils';
+import { localDayKeyFromMs, timestampMatchesDay, istanbulDayKey } from './homeworkDayUtils';
 import { parseLichessActivityPuzzles } from './leaderboardUtils';
 
 export type LichessActivityRow = {
@@ -40,6 +39,7 @@ export type PlatformDayStatsPayload = {
   chessComPuzzles: number;
   chessComPuzzlePassed: number;
   chessComPuzzleFailed: number;
+  activityTimeSeconds?: number;
   lichessError?: boolean;
   chessComError?: boolean;
 };
@@ -80,22 +80,23 @@ function puzzleAttemptOnDay(isoDate: string | undefined, day: string): boolean {
   try {
     const ms = new Date(isoDate).getTime();
     if (!Number.isFinite(ms)) return false;
-    return timestampMatchesDay(ms, day);
+    const target = day.slice(0, 10);
+    return timestampMatchesDay(ms, target) || istanbulDayKey(new Date(ms)) === target;
   } catch {
     return false;
   }
 }
 
+/** Son bulmaca listesinden günlük sayım — her satır bir deneme (yeniden denemeler dahil). */
 export function chessComPuzzleStatsForDay(
   rated: ChessComPuzzleAttempt[],
   day: string,
 ): DayPuzzleStats {
   const target = day.slice(0, 10);
   const ratedToday = rated.filter((a) => puzzleAttemptOnDay(a.date, target));
-  const unique = dedupeChessComPuzzleAttempts(ratedToday);
-  const passed = unique.filter((a) => a.passed).length;
-  const failed = unique.filter((a) => !a.passed).length;
-  return { count: unique.length, passed, failed };
+  const passed = ratedToday.filter((a) => a.passed).length;
+  const failed = ratedToday.filter((a) => !a.passed).length;
+  return { count: ratedToday.length, passed, failed };
 }
 
 export function chessComGamesForDay(
@@ -116,8 +117,9 @@ export function chessComGamesForDay(
 export function buildPlatformDayStats(
   lichess: { games: number; puzzles: DayPuzzleStats; error?: boolean },
   chess: { games: number; puzzles: DayPuzzleStats; error?: boolean },
+  activityTimeSeconds?: number,
 ): PlatformDayStatsPayload {
-  return {
+  const payload: PlatformDayStatsPayload = {
     games: lichess.games + chess.games,
     puzzleSolved: lichess.puzzles.count + chess.puzzles.count,
     puzzlePassed: lichess.puzzles.passed + chess.puzzles.passed,
@@ -133,6 +135,10 @@ export function buildPlatformDayStats(
     lichessError: lichess.error,
     chessComError: chess.error,
   };
+  if (activityTimeSeconds != null && activityTimeSeconds > 0) {
+    payload.activityTimeSeconds = Math.round(activityTimeSeconds);
+  }
+  return payload;
 }
 
 export function uniqueYearMonths(days: string[]): Array<{ year: string; month: string }> {

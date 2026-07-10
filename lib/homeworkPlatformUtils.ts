@@ -2,7 +2,6 @@ import type { HomeworkAssignment, HomeworkPuzzleAttempt, Student, StudentDailyTa
 import type { HomeworkStudentStatus } from './homeworkAnalysisUtils';
 import { countPerPuzzleResults } from './homeworkAnalysisUtils';
 import {
-  dedupeChessComPuzzleAttempts,
   type ChessComPuzzleTab,
   type ChessComPuzzleAttempt,
 } from '../lib/chesscomPuzzleParse';
@@ -20,8 +19,13 @@ import {
   type LichessGame,
 } from '../services/chessPlatformService';
 import { fetchLichessOAuthDayPuzzleStats, isStudentLichessOAuthConnected } from '../services/lichessOAuthClient';
-import { timestampMatchesDay } from './homeworkDayUtils';
+import { timestampMatchesDay, istanbulDayKey } from './homeworkDayUtils';
 import { weekdayKeyFromIso } from './homeworkDayUtils';
+import {
+  chessComGameDurationSeconds,
+  lichessGameDurationSeconds,
+} from './chesscomGameDuration';
+import { chessComPuzzleTimeEstimateForDay } from './platformActivityTime';
 
 export type PlatformDayStats = {
   games: number;
@@ -36,6 +40,7 @@ export type PlatformDayStats = {
   chessComPuzzles: number;
   chessComPuzzlePassed: number;
   chessComPuzzleFailed: number;
+  activityTimeSeconds?: number;
   lichessError?: boolean;
   chessComError?: boolean;
 };
@@ -362,7 +367,8 @@ export function puzzleAttemptMatchesDay(isoDate: string | undefined, dayIso: str
   try {
     const ms = new Date(isoDate).getTime();
     if (!Number.isFinite(ms)) return false;
-    return timestampMatchesDay(ms, dayIso);
+    const target = dayIso.slice(0, 10);
+    return timestampMatchesDay(ms, target) || istanbulDayKey(new Date(ms)) === target;
   } catch {
     return false;
   }
@@ -393,7 +399,7 @@ export function chessComAttemptsForHomeworkDay(
       if (puzzleAttemptMatchesDay(attempt.date, dayIso)) merged.push(attempt);
     }
   }
-  return dedupeChessComPuzzleAttempts(merged);
+  return merged.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
 
 export async function fetchChessComPuzzlesForDay(
@@ -424,81 +430,6 @@ export async function fetchChessComPuzzlesForDay(
   }));
 }
 
-function lichessGameDurationSeconds(game: LichessGame): number {
-  const start = game.createdAt;
-  const end = game.lastMoveAt ?? start;
-  if (!start || !end) return 0;
-  return Math.max(0, Math.round((end - start) / 1000));
-}
-
-function parseClockSeconds(raw: string | undefined): number | null {
-  const value = String(raw ?? '').trim();
-  if (!value) return null;
-  const parts = value.split(':').map((part) => part.trim()).filter(Boolean);
-  if (parts.length < 2 || parts.length > 3) return null;
-  const nums = parts.map((part) => Number(part));
-  if (nums.some((num) => !Number.isFinite(num))) return null;
-  if (nums.length === 2) {
-    const [minutes, seconds] = nums;
-    return Math.round(minutes * 60 + seconds);
-  }
-  const [hours, minutes, seconds] = nums;
-  return Math.round(hours * 3600 + minutes * 60 + seconds);
-}
-
-function parseInitialTimeControlSeconds(raw: string | undefined): { initialSeconds: number; incrementSeconds: number } | null {
-  const value = String(raw ?? '').trim();
-  if (!value || value === '-' || value.includes('/')) return null;
-  const [baseRaw, incrementRaw = '0'] = value.split('+');
-  const base = Number(baseRaw);
-  const increment = Number(incrementRaw);
-  if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(increment) || increment < 0) return null;
-  return {
-    initialSeconds: Math.round(base),
-    incrementSeconds: Math.round(increment),
-  };
-}
-
-function sumClockDurationsFromPgn(rawPgn: string | undefined, timeControl?: string): number {
-  const pgn = String(rawPgn ?? '');
-  if (!pgn.trim()) return 0;
-
-  const emtMatches = [...pgn.matchAll(/\[%emt\s+([0-9:.]+)\]/gi)];
-  if (emtMatches.length > 0) {
-    return emtMatches.reduce((sum, match) => {
-      const sec = parseClockSeconds(match[1]);
-      return sum + Math.max(0, sec ?? 0);
-    }, 0);
-  }
-
-  const clockMatches = [...pgn.matchAll(/\[%clk\s+([0-9:.]+)\]/gi)];
-  if (clockMatches.length === 0) return 0;
-
-  const tc = parseInitialTimeControlSeconds(timeControl);
-  if (!tc) return 0;
-
-  let prevWhite = tc.initialSeconds;
-  let prevBlack = tc.initialSeconds;
-  let total = 0;
-  clockMatches.forEach((match, index) => {
-    const remaining = parseClockSeconds(match[1]);
-    if (remaining == null) return;
-    if (index % 2 === 0) {
-      total += Math.max(0, prevWhite + tc.incrementSeconds - remaining);
-      prevWhite = remaining;
-    } else {
-      total += Math.max(0, prevBlack + tc.incrementSeconds - remaining);
-      prevBlack = remaining;
-    }
-  });
-  return total;
-}
-
-function chessComGameDurationSeconds(game: ChessComGame): number {
-  const headerTimeControl = game.pgn?.match(/\[TimeControl\s+"([^"]+)"\]/i)?.[1];
-  return sumClockDurationsFromPgn(game.pgn, headerTimeControl ?? game.time_control);
-}
-
 /** Gün boyu tüm platform aktivitesinin toplam süresi (sn). */
 export async function fetchStudentPlatformActivityTimeSeconds(
   student: Student,
@@ -512,7 +443,15 @@ export async function fetchStudentPlatformActivityTimeSeconds(
       const rows = await fetchChessComPuzzlesForDay(chessComUsername, dayIso, {
         tabs: ['rated', 'learning', 'rush'],
       });
-      total += rows.reduce((sum, row) => sum + Math.max(0, row.attempt.myTimeSec ?? 0), 0);
+      const listTime = rows.reduce((sum, row) => sum + Math.max(0, row.attempt.myTimeSec ?? 0), 0);
+      total += listTime;
+      if (listTime <= 0 && rows.length > 0) {
+        total += chessComPuzzleTimeEstimateForDay(
+          rows.map((r) => r.attempt),
+          dayIso,
+          rows.length,
+        );
+      }
     } catch {
       /* platform süresi atlanır */
     }
@@ -573,6 +512,10 @@ export function mergePlatformDayStats(
 
   const lichessKept = lichessGames > 0 || lichessPuzzles > 0;
   const chessKept = chessComGames > 0 || chessComPuzzles > 0;
+  const activityTimeSeconds = Math.max(
+    prev.activityTimeSeconds ?? 0,
+    next.activityTimeSeconds ?? 0,
+  );
 
   return {
     games,
@@ -587,6 +530,7 @@ export function mergePlatformDayStats(
     chessComPuzzles,
     chessComPuzzlePassed,
     chessComPuzzleFailed,
+    ...(activityTimeSeconds > 0 ? { activityTimeSeconds } : {}),
     lichessError: next.lichessError && !lichessKept ? true : (prev.lichessError && !lichessKept ? true : undefined),
     chessComError: next.chessComError && !chessKept ? true : (prev.chessComError && !chessKept ? true : undefined),
   };

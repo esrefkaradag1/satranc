@@ -1,3 +1,18 @@
+export function istanbulDayKey(ref = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Istanbul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(ref);
+}
+
+export function shiftIstanbulDayKey(day: string, deltaDays: number): string {
+  const d = new Date(`${day.slice(0, 10)}T12:00:00+03:00`);
+  d.setDate(d.getDate() + deltaDays);
+  return istanbulDayKey(d);
+}
+
 /** Yerel takvim günü: YYYY-MM-DD */
 export function todayDayKey(ref = new Date()): string {
   const y = ref.getFullYear();
