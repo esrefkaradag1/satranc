@@ -43,6 +43,11 @@ import {
 } from '../lib/homeworkPlatformUtils';
 import { fetchStudentsPlatformWeekStats } from '../services/platformWeekStatsService';
 import {
+  loadPlatformDayStatsFromDb,
+  savePlatformDayStatsToDb,
+  type PlatformDayCacheRow,
+} from '../services/platformStatsCacheService';
+import {
   mergePlatformActivitySeconds,
   mergePlatformWeekStatsStore,
   mergePlatformWeekTimeStore,
@@ -419,7 +424,38 @@ const Homework: React.FC = () => {
     setDailyTargetDrafts(next);
   }, [programHomework?.id, programAssigneeIdsKey, homeworks, getAssignees]);
 
-  const applyPlatformStatsPatch = useCallback((patch: Record<string, Record<string, PlatformDayStats>>) => {
+  const persistPlatformPatchToDb = useCallback((
+    statsPatch: Record<string, Record<string, number | PlatformDayStats>> | undefined,
+    timePatch: Record<string, Record<string, number>> | undefined,
+  ) => {
+    const keys = new Set<string>();
+    for (const [sid, byDate] of Object.entries(statsPatch ?? {})) {
+      for (const iso of Object.keys(byDate)) keys.add(`${sid}\u0000${iso}`);
+    }
+    for (const [sid, byDate] of Object.entries(timePatch ?? {})) {
+      for (const iso of Object.keys(byDate)) keys.add(`${sid}\u0000${iso}`);
+    }
+    if (keys.size === 0) return;
+    const rows: PlatformDayCacheRow[] = [];
+    for (const key of keys) {
+      const [sid, iso] = key.split('\u0000');
+      const stats = studentPlatformWeekStatsRef.current[sid]?.[iso];
+      if (!stats) continue;
+      rows.push({
+        studentId: sid,
+        day: iso,
+        stats,
+        timeSeconds: studentPlatformWeekTimeSecondsRef.current[sid]?.[iso] ?? 0,
+      });
+    }
+    if (rows.length > 0) void savePlatformDayStatsToDb(rows);
+  }, []);
+
+  const applyPlatformStatsPatch = useCallback((
+    patch: Record<string, Record<string, PlatformDayStats>>,
+    opts?: { persistDb?: boolean },
+  ) => {
+    const persistDb = opts?.persistDb !== false;
     const nextStats = mergePlatformWeekStatsStore(studentPlatformWeekStatsRef.current, patch);
     studentPlatformWeekStatsRef.current = nextStats;
     setStudentPlatformWeekStats(nextStats);
@@ -442,18 +478,25 @@ const Homework: React.FC = () => {
       studentPlatformWeekTimeSecondsRef.current = nextTime;
       setStudentPlatformWeekTimeSeconds(nextTime);
       writeCoachPlatformCache(nextStats, nextTime);
+      if (persistDb) persistPlatformPatchToDb(patch, timeFromStats);
       return;
     }
 
     writeCoachPlatformCache(nextStats, studentPlatformWeekTimeSecondsRef.current);
-  }, []);
+    if (persistDb) persistPlatformPatchToDb(patch, undefined);
+  }, [persistPlatformPatchToDb]);
 
-  const applyPlatformTimePatch = useCallback((patch: Record<string, Record<string, number>>) => {
+  const applyPlatformTimePatch = useCallback((
+    patch: Record<string, Record<string, number>>,
+    opts?: { persistDb?: boolean },
+  ) => {
+    const persistDb = opts?.persistDb !== false;
     const nextTime = mergePlatformWeekTimeStore(studentPlatformWeekTimeSecondsRef.current, patch);
     studentPlatformWeekTimeSecondsRef.current = nextTime;
     setStudentPlatformWeekTimeSeconds(nextTime);
     writeCoachPlatformCache(studentPlatformWeekStatsRef.current, nextTime);
-  }, []);
+    if (persistDb) persistPlatformPatchToDb(undefined, patch);
+  }, [persistPlatformPatchToDb]);
 
   const refreshDailyPlatformStats = useCallback(async (opts?: { silent?: boolean }) => {
     const hw = programSelectedHw ?? programHomework;
@@ -585,6 +628,45 @@ const Homework: React.FC = () => {
     if (panelTab !== 'program' || programAnalysisView !== 'detail' || !programSelectedHw) return;
     void refreshDailyPlatformStats({ silent: true });
   }, [panelTab, programAnalysisView, programSelectedHw?.id, viewDate, refreshDailyPlatformStats]);
+
+  // DB önbelleğini yükle: geçmiş günlerin verisi API'den gelmese de gösterilir.
+  useEffect(() => {
+    if (panelTab !== 'program') return;
+    const hw = programSelectedHw ?? programHomework;
+    if (!hw) return;
+    const assignees = getAssignees(hw).filter((s) => targetStudentIds.has(s.id));
+    if (assignees.length === 0) return;
+
+    const ids = assignees.map((s) => s.id);
+    const today = todayDayKey();
+    const monday = mondayOfWeek();
+    const days = new Set<string>([viewDate]);
+    for (let d = 1; d <= 7; d++) {
+      const iso = isoDateForWeekday(monday, d);
+      if (iso <= today) days.add(iso);
+    }
+
+    let cancelled = false;
+    void loadPlatformDayStatsFromDb(ids, [...days]).then((res) => {
+      if (cancelled || !res) return;
+      if (Object.keys(res.stats).length > 0) {
+        applyPlatformStatsPatch(res.stats, { persistDb: false });
+      }
+      if (Object.keys(res.timeSeconds).length > 0) {
+        applyPlatformTimePatch(res.timeSeconds, { persistDb: false });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [
+    panelTab,
+    programSelectedHw?.id,
+    programHomework?.id,
+    viewDate,
+    targetStudentIds,
+    getAssignees,
+    applyPlatformStatsPatch,
+    applyPlatformTimePatch,
+  ]);
 
   useEffect(() => {
     studentPlatformWeekStatsRef.current = studentPlatformWeekStats;

@@ -32,10 +32,12 @@ export function computeChessComWinRate(chessComUsername: string | undefined, che
   const uname = chessComUsername.toLowerCase();
   let wins = 0;
   for (const g of chessComGames) {
-    if (g.white?.username?.toLowerCase() === uname && g.black?.result === 'checkmated') wins++;
-    if (g.black?.username?.toLowerCase() === uname && g.white?.result === 'checkmated') wins++;
-    if (g.white?.username?.toLowerCase() === uname && g.white?.result === 'win') wins++;
-    if (g.black?.username?.toLowerCase() === uname && g.black?.result === 'win') wins++;
+    // Chess.com'da kazananın result'ı 'win', kaybedenin result'ı sebep (checkmated/resigned/timeout...).
+    // Oyuncunun kendi 'win' sonucunu tek sefer say (aksi halde mat kazanışları çift sayılıyordu).
+    const isWhite = g.white?.username?.toLowerCase() === uname;
+    const isBlack = g.black?.username?.toLowerCase() === uname;
+    if (isWhite && g.white?.result === 'win') wins++;
+    else if (isBlack && g.black?.result === 'win') wins++;
   }
   return Math.round((wins / chessComGames.length) * 100);
 }

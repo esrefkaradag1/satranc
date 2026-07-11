@@ -28,6 +28,8 @@ ENV VITE_OPENROUTER_MODEL=$VITE_OPENROUTER_MODEL
 
 RUN npm run sync:stockfish
 RUN npm run build
+# Docker yalnızca .mjs çalıştırır; TS-yalnızca API handler'larını (.mjs) paketle.
+RUN npm run build:server
 
 FROM node:22-alpine
 
@@ -40,6 +42,7 @@ RUN npm ci --omit=dev --ignore-scripts
 
 COPY server/docker-api.mjs server/docker-production.mjs /app/server/
 COPY lib/*.mjs /app/lib/
+COPY --from=builder /app/server/generated /app/server/generated
 COPY --from=builder /app/dist /app/dist
 
 ENV STATIC_DIR=/app/dist

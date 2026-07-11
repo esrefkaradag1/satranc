@@ -1,7 +1,7 @@
 import { fetchChessComGameSnapshotFromParsed } from './chesscomLiveGameServer';
 import { parseExternalGameLink } from './externalGameLink';
 import {
-  snapshotFromLichessStreamLine,
+  snapshotFromPgn,
   type ExternalGameSnapshot,
 } from './externalGameSnapshot';
 import { fetchChessComPuzzleRecentStatus } from './studentChessComPuzzlePull';
@@ -41,27 +41,39 @@ function snapshotFromLichessNdjsonGame(game: Record<string, unknown>): ExternalG
   if (!id) return null;
   const speed = typeof game.speed === 'string' ? game.speed : undefined;
   const status = String(game.status ?? '');
-  return snapshotFromLichessStreamLine(
-    {
-      type: 'gameState',
-      fen: typeof game.fen === 'string' ? game.fen : undefined,
-      moves: typeof game.moves === 'string' ? game.moves : '',
-      status,
-      speed,
-    },
-    {
-      gameId: id,
-      gameUrl: `https://lichess.org/${id}`,
-      label: speed,
-    },
-  );
+  const isFinished = status !== 'started' && status !== 'created';
+  // games/user export'unda `moves` alanı SAN dizisidir ("d4 d5 Bf4 ..."), UCI değil.
+  // lastFen=true ile mevcut konum `lastFen` alanında gelir.
+  const movesSan = typeof game.moves === 'string' ? game.moves.trim() : '';
+  const lastFen =
+    (typeof game.lastFen === 'string' && game.lastFen.trim())
+    || (typeof game.fen === 'string' && game.fen.trim())
+    || '';
+  const meta = {
+    source: 'lichess' as const,
+    gameId: id,
+    gameUrl: `https://lichess.org/${id}`,
+    label: speed,
+    isFinished,
+  };
+  if (movesSan) {
+    const fromSan = snapshotFromPgn(movesSan, meta);
+    if (fromSan) {
+      return lastFen ? { ...fromSan, fen: lastFen } : fromSan;
+    }
+  }
+  if (lastFen) {
+    return { fen: lastFen, moves: [], baseFen: lastFen, ...meta };
+  }
+  return null;
 }
 
 async function fetchLichessOngoingByUsername(username: string): Promise<ExternalGameSnapshot | null> {
   const trimmed = username.trim().toLowerCase();
   if (!trimmed) return null;
+  // Sadece DEVAM EDEN oyunu iste (ongoing=true). Bitmiş oyunu canlıymış gibi göstermeyelim.
   const res = await fetch(
-    `https://lichess.org/api/games/user/${encodeURIComponent(trimmed)}?max=12&moves=1`,
+    `https://lichess.org/api/games/user/${encodeURIComponent(trimmed)}?max=1&ongoing=true&lastFen=true&moves=true&sort=dateDesc`,
     {
       headers: { Accept: 'application/x-ndjson' },
       signal: AbortSignal.timeout(15000),
@@ -69,14 +81,19 @@ async function fetchLichessOngoingByUsername(username: string): Promise<External
   );
   if (!res.ok) return null;
   const games = parseNdjson(await res.text());
-  const ongoing = games.find((g) => String(g.status ?? '') === 'started');
-  const pick = ongoing ?? games[0];
-  if (!pick) return null;
-  const fromNdjson = snapshotFromLichessNdjsonGame(pick);
-  if (fromNdjson) return fromNdjson;
-  const id = String(pick.id ?? '').trim();
+  const ongoing = games.find((g) => {
+    const status = String(g.status ?? '');
+    return status === 'started' || status === 'created';
+  });
+  if (!ongoing) return null;
+  const id = String(ongoing.id ?? '').trim();
   if (!id) return null;
-  return fetchLichessGameSnapshot(id);
+  // Canlı akıştan güncel konum + UCI hamleleri al; olmazsa ndjson SAN'ından üret.
+  const fromStream = await fetchLichessGameSnapshot(id);
+  if (fromStream && !fromStream.isFinished) return fromStream;
+  const fromNdjson = snapshotFromLichessNdjsonGame(ongoing);
+  if (fromNdjson) return fromNdjson;
+  return fromStream;
 }
 
 async function fetchChessComOngoingByUsername(username: string): Promise<ExternalGameSnapshot | null> {

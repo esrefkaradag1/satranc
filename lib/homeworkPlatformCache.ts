@@ -11,6 +11,21 @@ export type CoachPlatformCachePayload = {
   updatedAt: string;
 };
 
+/**
+ * Kalıcı depo: localStorage (tarayıcı/sekme kapansa da korunur).
+ * Geçmiş günler yeniden sorgulandığında platform API'leri eski veriyi getiremediği
+ * için (lifetime delta sıfırlanır, son ~25 bulmaca listesi) önceden çekilen doğru
+ * veri burada saklanır ve üstüne 0 yazılmaz.
+ */
+function cacheStore(): Storage | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 function pruneByIsoDate<T>(
   byStudent: Record<string, Record<string, T>>,
   cutoffIso: string,
@@ -26,11 +41,9 @@ function pruneByIsoDate<T>(
   return out;
 }
 
-export function readCoachPlatformCache(): CoachPlatformCachePayload | null {
-  if (typeof window === 'undefined') return null;
+function parseCachePayload(raw: string | null): CoachPlatformCachePayload | null {
+  if (!raw) return null;
   try {
-    const raw = window.sessionStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
     const parsed = JSON.parse(raw) as CoachPlatformCachePayload;
     if (!parsed || typeof parsed !== 'object' || !parsed.stats) return null;
     return {
@@ -43,21 +56,56 @@ export function readCoachPlatformCache(): CoachPlatformCachePayload | null {
   }
 }
 
+export function readCoachPlatformCache(): CoachPlatformCachePayload | null {
+  const store = cacheStore();
+  if (!store) return null;
+  const fromLocal = parseCachePayload(store.getItem(CACHE_KEY));
+  // Eski sessionStorage kayıtlarını localStorage'a taşı (geçiş yedeği).
+  let fromSession: CoachPlatformCachePayload | null = null;
+  try {
+    fromSession = parseCachePayload(window.sessionStorage.getItem(CACHE_KEY));
+  } catch {
+    fromSession = null;
+  }
+  if (!fromLocal) return fromSession;
+  if (!fromSession) return fromLocal;
+  return {
+    stats: mergePlatformWeekStatsStore(fromLocal.stats, fromSession.stats),
+    timeSeconds: mergePlatformWeekTimeStore(fromLocal.timeSeconds, fromSession.timeSeconds),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function writeCoachPlatformCache(
   stats: Record<string, Record<string, PlatformDayStats>>,
   timeSeconds: Record<string, Record<string, number>>,
 ): void {
-  if (typeof window === 'undefined') return;
+  const store = cacheStore();
+  if (!store) return;
   try {
+    // Var olan kayıtla birleştir: başka bir sekme/oturumun verisini ezme.
+    const existing = parseCachePayload(store.getItem(CACHE_KEY));
+    const mergedStats = existing
+      ? mergePlatformWeekStatsStore(existing.stats, stats)
+      : stats;
+    const mergedTime = existing
+      ? mergePlatformWeekTimeStore(existing.timeSeconds, timeSeconds)
+      : timeSeconds;
+
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - CACHE_MAX_AGE_DAYS);
     const cutoffIso = todayDayKey(cutoff);
     const payload: CoachPlatformCachePayload = {
-      stats: pruneByIsoDate(stats, cutoffIso),
-      timeSeconds: pruneByIsoDate(timeSeconds, cutoffIso),
+      stats: pruneByIsoDate(mergedStats, cutoffIso),
+      timeSeconds: pruneByIsoDate(mergedTime, cutoffIso),
       updatedAt: new Date().toISOString(),
     };
-    window.sessionStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+    store.setItem(CACHE_KEY, JSON.stringify(payload));
+    try {
+      window.sessionStorage.removeItem(CACHE_KEY);
+    } catch {
+      /* yok say */
+    }
   } catch {
     /* quota / private mode */
   }

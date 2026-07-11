@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run sync:stockfish && vite build",
+    "build:server": "node scripts/build-docker-handlers.mjs",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
@@ -42,6 +43,7 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "esbuild": "^0.25.12",
     "playwright": "^1.60.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"

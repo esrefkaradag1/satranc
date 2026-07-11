@@ -65,8 +65,38 @@ function parseBody(req: Req): { students: StudentInput[]; days: string[] } {
   return { students, days };
 }
 
+const LICHESS_ACTIVITY_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(fallback);
+      }
+    }, ms);
+    promise.then(
+      (value) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        }
+      },
+      () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fallback);
+        }
+      },
+    );
+  });
+}
+
 async function fetchLichessActivity(username: string): Promise<LichessActivityRow[]> {
-  try {
+  const run = async (): Promise<LichessActivityRow[]> => {
     const qs = new URLSearchParams();
     qs.set('soft', '1');
     const upstream = await lichessProxyRequest(`user/${username}/activity`, qs, 'application/json', process.env);
@@ -74,9 +104,9 @@ async function fetchLichessActivity(username: string): Promise<LichessActivityRo
     if (upstream.status < 200 || upstream.status >= 300) return [];
     const data = JSON.parse(upstream.body);
     return Array.isArray(data) ? (data as LichessActivityRow[]) : [];
-  } catch {
-    return [];
-  }
+  };
+  // Lichess yavaşsa/backoff'taysa batch isteğini kilitleme: zaman aşımında boş dön.
+  return withTimeout(run().catch(() => [] as LichessActivityRow[]), LICHESS_ACTIVITY_TIMEOUT_MS, []);
 }
 
 async function fetchChessComMemberTacticsLifetime(username: string) {

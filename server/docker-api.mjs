@@ -75,6 +75,40 @@ async function readJsonBody(req) {
   }
 }
 
+/**
+ * Vercel tarzı TS handler'ları (server/generated/*.mjs) çalıştırır.
+ * Docker yalnızca .mjs yükleyebildiği için bu handler'lar build sırasında
+ * `scripts/build-docker-handlers.mjs` ile paketlenir. Dosya yoksa sunucunun
+ * tamamı çökmesin diye tembel/dinamik import kullanılır.
+ */
+const generatedHandlerCache = new Map();
+async function runGeneratedHandler(name, reqLike, res) {
+  let handler = generatedHandlerCache.get(name);
+  if (!handler) {
+    try {
+      const mod = await import(`./generated/${name}.mjs`);
+      handler = mod.default ?? mod;
+      generatedHandlerCache.set(name, handler);
+    } catch {
+      sendJson(res, 500, {
+        error: `Handler paketi bulunamadı (${name}). Docker imajını 'npm run build:server' ile yeniden oluşturun.`,
+      });
+      return;
+    }
+  }
+  let status = 200;
+  let payload = {};
+  const mockRes = {
+    status(code) {
+      status = code;
+      return { json(data) { payload = data; } };
+    },
+    setHeader() {},
+  };
+  await handler(reqLike, mockRes);
+  sendJson(res, status, payload);
+}
+
 async function handleHomeworkAttempt(req, res) {
   const body = await readJsonBody(req);
   const result = await insertHomeworkAttemptViaEnv(body);
@@ -523,6 +557,17 @@ export async function dispatchApi(req, res, url) {
     }
     if (path === '/api/lichess-proxy') {
       await handleLichessProxy(url, req, res);
+      return true;
+    }
+    if (path === '/api/platform-week-stats' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      await runGeneratedHandler('platform-week-stats', { method: 'POST', body }, res);
+      return true;
+    }
+    if (path === '/api/external-game-snapshot' && req.method === 'GET') {
+      const query = {};
+      url.searchParams.forEach((value, key) => { query[key] = value; });
+      await runGeneratedHandler('external-game-snapshot', { method: 'GET', query }, res);
       return true;
     }
     if (path === '/api/homework-attempt' && req.method === 'POST') {
