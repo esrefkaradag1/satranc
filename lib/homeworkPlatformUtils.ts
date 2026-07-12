@@ -405,9 +405,9 @@ export function chessComAttemptsForHomeworkDay(
 export async function fetchChessComPuzzlesForDay(
   username: string,
   dayIso: string,
-  opts?: { tabs?: ChessComPuzzleTab[] },
+  opts?: { tabs?: ChessComPuzzleTab[]; force?: boolean },
 ): Promise<PlatformChessComPuzzleRow[]> {
-  const bundle = await fetchChessComPuzzlesBundle(username);
+  const bundle = await fetchChessComPuzzlesBundle(username, { force: opts?.force });
   if (!bundle) return [];
   const tabs = opts?.tabs ?? HOMEWORK_CHESSCOM_PUZZLE_TABS;
   const unique = chessComAttemptsForHomeworkDay(bundle, dayIso, tabs);

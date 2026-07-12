@@ -1,5 +1,5 @@
-import React from 'react';
-import { CheckCircle2, CircleDashed, Play, Clock, ChevronRight, XCircle, MinusCircle } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { CheckCircle2, CircleDashed, Play, Clock, ChevronRight, XCircle, MinusCircle, Search } from 'lucide-react';
 import type { PlatformStudentStat } from '../../lib/homeworkStatsBuilders';
 import { StudentCountText, StudentCountPairText } from '../ui/StudentCountText';
 import { formatHomeworkDuration } from '../../lib/homeworkAnalysisUtils';
@@ -25,13 +25,19 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
   viewDate,
   onSelect,
 }) => {
-  const sorted = [...stats].sort((a, b) => {
+  const [query, setQuery] = useState('');
+  const sorted = useMemo(() => {
     const order = { 'Devam Ediyor': 0, 'Kısmi yaptı': 1, Başlamadı: 2, Yapılmadı: 3, Tamamlandı: 4 };
-    const ao = order[a.status as keyof typeof order] ?? 1;
-    const bo = order[b.status as keyof typeof order] ?? 1;
-    if (ao !== bo) return ao - bo;
-    return b.correct - a.correct || a.name.localeCompare(b.name, 'tr');
-  });
+    const q = query.trim().toLocaleLowerCase('tr');
+    return [...stats]
+      .filter((s) => !q || s.name.toLocaleLowerCase('tr').includes(q))
+      .sort((a, b) => {
+        const ao = order[a.status as keyof typeof order] ?? 1;
+        const bo = order[b.status as keyof typeof order] ?? 1;
+        if (ao !== bo) return ao - bo;
+        return b.correct - a.correct || a.name.localeCompare(b.name, 'tr');
+      });
+  }, [stats, query]);
   const totalCorrect = stats.reduce((s, x) => s + x.correct, 0);
   const totalWrong = stats.reduce((s, x) => s + x.wrong, 0);
   const completed = stats.filter((s) => s.status === 'Tamamlandı').length;
@@ -55,6 +61,18 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
           <StudentCountPairText current={completed} total={stats.length} suffix="tamamladı" className="text-violet-300" />
         </div>
       </div>
+      <div className="px-4 py-2.5 border-b border-violet-500/10 bg-white/[0.02]">
+        <div className="relative max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Öğrenci ara…"
+            className="w-full rounded-lg border border-white/10 bg-[#0f1626]/80 pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/30"
+          />
+        </div>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-xs min-w-[720px]">
           <thead>
@@ -69,6 +87,13 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
             </tr>
           </thead>
           <tbody>
+            {sorted.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="py-6 text-center text-slate-500">
+                  {query.trim() ? `"${query.trim()}" için öğrenci bulunamadı.` : 'Kayıt yok.'}
+                </td>
+              </tr>
+            ) : null}
             {sorted.map((stat) => {
               const statusColor =
                 stat.status === 'Tamamlandı'

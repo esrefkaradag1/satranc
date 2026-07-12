@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import {
@@ -10,10 +10,19 @@ import type { PlatformDayStats } from '../../lib/homeworkPlatformUtils';
 import {
   fetchChessComPuzzlesForDay,
   capDailyPuzzleDisplay,
+  puzzleAttemptMatchesDay,
   type PlatformChessComPuzzleRow,
 } from '../../lib/homeworkPlatformUtils';
+import { timestampMatchesDay } from '../../lib/homeworkDayUtils';
 import { fetchLichessPuzzlesForDay, isStudentLichessOAuthConnected, type PlatformLichessPuzzleRow } from '../../services/lichessOAuthClient';
-import { selectHomeworkGoalPuzzles } from '../../lib/chesscomPuzzleParse';
+import { dedupeChessComPuzzleAttempts } from '../../lib/chesscomPuzzleParse';
+import {
+  emptyActivityRecords,
+  loadPlatformDayActivity,
+  mergeById,
+  savePlatformDayActivity,
+  type PlatformDayActivityRecords,
+} from '../../services/platformActivityCacheService';
 import {
   chessComPuzzleAnalysisUrl,
   fetchChessComGamesListForDay,
@@ -35,6 +44,14 @@ import { fetchPuzzleById } from '../../services/lichessService';
 import type { Puzzle } from '../../types';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+/** Birleştirilmiş Chess.com denemelerinden kronolojik (eski→yeni) benzersiz kart listesi. */
+function buildChessComRows(attempts: ChessComPuzzleAttempt[]): PlatformChessComPuzzleRow[] {
+  return dedupeChessComPuzzleAttempts(attempts)
+    .slice()
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .map((attempt) => ({ source: 'chesscom' as const, tab: 'rated' as ChessComPuzzleTab, attempt }));
+}
 
 function pgnToFinalFen(pgn: string): string {
   try {
@@ -638,7 +655,8 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
     fetchChessComGamesListForDay(username, viewDate)
       .then((fetched) => {
         if (cancelled) return;
-        const picks = fetched.slice(0, Math.max(1, gameTarget));
+        // O günün tüm maçları (hedefle sınırlama yok).
+        const picks = [...fetched].sort((a, b) => (a.end_time ?? 0) - (b.end_time ?? 0));
         if (picks.length === 0) {
           if (summaryGameCount > 0) {
             setGames([]);
@@ -978,10 +996,8 @@ const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
     fetchLichessGamesForDay(username, viewDate)
       .then((fetched) => {
         if (cancelled) return;
-        const limit = Math.max(1, gameTarget);
-        const picks = [...fetched]
-          .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
-          .slice(0, limit);
+        // O günün tüm maçları (hedefle sınırlama yok).
+        const picks = [...fetched].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
         if (picks.length === 0) {
           if (summaryGameCount > 0) {
             setGames([]);
@@ -1070,28 +1086,71 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lichessLoadError, setLichessLoadError] = useState<string | null>(null);
   const [viewerAttempt, setViewerAttempt] = useState<ChessComPuzzleAttempt | null>(null);
+  const [platformFilter, setPlatformFilter] = useState<'all' | 'chesscom' | 'lichess'>('all');
 
   const lichessUsername = student.lichessUsername?.trim() || '';
   const chessComUsername = student.chessComUsername?.trim().toLowerCase() || '';
 
-  const load = useCallback(async () => {
+  // Birikimli aktivite önbelleği (bulmacalar): sıfırdan çekmek yerine yenileri ekler.
+  const activityRef = useRef<PlatformDayActivityRecords>(emptyActivityRecords());
+  const cachePromiseRef = useRef<Promise<void> | null>(null);
+  const forcedRefreshRef = useRef(false);
+
+  // Öğrenci/gün değişince önbelleği yükle ve UI'yı anında kayıtlı verilerle doldur.
+  useEffect(() => {
+    forcedRefreshRef.current = false;
+    activityRef.current = emptyActivityRecords();
+    setChessComRows([]);
+    setLichessRows([]);
+    const p = (async () => {
+      const raw = student.id
+        ? await loadPlatformDayActivity(student.id, viewDate)
+        : emptyActivityRecords();
+      // Yalnızca GÖRÜNTÜLENEN güne ait kayıtları tut (eski önbellek başka gün sızdırmışsa arındır).
+      const cached: PlatformDayActivityRecords = {
+        chessComPuzzles: raw.chessComPuzzles.filter((a) => puzzleAttemptMatchesDay(a.date, viewDate)),
+        lichessPuzzles: raw.lichessPuzzles.filter((a) => timestampMatchesDay(a.date, viewDate)),
+      };
+      activityRef.current = cached;
+      if (cached.chessComPuzzles.length > 0) {
+        setChessComRows(buildChessComRows(cached.chessComPuzzles));
+      }
+      if (cached.lichessPuzzles.length > 0) {
+        setLichessRows(cached.lichessPuzzles.map((attempt) => ({ source: 'lichess' as const, attempt })));
+      }
+    })();
+    cachePromiseRef.current = p;
+  }, [student.id, viewDate]);
+
+  const persistActivity = useCallback(() => {
+    if (student.id) void savePlatformDayActivity(student.id, viewDate, activityRef.current);
+  }, [student.id, viewDate]);
+
+  const load = useCallback(async (force = false) => {
     if (!chessComUsername) {
-      setChessComRows([]);
       setLoadError(null);
       return;
     }
     setLoading(true);
     setLoadError(null);
     try {
-      const rows = await fetchChessComPuzzlesForDay(chessComUsername, viewDate);
-      setChessComRows(rows);
+      await cachePromiseRef.current;
+      const rows = await fetchChessComPuzzlesForDay(chessComUsername, viewDate, { force });
+      const merged = mergeById(
+        activityRef.current.chessComPuzzles,
+        rows.map((r) => r.attempt),
+        (a) => a.id,
+      ).filter((a) => puzzleAttemptMatchesDay(a.date, viewDate));
+      activityRef.current = { ...activityRef.current, chessComPuzzles: merged };
+      setChessComRows(buildChessComRows(merged));
+      persistActivity();
     } catch {
-      setChessComRows([]);
+      // Hata durumunda kayıtlı (önbellekten gelen) satırları koru, temizleme.
       setLoadError('Chess.com bulmacaları yüklenemedi');
     } finally {
       setLoading(false);
     }
-  }, [chessComUsername, viewDate]);
+  }, [chessComUsername, viewDate, persistActivity]);
 
   useEffect(() => {
     void load();
@@ -1106,6 +1165,16 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
   const totalGames = platformStats?.games ?? 0;
   const totalPuzzlesSolved = platformStats?.puzzleSolved ?? 0;
 
+  // İstatistik Chess.com'da bulmaca sayarken detay listesi (eski önbellek) daha az
+  // kart döndürdüyse bir kez zorla yenile — "20 doğru ama 5 kart" durumunu onarır.
+  useEffect(() => {
+    if (loading || !chessComUsername || forcedRefreshRef.current) return;
+    if (chessComPuzzles > 0 && chessComRows.length < chessComPuzzles) {
+      forcedRefreshRef.current = true;
+      void load(true);
+    }
+  }, [loading, chessComUsername, chessComPuzzles, chessComRows.length, load]);
+
   const effectivePuzzleTarget = Math.max(
     dailyPuzzleTarget,
     lichessPassed + lichessFailed,
@@ -1114,53 +1183,47 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
   );
   const effectiveGameTarget = Math.max(dailyGameTarget, totalGames, lichessGames, chessComGames);
 
-  const goalPuzzleRows = useMemo(() => {
-    if (chessComRows.length === 0) return [];
-    if (effectivePuzzleTarget <= 0) {
-      return chessComRows.slice(0, 12);
-    }
-    const selected = selectHomeworkGoalPuzzles(
-      chessComRows.map((r) => r.attempt),
-      effectivePuzzleTarget,
-    );
-    const selectedIds = new Set(selected.map((a) => a.id));
-    return chessComRows
-      .filter((r) => selectedIds.has(r.attempt.id))
-      .sort(
-        (a, b) => selected.findIndex((x) => x.id === a.attempt.id)
-          - selected.findIndex((x) => x.id === b.attempt.id),
-      );
-  }, [chessComRows, effectivePuzzleTarget]);
+  // Günün TÜM Chess.com bulmacaları (hedefle sınırlanmaz).
+  const goalPuzzleRows = chessComRows;
 
   const loadLichess = useCallback(async () => {
     if (!isStudentLichessOAuthConnected(student)) {
-      setLichessRows([]);
+      // OAuth yoksa taze çekemeyiz; kayıtlı (önbellek) satırları koru.
       setLichessLoadError(null);
       return;
     }
     setLichessLoading(true);
     setLichessLoadError(null);
     try {
-      const rows = await fetchLichessPuzzlesForDay(
-        student.id,
-        viewDate,
-        effectivePuzzleTarget > 0 ? effectivePuzzleTarget : undefined,
-        student,
-      );
-      setLichessRows(rows);
+      await cachePromiseRef.current;
+      // Hedef sınırı yok: günün tamamını çek (varsayılan üst sınır).
+      const rows = await fetchLichessPuzzlesForDay(student.id, viewDate, undefined, student);
+      const merged = mergeById(
+        activityRef.current.lichessPuzzles,
+        rows.map((r) => r.attempt),
+        (a) => a.id,
+      ).filter((a) => timestampMatchesDay(a.date, viewDate));
+      activityRef.current = { ...activityRef.current, lichessPuzzles: merged };
+      setLichessRows(merged.map((attempt) => ({ source: 'lichess' as const, attempt })));
+      persistActivity();
     } catch {
-      setLichessRows([]);
       setLichessLoadError('Lichess bulmacaları yüklenemedi');
     } finally {
       setLichessLoading(false);
     }
-  }, [student, viewDate, effectivePuzzleTarget]);
+  }, [student, viewDate, persistActivity]);
 
   useEffect(() => {
     void loadLichess();
   }, [loadLichess]);
 
-  const showLichessPuzzleSummary = lichessUsername && lichessPuzzles > 0 && lichessRows.length === 0 && goalPuzzleRows.length === 0;
+  const showChessCom = platformFilter !== 'lichess';
+  const showLichess = platformFilter !== 'chesscom';
+  const canFilterPlatforms = Boolean(lichessUsername) && Boolean(chessComUsername);
+
+  // Lichess bulmaca detayları yalnızca OAuth ile gelir; OAuth yoksa en azından
+  // günlük sayıları (doğru/yanlış) özet kartında göster — Chess.com kartları olsa bile gizleme.
+  const showLichessPuzzleSummary = showLichess && Boolean(lichessUsername) && lichessPuzzles > 0 && lichessRows.length === 0;
   const gameGoalMet = effectiveGameTarget > 0 && totalGames >= effectiveGameTarget;
   const hasPlatformActivity = totalGames > 0 || totalPuzzlesSolved > 0;
   const hasContent = hasPlatformActivity
@@ -1219,21 +1282,49 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               </>
             )}
           </p>
-          {(effectivePuzzleTarget > 0 || effectiveGameTarget > 0) ? (
-            <p className="text-[10px] text-slate-600 mt-1">
-              Yalnızca ödev hedefi kadar kayıt gösterilir ({effectivePuzzleTarget} bulmaca{effectiveGameTarget > 0 ? ` · ${effectiveGameTarget} maç` : ''}).
-            </p>
-          ) : null}
+          <p className="text-[10px] text-slate-600 mt-1">
+            O gün yapılan tüm bulmaca ve maçlar gösterilir; her açılışta yalnızca yeni kayıtlar eklenir.
+          </p>
         </div>
         <button
           type="button"
-          onClick={() => { void load(); void loadLichess(); }}
+          onClick={() => { void load(true); void loadLichess(); }}
           disabled={loading || lichessLoading}
           className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
         >
           Yenile
         </button>
       </div>
+
+      {canFilterPlatforms ? (
+        <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-[#141b28] p-1">
+          {([
+            { key: 'all', label: 'Tümü' },
+            { key: 'chesscom', label: 'Chess.com' },
+            { key: 'lichess', label: 'Lichess' },
+          ] as const).map((tab) => {
+            const active = platformFilter === tab.key;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setPlatformFilter(tab.key)}
+                className={`px-3 py-1.5 rounded-md text-[11px] font-bold transition-colors ${
+                  active
+                    ? tab.key === 'lichess'
+                      ? 'bg-[#81b64c] text-[#1a2010]'
+                      : tab.key === 'chesscom'
+                        ? 'bg-[#3d6e4e] text-white'
+                        : 'bg-indigo-500 text-white'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       {showLichessPuzzleSummary ? (
         <div className="rounded-xl border border-white/[0.08] bg-[#1a2332]/80 p-4">
@@ -1284,9 +1375,24 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
         <p className="text-sm text-rose-400/90 text-center">{loadError || lichessLoadError}</p>
       ) : null}
 
+      {showLichess && lichessUsername && platformStats?.lichessError ? (
+        <p className="text-center text-xs text-amber-400/90">
+          Lichess verisine şu an ulaşılamıyor (limit/gecikme). Birazdan “Yenile” ile tekrar deneyin.
+        </p>
+      ) : null}
+
+      {showChessCom && chessComUsername && chessComPuzzles > goalPuzzleRows.length && goalPuzzleRows.length > 0 ? (
+        <p className="mb-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-200/90">
+          Bu gün {chessComPuzzles} Chess.com bulmacası çözülmüş, ancak Chess.com herkese
+          açık olarak yalnızca en son ~25 bulmacanın tahtasını verir. Bu yüzden{' '}
+          {goalPuzzleRows.length} tanesinin tahtası gösteriliyor; sayaç (doğru/yanlış)
+          günün tamamını yansıtır. Detay gün içinde açıldıkça yeni bulmacalar birikir.
+        </p>
+      ) : null}
+
       {goalPuzzleRows.length > 0 || lichessRows.length > 0 || lichessGames > 0 || chessComGames > 0 || effectiveGameTarget > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-          {lichessUsername && lichessGames > 0 ? (
+          {showLichess && lichessUsername && lichessGames > 0 ? (
             <LichessMatchGoalCards
               username={lichessUsername}
               viewDate={viewDate}
@@ -1295,7 +1401,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               summaryGameCount={lichessGames}
             />
           ) : null}
-          {chessComUsername && chessComGames > 0 ? (
+          {showChessCom && chessComUsername && chessComGames > 0 ? (
             <ChessComMatchGoalCards
               username={chessComUsername}
               viewDate={viewDate}
@@ -1303,7 +1409,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               summaryGameCount={chessComGames}
             />
           ) : null}
-          {lichessUsername && lichessGames === 0 && chessComGames === 0 && effectiveGameTarget > 0 ? (
+          {showLichess && lichessUsername && lichessGames === 0 && chessComGames === 0 && effectiveGameTarget > 0 ? (
             <div className={`rounded-xl border bg-[#1a2332]/90 overflow-hidden shadow-lg ring-1 ${gameGoalMet ? 'border-sky-500/35 ring-sky-500/10' : 'border-slate-600/40 ring-slate-500/10'}`}>
               <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2 bg-white/[0.02]">
                 <div className="flex items-center gap-2">
@@ -1331,7 +1437,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               </div>
             </div>
           ) : null}
-          {goalPuzzleRows.map((row) => (
+          {showChessCom && goalPuzzleRows.map((row) => (
             <ChessComPuzzleCard
               key={`${row.tab}-${row.attempt.id}`}
               row={row}
@@ -1339,7 +1445,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               onOpenViewer={setViewerAttempt}
             />
           ))}
-          {lichessRows.map((row) => (
+          {showLichess && lichessRows.map((row) => (
             <LichessPuzzleCard
               key={row.attempt.id}
               row={row}
@@ -1347,6 +1453,17 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
             />
           ))}
         </div>
+      ) : null}
+
+      {platformFilter === 'chesscom' && chessComGames === 0 && goalPuzzleRows.length === 0 && !loading ? (
+        <p className="text-center text-xs text-slate-500 py-6">
+          Chess.com için bu gün kayıt bulunamadı.
+        </p>
+      ) : null}
+      {platformFilter === 'lichess' && lichessGames === 0 && lichessRows.length === 0 && !showLichessPuzzleSummary && !lichessLoading ? (
+        <p className="text-center text-xs text-slate-500 py-6">
+          Lichess için bu gün kayıt bulunamadı.
+        </p>
       ) : null}
 
       <ChessComPuzzleViewerModal

@@ -1172,11 +1172,16 @@ export async function fetchChessComPuzzlesBundleWithMeta(username: string): Prom
 }
 
 /** Tek istekte tüm bulmaca sekmeleri (Chess.com profil ile aynı kaynak) */
-export async function fetchChessComPuzzlesBundle(username: string): Promise<ChessComPuzzlesBundle | null> {
+export async function fetchChessComPuzzlesBundle(
+  username: string,
+  opts?: { force?: boolean },
+): Promise<ChessComPuzzlesBundle | null> {
   const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
-  const cached = readChessComBundleCache(trimmed);
-  if (cached) return cached;
+  if (!opts?.force) {
+    const cached = readChessComBundleCache(trimmed);
+    if (cached) return cached;
+  }
 
   const inflight = chessComBundleInFlight.get(trimmed);
   if (inflight) return inflight;
