@@ -19,6 +19,12 @@ type TrackerEntry = {
 const STORAGE_KEY = 'chesscom_tactics_lifetime_v1';
 const serverMemory = new Map<string, TrackerEntry>();
 
+// Makul günlük üst sınırlar. Lifetime baz kaydı bozulduğunda (opening≈0) delta,
+// öğrencinin TÜM ZAMANLAR sayısına eşit çıkabiliyor (ör. bir günde 1757 bulmaca /
+// 22 saat). Bu sınırları aşan delta "güvenilmez" sayılır ve liste sayımına düşülür.
+export const MAX_PLAUSIBLE_DAILY_PUZZLES = 500;
+export const MAX_PLAUSIBLE_DAILY_SECONDS = 6 * 3600;
+
 function clampCounts(value: TacticsLifetimeCounts): TacticsLifetimeCounts {
   return {
     attemptCount: Math.max(0, Math.round(value.attemptCount)),
@@ -35,6 +41,9 @@ function subtractCounts(current: TacticsLifetimeCounts, opening: TacticsLifetime
     Math.max(0, current.attemptCount - opening.attemptCount),
     passed + failed,
   );
+  if (count > 500 || passed > 500) {
+    return { count: 0, passed: 0, failed: 0 };
+  }
   return { count, passed, failed };
 }
 
@@ -75,6 +84,11 @@ export function tacticsLifetimeFromMemberStats(
   stats: { attemptCount?: number; passedCount?: number; failedCount?: number; totalSeconds?: number } | null | undefined,
 ): TacticsLifetimeCounts | null {
   if (!stats) return null;
+  // If the API payload completely lacks attemptCount and passedCount, do not default to 0.
+  // Defaulting to 0 causes the entire lifetime count to appear as the next day's delta.
+  if (stats.attemptCount === undefined && stats.passedCount === undefined) {
+    return null;
+  }
   const attemptCount = Number(stats.attemptCount ?? 0);
   const passedCount = Number(stats.passedCount ?? 0);
   const failedCount = Number(stats.failedCount ?? 0);
@@ -83,13 +97,24 @@ export function tacticsLifetimeFromMemberStats(
   return clampCounts({ attemptCount, passedCount, failedCount, totalSeconds });
 }
 
+/** Baz kaydı geçerli mi? opening≈0 iken closing büyükse (gün başı okuması alınamamış) delta anlamsızdır. */
+function isImplausibleDelta(entry: TrackerEntry, deltaCount: number): boolean {
+  if (deltaCount > MAX_PLAUSIBLE_DAILY_PUZZLES) return true;
+  // Baz sıfır (hiç gün-başı okuması yok) ama kapanış büyükse: delta ≈ tüm-zamanlar → reddet.
+  if (entry.opening.attemptCount === 0 && entry.closing.attemptCount > MAX_PLAUSIBLE_DAILY_PUZZLES) return true;
+  return false;
+}
+
 export function chessComDailyTimeFromLifetimeTracker(
   username: string,
   day: string,
   current: TacticsLifetimeCounts,
 ): number {
   const entry = updateChessComTacticsTracker(username, day, current);
-  return Math.max(0, entry.closing.totalSeconds - entry.opening.totalSeconds);
+  const delta = Math.max(0, entry.closing.totalSeconds - entry.opening.totalSeconds);
+  // 6 saatten uzun "günlük bulmaca süresi" gerçek dışı → bozuk baz, süreyi kullanma.
+  if (delta > MAX_PLAUSIBLE_DAILY_SECONDS) return 0;
+  return delta;
 }
 
 export function updateChessComTacticsTracker(
@@ -129,7 +154,11 @@ export function chessComDailyStatsFromLifetimeTracker(
   current: TacticsLifetimeCounts,
 ): DayPuzzleStats {
   const entry = updateChessComTacticsTracker(username, day, current);
-  return subtractCounts(entry.closing, entry.opening);
+  const delta = subtractCounts(entry.closing, entry.opening);
+  // Bozuk baz kaydından kaynaklı "tüm-zamanlar" büyüklüğündeki deltayı kullanma;
+  // çağıran taraf liste sayımına (o güne tarihli gerçek bulmacalar) düşer.
+  if (isImplausibleDelta(entry, delta.count)) return { count: 0, passed: 0, failed: 0 };
+  return delta;
 }
 
 export function preferRicherChessComDayStats(a: DayPuzzleStats, b: DayPuzzleStats): DayPuzzleStats {

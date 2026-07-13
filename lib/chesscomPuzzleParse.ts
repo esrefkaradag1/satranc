@@ -178,6 +178,7 @@ export function parseChessComTacticsLifetimeFromMemberPayload(data: unknown): {
   const raw = data as { stats?: Array<{ key: string; stats: Record<string, unknown> }> };
   const tactics = raw.stats?.find((s) => s.key === 'tactics')?.stats;
   if (!tactics) return null;
+  if (tactics.attempt_count === undefined && tactics.passed_count === undefined) return null;
   const attemptCount = Number(tactics.attempt_count ?? 0);
   const passedCount = Number(tactics.passed_count ?? 0);
   const failedCount = Number(tactics.failed_count ?? 0);
@@ -204,6 +205,7 @@ export function parseChessComTacticsLifetimeFromTactics2Bundle(data: unknown): {
   const stats = (statsInfo as Record<string, unknown>).stats;
   if (!stats || typeof stats !== 'object') return null;
   const s = stats as Record<string, unknown>;
+  if (s.attempt_count === undefined && s.passed_count === undefined) return null;
   const attemptCount = Number(s.attempt_count ?? 0);
   const passedCount = Number(s.passed_count ?? 0);
   const failedCount = Number(s.failed_count ?? 0);

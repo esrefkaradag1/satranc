@@ -5,10 +5,7 @@ import {
   chessComGamesTimeSecondsForDay,
   lichessGameDurationSeconds,
 } from './chesscomGameDuration';
-import {
-  chessComDailyTimeFromLifetimeTracker,
-  type TacticsLifetimeCounts,
-} from './chesscomDailyTacticsTracker';
+import type { TacticsLifetimeCounts } from './chesscomDailyTacticsTracker';
 
 function puzzleAttemptOnDay(isoDate: string | undefined, day: string): boolean {
   if (!isoDate?.trim()) return false;
@@ -65,18 +62,17 @@ export function computeChessComActivityTimeSeconds(
   dayIso: string,
   ratedAttempts: ChessComPuzzleAttempt[],
   monthGames: ChessComGame[],
-  lifetime: TacticsLifetimeCounts | null | undefined,
+  _lifetime: TacticsLifetimeCounts | null | undefined,
   dayPuzzleAttemptCount = 0,
 ): number {
+  // Süre yalnızca O GÜNE tarihli denemelerden hesaplanır. Lifetime süre farkı, bozuk
+  // baz kaydında günün tamamı yerine tüm-zamanları (ör. 22 saat) yansıttığı için kullanılmaz.
   const games = chessComGamesTimeSecondsForDay(monthGames, username, dayIso);
   const listPuzzle = chessComPuzzleTimeSecondsForDay(ratedAttempts, dayIso);
-  const lifetimePuzzle = lifetime
-    ? chessComDailyTimeFromLifetimeTracker(username, dayIso, lifetime)
-    : 0;
   const estimatedPuzzle = dayPuzzleAttemptCount > 0
     ? chessComPuzzleTimeEstimateForDay(ratedAttempts, dayIso, dayPuzzleAttemptCount)
     : 0;
-  const puzzleTime = Math.max(listPuzzle, lifetimePuzzle, estimatedPuzzle);
+  const puzzleTime = Math.max(listPuzzle, estimatedPuzzle);
   return games + puzzleTime;
 }
 

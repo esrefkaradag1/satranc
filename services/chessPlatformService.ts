@@ -12,11 +12,6 @@ import {
 } from '../lib/chesscomPuzzleParse';
 import { timestampMatchesDay, localDayKeyFromMs } from '../lib/homeworkDayUtils';
 import {
-  chessComDailyStatsFromLifetimeTracker,
-  preferRicherChessComDayStats,
-  tacticsLifetimeFromMemberStats,
-} from '../lib/chesscomDailyTacticsTracker';
-import {
   lichessGamesForDayFromActivity,
   lichessPuzzleStatsForDayFromActivity,
   chessComGamesForDay,
@@ -929,10 +924,10 @@ export function parseChessComMemberStatsPayload(data: unknown): ChessComMemberSt
       highestRatingDate: s.highest_rating_date != null ? String(s.highest_rating_date) : undefined,
       lowestRating: (s.lowest_rating as number) ?? 0,
       lowestRatingDate: s.lowest_rating_date != null ? String(s.lowest_rating_date) : undefined,
-      attemptCount: (s.attempt_count as number) ?? 0,
-      passedCount: (s.passed_count as number) ?? 0,
-      failedCount: (s.failed_count as number) ?? 0,
-      totalSeconds: (s.total_seconds as number) ?? 0,
+      attemptCount: s.attempt_count as number | undefined,
+      passedCount: s.passed_count as number | undefined,
+      failedCount: s.failed_count as number | undefined,
+      totalSeconds: s.total_seconds as number | undefined,
       lastDate: s.last_date != null ? String(s.last_date) : undefined,
     };
   }
@@ -1591,20 +1586,9 @@ export async function fetchChessComDailyPuzzleStats(
   if (!trimmed) return { count: 0, passed: 0, failed: 0 };
 
   const bundle = await fetchChessComPuzzlesBundle(trimmed);
-  const listStats = chessComPuzzleStatsForDay(bundle?.rated ?? [], day);
-
-  try {
-    const member = await fetchChessComMemberStats(trimmed);
-    const lifetime = tacticsLifetimeFromMemberStats(member?.tactics);
-    if (lifetime) {
-      const deltaStats = chessComDailyStatsFromLifetimeTracker(trimmed, day, lifetime);
-      return preferRicherChessComDayStats(listStats, deltaStats);
-    }
-  } catch {
-    /* member stats yedek */
-  }
-
-  return listStats;
+  // Yalnızca O GÜNE tarihli gerçek denemeleri say. Lifetime farkı (all-time sayaç deltası)
+  // bozuk baz kaydında günün tamamı yerine tüm-zamanları yansıtabildiği için kullanılmıyor.
+  return chessComPuzzleStatsForDay(bundle?.rated ?? [], day);
 }
 
 /** Tek bulmaca bundle + aylık arşivle birden fazla günün Chess.com özeti */

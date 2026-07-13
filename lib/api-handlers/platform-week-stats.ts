@@ -17,8 +17,6 @@ import {
   type PlatformDayStatsPayload,
 } from '../platformWeekStatsDerive';
 import {
-  chessComDailyStatsFromLifetimeTracker,
-  preferRicherChessComDayStats,
   tacticsLifetimeFromMemberStats,
 } from '../chesscomDailyTacticsTracker';
 import { computeChessComActivityTimeSeconds } from '../platformActivityTime';
@@ -202,7 +200,6 @@ export default async function handler(req: Req, res: Res) {
 
   const lichessActivityByUser = new Map<string, LichessActivityRow[]>();
   const chessPuzzlesByUser = new Map<string, Awaited<ReturnType<typeof loadChessComUserData>>['rated']>();
-  const chessLifetimeByUser = new Map<string, Awaited<ReturnType<typeof fetchChessComMemberTacticsLifetime>>>();
   const chessMonthGamesByUserMonth = new Map<string, Awaited<ReturnType<typeof fetchChessComMonthGames>>['games']>();
 
   const lichessUsers = [...new Set(students.map((s) => normalizeLichess(s.lichessUsername)).filter(Boolean))];
@@ -218,7 +215,6 @@ export default async function handler(req: Req, res: Res) {
     chessUsers.map(async (username) => {
       const loaded = await loadChessComUserData(username, months);
       chessPuzzlesByUser.set(username, loaded.rated);
-      chessLifetimeByUser.set(username, loaded.lifetime);
       for (const [key, games] of loaded.monthGames.entries()) {
         chessMonthGamesByUserMonth.set(key, games);
       }
@@ -251,20 +247,14 @@ export default async function handler(req: Req, res: Res) {
         const monthKey = `${chessUser}:${year}-${month}`;
         const monthGames = chessMonthGamesByUserMonth.get(monthKey) ?? [];
         chessGames = chessComGamesForDay(monthGames, chessUser, day);
-        const listStats = chessComPuzzleStatsForDay(ratedPuzzles, day);
-        const lifetime = chessLifetimeByUser.get(chessUser);
-        chessPuzzles = lifetime
-          ? preferRicherChessComDayStats(
-              listStats,
-              chessComDailyStatsFromLifetimeTracker(chessUser, day, lifetime),
-            )
-          : listStats;
+        // Yalnızca O GÜNE tarihli gerçek denemeleri say (lifetime farkı all-time sızdırıyordu).
+        chessPuzzles = chessComPuzzleStatsForDay(ratedPuzzles, day);
         activityTimeSeconds += computeChessComActivityTimeSeconds(
           chessUser,
           day,
           ratedPuzzles,
           monthGames,
-          lifetime,
+          null,
           chessPuzzles.count,
         );
       }

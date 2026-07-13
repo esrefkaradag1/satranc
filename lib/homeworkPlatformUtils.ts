@@ -489,33 +489,81 @@ export function capDailyPuzzleDisplay(
   };
 }
 
+// Tek günde gerçek dışı büyüklükler → bozuk lifetime bazından kaynaklı "tüm-zamanlar"
+// kirlenmesi. Bu değerler "güvenilmez" sayılıp Math.max'ta iyi verinin üstüne KİLİTLENMESİ
+// engellenir (aksi halde bir kez yazılan 1757 bulmaca/22 saat kalıcı kalıyordu).
+const MAX_DAILY_PLATFORM_PUZZLES = 500;
+const MAX_DAILY_TOTAL_PUZZLES = 1000;
+const MAX_DAILY_ACTIVITY_SECONDS = 10 * 3600;
+
+function isImplausibleDayStats(s: PlatformDayStats): boolean {
+  return (
+    s.chessComPuzzles > MAX_DAILY_PLATFORM_PUZZLES
+    || s.lichessPuzzles > MAX_DAILY_PLATFORM_PUZZLES
+    || s.puzzleSolved > MAX_DAILY_TOTAL_PUZZLES
+    || (s.activityTimeSeconds ?? 0) > MAX_DAILY_ACTIVITY_SECONDS
+  );
+}
+
+/** Şişik/gerçek dışı bulmaca+süre katkısını sıfırlar (maçlar korunur). */
+function dropPuzzleContribution(s: PlatformDayStats): PlatformDayStats {
+  return {
+    ...s,
+    puzzleSolved: 0,
+    puzzlePassed: 0,
+    puzzleFailed: 0,
+    lichessPuzzles: 0,
+    lichessPuzzlePassed: 0,
+    lichessPuzzleFailed: 0,
+    chessComPuzzles: 0,
+    chessComPuzzlePassed: 0,
+    chessComPuzzleFailed: 0,
+    activityTimeSeconds: 0,
+  };
+}
+
 /** Rate limit veya geçici hata sonrası daha düşük sayıların iyi verinin üzerine yazılmasını önler. */
 export function mergePlatformDayStats(
-  prev: PlatformDayStats | undefined,
-  next: PlatformDayStats,
+  prevRaw: PlatformDayStats | undefined,
+  nextRaw: PlatformDayStats,
 ): PlatformDayStats {
+  // Gerçek dışı (all-time kirlenmesi) tarafların bulmaca katkısını at ki Math.max'a kilitlenmesin.
+  const prev = prevRaw && isImplausibleDayStats(prevRaw) ? dropPuzzleContribution(prevRaw) : prevRaw;
+  const next = isImplausibleDayStats(nextRaw) ? dropPuzzleContribution(nextRaw) : nextRaw;
+
   if (!prev) return { ...next };
 
-  const lichessGames = Math.max(prev.lichessGames, next.lichessGames);
-  const chessComGames = Math.max(prev.chessComGames, next.chessComGames);
-  const lichessPuzzles = Math.max(prev.lichessPuzzles, next.lichessPuzzles);
-  const chessComPuzzles = Math.max(prev.chessComPuzzles, next.chessComPuzzles);
-  const lichessPuzzlePassed = Math.max(prev.lichessPuzzlePassed, next.lichessPuzzlePassed);
-  const chessComPuzzlePassed = Math.max(prev.chessComPuzzlePassed, next.chessComPuzzlePassed);
-  const lichessPuzzleFailed = Math.max(prev.lichessPuzzleFailed, next.lichessPuzzleFailed);
-  const chessComPuzzleFailed = Math.max(prev.chessComPuzzleFailed, next.chessComPuzzleFailed);
+  // "Sadece o gün" politikası: taze (next) tarafta gerçek veri varsa (hata yok ve sayı>0)
+  // onu KULLAN — böylece eski şişik (all-time kirlenmesi) değer AŞAĞI düzeltilebilir.
+  // Taze taraf hatalı/boşsa eskiyi koru (geçmiş günün kaydı API'den yeniden çekilemez).
+  const chessFresh = !next.chessComError && (next.chessComPuzzles > 0 || next.chessComGames > 0);
+  const lichessFresh = !next.lichessError && (next.lichessPuzzles > 0 || next.lichessGames > 0);
 
-  const games = Math.max(prev.games, next.games, lichessGames + chessComGames);
-  const puzzleSolved = Math.max(prev.puzzleSolved, next.puzzleSolved, lichessPuzzles + chessComPuzzles);
-  const puzzlePassed = Math.max(prev.puzzlePassed, next.puzzlePassed, lichessPuzzlePassed + chessComPuzzlePassed);
-  const puzzleFailed = Math.max(prev.puzzleFailed, next.puzzleFailed, lichessPuzzleFailed + chessComPuzzleFailed);
+  const pick = (fresh: boolean, n: number, p: number) => (fresh ? n : Math.max(p, n));
+
+  const lichessGames = pick(lichessFresh, next.lichessGames, prev.lichessGames);
+  const chessComGames = pick(chessFresh, next.chessComGames, prev.chessComGames);
+  const lichessPuzzles = pick(lichessFresh, next.lichessPuzzles, prev.lichessPuzzles);
+  const chessComPuzzles = pick(chessFresh, next.chessComPuzzles, prev.chessComPuzzles);
+  const lichessPuzzlePassed = pick(lichessFresh, next.lichessPuzzlePassed, prev.lichessPuzzlePassed);
+  const chessComPuzzlePassed = pick(chessFresh, next.chessComPuzzlePassed, prev.chessComPuzzlePassed);
+  const lichessPuzzleFailed = pick(lichessFresh, next.lichessPuzzleFailed, prev.lichessPuzzleFailed);
+  const chessComPuzzleFailed = pick(chessFresh, next.chessComPuzzleFailed, prev.chessComPuzzleFailed);
+
+  // Toplamlar platform değerlerinden türetilir (eski birleşik değere kilitlenmez).
+  const games = lichessGames + chessComGames;
+  const puzzleSolved = lichessPuzzles + chessComPuzzles;
+  const puzzlePassed = lichessPuzzlePassed + chessComPuzzlePassed;
+  const puzzleFailed = lichessPuzzleFailed + chessComPuzzleFailed;
 
   const lichessKept = lichessGames > 0 || lichessPuzzles > 0;
   const chessKept = chessComGames > 0 || chessComPuzzles > 0;
-  const activityTimeSeconds = Math.max(
-    prev.activityTimeSeconds ?? 0,
-    next.activityTimeSeconds ?? 0,
-  );
+  // Süre: her iki platform da taze/hatasızsa taze süreyi kullan (22 saat gibi eski
+  // kirlenmeleri düzeltir); aksi halde en yüksek bilineni koru.
+  const bothTrusted = !next.chessComError && !next.lichessError && (chessFresh || lichessFresh);
+  const activityTimeSeconds = bothTrusted
+    ? (next.activityTimeSeconds ?? 0)
+    : Math.max(prev.activityTimeSeconds ?? 0, next.activityTimeSeconds ?? 0);
 
   return {
     games,
