@@ -33,6 +33,7 @@ const externalizeMjsPlugin = {
 
 const entries = [
   'lib/api-handlers/platform-week-stats.ts',
+  'lib/api-handlers/platform-day-sync.ts',
   'lib/api-handlers/external-game-snapshot.ts',
 ];
 

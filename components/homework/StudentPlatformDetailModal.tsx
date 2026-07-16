@@ -13,6 +13,8 @@ type Props = {
   viewDate: string;
   platformStats?: PlatformDayStats;
   onClose: () => void;
+  /** Detayda biriken canlı sayılar → üst listedeki gün kartını güncelle. */
+  onDiscoveredStats?: (stats: PlatformDayStats) => void;
 };
 
 export const StudentPlatformDetailModal: React.FC<Props> = ({
@@ -22,9 +24,20 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
   viewDate,
   platformStats,
   onClose,
+  onDiscoveredStats,
 }) => {
-  const [goalActivity, setGoalActivity] = useState<{ puzzleCorrect: number; puzzleWrong: number; games: number } | null>(null);
-  const handleGoalActivityChange = useCallback((data: { puzzleCorrect: number; puzzleWrong: number; games: number }) => {
+  const [goalActivity, setGoalActivity] = useState<{
+    puzzleCorrect: number;
+    puzzleWrong: number;
+    games: number;
+    activityTimeSeconds: number;
+  } | null>(null);
+  const handleGoalActivityChange = useCallback((data: {
+    puzzleCorrect: number;
+    puzzleWrong: number;
+    games: number;
+    activityTimeSeconds: number;
+  }) => {
     setGoalActivity(data);
   }, []);
 
@@ -32,17 +45,95 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
     setGoalActivity(null);
   }, [stat.studentId, viewDate]);
 
-  const games = goalActivity?.games ?? platformStats?.games ?? stat.todayGames ?? 0;
+  const games = Math.max(
+    goalActivity?.games ?? 0,
+    platformStats?.games ?? 0,
+    stat.todayGames ?? 0,
+  );
   const gameTarget = Math.max(0, stat.dailyGameTarget ?? homework.dailyGameTarget ?? 0);
   const puzzleTarget = Math.max(0, stat.dailyPuzzleTarget ?? homework.dailyPuzzleTarget ?? 0);
-  const puzzleCorrect = platformStats?.puzzlePassed ?? stat.correct;
-  const puzzleWrong = platformStats?.puzzleFailed ?? stat.wrong;
+  const puzzleCorrect = Math.max(
+    goalActivity?.puzzleCorrect ?? 0,
+    platformStats?.puzzlePassed ?? 0,
+    stat.correct ?? 0,
+  );
+  const puzzleWrong = Math.max(
+    goalActivity?.puzzleWrong ?? 0,
+    platformStats?.puzzleFailed ?? 0,
+    stat.wrong ?? 0,
+  );
   const dateLabel = new Date(`${viewDate}T12:00:00`).toLocaleDateString('tr-TR', {
     weekday: 'long',
     day: '2-digit',
     month: 'long',
     year: 'numeric',
   });
+  const platformTimeSec = Math.max(
+    goalActivity?.activityTimeSeconds ?? 0,
+    stat.timeSeconds ?? 0,
+    platformStats?.activityTimeSeconds ?? 0,
+  );
+
+  // Canlı detay → üst liste / DB (Chess.com son-25 penceresi düşmeden önce kilitle).
+  useEffect(() => {
+    if (!onDiscoveredStats || !goalActivity) return;
+    const puzzleSolved = puzzleCorrect + puzzleWrong;
+    if (puzzleSolved <= 0 && games <= 0 && platformTimeSec <= 0) return;
+
+    const prevSolved = platformStats?.puzzleSolved ?? 0;
+    const prevGames = platformStats?.games ?? 0;
+    const prevTime = platformStats?.activityTimeSeconds ?? 0;
+    // Yalnızca iyileşme varsa yaz — gereksiz patch döngüsünü kes.
+    if (
+      puzzleSolved <= prevSolved
+      && games <= prevGames
+      && platformTimeSec <= prevTime
+    ) {
+      return;
+    }
+
+    const lichessPuzzlePassed = platformStats?.lichessPuzzlePassed ?? 0;
+    const lichessPuzzleFailed = platformStats?.lichessPuzzleFailed ?? 0;
+    const lichessPuzzles = platformStats?.lichessPuzzles ?? (lichessPuzzlePassed + lichessPuzzleFailed);
+    const chessComPuzzlePassed = Math.max(
+      0,
+      puzzleCorrect - lichessPuzzlePassed,
+      platformStats?.chessComPuzzlePassed ?? 0,
+    );
+    const chessComPuzzleFailed = Math.max(
+      0,
+      puzzleWrong - lichessPuzzleFailed,
+      platformStats?.chessComPuzzleFailed ?? 0,
+    );
+    const chessComPuzzles = Math.max(
+      chessComPuzzlePassed + chessComPuzzleFailed,
+      platformStats?.chessComPuzzles ?? 0,
+    );
+
+    onDiscoveredStats({
+      games: Math.max(games, prevGames),
+      puzzleSolved: Math.max(puzzleSolved, prevSolved),
+      puzzlePassed: puzzleCorrect,
+      puzzleFailed: puzzleWrong,
+      lichessGames: platformStats?.lichessGames ?? 0,
+      lichessPuzzles,
+      lichessPuzzlePassed,
+      lichessPuzzleFailed,
+      chessComGames: Math.max(platformStats?.chessComGames ?? 0, games - (platformStats?.lichessGames ?? 0)),
+      chessComPuzzles,
+      chessComPuzzlePassed,
+      chessComPuzzleFailed,
+      ...(platformTimeSec > 0 ? { activityTimeSeconds: platformTimeSec } : {}),
+    });
+  }, [
+    goalActivity,
+    games,
+    puzzleCorrect,
+    puzzleWrong,
+    platformTimeSec,
+    platformStats,
+    onDiscoveredStats,
+  ]);
 
   return (
     <div className="modal-overlay z-50" onClick={onClose}>
@@ -85,7 +176,7 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
               { label: 'Bulmaca yanlış', value: puzzleWrong, color: 'text-rose-400' },
               {
                 label: 'Platform süresi',
-                value: stat.timeSeconds > 0 ? formatHomeworkDuration(stat.timeSeconds) : '—',
+                value: platformTimeSec > 0 ? formatHomeworkDuration(platformTimeSec) : '—',
                 color: 'text-slate-200',
               },
             ].map((item) => (

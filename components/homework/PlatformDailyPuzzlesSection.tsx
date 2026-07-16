@@ -34,6 +34,7 @@ import {
   type ChessComGame,
   type LichessGame,
 } from '../../services/chessPlatformService';
+import { chessComGameDurationSeconds, lichessGameDurationSeconds } from '../../lib/chesscomGameDuration';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
 import ChessComPuzzleViewerModal from '../ChessComPuzzleViewerModal';
@@ -465,20 +466,11 @@ function chessComPlayerRating(game: ChessComGame, username: string): number | un
 }
 
 function chessComGameDuration(game: ChessComGame): string {
-  if (!game.end_time || !game.pgn) return '—';
-  const startMatch = game.pgn.match(/\[UTCDate\s+"([^"]+)"\][\s\S]*?\[UTCTime\s+"([^"]+)"\]/i);
-  if (!startMatch) return '—';
-  try {
-    const startMs = Date.parse(`${startMatch[1].replace(/\./g, '-')}T${startMatch[2]}Z`);
-    const endMs = game.end_time * 1000;
-    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return '—';
-    const sec = Math.max(0, Math.round((endMs - startMs) / 1000));
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m}:${String(s).padStart(2, '0')}`;
-  } catch {
-    return '—';
-  }
+  const sec = chessComGameDurationSeconds(game);
+  if (sec <= 0) return '—';
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 type ChessComSingleMatchCardProps = {
@@ -634,6 +626,7 @@ type ChessComMatchGoalCardsProps = {
   viewDate: string;
   gameTarget: number;
   summaryGameCount?: number;
+  onGamesTimeSeconds?: (seconds: number) => void;
 };
 
 const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
@@ -641,6 +634,7 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
   viewDate,
   gameTarget,
   summaryGameCount = 0,
+  onGamesTimeSeconds,
 }) => {
   const [loading, setLoading] = useState(true);
   const [games, setGames] = useState<ChessComGame[]>([]);
@@ -651,6 +645,7 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
     setLoading(true);
     setLoadError(null);
     setGames([]);
+    onGamesTimeSeconds?.(0);
 
     fetchChessComGamesListForDay(username, viewDate)
       .then((fetched) => {
@@ -667,6 +662,8 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
           return;
         }
         setGames(picks);
+        const sec = picks.reduce((sum, g) => sum + chessComGameDurationSeconds(g), 0);
+        onGamesTimeSeconds?.(sec);
       })
       .catch(() => {
         if (!cancelled) setLoadError('Chess.com maçları alınamadı');
@@ -675,8 +672,11 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
         if (!cancelled) setLoading(false);
       });
 
-    return () => { cancelled = true; };
-  }, [username, viewDate, gameTarget, summaryGameCount]);
+    return () => {
+      cancelled = true;
+      onGamesTimeSeconds?.(0);
+    };
+  }, [username, viewDate, gameTarget, summaryGameCount, onGamesTimeSeconds]);
 
   if (loading) {
     return (
@@ -931,6 +931,7 @@ type LichessMatchCardProps = {
   gameGoalMet: boolean;
   /** Aktivite özetinden bilinen maç sayısı — liste API boş dönerse yedek kart */
   summaryGameCount?: number;
+  onGamesTimeSeconds?: (seconds: number) => void;
 };
 
 const LichessMatchSummaryCard: React.FC<{
@@ -982,6 +983,7 @@ const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
   gameTarget,
   gameGoalMet,
   summaryGameCount = 0,
+  onGamesTimeSeconds,
 }) => {
   const [loading, setLoading] = useState(true);
   const [games, setGames] = useState<LichessGame[]>([]);
@@ -992,6 +994,7 @@ const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
     setLoading(true);
     setLoadError(null);
     setGames([]);
+    onGamesTimeSeconds?.(0);
 
     fetchLichessGamesForDay(username, viewDate)
       .then((fetched) => {
@@ -1008,6 +1011,8 @@ const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
           return;
         }
         setGames(picks);
+        const sec = picks.reduce((sum, g) => sum + lichessGameDurationSeconds(g), 0);
+        onGamesTimeSeconds?.(sec);
       })
       .catch(() => {
         if (!cancelled) setLoadError('Lichess maçları alınamadı');
@@ -1016,8 +1021,11 @@ const LichessMatchGoalCards: React.FC<LichessMatchCardProps> = ({
         if (!cancelled) setLoading(false);
       });
 
-    return () => { cancelled = true; };
-  }, [username, viewDate, gameTarget, summaryGameCount]);
+    return () => {
+      cancelled = true;
+      onGamesTimeSeconds?.(0);
+    };
+  }, [username, viewDate, gameTarget, summaryGameCount, onGamesTimeSeconds]);
 
   if (loading) {
     return (
@@ -1068,7 +1076,12 @@ type Props = {
   platformStats?: PlatformDayStats;
   dailyPuzzleTarget?: number;
   dailyGameTarget?: number;
-  onGoalActivityChange?: (data: { puzzleCorrect: number; puzzleWrong: number; games: number }) => void;
+  onGoalActivityChange?: (data: {
+    puzzleCorrect: number;
+    puzzleWrong: number;
+    games: number;
+    activityTimeSeconds: number;
+  }) => void;
 };
 
 export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
@@ -1087,6 +1100,15 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
   const [lichessLoadError, setLichessLoadError] = useState<string | null>(null);
   const [viewerAttempt, setViewerAttempt] = useState<ChessComPuzzleAttempt | null>(null);
   const [platformFilter, setPlatformFilter] = useState<'all' | 'chesscom' | 'lichess'>('all');
+  const [chessComGamesTimeSec, setChessComGamesTimeSec] = useState(0);
+  const [lichessGamesTimeSec, setLichessGamesTimeSec] = useState(0);
+
+  const handleChessComGamesTime = useCallback((sec: number) => {
+    setChessComGamesTimeSec(Math.max(0, sec));
+  }, []);
+  const handleLichessGamesTime = useCallback((sec: number) => {
+    setLichessGamesTimeSec(Math.max(0, sec));
+  }, []);
 
   const lichessUsername = student.lichessUsername?.trim() || '';
   const chessComUsername = student.chessComUsername?.trim().toLowerCase() || '';
@@ -1102,6 +1124,8 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
     activityRef.current = emptyActivityRecords();
     setChessComRows([]);
     setLichessRows([]);
+    setChessComGamesTimeSec(0);
+    setLichessGamesTimeSec(0);
     const p = (async () => {
       const raw = student.id
         ? await loadPlatformDayActivity(student.id, viewDate)
@@ -1241,12 +1265,42 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
     const ccWrong = goalPuzzleRows.filter((r) => !r.attempt.passed).length;
     const lichessCorrect = lichessRows.filter((r) => r.attempt.win).length;
     const lichessWrong = lichessRows.filter((r) => !r.attempt.win).length;
+
+    // Kartlarda görünen sürelerin toplamı — önbellekteki şişik/eksik time_seconds yerine.
+    const listedPuzzleSec = goalPuzzleRows.reduce(
+      (sum, r) => sum + Math.max(0, r.attempt.myTimeSec ?? 0),
+      0,
+    );
+    const listedCount = goalPuzzleRows.length;
+    const totalPuzzleCount = Math.max(chessComPuzzles, listedCount);
+    // Listede süre yoksa veya daha az bulmaca varsa kalanlar için ~45 sn tahmin.
+    const avgListed = listedCount > 0
+      ? listedPuzzleSec / listedCount
+      : 45;
+    const chessComPuzzleSec = listedCount >= totalPuzzleCount && listedPuzzleSec > 0
+      ? listedPuzzleSec
+      : Math.round(Math.max(listedPuzzleSec, totalPuzzleCount * Math.max(avgListed, 20)));
+    const lichessPuzzleSec = Math.max(lichessPuzzles, lichessRows.length) * 45;
+    const activityTimeSeconds = Math.round(
+      chessComGamesTimeSec + lichessGamesTimeSec + chessComPuzzleSec + lichessPuzzleSec,
+    );
+
     onGoalActivityChange({
       puzzleCorrect: ccCorrect + lichessCorrect,
       puzzleWrong: ccWrong + lichessWrong,
       games: totalGames,
+      activityTimeSeconds,
     });
-  }, [goalPuzzleRows, lichessRows, totalGames, onGoalActivityChange]);
+  }, [
+    goalPuzzleRows,
+    lichessRows,
+    totalGames,
+    chessComPuzzles,
+    lichessPuzzles,
+    chessComGamesTimeSec,
+    lichessGamesTimeSec,
+    onGoalActivityChange,
+  ]);
 
   if (!lichessUsername && !chessComUsername) {
     return (
@@ -1399,6 +1453,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               gameTarget={Math.max(effectiveGameTarget, lichessGames)}
               gameGoalMet={gameGoalMet}
               summaryGameCount={lichessGames}
+              onGamesTimeSeconds={handleLichessGamesTime}
             />
           ) : null}
           {showChessCom && chessComUsername && chessComGames > 0 ? (
@@ -1407,6 +1462,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               viewDate={viewDate}
               gameTarget={Math.max(effectiveGameTarget, chessComGames)}
               summaryGameCount={chessComGames}
+              onGamesTimeSeconds={handleChessComGamesTime}
             />
           ) : null}
           {showLichess && lichessUsername && lichessGames === 0 && chessComGames === 0 && effectiveGameTarget > 0 ? (

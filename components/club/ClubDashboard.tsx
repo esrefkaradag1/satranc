@@ -29,6 +29,8 @@ import { DashboardHeroScene } from '../dashboard/DashboardHeroScene';
 import { QuickMenuButton, QuickStatCard } from '../dashboard/dashboardQuickUI';
 import type { Club, Coach, Student, Transaction } from '../../types';
 import { canShowStudentCounts } from '../../lib/studentCountVisibility';
+import { summarizeClubMonthDues } from '../../lib/duesCalendarUtils';
+import { istanbulDayKey } from '../../lib/homeworkDayUtils';
 
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 
@@ -55,7 +57,7 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
   onNavigate,
   canAccess,
 }) => {
-  const { homeworks, lessons, scopedTournaments, auth } = useApp();
+  const { homeworks, lessons, scopedTournaments, auth, scopedTrainingGroups, scopedDisciplineBranches } = useApp();
   const clubKey = normalizeClubKey(branch);
 
   const totalIncome = useMemo(
@@ -94,8 +96,8 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
   }, [transactions]);
 
   const financeKpis = useMemo(() => {
-    const now = new Date();
-    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    // İstanbul ayı — sunucu UTC olsa bile "bu ay" TR takvimine göre.
+    const thisMonth = istanbulDayKey().slice(0, 7);
     const thisMonthIncome = transactions
       .filter((t) => t.type === 'income' && t.date.startsWith(thisMonth))
       .reduce((sum, t) => sum + t.amount, 0);
@@ -112,9 +114,15 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
   const showStudentCounts = canShowStudentCounts(auth);
   const activeStudents = useMemo(() => students.filter((s) => s.status !== 'inactive').length, [students]);
   const groupCount = useMemo(() => new Set(students.map((s) => s.group).filter(Boolean)).size, [students]);
-  const paid = students.filter((s) => s.paymentStatus === 'Paid').length;
-  const unpaid = students.filter((s) => s.paymentStatus === 'Unpaid').length;
-  const partial = students.filter((s) => s.paymentStatus === 'Partial').length;
+
+  // paymentStatus stale olabilir; bu ay aidat takvimi + gerçek işlemlerle say.
+  const monthDues = useMemo(
+    () => summarizeClubMonthDues(students, transactions, scopedTrainingGroups, scopedDisciplineBranches),
+    [students, transactions, scopedTrainingGroups, scopedDisciplineBranches],
+  );
+  const paid = monthDues.paid;
+  const unpaid = monthDues.unpaid;
+  const partial = monthDues.partial;
 
   const clubHomeworks = useMemo(() => {
     const studentIds = new Set(students.map((s) => s.id));
@@ -469,7 +477,7 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
                     <MiniKpi label="Bu Ay Gelir" value={`₺${financeKpis.thisMonthIncome.toLocaleString('tr-TR')}`} tone="green" />
                     <MiniKpi label="Bu Ay Gider" value={`₺${financeKpis.thisMonthExpense.toLocaleString('tr-TR')}`} tone="red" />
                     <MiniKpi label="Aylık Net" value={`₺${financeKpis.thisMonthNet.toLocaleString('tr-TR')}`} tone={financeKpis.thisMonthNet >= 0 ? 'green' : 'red'} />
-                    <MiniKpi label="Kasa Bakiye" value={`₺${balance.toLocaleString('tr-TR')}`} tone={balance >= 0 ? 'green' : 'red'} />
+                    <MiniKpi label="Kasa Bakiye" value={`₺${balance.toLocaleString('tr-TR')}`} tone={balance >= 0 ? 'green' : 'red'} hint="tüm zamanlar" />
                   </>
                 ) : (
                   <>
@@ -477,8 +485,19 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
                     <MiniKpi label="Bugün Ders" value={`${todayLessons.length}`} tone="indigo" suffix="ders" />
                   </>
                 )}
-                <MiniKpi label="Ödedi" value={`${paid}`} tone="green" suffix="öğrenci" />
-                <MiniKpi label="Ödemedi" value={`${unpaid}`} tone="red" suffix="öğrenci" />
+                <MiniKpi
+                  label="Bu Ay Ödedi"
+                  value={`${paid}`}
+                  tone="green"
+                  suffix="öğrenci"
+                />
+                <MiniKpi
+                  label="Bu Ay Ödemedi"
+                  value={`${unpaid}`}
+                  tone="red"
+                  suffix="öğrenci"
+                  hint={partial > 0 ? `${partial} kısmi` : undefined}
+                />
               </div>
             </div>
 
@@ -682,16 +701,25 @@ const ClubActionButton: React.FC<{
   </button>
 );
 
-const MiniKpi: React.FC<{ label: string; value: string; tone: 'green' | 'red'; suffix?: string }> = ({
+const MiniKpi: React.FC<{
+  label: string;
+  value: string;
+  tone: 'green' | 'red' | 'indigo';
+  suffix?: string;
+  hint?: string;
+}> = ({
   label,
   value,
   tone,
   suffix,
+  hint,
 }) => {
   const toneClass =
     tone === 'green'
       ? 'text-emerald-300 border-emerald-500/20 bg-emerald-500/[0.06]'
-      : 'text-rose-300 border-rose-500/20 bg-rose-500/[0.06]';
+      : tone === 'indigo'
+        ? 'text-indigo-300 border-indigo-500/20 bg-indigo-500/[0.06]'
+        : 'text-rose-300 border-rose-500/20 bg-rose-500/[0.06]';
   return (
     <div className={`rounded-xl border px-3 py-3 ${toneClass}`}>
       <p className="text-[9px] uppercase tracking-widest opacity-70 font-semibold leading-tight">{label}</p>
@@ -699,6 +727,7 @@ const MiniKpi: React.FC<{ label: string; value: string; tone: 'green' | 'red'; s
         {value}
         {suffix && <span className="text-[9px] font-medium opacity-70 ml-1">{suffix}</span>}
       </p>
+      {hint ? <p className="text-[9px] opacity-60 mt-1 font-medium">{hint}</p> : null}
     </div>
   );
 };

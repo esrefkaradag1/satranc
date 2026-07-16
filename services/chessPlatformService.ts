@@ -7,10 +7,11 @@ import {
   parseChessComTactics2Puzzles,
   formatChessComApiError,
   dedupeChessComPuzzleAttempts,
+  parseChessComTacticsLifetimeFromTactics2Bundle,
   type ChessComPuzzleAttempt,
   type ChessComPuzzleTab,
 } from '../lib/chesscomPuzzleParse';
-import { timestampMatchesDay, localDayKeyFromMs } from '../lib/homeworkDayUtils';
+import { timestampMatchesDay, localDayKeyFromMs, istanbulDayKey } from '../lib/homeworkDayUtils';
 import {
   lichessGamesForDayFromActivity,
   lichessPuzzleStatsForDayFromActivity,
@@ -18,6 +19,15 @@ import {
   chessComPuzzleStatsForDay,
   uniqueYearMonths,
 } from '../lib/platformWeekStatsDerive';
+import {
+  chessComDailyStatsFromLifetimeTracker,
+  preferRicherChessComDayStats,
+  tacticsLifetimeFromMemberStats,
+} from '../lib/chesscomDailyTacticsTracker';
+import {
+  fetchChessComPuzzleDailyChart,
+  chessComPuzzleStatsFromDailyChart,
+} from '../lib/chesscomPuzzleDailyChart';
 
 export type { ChessComPuzzleAttempt, ChessComPuzzleTab };
 export { parseChessComTactics2Puzzles };
@@ -124,7 +134,7 @@ async function lichessApiFetch(
 
     const proxyUrl = lichessProxyUrl(apiPath, query);
     const res = await fetchWithTimeout(proxyUrl, init);
-    if (res.status === 429) markLichessRateLimited();
+    if (res.status === 429) markLichessRateLimited(res.headers.get('retry-after'));
     return res;
   });
 }
@@ -179,12 +189,13 @@ async function fetchChessComMonthGamesViaProxy(
     return [];
   }
 }
-const LICHESS_ACTIVITY_CACHE_TTL_MS = 5 * 60 * 1000;
-const LICHESS_ACTIVITY_RATE_LIMIT_MS = 5 * 60 * 1000;
-const LICHESS_USER_CACHE_TTL_MS = 30 * 60 * 1000;
+const LICHESS_ACTIVITY_CACHE_TTL_MS = 15 * 60 * 1000;
+const LICHESS_ACTIVITY_RATE_LIMIT_MS = 10 * 60 * 1000;
+const LICHESS_USER_CACHE_TTL_MS = 45 * 60 * 1000;
 /** Lichess public API — ardışık istekler arası minimum süre (429 önleme) */
-const LICHESS_MIN_REQUEST_GAP_MS = 2000;
-const LICHESS_GLOBAL_BACKOFF_MS = 60_000;
+const LICHESS_MIN_REQUEST_GAP_MS = 2500;
+const LICHESS_DEFAULT_BACKOFF_MS = 60_000;
+const LICHESS_MAX_BACKOFF_MS = 5 * 60_000;
 const CHESSCOM_API = CHESSCOM_DIRECT_API;
 
 let lichessRequestChain: Promise<unknown> = Promise.resolve();
@@ -193,6 +204,21 @@ let lichessGlobalBackoffUntil = 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(headerValue: string | null): number | null {
+  if (!headerValue?.trim()) return null;
+  const raw = headerValue.trim();
+  const asSeconds = Number(raw);
+  if (Number.isFinite(asSeconds) && asSeconds >= 0) {
+    return Math.min(LICHESS_MAX_BACKOFF_MS, Math.max(LICHESS_DEFAULT_BACKOFF_MS, Math.round(asSeconds * 1000)));
+  }
+  const when = Date.parse(raw);
+  if (Number.isFinite(when)) {
+    const delta = when - Date.now();
+    if (delta > 0) return Math.min(LICHESS_MAX_BACKOFF_MS, Math.max(LICHESS_DEFAULT_BACKOFF_MS, delta));
+  }
+  return null;
 }
 
 /** Tüm Lichess proxy isteklerini sıraya alır; Lichess rate limit (429) riskini azaltır. */
@@ -211,8 +237,10 @@ async function runLichessThrottled<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-function markLichessRateLimited(): void {
-  lichessGlobalBackoffUntil = Date.now() + LICHESS_GLOBAL_BACKOFF_MS;
+function markLichessRateLimited(retryAfterHeader?: string | null): void {
+  const fromHeader = parseRetryAfterMs(retryAfterHeader ?? null);
+  const wait = fromHeader ?? LICHESS_DEFAULT_BACKOFF_MS;
+  lichessGlobalBackoffUntil = Math.max(lichessGlobalBackoffUntil, Date.now() + wait);
 }
 
 export function isLichessGloballyRateLimited(): boolean {
@@ -506,7 +534,7 @@ export async function fetchLichessUser(username: string): Promise<LichessUserPro
       });
       const softlyRateLimited = res.headers.get('X-Lichess-Rate-Limited') === '1';
       if (res.status === 429 || softlyRateLimited) {
-        markLichessRateLimited();
+        markLichessRateLimited(res.headers.get('retry-after'));
         const fallback = cached?.profile ?? null;
         lichessUserCache.set(key, { fetchedAt: Date.now(), profile: fallback, rateLimited: true });
         return fallback;
@@ -1081,6 +1109,13 @@ export interface ChessComPuzzlesBundle {
   learning: ChessComPuzzleAttempt[];
   rush: ChessComPuzzleAttempt[];
   profileUrl?: string;
+  /** tactics2 statsInfo lifetime (günlük delta için; yoksa undefined). */
+  lifetime?: {
+    attemptCount: number;
+    passedCount: number;
+    failedCount: number;
+    totalSeconds: number;
+  } | null;
 }
 
 export interface ChessComPuzzlesBundleResult {
@@ -1112,12 +1147,16 @@ function parseChessComPuzzlesBundlePayload(
     attempts?: ChessComPuzzleAttempt[];
     recentRatedProblems?: unknown;
   };
+  const lifetime =
+    body.lifetime
+    ?? parseChessComTacticsLifetimeFromTactics2Bundle(data);
   if (Array.isArray(body.rated)) {
     return {
       rated: body.rated,
       learning: body.learning ?? [],
       rush: body.rush ?? [],
       profileUrl: body.profileUrl ?? profileUrl,
+      lifetime: lifetime ?? null,
     };
   }
   if (body.recentRatedProblems != null || (data as Record<string, unknown>).recentLearningProblems != null) {
@@ -1126,6 +1165,7 @@ function parseChessComPuzzlesBundlePayload(
       learning: parseChessComTactics2Puzzles(data, 'learning'),
       rush: parseChessComTactics2Puzzles(data, 'rush'),
       profileUrl: body.profileUrl ?? profileUrl,
+      lifetime: lifetime ?? null,
     };
   }
   return {
@@ -1133,6 +1173,7 @@ function parseChessComPuzzlesBundlePayload(
     learning: [],
     rush: [],
     profileUrl: body.profileUrl ?? profileUrl,
+    lifetime: lifetime ?? null,
   };
 }
 
@@ -1401,6 +1442,7 @@ export async function fetchLichessActivity(username: string): Promise<LichessAct
       );
       const softlyRateLimited = res.headers.get('X-Lichess-Rate-Limited') === '1';
       if (res.status === 429 || softlyRateLimited) {
+        markLichessRateLimited(res.headers.get('retry-after'));
         const fallback = cached?.data ?? [];
         lichessActivityCache.set(key, { fetchedAt: Date.now(), data: fallback, rateLimited: true });
         return fallback;
@@ -1576,7 +1618,8 @@ export async function fetchLichessDailyPuzzleStats(
 }
 
 /**
- * Chess.com tactics2 son bulmacalarından belirtilen güne ait denemeler (puanlı + özel + hücum).
+ * Chess.com günlük bulmaca: son liste + profil günlük grafiği (+ bugün için lifetime).
+ * Grafik endpoint'i geçmiş günleri (son 25 listesinden düşenler dahil) verir.
  */
 export async function fetchChessComDailyPuzzleStats(
   username: string,
@@ -1585,10 +1628,25 @@ export async function fetchChessComDailyPuzzleStats(
   const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return { count: 0, passed: 0, failed: 0 };
 
-  const bundle = await fetchChessComPuzzlesBundle(trimmed);
-  // Yalnızca O GÜNE tarihli gerçek denemeleri say. Lifetime farkı (all-time sayaç deltası)
-  // bozuk baz kaydında günün tamamı yerine tüm-zamanları yansıtabildiği için kullanılmıyor.
-  return chessComPuzzleStatsForDay(bundle?.rated ?? [], day);
+  const target = day.slice(0, 10);
+  const [bundle, chartByDay] = await Promise.all([
+    fetchChessComPuzzlesBundle(trimmed),
+    fetchChessComPuzzleDailyChart(trimmed),
+  ]);
+  let stats = preferRicherChessComDayStats(
+    chessComPuzzleStatsForDay(bundle?.rated ?? [], target),
+    chessComPuzzleStatsFromDailyChart(chartByDay, target),
+  );
+  if (target === istanbulDayKey()) {
+    const lifetime = tacticsLifetimeFromMemberStats(bundle?.lifetime ?? null);
+    if (lifetime) {
+      stats = preferRicherChessComDayStats(
+        stats,
+        chessComDailyStatsFromLifetimeTracker(trimmed, target, lifetime),
+      );
+    }
+  }
+  return stats;
 }
 
 /** Tek bulmaca bundle + aylık arşivle birden fazla günün Chess.com özeti */
@@ -1601,7 +1659,10 @@ export async function fetchChessComDaysStats(
   if (!trimmed) {
     return Object.fromEntries(uniqueDays.map((d) => [d, { games: 0, puzzles: { count: 0, passed: 0, failed: 0 } }]));
   }
-  const bundle = await fetchChessComPuzzlesBundle(trimmed);
+  const [bundle, chartByDay] = await Promise.all([
+    fetchChessComPuzzlesBundle(trimmed),
+    fetchChessComPuzzleDailyChart(trimmed),
+  ]);
   const rated = bundle?.rated ?? [];
   const monthGames = new Map<string, ChessComGame[]>();
   for (const { year, month } of uniqueYearMonths(uniqueDays)) {
@@ -1611,7 +1672,11 @@ export async function fetchChessComDaysStats(
   for (const day of uniqueDays) {
     const [year, month] = day.split('-');
     const games = chessComGamesForDay(monthGames.get(`${year}-${month}`) ?? [], trimmed, day);
-    out[day] = { games, puzzles: chessComPuzzleStatsForDay(rated, day) };
+    const puzzles = preferRicherChessComDayStats(
+      chessComPuzzleStatsForDay(rated, day),
+      chessComPuzzleStatsFromDailyChart(chartByDay, day),
+    );
+    out[day] = { games, puzzles };
   }
   return out;
 }

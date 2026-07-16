@@ -110,7 +110,10 @@ export function chessComGamesForDay(
     (g) =>
       chessComGameInvolvesUser(g, trimmed) &&
       g.end_time &&
-      localDayKeyFromMs(g.end_time * 1000) === target,
+      (
+        istanbulDayKey(new Date(g.end_time * 1000)) === target
+        || localDayKeyFromMs(g.end_time * 1000) === target
+      ),
   ).length;
 }
 

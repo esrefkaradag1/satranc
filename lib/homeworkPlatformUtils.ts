@@ -443,15 +443,10 @@ export async function fetchStudentPlatformActivityTimeSeconds(
       const rows = await fetchChessComPuzzlesForDay(chessComUsername, dayIso, {
         tabs: ['rated', 'learning', 'rush'],
       });
-      const listTime = rows.reduce((sum, row) => sum + Math.max(0, row.attempt.myTimeSec ?? 0), 0);
-      total += listTime;
-      if (listTime <= 0 && rows.length > 0) {
-        total += chessComPuzzleTimeEstimateForDay(
-          rows.map((r) => r.attempt),
-          dayIso,
-          rows.length,
-        );
-      }
+      const attempts = rows.map((r) => r.attempt);
+      const listTime = attempts.reduce((sum, a) => sum + Math.max(0, a.myTimeSec ?? 0), 0);
+      const estimated = chessComPuzzleTimeEstimateForDay(attempts, dayIso, attempts.length);
+      total += Math.max(listTime, estimated);
     } catch {
       /* platform süresi atlanır */
     }
@@ -533,24 +528,24 @@ export function mergePlatformDayStats(
 
   if (!prev) return { ...next };
 
-  // "Sadece o gün" politikası: taze (next) tarafta gerçek veri varsa (hata yok ve sayı>0)
-  // onu KULLAN — böylece eski şişik (all-time kirlenmesi) değer AŞAĞI düzeltilebilir.
-  // Taze taraf hatalı/boşsa eskiyi koru (geçmiş günün kaydı API'den yeniden çekilemez).
-  const chessFresh = !next.chessComError && (next.chessComPuzzles > 0 || next.chessComGames > 0);
-  const lichessFresh = !next.lichessError && (next.lichessPuzzles > 0 || next.lichessGames > 0);
+  // Maçlar: aylık arşiv güvenilir → hatasız çekimde taze değer.
+  const lichessGames = !next.lichessError
+    ? next.lichessGames
+    : Math.max(prev.lichessGames, next.lichessGames);
+  const chessComGames = !next.chessComError
+    ? next.chessComGames
+    : Math.max(prev.chessComGames, next.chessComGames);
 
-  const pick = (fresh: boolean, n: number, p: number) => (fresh ? n : Math.max(p, n));
+  // Bulmaca: Chess.com yalnızca son ~25 denemeyi döndürür; yeni günde eskiler listeden
+  // düşünce 0 gelir. Maç varken "taze" sayılıp geçmiş günün bulmacasını sıfırlamak YASAK —
+  // her zaman bilinen en zengin sayıyı koru.
+  const lichessPuzzles = Math.max(prev.lichessPuzzles, next.lichessPuzzles);
+  const chessComPuzzles = Math.max(prev.chessComPuzzles, next.chessComPuzzles);
+  const lichessPuzzlePassed = Math.max(prev.lichessPuzzlePassed, next.lichessPuzzlePassed);
+  const chessComPuzzlePassed = Math.max(prev.chessComPuzzlePassed, next.chessComPuzzlePassed);
+  const lichessPuzzleFailed = Math.max(prev.lichessPuzzleFailed, next.lichessPuzzleFailed);
+  const chessComPuzzleFailed = Math.max(prev.chessComPuzzleFailed, next.chessComPuzzleFailed);
 
-  const lichessGames = pick(lichessFresh, next.lichessGames, prev.lichessGames);
-  const chessComGames = pick(chessFresh, next.chessComGames, prev.chessComGames);
-  const lichessPuzzles = pick(lichessFresh, next.lichessPuzzles, prev.lichessPuzzles);
-  const chessComPuzzles = pick(chessFresh, next.chessComPuzzles, prev.chessComPuzzles);
-  const lichessPuzzlePassed = pick(lichessFresh, next.lichessPuzzlePassed, prev.lichessPuzzlePassed);
-  const chessComPuzzlePassed = pick(chessFresh, next.chessComPuzzlePassed, prev.chessComPuzzlePassed);
-  const lichessPuzzleFailed = pick(lichessFresh, next.lichessPuzzleFailed, prev.lichessPuzzleFailed);
-  const chessComPuzzleFailed = pick(chessFresh, next.chessComPuzzleFailed, prev.chessComPuzzleFailed);
-
-  // Toplamlar platform değerlerinden türetilir (eski birleşik değere kilitlenmez).
   const games = lichessGames + chessComGames;
   const puzzleSolved = lichessPuzzles + chessComPuzzles;
   const puzzlePassed = lichessPuzzlePassed + chessComPuzzlePassed;
@@ -558,12 +553,10 @@ export function mergePlatformDayStats(
 
   const lichessKept = lichessGames > 0 || lichessPuzzles > 0;
   const chessKept = chessComGames > 0 || chessComPuzzles > 0;
-  // Süre: her iki platform da taze/hatasızsa taze süreyi kullan (22 saat gibi eski
-  // kirlenmeleri düzeltir); aksi halde en yüksek bilineni koru.
-  const bothTrusted = !next.chessComError && !next.lichessError && (chessFresh || lichessFresh);
-  const activityTimeSeconds = bothTrusted
-    ? (next.activityTimeSeconds ?? 0)
-    : Math.max(prev.activityTimeSeconds ?? 0, next.activityTimeSeconds ?? 0);
+  const activityTimeSeconds = Math.max(
+    prev.activityTimeSeconds ?? 0,
+    next.activityTimeSeconds ?? 0,
+  );
 
   return {
     games,

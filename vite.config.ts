@@ -22,6 +22,7 @@ import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
 import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
 import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
 import { startTrainingNotifyScheduler, trainingNotifyHandler } from './lib/trainingWhatsAppNotify.mjs';
+import { runPlatformDaySync } from './lib/api-handlers/platform-day-sync';
 import platformWeekStatsHandler from './lib/api-handlers/platform-week-stats';
 import externalGameSnapshotHandler from './lib/api-handlers/external-game-snapshot';
 import chesscomPuzzleLatestHandler from './lib/api-handlers/chesscom-puzzle-latest';
@@ -70,13 +71,17 @@ const DEV_POST_ROUTES = new Set([
   '/api/lichess-oauth-disconnect',
   '/api/training-notify',
   '/api/platform-week-stats',
+  '/api/platform-day-sync',
+  '/api/nightly',
 ]);
 
 function devApiPlugin(env: Record<string, string>): Plugin {
   return {
     name: 'dev-api-routes',
     configureServer(server) {
-      startTrainingNotifyScheduler(env);
+      startTrainingNotifyScheduler(env, {
+        onNightly: () => runPlatformDaySync(env),
+      });
       server.middlewares.use((req, res, next) => {
         const fullUrl = req.url ?? '';
         const route = fullUrl.split('?')[0];
@@ -236,6 +241,20 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 });
                 await externalGameSnapshotHandler({ method: 'GET', query }, mockRes);
                 result = { status, body: payload };
+              } else if (route === '/api/platform-day-sync') {
+                syncSupabaseProcessEnv(env);
+                const syncResult = await runPlatformDaySync(env, {
+                  day: parsed.searchParams.get('day')?.slice(0, 10) || undefined,
+                });
+                result = { status: syncResult.ok ? 200 : 500, body: syncResult };
+              } else if (route === '/api/nightly') {
+                syncSupabaseProcessEnv(env);
+                const platform = await runPlatformDaySync(env);
+                const training = await trainingNotifyHandler({ mode: 'evening' }, env);
+                result = {
+                  status: 200,
+                  body: { ok: true, at: new Date().toISOString(), platform, training: training.body },
+                };
               } else {
                 const accept = req.headers.accept || 'application/json';
                 const softFail = parsed.searchParams.get('soft') === '1';
@@ -333,6 +352,20 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 };
                 await platformWeekStatsHandler({ method: 'POST', body }, mockRes);
                 result = { status, body: payload };
+              } else if (route === '/api/platform-day-sync') {
+                syncSupabaseProcessEnv(env);
+                const syncResult = await runPlatformDaySync(env, {
+                  day: typeof body.day === 'string' ? body.day.slice(0, 10) : undefined,
+                });
+                result = { status: syncResult.ok ? 200 : 500, body: syncResult };
+              } else if (route === '/api/nightly') {
+                syncSupabaseProcessEnv(env);
+                const platform = await runPlatformDaySync(env);
+                const training = await trainingNotifyHandler({ mode: 'evening' }, env);
+                result = {
+                  status: 200,
+                  body: { ok: true, at: new Date().toISOString(), platform, training: training.body },
+                };
               } else if (body.replace === true) {
                 result = await replaceSessionMediaViaEnv(body, env);
               } else {

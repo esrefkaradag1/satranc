@@ -118,3 +118,57 @@ export async function savePlatformDayActivity(
     console.warn('[PlatformActivityCache] save failed:', e);
   }
 }
+
+/** Kayıtlı bulmaca listelerinden günlük doğru/yanlış özeti. */
+export function puzzleStatsFromActivityRecords(records: PlatformDayActivityRecords): {
+  chessCom: { count: number; passed: number; failed: number };
+  lichess: { count: number; passed: number; failed: number };
+} {
+  const ccPassed = records.chessComPuzzles.filter((a) => a.passed).length;
+  const ccFailed = records.chessComPuzzles.length - ccPassed;
+  const liPassed = records.lichessPuzzles.filter((a) => a.win).length;
+  const liFailed = records.lichessPuzzles.length - liPassed;
+  return {
+    chessCom: { count: records.chessComPuzzles.length, passed: ccPassed, failed: ccFailed },
+    lichess: { count: records.lichessPuzzles.length, passed: liPassed, failed: liFailed },
+  };
+}
+
+/** Birden fazla öğrenci + gün için aktivite önbelleğini toplu yükler. */
+export async function loadPlatformDayActivityBatch(
+  studentIds: string[],
+  days: string[],
+): Promise<Record<string, Record<string, PlatformDayActivityRecords>>> {
+  const out: Record<string, Record<string, PlatformDayActivityRecords>> = {};
+  if (!isSupabaseBackend()) return out;
+  const ids = [...new Set(studentIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
+  const isoDays = [...new Set(days.map((d) => String(d ?? '').slice(0, 10)).filter(Boolean))];
+  if (ids.length === 0 || isoDays.length === 0) return out;
+
+  try {
+    const client = dbClient();
+    if (!client) return out;
+    const { data, error } = await client
+      .from(TABLE)
+      .select('student_id, day, records')
+      .in('student_id', ids)
+      .in('day', isoDays);
+    if (error) {
+      console.warn('[PlatformActivityCache] batch load error:', error.message);
+      return out;
+    }
+    for (const row of data ?? []) {
+      const sid = String((row as { student_id: string }).student_id);
+      const iso = String((row as { day: string }).day).slice(0, 10);
+      const r = (row as { records?: Partial<PlatformDayActivityRecords> }).records;
+      const records: PlatformDayActivityRecords = {
+        chessComPuzzles: Array.isArray(r?.chessComPuzzles) ? r.chessComPuzzles : [],
+        lichessPuzzles: Array.isArray(r?.lichessPuzzles) ? r.lichessPuzzles : [],
+      };
+      (out[sid] ??= {})[iso] = records;
+    }
+  } catch (e) {
+    console.warn('[PlatformActivityCache] batch load failed:', e);
+  }
+  return out;
+}

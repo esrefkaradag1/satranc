@@ -1,11 +1,15 @@
 /** Chess.com / Lichess oyun süresi — PGN saat etiketlerinden (paylaşımlı). */
 
 import type { ChessComGame, LichessGame } from '../services/chessPlatformService';
-import { localDayKeyFromMs } from './homeworkDayUtils';
+import { istanbulDayKey, localDayKeyFromMs } from './homeworkDayUtils';
+
+/** Tek maç için üst sınır (günlük/yazışmalı maçlarda haftalar süren wall-clock şişmesini keser). */
+const MAX_GAME_DURATION_SECONDS = 3 * 3600;
 
 function parseClockSeconds(raw: string | undefined): number | null {
   const value = String(raw ?? '').trim();
   if (!value) return null;
+  // "0:15:08.4" gibi ondalıklı saniyeleri kabul et
   const parts = value.split(':').map((part) => part.trim()).filter(Boolean);
   if (parts.length < 2 || parts.length > 3) return null;
   const nums = parts.map((part) => Number(part));
@@ -66,9 +70,31 @@ export function sumClockDurationsFromPgn(rawPgn: string | undefined, timeControl
   return total;
 }
 
+/**
+ * Maç süresi: PGN [%emt]/[%clk] düşünme süreleri; bunlar yoksa (özellikle Chess.com
+ * daily/yazışmalı maçlarda) kartlarda gösterilen wall-clock'a düş (UTCDate/UTCTime → end_time).
+ */
+export function chessComGameWallClockSeconds(game: ChessComGame): number {
+  if (!game.end_time || !game.pgn) return 0;
+  const startMatch = game.pgn.match(/\[UTCDate\s+"([^"]+)"\][\s\S]*?\[UTCTime\s+"([^"]+)"\]/i);
+  if (!startMatch) return 0;
+  try {
+    const startMs = Date.parse(`${startMatch[1].replace(/\./g, '-')}T${startMatch[2]}Z`);
+    const endMs = game.end_time * 1000;
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return 0;
+    return Math.max(0, Math.round((endMs - startMs) / 1000));
+  } catch {
+    return 0;
+  }
+}
+
 export function chessComGameDurationSeconds(game: ChessComGame): number {
   const headerTimeControl = game.pgn?.match(/\[TimeControl\s+"([^"]+)"\]/i)?.[1];
-  return sumClockDurationsFromPgn(game.pgn, headerTimeControl ?? game.time_control);
+  const fromClocks = sumClockDurationsFromPgn(game.pgn, headerTimeControl ?? game.time_control);
+  const wall = chessComGameWallClockSeconds(game);
+  // Kartlardaki "Süre" wall-clock; günlük maçlarda clk yok. İkisinin max'ı tüm günü kapsar.
+  const raw = Math.max(fromClocks, wall);
+  return Math.min(MAX_GAME_DURATION_SECONDS, Math.max(0, raw));
 }
 
 export function lichessGameDurationSeconds(game: LichessGame): number {
@@ -86,19 +112,24 @@ export function chessComGameInvolvesUser(game: ChessComGame, username: string): 
   return w === u || b === u;
 }
 
+function chessComGameOnDay(game: ChessComGame, dayIso: string): boolean {
+  if (!game.end_time) return false;
+  const ms = game.end_time * 1000;
+  const target = dayIso.slice(0, 10);
+  // Vercel UTC'de localDayKey günü kaydırabilir; önce İstanbul günü, sonra yerel/UTC.
+  return (
+    istanbulDayKey(new Date(ms)) === target
+    || localDayKeyFromMs(ms) === target
+  );
+}
+
 export function chessComGamesTimeSecondsForDay(
   monthGames: ChessComGame[],
   username: string,
   dayIso: string,
 ): number {
   const trimmed = username.trim().toLowerCase();
-  const target = dayIso.slice(0, 10);
   return monthGames
-    .filter(
-      (g) =>
-        chessComGameInvolvesUser(g, trimmed) &&
-        g.end_time &&
-        localDayKeyFromMs(g.end_time * 1000) === target,
-    )
+    .filter((g) => chessComGameInvolvesUser(g, trimmed) && chessComGameOnDay(g, dayIso))
     .reduce((sum, g) => sum + chessComGameDurationSeconds(g), 0);
 }

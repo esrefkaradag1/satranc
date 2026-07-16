@@ -69,6 +69,8 @@ import { puzzleBoardOrientationForFen, puzzleBoardOrientationForStudent, formatP
 
 /** Platform API otomatik kontrol aralığı (manuel yenileme sonrası / sekme açıkken) */
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
+/** Lichess rate-limit: gün içi otomatik poll kapalı; toplu çekim günde 1 kez ~23:00 cron ile. */
+const PLATFORM_AUTO_POLL_ENABLED = false;
 /** Çoklu öğrenci istemci yedeği: öğrenci başına tek batch (gün döngüsü yok) */
 const STUDENT_PLATFORM_GAP_MS = 350;
 
@@ -625,6 +627,9 @@ const Homework: React.FC = () => {
   }, [studentPlatformWeekStats]);
 
   useEffect(() => {
+    // Gün içi otomatik Lichess/Chess.com taraması kapalı — DB önbelleği + gece cron yeter.
+    // Koç "Yenile" ile elle tetikleyebilir.
+    if (!PLATFORM_AUTO_POLL_ENABLED) return;
     if (panelTab !== 'program' || programAnalysisView !== 'detail' || !programSelectedHw) return;
     void refreshDailyPlatformStats({ silent: true });
   }, [panelTab, programAnalysisView, programSelectedHw?.id, viewDate, refreshDailyPlatformStats]);
@@ -1099,11 +1104,13 @@ const Homework: React.FC = () => {
   }, [effectiveStats]);
 
   useEffect(() => {
+    if (!PLATFORM_AUTO_POLL_ENABLED) return;
     if (panelTab !== 'program' || programAnalysisView !== 'detail' || !programSelectedHw) return;
     void refreshProgramPlatformStats({ silent: true });
   }, [panelTab, programAnalysisView, programSelectedHw?.id, refreshProgramPlatformStats]);
 
   useEffect(() => {
+    if (!PLATFORM_AUTO_POLL_ENABLED) return;
     if (!dailyPlatformPollEnabledRef.current) return;
     if (!programSelectedHw || panelTab !== 'program' || programAnalysisView !== 'detail') return;
     const id = window.setInterval(() => {
@@ -1113,6 +1120,7 @@ const Homework: React.FC = () => {
   }, [panelTab, programAnalysisView, programSelectedHw, refreshDailyPlatformStats]);
 
   useEffect(() => {
+    if (!PLATFORM_AUTO_POLL_ENABLED) return;
     if (!programPlatformPollEnabledRef.current) return;
     if (panelTab !== 'program' || !programHomework) return;
     const id = window.setInterval(() => {
@@ -2342,6 +2350,22 @@ const Homework: React.FC = () => {
             viewDate={viewDate}
             platformStats={viewDatePlatformStats[liveProgramDetailStat.studentId]}
             onClose={() => setProgramDetailStat(null)}
+            onDiscoveredStats={(live) => {
+              const prev = studentPlatformWeekStatsRef.current[student.id]?.[viewDate];
+              const merged = mergePlatformDayStats(prev, live);
+              applyPlatformStatsPatch({ [student.id]: { [viewDate]: merged } });
+              const sec = merged.activityTimeSeconds ?? 0;
+              if (sec > 0) {
+                applyPlatformTimePatch({
+                  [student.id]: {
+                    [viewDate]: Math.max(
+                      studentPlatformWeekTimeSecondsRef.current[student.id]?.[viewDate] ?? 0,
+                      sec,
+                    ),
+                  },
+                });
+              }
+            }}
           />
         );
       })()}

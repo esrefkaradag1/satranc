@@ -11,7 +11,7 @@ import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentA
 import { apiLocalAuthParentLogin } from './services/backendApi';
 import { findClubForLogin } from './lib/clubLoginUtils';
 import { createStudentLoginCredentials } from './lib/studentCredentials';
-import { lessonLogEntriesMaxTs } from './lib/lessonLogUtils';
+import { sortLessonLogEntries } from './lib/lessonLogUtils';
 import {
   type BranchOfficeRecord,
   branchOfficeToDb,
@@ -377,11 +377,70 @@ function restoreStudentLoginColumnsInSchema() {
 const LESSON_LOG_STORAGE_KEY = 'netchess_lesson_logs';
 const GROUP_LESSON_LOG_STORAGE_KEY = 'netchess_group_lesson_logs';
 const GROUP_LESSON_LOG_UPDATED_KEY = 'netchess_group_lesson_logs_updated';
+// Silinen kayıtların izi (id -> silinme zamanı ISO). Silme senkronizasyonu için:
+// bayat bir istemci eski listeyi geri yazsa bile burada izi olan kayıt tekrar getirilmez.
+const GROUP_LESSON_LOG_DELETED_KEY = 'netchess_group_lesson_logs_deleted';
 
 type GroupLessonLogDbBundle = {
   entries: StudentLessonLogEntry[];
   updatedAt: string | null;
+  deletedIds: Record<string, string>;
 };
+
+function loadGroupLessonLogsDeletedMap(): Record<string, Record<string, string>> {
+  try {
+    const raw = localStorage.getItem(GROUP_LESSON_LOG_DELETED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, Record<string, string>> = {};
+    for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        const inner: Record<string, string> = {};
+        for (const [id, ts] of Object.entries(val as Record<string, unknown>)) {
+          if (typeof ts === 'string' && ts.trim()) inner[id] = ts;
+        }
+        out[key] = inner;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function parseDeletedIds(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [id, ts] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof ts === 'string' && ts.trim()) out[id] = ts;
+  }
+  return out;
+}
+
+/** İki silme-izi haritasını birleştirir; aynı id için en yeni silinme zamanı kalır. */
+function mergeTombstones(
+  a: Record<string, string>,
+  b: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = { ...a };
+  for (const [id, ts] of Object.entries(b)) {
+    const prev = out[id];
+    if (!prev || Date.parse(ts) > Date.parse(prev)) out[id] = ts;
+  }
+  return out;
+}
+
+function persistGroupLessonLogDeletedLocal(
+  groupKey: string,
+  deletedIds: Record<string, string>,
+) {
+  const map = loadGroupLessonLogsDeletedMap();
+  map[groupKey] = deletedIds;
+  try {
+    localStorage.setItem(GROUP_LESSON_LOG_DELETED_KEY, JSON.stringify(map));
+  } catch { /* quota */ }
+}
 
 function loadGroupLessonLogsMap(): Record<string, StudentLessonLogEntry[]> {
   try {
@@ -430,15 +489,6 @@ function persistGroupLessonLogLocal(
   } catch { /* quota */ }
 }
 
-function groupLessonLogBundleTs(
-  entries: StudentLessonLogEntry[],
-  updatedAt: string | null | undefined,
-): number {
-  const metaTs = Date.parse(updatedAt ?? '');
-  if (Number.isFinite(metaTs) && metaTs > 0) return metaTs;
-  return lessonLogEntriesMaxTs(entries);
-}
-
 function ensureGroupLessonLogsUpdatedMeta(
   entries: Record<string, StudentLessonLogEntry[]>,
   meta: Record<string, string>,
@@ -460,37 +510,59 @@ function ensureGroupLessonLogsUpdatedMeta(
   return next;
 }
 
-function resolveLocalGroupLessonTs(
-  key: string,
-  local: StudentLessonLogEntry[],
-  localEntries: Record<string, StudentLessonLogEntry[]>,
-  localUpdated: Record<string, string>,
-): number {
-  const metaTs = Date.parse(localUpdated[key] ?? '');
-  if (Number.isFinite(metaTs) && metaTs > 0) return metaTs;
-  if (Object.prototype.hasOwnProperty.call(localEntries, key)) {
-    // Yerel kayıt var; konu tarihleri DB updated_at ile yarışamaz
-    return lessonLogEntriesMaxTs(local) + 86_400_000;
-  }
-  return lessonLogEntriesMaxTs(local);
+function entryTs(e: StudentLessonLogEntry): number {
+  return Date.parse(e.updatedAt ?? e.createdAt ?? '') || 0;
 }
+
+/**
+ * Grup ders konularını KAYIT BAZINDA birleştirir:
+ *  - local + DB kayıtları id'ye göre birleşir; aynı id için en yeni sürüm kalır.
+ *  - Silme izleri (tombstone) birleşir; izi olan ve izden daha yeni olmayan kayıt elenir.
+ * Böylece bir kayıt bir cihazda silindiğinde, başka bir cihaz eski listeyi geri
+ * yazsa dahi silinen kayıt geri gelmez.
+ */
+function mergeGroupLessonEntries(
+  localEntries: StudentLessonLogEntry[],
+  dbEntries: StudentLessonLogEntry[],
+  tombstones: Record<string, string>,
+): StudentLessonLogEntry[] {
+  const byId = new Map<string, StudentLessonLogEntry>();
+  for (const e of [...dbEntries, ...localEntries]) {
+    if (!e || !e.id) continue;
+    const prev = byId.get(e.id);
+    if (!prev || entryTs(e) >= entryTs(prev)) byId.set(e.id, e);
+  }
+  const result: StudentLessonLogEntry[] = [];
+  for (const e of byId.values()) {
+    const deletedAt = tombstones[e.id];
+    if (deletedAt && Date.parse(deletedAt) >= entryTs(e)) continue;
+    result.push(e);
+  }
+  return sortLessonLogEntries(result);
+}
+
+type MergedGroupBundle = {
+  entries: Record<string, StudentLessonLogEntry[]>;
+  deleted: Record<string, Record<string, string>>;
+};
 
 function mergeGroupLessonLogsMaps(
   localEntries: Record<string, StudentLessonLogEntry[]>,
-  localUpdated: Record<string, string>,
+  localDeleted: Record<string, Record<string, string>>,
   fromDb: Record<string, GroupLessonLogDbBundle>,
-): Record<string, StudentLessonLogEntry[]> {
+): MergedGroupBundle {
   const keys = new Set([...Object.keys(localEntries), ...Object.keys(fromDb)]);
-  const out: Record<string, StudentLessonLogEntry[]> = {};
+  const entries: Record<string, StudentLessonLogEntry[]> = {};
+  const deleted: Record<string, Record<string, string>> = {};
   for (const key of keys) {
     const local = localEntries[key] ?? [];
     const dbBundle = fromDb[key];
     const db = dbBundle?.entries ?? [];
-    const localTs = resolveLocalGroupLessonTs(key, local, localEntries, localUpdated);
-    const dbTs = groupLessonLogBundleTs(db, dbBundle?.updatedAt ?? null);
-    out[key] = localTs >= dbTs ? local : db;
+    const tomb = mergeTombstones(localDeleted[key] ?? {}, dbBundle?.deletedIds ?? {});
+    deleted[key] = tomb;
+    entries[key] = mergeGroupLessonEntries(local, db, tomb);
   }
-  return out;
+  return { entries, deleted };
 }
 
 function groupLessonLogsFromDbRows(rows: Record<string, unknown>[]): Record<string, GroupLessonLogDbBundle> {
@@ -501,6 +573,7 @@ function groupLessonLogsFromDbRows(rows: Record<string, unknown>[]): Record<stri
     out[name] = {
       entries: parseLessonLogFromDb(row.entries),
       updatedAt: row.updated_at != null ? String(row.updated_at) : null,
+      deletedIds: parseDeletedIds(row.deleted_ids),
     };
   }
   return out;
@@ -521,7 +594,8 @@ async function loadGroupLessonLogsFromSupabase(
   sb: NonNullable<ReturnType<typeof getServiceSupabase>> | typeof supabase,
 ): Promise<Record<string, GroupLessonLogDbBundle>> {
   try {
-    const { data, error } = await sb.from('group_lesson_logs').select('group_name, entries, updated_at');
+    // '*' seçiyoruz ki deleted_ids kolonu henüz eklenmemiş şemalarda da hata vermesin.
+    const { data, error } = await sb.from('group_lesson_logs').select('*');
     if (error) {
       if (!isMissingSupabaseTableError(error)) {
         console.warn('[Supabase] group_lesson_logs yükleme:', error.message);
@@ -539,25 +613,48 @@ function applyGroupLessonLogsMerge(
   fromDb: Record<string, GroupLessonLogDbBundle>,
 ): Record<string, StudentLessonLogEntry[]> {
   const localEntries = loadGroupLessonLogsMap();
-  const localUpdated = ensureGroupLessonLogsUpdatedMeta(localEntries, loadGroupLessonLogsUpdatedMap());
-  const merged = mergeGroupLessonLogsMaps(localEntries, localUpdated, fromDb);
-  const nextMeta: Record<string, string> = { ...localUpdated };
-  for (const key of new Set([...Object.keys(merged), ...Object.keys(fromDb)])) {
-    const local = localEntries[key] ?? [];
-    const dbBundle = fromDb[key];
-    const db = dbBundle?.entries ?? [];
-    const localTs = resolveLocalGroupLessonTs(key, local, localEntries, localUpdated);
-    const dbTs = groupLessonLogBundleTs(db, dbBundle?.updatedAt ?? null);
-    nextMeta[key] =
-      localTs >= dbTs
-        ? (localUpdated[key] ?? new Date().toISOString())
-        : (dbBundle?.updatedAt ?? new Date().toISOString());
+  const localDeleted = loadGroupLessonLogsDeletedMap();
+  const { entries: merged, deleted } = mergeGroupLessonLogsMaps(localEntries, localDeleted, fromDb);
+  const nextMeta: Record<string, string> = { ...loadGroupLessonLogsUpdatedMap() };
+  const now = new Date().toISOString();
+  for (const key of Object.keys(merged)) {
+    if (!nextMeta[key]) nextMeta[key] = now;
   }
   try {
     localStorage.setItem(GROUP_LESSON_LOG_STORAGE_KEY, JSON.stringify(merged));
     localStorage.setItem(GROUP_LESSON_LOG_UPDATED_KEY, JSON.stringify(nextMeta));
+    localStorage.setItem(GROUP_LESSON_LOG_DELETED_KEY, JSON.stringify(deleted));
   } catch { /* quota */ }
   return merged;
+}
+
+/**
+ * group_lesson_logs satırını yazar. deleted_ids kolonu (silme izleri) eski şemalarda
+ * bulunmayabilir; o durumda kolonsuz tekrar dener. deletedColumnMissing=true ise
+ * çağıran tarafa "SQL migration'ı çalıştır" uyarısı vermesi bildirilir.
+ */
+async function upsertGroupLessonLogRow(
+  sb: NonNullable<ReturnType<typeof getServiceSupabase>> | typeof supabase,
+  key: string,
+  entries: StudentLessonLogEntry[],
+  updatedAt: string,
+  deletedIds: Record<string, string>,
+): Promise<{ error: { code?: string; message?: string } | null; deletedColumnMissing: boolean }> {
+  const first = await sb.from('group_lesson_logs').upsert(
+    { group_name: key, entries, updated_at: updatedAt, deleted_ids: deletedIds },
+    { onConflict: 'group_name' },
+  );
+  if (!first.error) return { error: null, deletedColumnMissing: false };
+  // Tablo VEYA deleted_ids kolonu eksik olabilir; kolonsuz tekrar dene.
+  if (isMissingSupabaseTableError(first.error)) {
+    const retry = await sb.from('group_lesson_logs').upsert(
+      { group_name: key, entries, updated_at: updatedAt },
+      { onConflict: 'group_name' },
+    );
+    if (!retry.error) return { error: null, deletedColumnMissing: true };
+    return { error: retry.error, deletedColumnMissing: false };
+  }
+  return { error: first.error, deletedColumnMissing: false };
 }
 
 async function migrateLocalGroupLessonLogsToSupabase(
@@ -566,19 +663,13 @@ async function migrateLocalGroupLessonLogsToSupabase(
 ): Promise<void> {
   const local = loadGroupLessonLogsMap();
   const localUpdated = loadGroupLessonLogsUpdatedMap();
+  const localDeleted = loadGroupLessonLogsDeletedMap();
   const keys = Object.keys(local).filter((k) => Object.prototype.hasOwnProperty.call(local, k));
   if (keys.length === 0) return;
   for (const key of keys) {
     const entries = merged[key] ?? local[key] ?? [];
     const updatedAt = localUpdated[key] ?? new Date().toISOString();
-    const { error } = await sb.from('group_lesson_logs').upsert(
-      {
-        group_name: key,
-        entries,
-        updated_at: updatedAt,
-      },
-      { onConflict: 'group_name' },
-    );
+    const { error } = await upsertGroupLessonLogRow(sb, key, entries, updatedAt, localDeleted[key] ?? {});
     if (error) {
       if (isMissingSupabaseTableError(error)) return;
       console.warn('[Supabase] group_lesson_logs migrate:', key, error.message);
@@ -4233,19 +4324,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const key = groupKey.trim();
     if (!key) return;
     const updatedAt = new Date().toISOString();
+
+    // Silinen kayıtların ID'lerini tespit edip "silme izi" (tombstone) olarak işaretle.
+    // Böylece bayat bir istemci eski listeyi geri yazsa dahi kayıt tekrar getirilmez.
+    const prevEntries = loadGroupLessonLogsMap()[key] ?? [];
+    const nextIds = new Set(entries.map((e) => e.id).filter(Boolean));
+    const removedIds = prevEntries.filter((e) => e.id && !nextIds.has(e.id)).map((e) => e.id);
+    const deletedIds = { ...(loadGroupLessonLogsDeletedMap()[key] ?? {}) };
+    for (const id of removedIds) deletedIds[id] = updatedAt;
+    for (const id of nextIds) delete deletedIds[id];
+
     setGroupLessonLogs((prev) => ({ ...prev, [key]: entries }));
     persistGroupLessonLogLocal(key, entries, updatedAt);
+    persistGroupLessonLogDeletedLocal(key, deletedIds);
 
     const sb = getServiceSupabase() ?? supabase;
     if (isSupabaseBackend()) {
-      const { error } = await sb.from('group_lesson_logs').upsert(
-        {
-          group_name: key,
-          entries,
-          updated_at: updatedAt,
-        },
-        { onConflict: 'group_name' },
-      );
+      const { error, deletedColumnMissing } = await upsertGroupLessonLogRow(sb, key, entries, updatedAt, deletedIds);
       if (error) {
         if (isMissingSupabaseTableError(error)) {
           showToast(
@@ -4256,6 +4351,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           console.error('[Supabase] group_lesson_logs upsert:', error.message);
           showToast('Grup konuları cihazda saklandı; sunucuya yazılamadı.', 'warning');
         }
+        return;
+      }
+      if (deletedColumnMissing) {
+        showToast(
+          'Kaydedildi. Silmelerin kalıcı olması için supabase_group_lesson_logs.sql dosyasını çalıştırın (deleted_ids kolonu eksik).',
+          'warning',
+        );
         return;
       }
     }

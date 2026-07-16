@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { canShowStudentCounts } from '../lib/studentCountVisibility';
+import { useCanShowStudentCounts } from './ui/StudentCountText';
 import { filterStudentsByClub } from '../lib/clubScope';
 import type { Tournament, TournamentPairing, TournamentStanding, Student } from '../types';
 
@@ -299,6 +300,7 @@ interface ViewerProps {
 }
 
 const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBack, onUpdate, recalc }) => {
+  const showStudentCounts = useCanShowStudentCounts();
   const standings = useMemo(() => t.standings ?? recalc(t), [t, recalc]);
   const ranking = useMemo(() => {
     return (t.participantIds ?? [])

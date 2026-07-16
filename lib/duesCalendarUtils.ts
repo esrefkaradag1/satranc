@@ -1,10 +1,11 @@
-import type { DisciplineBranch, Student, TrainingGroup } from '../types';
+import type { DisciplineBranch, Student, TrainingGroup, Transaction } from '../types';
 import {
   getExpectedDueForMonth,
   getExpectedDuesForYear,
   isMonthBeforeRegistration,
   isMonthDuesWaived,
 } from './trainingGroupUtils';
+import { filterDuesTransactions } from './transactionUtils';
 
 export const MONTHS_TR = [
   'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
@@ -194,4 +195,105 @@ export function computeDuesFinanceSummary(
     unpaidMonths,
     waitingMonths,
   };
+}
+
+/** Belirli yıl için öğrenci aidat tahsilatlarını aya göre toplar (Aidat kategorisi). */
+export function duesPaidByMonthForYear(
+  transactions: Transaction[],
+  studentId: string,
+  calendarYear: number,
+): Record<number, number> {
+  const yearStr = String(calendarYear);
+  const map: Record<number, number> = {};
+  for (let m = 1; m <= 12; m++) map[m] = 0;
+  filterDuesTransactions(transactions, studentId).forEach((t) => {
+    const d = t.date || '';
+    if (d.slice(0, 4) !== yearStr) return;
+    const monthNum = parseInt(d.slice(5, 7), 10);
+    if (monthNum >= 1 && monthNum <= 12) {
+      map[monthNum] = (map[monthNum] || 0) + (t.amount || 0);
+    }
+  });
+  return map;
+}
+
+export type ClubMonthDuesSummary = {
+  /** Bu ay aidatı tam ödenen (+ burslu) aktif öğrenci */
+  paid: number;
+  /** Bu ay borçlu veya kısmi ödemiş aktif öğrenci */
+  unpaid: number;
+  /** Kısmi ödeme yapanlar (unpaid içinde de sayılır) */
+  partial: number;
+  /** Paket / kayıt öncesi / muaf / gelecek ay — aylık aidat sayılmayan */
+  excluded: number;
+  /** Bu ay aidat tahsilatı (₺) */
+  collectedDues: number;
+  /** Bu ay beklenen aidat (₺) — aidatı olan öğrenciler */
+  expectedDues: number;
+};
+
+/**
+ * Kulüp dashboard "Ödedi / Ödemedi" sayıları.
+ * Öğrenci.paymentStatus güncel olmayabildiği için gerçek aidat işlemleri +
+ * beklenen ücret üzerinden (aidat takvimiyle aynı mantık) hesaplanır.
+ */
+export function summarizeClubMonthDues(
+  students: Student[],
+  transactions: Transaction[],
+  trainingGroups: TrainingGroup[],
+  disciplineBranches: DisciplineBranch[],
+  ref = new Date(),
+): ClubMonthDuesSummary {
+  const year = ref.getFullYear();
+  const month = ref.getMonth() + 1;
+
+  let paid = 0;
+  let unpaid = 0;
+  let partial = 0;
+  let excluded = 0;
+  let collectedDues = 0;
+  let expectedDues = 0;
+
+  for (const student of students) {
+    if (student.status === 'inactive') continue;
+
+    const paidAmt = duesPaidByMonthForYear(transactions, student.id, year)[month] ?? 0;
+    const cell = getDuesMonthCell(
+      student,
+      year,
+      month,
+      paidAmt,
+      trainingGroups,
+      disciplineBranches,
+    );
+
+    if (cell.inactive || cell.state === 'Paket' || cell.state === 'Bekliyor') {
+      excluded += 1;
+      continue;
+    }
+
+    const dueInfo = getExpectedDueForMonth(student, year, month, trainingGroups, disciplineBranches);
+    if (cell.state === 'Burslu') {
+      paid += 1;
+      continue;
+    }
+    if (cell.state === 'Ödendi') {
+      paid += 1;
+      collectedDues += paidAmt;
+      expectedDues += dueInfo.expected;
+      continue;
+    }
+    if (cell.state === 'Kısmi') {
+      partial += 1;
+      unpaid += 1;
+      collectedDues += paidAmt;
+      expectedDues += dueInfo.expected;
+      continue;
+    }
+    // Ödenmedi
+    unpaid += 1;
+    expectedDues += dueInfo.expected;
+  }
+
+  return { paid, unpaid, partial, excluded, collectedDues, expectedDues };
 }

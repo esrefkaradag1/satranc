@@ -171,11 +171,20 @@ export default async function handler(req: Req, res: Res) {
     const rated = parseTactics2Puzzles(data, 'rated');
     const learning = parseTactics2Puzzles(data, 'learning');
     const rush = parseTactics2Puzzles(data, 'rush');
+    const statsInfo = (data as { statsInfo?: { stats?: Record<string, unknown> } })?.statsInfo?.stats;
+    const lifetime = statsInfo && (statsInfo.attempt_count !== undefined || statsInfo.passed_count !== undefined)
+      ? {
+          attemptCount: Number(statsInfo.attempt_count ?? 0) || 0,
+          passedCount: Number(statsInfo.passed_count ?? 0) || 0,
+          failedCount: Number(statsInfo.failed_count ?? 0) || 0,
+          totalSeconds: Number(statsInfo.total_seconds ?? 0) || 0,
+        }
+      : null;
 
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
 
     if (type === 'all') {
-      const body = { rated, learning, rush, profileUrl };
+      const body = { rated, learning, rush, lifetime, profileUrl };
       responseCache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, body });
       res.status(200).json(body);
       return;
@@ -185,6 +194,7 @@ export default async function handler(req: Req, res: Res) {
 
     const body = {
       attempts,
+      lifetime,
       unavailable: attempts.length === 0,
       profileUrl,
     };

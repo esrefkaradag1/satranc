@@ -564,6 +564,24 @@ export async function dispatchApi(req, res, url) {
       await runGeneratedHandler('platform-week-stats', { method: 'POST', body }, res);
       return true;
     }
+    if (path === '/api/platform-day-sync' && (req.method === 'GET' || req.method === 'POST')) {
+      const body = req.method === 'POST' ? await readJsonBody(req) : {};
+      const query = {};
+      url.searchParams.forEach((value, key) => { query[key] = value; });
+      await runGeneratedHandler('platform-day-sync', { method: req.method, body, query, headers: req.headers }, res);
+      return true;
+    }
+    if (path === '/api/nightly' && (req.method === 'GET' || req.method === 'POST')) {
+      try {
+        const { runPlatformDaySync } = await import('./generated/platform-day-sync.mjs');
+        const platform = await runPlatformDaySync(process.env);
+        const training = await trainingNotifyHandler({ mode: 'evening' }, process.env);
+        sendJson(res, 200, { ok: true, at: new Date().toISOString(), platform, training: training.body });
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'Sunucu hatası' });
+      }
+      return true;
+    }
     if (path === '/api/external-game-snapshot' && req.method === 'GET') {
       const query = {};
       url.searchParams.forEach((value, key) => { query[key] = value; });
@@ -650,6 +668,11 @@ if (isMain) {
   });
   server.listen(PORT, HOST, () => {
     console.log(`[docker-api] listening on http://${HOST}:${PORT}`);
-    startTrainingNotifyScheduler(process.env);
+    startTrainingNotifyScheduler(process.env, {
+      onNightly: async () => {
+        const mod = await import('./generated/platform-day-sync.mjs');
+        return mod.runPlatformDaySync(process.env);
+      },
+    });
   });
 }
