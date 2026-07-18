@@ -18,3 +18,13 @@ export function filterDuesTransactions(
     return isDuesPaymentTransaction(t);
   });
 }
+
+export function isPersonalCashTransaction(t: Pick<Transaction, 'personalCash'>): boolean {
+  return !!t.personalCash;
+}
+
+/** Genel kasa (toplam gelir/gider/bakiye) kartlarına dahil mi? */
+export function countsTowardGeneralCash(t: Pick<Transaction, 'personalCash' | 'includeInGeneralCash'>): boolean {
+  if (!t.personalCash) return true;
+  return !!t.includeInGeneralCash;
+}

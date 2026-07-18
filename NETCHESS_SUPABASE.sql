@@ -319,6 +319,8 @@ ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS processed_by text;
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS student_id text;
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS branch text;
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS total_amount numeric;
+ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS personal_cash boolean DEFAULT false;
+ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS include_in_general_cash boolean DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS public.gallery (
   id text PRIMARY KEY,

@@ -1,12 +1,12 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { Wallet, TrendingUp, TrendingDown, Landmark, Search, Plus, Filter, Download, X, Edit2, Trash2 } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, Landmark, Search, Plus, Filter, Download, X, Edit2, Trash2, Lock } from 'lucide-react';
 import { useApp } from '../AppContext';
 import type { Transaction } from '../types';
 import { DATE_INPUT_MAX, DATE_INPUT_MIN, normalizeDateInputYear } from '../lib/dateInputUtils';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { isPackageSaleCategory } from '../lib/salePaymentUtils';
-import { isDuesPaymentTransaction } from '../lib/transactionUtils';
+import { countsTowardGeneralCash, isDuesPaymentTransaction, isPersonalCashTransaction } from '../lib/transactionUtils';
 import SalePaymentCell from './SalePaymentCell';
 
 const CATEGORY_PRESETS = ['Aidat', 'Özel Ders', 'Paket', 'Kira', 'Malzeme', 'Diğer'] as const;
@@ -32,6 +32,8 @@ const Finance: React.FC = () => {
   const [editTxnDescription, setEditTxnDescription] = useState('');
   const [editTxnCategory, setEditTxnCategory] = useState('Aidat');
   const [editTxnStudentId, setEditTxnStudentId] = useState('');
+  const [editTxnPersonalCash, setEditTxnPersonalCash] = useState(false);
+  const [editTxnIncludeInGeneral, setEditTxnIncludeInGeneral] = useState(false);
 
   const [formData, setFormData] = useState({
     studentId: '',
@@ -43,6 +45,8 @@ const Finance: React.FC = () => {
     description: '',
     paymentType: 'Nakit' as 'Nakit' | 'Havale/EFT' | 'Kredi Kartı',
     processedBy: '',
+    personalCash: false,
+    includeInGeneralCash: false,
   });
 
   const studentNameById = useMemo(() => {
@@ -56,15 +60,32 @@ const Finance: React.FC = () => {
     return c === 'Aidat' || isPackageSaleCategory(c);
   };
 
-  const totalIncome = transactions
+  const generalTransactions = useMemo(
+    () => transactions.filter((t) => countsTowardGeneralCash(t)),
+    [transactions],
+  );
+  const personalTransactions = useMemo(
+    () => transactions.filter((t) => isPersonalCashTransaction(t)),
+    [transactions],
+  );
+
+  const totalIncome = generalTransactions
     .filter((t) => t.type === 'income')
     .reduce((acc, t) => acc + t.amount, 0);
 
-  const totalExpense = transactions
+  const totalExpense = generalTransactions
     .filter((t) => t.type === 'expense')
     .reduce((acc, t) => acc + t.amount, 0);
 
   const balance = totalIncome - totalExpense;
+
+  const personalIncome = personalTransactions
+    .filter((t) => t.type === 'income')
+    .reduce((acc, t) => acc + t.amount, 0);
+  const personalExpense = personalTransactions
+    .filter((t) => t.type === 'expense')
+    .reduce((acc, t) => acc + t.amount, 0);
+  const personalBalance = personalIncome - personalExpense;
 
   const filteredTransactions = transactions.filter((t) => {
     const q = searchTerm.toLowerCase();
@@ -73,6 +94,7 @@ const Finance: React.FC = () => {
       (t.description || '').toLowerCase().includes(q)
       || (t.category || '').toLowerCase().includes(q)
       || studentName.toLowerCase().includes(q)
+      || (isPersonalCashTransaction(t) && 'kişisel kasa'.includes(q))
     );
   });
 
@@ -87,6 +109,8 @@ const Finance: React.FC = () => {
       description: '',
       paymentType: 'Nakit',
       processedBy: '',
+      personalCash: false,
+      includeInGeneralCash: false,
     });
   };
 
@@ -104,6 +128,8 @@ const Finance: React.FC = () => {
       amount: formData.amount,
       processedBy: formData.processedBy.trim() || undefined,
       studentId: formData.studentId || undefined,
+      personalCash: formData.personalCash || undefined,
+      includeInGeneralCash: formData.personalCash ? formData.includeInGeneralCash : undefined,
     };
     if (formData.type === 'income' && isPackageSaleCategory(formData.category) && formData.totalAmount > 0) {
       payload.totalAmount = formData.totalAmount;
@@ -123,6 +149,8 @@ const Finance: React.FC = () => {
     setEditTxnDescription(t.description || '');
     setEditTxnCategory(t.category || '');
     setEditTxnStudentId(t.studentId ? String(t.studentId) : '');
+    setEditTxnPersonalCash(!!t.personalCash);
+    setEditTxnIncludeInGeneral(!!t.includeInGeneralCash);
   }, []);
 
   const saveEdit = () => {
@@ -140,6 +168,8 @@ const Finance: React.FC = () => {
       paymentType: editTxnPaymentType,
       processedBy: editTxnProcessedBy.trim() || undefined,
       studentId: editTxnStudentId || undefined,
+      personalCash: editTxnPersonalCash,
+      includeInGeneralCash: editTxnPersonalCash ? editTxnIncludeInGeneral : false,
     });
     setEditingId(null);
   };
@@ -164,7 +194,10 @@ const Finance: React.FC = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div>
           <h2 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">Finans Yönetimi</h2>
-          <p className="text-slate-400 text-sm mt-1">Gelir ve gider takibini buradan yapabilirsiniz. Aidat tahsilatları yalnızca &quot;Aidat&quot; kategorisinde öğrenci aidat takvimine yansır.</p>
+          <p className="text-slate-400 text-sm mt-1">
+            Gelir ve gider takibini buradan yapabilirsiniz. Aidat tahsilatları yalnızca &quot;Aidat&quot; kategorisinde öğrenci aidat takvimine yansır.
+            Kişisel kasa işlemleri varsayılan olarak genel toplamlara dahil edilmez.
+          </p>
         </div>
         <div className="flex gap-3 w-full md:w-auto">
           <button type="button" className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-white/5 border border-white/10 rounded-lg text-sm font-bold text-slate-300 hover:bg-white/10 transition-all active:scale-95">
@@ -180,10 +213,17 @@ const Finance: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 xl:gap-8">
         <FinanceStatCard icon={<TrendingUp />} label="Toplam Gelir" value={`₺${totalIncome.toLocaleString('tr-TR')}`} color="green" />
         <FinanceStatCard icon={<TrendingDown />} label="Toplam Gider" value={`₺${totalExpense.toLocaleString('tr-TR')}`} color="rose" />
         <FinanceStatCard icon={<Landmark />} label="Kasa Bakiyesi" value={`₺${balance.toLocaleString('tr-TR')}`} color="indigo" />
+        <FinanceStatCard
+          icon={<Lock />}
+          label="Kişisel Kasa"
+          value={`₺${personalBalance.toLocaleString('tr-TR')}`}
+          color="amber"
+          subtitle={personalTransactions.length > 0 ? `${personalTransactions.length} işlem` : 'Kişisel işlem yok'}
+        />
       </div>
 
       <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-white/5 overflow-hidden">
@@ -226,6 +266,7 @@ const Finance: React.FC = () => {
                 const studentName = transaction.studentId
                   ? studentNameById.get(String(transaction.studentId))
                   : null;
+                const isPersonal = isPersonalCashTransaction(transaction);
                 return (
                   <tr
                     key={transaction.id}
@@ -248,6 +289,13 @@ const Finance: React.FC = () => {
                           <p className="text-sm font-bold text-white tracking-tight">{transaction.category}</p>
                           <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest mt-0.5">
                             {isDuesPaymentTransaction(transaction) ? 'Aidat takvimi' : isPackageSaleCategory(transaction.category) ? 'Satış' : 'Genel'}
+                            {isPersonal ? (
+                              <span className="ml-2 inline-flex items-center gap-1 text-amber-300 normal-case tracking-normal">
+                                <Lock className="w-3 h-3" />
+                                Kişisel
+                                {transaction.includeInGeneralCash ? ' · genele yansır' : ''}
+                              </span>
+                            ) : null}
                           </p>
                         </div>
                       </div>
@@ -351,6 +399,45 @@ const Finance: React.FC = () => {
                   </select>
                 </div>
 
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.personalCash}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        personalCash: e.target.checked,
+                        includeInGeneralCash: e.target.checked ? formData.includeInGeneralCash : false,
+                      })}
+                      className="mt-1 rounded border-slate-500 bg-slate-900 text-amber-500 focus:ring-amber-500/40"
+                    />
+                    <span>
+                      <span className="text-sm font-bold text-amber-100 flex items-center gap-1.5">
+                        <Lock className="w-4 h-4" /> Kişisel kasa
+                      </span>
+                      <span className="block text-xs text-slate-400 mt-0.5">
+                        İşlem kişisel kasaya yazılır; genel gelir/gider/kasa bakiyesine dahil edilmez.
+                      </span>
+                    </span>
+                  </label>
+                  {formData.personalCash ? (
+                    <label className="flex items-start gap-3 cursor-pointer pl-7">
+                      <input
+                        type="checkbox"
+                        checked={formData.includeInGeneralCash}
+                        onChange={(e) => setFormData({ ...formData, includeInGeneralCash: e.target.checked })}
+                        className="mt-1 rounded border-slate-500 bg-slate-900 text-indigo-500 focus:ring-indigo-500/40"
+                      />
+                      <span>
+                        <span className="text-sm font-bold text-white">Genele yansıt</span>
+                        <span className="block text-xs text-slate-400 mt-0.5">
+                          İşaretlenirse bu tutar genel kasa toplamlarına da eklenir.
+                        </span>
+                      </span>
+                    </label>
+                  ) : null}
+                </div>
+
                 {formData.type === 'income' && needsStudentLink(formData.category) && (
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Öğrenci *</label>
@@ -413,6 +500,31 @@ const Finance: React.FC = () => {
                   {!CATEGORY_PRESETS.includes(editTxnCategory as typeof CATEGORY_PRESETS[number]) && editTxnCategory ? <option value={editTxnCategory}>{editTxnCategory}</option> : null}
                 </select>
               </div>
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer text-sm text-amber-100 font-bold">
+                  <input
+                    type="checkbox"
+                    checked={editTxnPersonalCash}
+                    onChange={(e) => {
+                      setEditTxnPersonalCash(e.target.checked);
+                      if (!e.target.checked) setEditTxnIncludeInGeneral(false);
+                    }}
+                    className="rounded border-slate-500 bg-slate-900 text-amber-500 focus:ring-amber-500/40"
+                  />
+                  Kişisel kasa
+                </label>
+                {editTxnPersonalCash ? (
+                  <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-200 pl-6">
+                    <input
+                      type="checkbox"
+                      checked={editTxnIncludeInGeneral}
+                      onChange={(e) => setEditTxnIncludeInGeneral(e.target.checked)}
+                      className="rounded border-slate-500 bg-slate-900 text-indigo-500 focus:ring-indigo-500/40"
+                    />
+                    Genele yansıt
+                  </label>
+                ) : null}
+              </div>
               {needsStudentLink(editTxnCategory) && (
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Öğrenci</label>
@@ -464,20 +576,34 @@ const Finance: React.FC = () => {
   );
 };
 
-const FinanceStatCard = ({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: string; color: string }) => {
+const FinanceStatCard = ({
+  icon,
+  label,
+  value,
+  color,
+  subtitle,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  color: string;
+  subtitle?: string;
+}) => {
   const colorClasses: Record<string, string> = {
     green: 'bg-emerald-500/25 text-emerald-300 border-emerald-400/45 shadow-emerald-500/15',
     rose: 'bg-rose-500/25 text-rose-300 border-rose-400/45 shadow-rose-500/15',
     indigo: 'bg-indigo-500/25 text-indigo-300 border-indigo-400/45 shadow-indigo-500/15',
+    amber: 'bg-amber-500/25 text-amber-300 border-amber-400/45 shadow-amber-500/15',
   };
 
   return (
     <div className="bg-[#1e293b]/90 backdrop-blur-2xl p-8 rounded-lg border border-white/5 hover:scale-[1.02] transition-all group">
       <div className={`w-14 h-14 rounded-lg flex items-center justify-center border mb-6 transition-transform group-hover:scale-110 ${colorClasses[color]}`}>
-        {React.cloneElement(icon as React.ReactElement, { size: 28, strokeWidth: 2.5 })}
+        {React.cloneElement(icon as React.ReactElement<{ size?: number; strokeWidth?: number }>, { size: 28, strokeWidth: 2.5 })}
       </div>
       <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em]">{label}</h3>
       <p className="text-3xl font-black text-white mt-2 tracking-tighter">{value}</p>
+      {subtitle ? <p className="text-xs text-slate-500 mt-1">{subtitle}</p> : null}
     </div>
   );
 };

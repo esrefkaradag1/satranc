@@ -256,6 +256,10 @@ export interface Transaction {
   processedBy?: string;
   /** Öğrenciye ait gelir/gider için öğrenci id */
   studentId?: string;
+  /** Kişisel kasa işlemi (varsayılan olarak genel kasa toplamlarına dahil edilmez) */
+  personalCash?: boolean;
+  /** Kişisel kasa işleminin genel kasa toplamlarına da yansıması */
+  includeInGeneralCash?: boolean;
 }
 
 /** İşlem geçmişi (log) kaydı */

@@ -1858,6 +1858,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
          });
          setVcFen(nextFen);
          setCurrentMoveIndex(newHistory.length);
+         logStudyEvent({
+           studyId: selectedStudy?.id,
+           chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+           studentId,
+           moveIndex: newHistory.length - 1,
+           expectedMove: 'Bilgisayar',
+           playedMove: san,
+           result: 'correct',
+           thinkMs: 0,
+         });
          void updatePresencePayload({
            vsComputer: true,
            fen: nextFen,
@@ -1868,7 +1878,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
          });
        }
      } finally { setVcThinking(false); }
-  }, [vcLevel, vcManualGameOver, updatePresencePayload, getBestMoveWithTimeout]);
+  }, [vcLevel, vcManualGameOver, updatePresencePayload, getBestMoveWithTimeout, selectedStudy?.id, effectiveChapter?.id, selectedChapter?.id, studentId]);
 
   useEffect(() => {
     if (!vsComputer || vcThinking) return;

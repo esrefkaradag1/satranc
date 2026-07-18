@@ -1450,6 +1450,8 @@ function dbToTransaction(row: Record<string, unknown>): Transaction {
     branch: row.branch != null ? String(row.branch) : undefined,
     processedBy: r.processed_by != null ? String(r.processed_by) : r.processedBy != null ? String(r.processedBy) : undefined,
     studentId: r.student_id != null && r.student_id !== '' ? String(r.student_id) : undefined,
+    personalCash: r.personal_cash === true || r.personalCash === true,
+    includeInGeneralCash: r.include_in_general_cash === true || r.includeInGeneralCash === true,
   };
 }
 function transactionToDb(t: Transaction): Record<string, unknown> {
@@ -1473,6 +1475,8 @@ function transactionToDb(t: Transaction): Record<string, unknown> {
     processed_by: t.processedBy ?? null,
     student_id: t.studentId ?? null,
     branch: t.branch ?? null,
+    personal_cash: !!t.personalCash,
+    include_in_general_cash: !!t.includeInGeneralCash,
   };
 }
 
@@ -3299,6 +3303,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (transaction.processedBy !== undefined) payload.processed_by = transaction.processedBy ?? null;
       if (transaction.branch !== undefined) payload.branch = transaction.branch ?? null;
       if (transaction.studentId !== undefined) payload.student_id = transaction.studentId ?? null;
+      if (transaction.personalCash !== undefined) payload.personal_cash = !!transaction.personalCash;
+      if (transaction.includeInGeneralCash !== undefined) payload.include_in_general_cash = !!transaction.includeInGeneralCash;
       if (Object.keys(payload).length === 0) return;
       const { error } = await sb.from('transactions').update(payload).eq('id', id);
       if (error) console.error('Supabase transactions update error:', error);

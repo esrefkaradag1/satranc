@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { BookOpen, Plus, Users, CheckSquare, ExternalLink, UserCircle, Activity, Search, X, Eye } from 'lucide-react';
 import type { Student } from '../../types';
 import type { Study } from '../../lib/studyTypes';
@@ -7,7 +8,7 @@ import { loadStudiesAsync, saveStudyAsync, subscribeToStudies } from '../../stud
 import { normalizeSearchText, searchIncludesText } from '../../lib/searchText';
 import { loadStudyEvents, type StudyEvent } from '../../studyEvents';
 import { mergeStudyAnalysisEvents, buildOrphanChapterMap, resolveEventChapterId } from '../../lib/studyAnalysisEvents';
-import { extractVsComputerHistory } from '../../lib/studyReplayUtils';
+import { extractVsComputerHistory, resolveFullVsMoveList } from '../../lib/studyReplayUtils';
 import { loadStudyPresence, subscribeStudyPresence } from '../../services/studyActions';
 import { buildStudyStudentStats, type StudyStudentStat } from '../../lib/studyHomeworkStats';
 import { useApp } from '../../AppContext';
@@ -36,6 +37,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   const [resultsStudyEvents, setResultsStudyEvents] = useState<StudyEvent[]>([]);
   const [loadingResults, setLoadingResults] = useState(false);
   const [selectedResultsStudyId, setSelectedResultsStudyId] = useState('');
+  const [activeLogChapterId, setActiveLogChapterId] = useState<string | null>(null);
 
   const getVsComputerHistory = (payload: unknown): string[] => {
     if (!payload || typeof payload !== 'object') return [];
@@ -217,7 +219,22 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
     setActiveStudyEvents([]);
     setActiveStudyPresenceRows([]);
     setLoadingStudyEvents(false);
+    setActiveLogChapterId(null);
   };
+
+  useEffect(() => {
+    if (!activeStudyLog) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeStudyLog();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [activeStudyLog]);
 
   useEffect(() => {
     if (!activeStudyLog) return;
@@ -309,8 +326,26 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
       grouped.get(chapterId)!.events.push({ ...event, chapterId });
     });
 
-    return [...grouped.values()];
+    return [...grouped.values()].map((entry) => {
+      const fromPresence = entry.vsMoveHistory;
+      const full = resolveFullVsMoveList(entry.chapter, entry.events, fromPresence);
+      return { ...entry, vsMoveHistory: full.length > 0 ? full : fromPresence };
+    });
   }, [activeStudyLog, activeStudyEvents, activeStudyPresenceRows]);
+
+  useEffect(() => {
+    if (activeStudyEventsByChapter.length === 0) {
+      setActiveLogChapterId(null);
+      return;
+    }
+    const stillValid = activeStudyEventsByChapter.some((c) => c.chapterId === activeLogChapterId);
+    if (!stillValid) setActiveLogChapterId(activeStudyEventsByChapter[0]?.chapterId ?? null);
+  }, [activeStudyEventsByChapter, activeLogChapterId]);
+
+  const activeLogChapter = useMemo(
+    () => activeStudyEventsByChapter.find((c) => c.chapterId === activeLogChapterId) ?? null,
+    [activeStudyEventsByChapter, activeLogChapterId],
+  );
 
   const assignStudyToGroup = async () => {
     if (!assignStudyId || students.length === 0) return;
@@ -517,67 +552,84 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
         )}
       </div>
 
-      {activeStudyLog && (
-        <div className="modal-overlay z-[120]" onClick={closeStudyLog}>
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden />
+      {activeStudyLog
+        && typeof document !== 'undefined'
+        && createPortal(
           <div
-            className="modal-panel relative max-w-6xl overflow-hidden rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#0f172a] shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[120] flex h-[100dvh] w-screen flex-col bg-[#0b1220]"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Çalışma hamle kayıtları"
           >
-            <div className="shrink-0 px-4 sm:px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-slate-900/70">
+            <div className="shrink-0 px-4 sm:px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-[#0f172a]">
               <div className="min-w-0">
-                <h3 className="text-lg font-black text-white truncate">{activeStudyLog.study.title}</h3>
-                <p className="text-xs text-slate-400 mt-1 truncate">{activeStudyLog.student.name} · Çalışma hamle kayıtları</p>
+                <h3 className="text-lg sm:text-xl font-black text-white truncate">{activeStudyLog.study.title}</h3>
+                <p className="text-xs text-slate-400 mt-0.5 truncate">{activeStudyLog.student.name} · Çalışma hamle kayıtları</p>
               </div>
-              <button type="button" onClick={closeStudyLog} className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10">
-                <X className="w-5 h-5" />
+              <button
+                type="button"
+                onClick={closeStudyLog}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-slate-200 border border-white/10 bg-white/5 hover:bg-white/10 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+                Kapat
               </button>
             </div>
-            <div className="modal-scroll-body p-4 sm:p-5 space-y-4 custom-scrollbar">
-              {loadingStudyEvents ? (
-                <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-10 text-center text-slate-400">
-                  Kayıtlar yükleniyor…
+
+            {loadingStudyEvents ? (
+              <div className="flex-1 flex items-center justify-center text-slate-400 p-10">
+                Kayıtlar yükleniyor…
+              </div>
+            ) : activeStudyEventsByChapter.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center text-slate-400 p-10">
+                Bu öğrenci için çalışma hamle kaydı bulunamadı.
+              </div>
+            ) : (
+              <>
+                <div className="shrink-0 px-3 sm:px-6 py-2 border-b border-white/10 bg-black/25 overflow-x-auto">
+                  <div className="flex gap-2 min-w-max">
+                    {activeStudyEventsByChapter.map((chapter) => {
+                      const selected = chapter.chapterId === activeLogChapterId;
+                      return (
+                        <button
+                          key={chapter.chapterId}
+                          type="button"
+                          onClick={() => setActiveLogChapterId(chapter.chapterId)}
+                          className={`px-3 py-1.5 rounded-lg text-left border transition-colors max-w-[220px] ${
+                            selected
+                              ? 'bg-violet-500/20 border-violet-400/40 text-white'
+                              : 'bg-white/[0.03] border-white/10 text-slate-300 hover:bg-white/[0.06]'
+                          }`}
+                        >
+                          <span className="block text-xs font-bold truncate">{chapter.chapterTitle}</span>
+                          <span className="block text-[10px] text-slate-500 truncate">
+                            {chapter.chapterType}
+                            {chapter.vsMoveHistory.length > 0
+                              ? ` · ${chapter.vsMoveHistory.length} hamle`
+                              : ` · ${chapter.events.length} kayıt`}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              ) : activeStudyEventsByChapter.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-10 text-center text-slate-400">
-                  Bu öğrenci için çalışma hamle kaydı bulunamadı.
-                </div>
-              ) : (
-                activeStudyEventsByChapter.map((chapter) => (
-                  <div key={chapter.chapterId} className="rounded-xl border border-white/10 overflow-hidden">
-                    <div className="px-4 py-3 border-b border-white/10 bg-white/[0.03]">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-sm font-bold text-white">{chapter.chapterTitle}</h4>
-                        <span className="inline-flex rounded-lg px-2 py-0.5 text-[10px] font-bold border border-violet-500/30 bg-violet-500/10 text-violet-300">
-                          {chapter.chapterType}
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-slate-500 mt-1">
-                        {chapter.events.length} hamle kaydı
-                        {chapter.chapterType === 'Bilgisayara karşı'
-                          ? ` · ${chapter.vsMoveHistory.length > 0
-                            ? chapter.vsMoveHistory.filter((_m, plyIdx) => {
-                              const studentIsWhite = (chapter.chapter?.orientation ?? 'white') === 'white';
-                              return studentIsWhite ? plyIdx % 2 === 0 : plyIdx % 2 === 1;
-                            }).length
-                            : chapter.events.filter((e) => !e.id.startsWith('presence-') && e.expectedMove == null).length} öğrenci hamlesi`
-                          : ` · ${chapter.events.filter((e) => e.result === 'wrong').length} yanlış`}
-                      </p>
-                    </div>
+
+                {activeLogChapter ? (
+                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                     <StudyChapterReplayPanel
-                      chapter={chapter.chapter}
-                      events={chapter.events}
+                      chapter={activeLogChapter.chapter}
+                      events={activeLogChapter.events}
                       studentId={activeStudyLog.student.id}
                       studyId={activeStudyLog.study.id}
-                      vsMoveHistory={chapter.vsMoveHistory}
+                      vsMoveHistory={activeLogChapter.vsMoveHistory}
                     />
                   </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+                ) : null}
+              </>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 };
