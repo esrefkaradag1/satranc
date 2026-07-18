@@ -62,7 +62,7 @@ import { useStudyKeyboardShortcuts } from '../hooks/useStudyKeyboardShortcuts';
 import { StudyKeyboardHelpModal } from './study/StudyKeyboardHelpModal';
 import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
 import { computeThreatOverlay } from '../lib/chessThreats';
-import { canCloneStudy, canExportStudy } from '../lib/studyPermissions';
+import { canCloneStudy, canExportStudy, isStudentStudyVisibleToCoach } from '../lib/studyPermissions';
 import {
   buildGlyphSquareEntries,
   filterGlyphEntriesForCurrentBoard,
@@ -84,6 +84,7 @@ type AppView = StudyView;
 type StudyListSidebar =
   | { type: 'all' }
   | { type: 'favorites' }
+  | { type: 'studentShares' }
   | { type: 'category'; id: string };
 
 type MoveAnalysisEntry = {
@@ -117,6 +118,38 @@ const Sel: React.FC<{
     </select>
   </div>
 );
+
+function resolveStudyStudentName(study: Study, students: Student[]): string | null {
+  const id = study.createdByStudentId;
+  if (!id) return null;
+  return students.find((s) => String(s.id) === String(id))?.name ?? null;
+}
+
+function formatStudyListDate(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function studentInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase();
+}
+
+function shortenStudentStudyTitle(study: Study, studentName: string | null): string {
+  if (!studentName) return study.title;
+  const prefix = `${studentName} —`;
+  if (study.title.startsWith(prefix)) {
+    return study.title.slice(prefix.length).trim() || study.title;
+  }
+  return study.title;
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
 const StudyPage: React.FC = () => {
@@ -1027,7 +1060,19 @@ const StudyPage: React.FC = () => {
       studyId: selectedStudy.id,
       onRow: (row) => {
         if (!mounted) return;
-        setPresenceByUserId((prev) => ({ ...prev, [String(row.user_id)]: row }));
+        setPresenceByUserId((prev) => {
+          const userId = String(row.user_id);
+          const prevRow = prev[userId];
+          const nextPayload = row?.payload;
+          const nextEmpty =
+            nextPayload == null
+            || (typeof nextPayload === 'object' && !Array.isArray(nextPayload) && Object.keys(nextPayload).length === 0);
+          // Heartbeat upserts without payload used to wipe vsComputer; keep last known game state.
+          if (nextEmpty && prevRow?.payload?.vsComputer) {
+            return { ...prev, [userId]: { ...row, payload: prevRow.payload } };
+          }
+          return { ...prev, [userId]: row };
+        });
       },
     });
     return () => { mounted = false; unsub(); };
@@ -1152,11 +1197,12 @@ const StudyPage: React.FC = () => {
         id: 'viewing-student',
         title: 'Bilgisayara Karşı',
         moves: viewingStudentVcHistory,
-        fen: viewingStudentPresence.vcFen || DEFAULT_FEN,
+        // Start FEN for move list / replay — not the live board FEN.
+        fen: selectedChapter?.fen || DEFAULT_FEN,
       } as any;
     }
     return null;
-  }, [viewingStudentId, viewingStudentPresence, viewingStudentVcHistory]);
+  }, [viewingStudentId, viewingStudentPresence, viewingStudentVcHistory, selectedChapter?.fen]);
 
   const studentEffectiveFen = viewingStudentPresence?.vsComputer
     ? (viewingStudentHistoryIdx !== null
@@ -3219,11 +3265,30 @@ const StudyPage: React.FC = () => {
   }
 
   if (view === 'list') {
+    const studentSharedStudies = studies.filter((s) => s.studentCreated && s.sharedWithCoach === true);
+    const isStudentShareView = listSidebar.type === 'studentShares';
+    const listPageTitle =
+      listSidebar.type === 'all'
+        ? 'Tüm çalışmalar'
+        : listSidebar.type === 'favorites'
+          ? 'Favoriler'
+          : listSidebar.type === 'studentShares'
+            ? 'Öğrenci paylaşımları'
+            : studyCategories.find((c) => c.id === listSidebar.id)?.name ?? 'Kategori';
     const filteredStudies = studies
       .filter(s => {
+        if (!isStudentStudyVisibleToCoach(s)) return false;
         const q = listSearch.trim().toLowerCase();
-        if (q && !s.title.toLowerCase().includes(q) && !s.description?.toLowerCase().includes(q)) return false;
+        if (q) {
+          const studentName = resolveStudyStudentName(s, students)?.toLowerCase() ?? '';
+          if (
+            !s.title.toLowerCase().includes(q)
+            && !s.description?.toLowerCase().includes(q)
+            && !studentName.includes(q)
+          ) return false;
+        }
         if (listSidebar.type === 'favorites' && !s.liked) return false;
+        if (listSidebar.type === 'studentShares' && !(s.studentCreated && s.sharedWithCoach === true)) return false;
         if (listSidebar.type === 'category' && s.categoryId !== listSidebar.id) return false;
         return true;
       })
@@ -3235,12 +3300,12 @@ const StudyPage: React.FC = () => {
     return (
       <div className="flex flex-col lg:flex-row gap-0 h-full min-h-0 bg-[#0d0f12] overflow-hidden relative">
         {/* Mobil: yatay filtre şeridi */}
-        <div className="lg:hidden shrink-0 border-b border-white/5 bg-slate-900/90 backdrop-blur-xl px-3 py-3 space-y-2.5">
-          <div className="flex gap-2 overflow-x-auto pb-0.5 -mx-1 px-1 scrollbar-none">
+        <div className="lg:hidden shrink-0 border-b border-white/[0.06] bg-slate-900/80 px-3 py-2.5">
+          <div className="flex gap-1.5 overflow-x-auto pb-0.5 -mx-1 px-1 scrollbar-none">
             <button
               type="button"
               onClick={() => setListSidebar({ type: 'all' })}
-              className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${listSidebar.type === 'all' ? 'bg-teal-500/25 text-teal-200 border border-teal-500/40' : 'text-slate-400 border border-white/10'}`}
+              className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${listSidebar.type === 'all' ? 'bg-white/[0.08] text-slate-200' : 'text-slate-500'}`}
             >
               <ListChecks className="w-3.5 h-3.5" />
               Tümü
@@ -3248,17 +3313,26 @@ const StudyPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setListSidebar({ type: 'favorites' })}
-              className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${listSidebar.type === 'favorites' ? 'bg-teal-500/25 text-teal-200 border border-teal-500/40' : 'text-slate-400 border border-white/10'}`}
+              className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${listSidebar.type === 'favorites' ? 'bg-white/[0.08] text-slate-200' : 'text-slate-500'}`}
             >
               <Star className="w-3.5 h-3.5" />
               Favoriler
+            </button>
+            <button
+              type="button"
+              onClick={() => setListSidebar({ type: 'studentShares' })}
+              className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${listSidebar.type === 'studentShares' ? 'bg-white/[0.08] text-slate-200' : 'text-slate-500'}`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              Paylaşımlar
+              <span className="rounded px-1 text-[10px] text-slate-500 tabular-nums">{studentSharedStudies.length}</span>
             </button>
             {studyCategories.map((cat) => (
               <button
                 key={cat.id}
                 type="button"
                 onClick={() => setListSidebar({ type: 'category', id: cat.id })}
-                className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all max-w-[9rem] ${listSidebar.type === 'category' && listSidebar.id === cat.id ? 'bg-teal-500/25 text-teal-200 border border-teal-500/40' : 'text-slate-400 border border-white/10'}`}
+                className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors max-w-[9rem] ${listSidebar.type === 'category' && listSidebar.id === cat.id ? 'bg-white/[0.08] text-slate-200' : 'text-slate-500'}`}
               >
                 <Folder className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate">{cat.name}</span>
@@ -3267,71 +3341,112 @@ const StudyPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setCategoryAddOpen(true)}
-              className="shrink-0 inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold text-teal-300 border border-dashed border-teal-500/40"
+              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-slate-500 border border-dashed border-white/10"
             >
               <FolderPlus className="w-3.5 h-3.5" />
               Bölüm
             </button>
           </div>
         </div>
-        <div className="hidden lg:flex w-60 shrink-0 flex-col min-h-0 bg-slate-900/50 backdrop-blur-xl border-r border-white/5 shadow-2xl">
-          <div className="flex-1 overflow-y-auto py-5 flex flex-col gap-1 min-h-0">
-            <button
-              type="button"
-              onClick={() => setListSidebar({ type: 'all' })}
-              className={`flex items-center gap-3 px-4 py-3 mx-2 rounded-xl text-sm font-medium transition-all ${listSidebar.type === 'all' ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 shadow-lg' : 'text-slate-400 hover:text-white'}`}
-            >
-              <ListChecks className="w-4 h-4 shrink-0" />
-              Tüm Çalışmalar
-            </button>
-            <button
-              type="button"
-              onClick={() => setListSidebar({ type: 'favorites' })}
-              className={`flex items-center gap-3 px-4 py-3 mx-2 rounded-xl text-sm font-medium transition-all ${listSidebar.type === 'favorites' ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 shadow-lg' : 'text-slate-400 hover:text-white'}`}
-            >
-              <Star className="w-4 h-4 shrink-0" />
-              Favoriler
-            </button>
-            <div className="mx-4 my-2 border-t border-white/10" />
-            <p className="px-4 text-[10px] font-bold uppercase tracking-widest text-slate-500">Kategoriler</p>
-            <div className="px-2 mx-2 mb-1 flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => setCategoryAddOpen(true)}
-                className="flex w-full items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wide text-teal-200 bg-teal-500/15 border border-teal-500/35 hover:bg-teal-500/25 hover:border-teal-400/50 transition-colors"
-              >
-                <FolderPlus className="w-4 h-4 shrink-0" aria-hidden />
-                Bölüm ekle
-              </button>
-              {studyCategories.length === 0 ? (
-                <p className="px-2 text-[11px] text-slate-600 leading-snug text-center">
-                  Bölüm ekleyerek çalışmalarınızı gruplayın; seçili bölümde yeni çalışma açılır.
-                </p>
-              ) : null}
-            </div>
-            {studyCategories.map((cat) => (
-              <div key={cat.id} className="flex items-stretch gap-1 mx-2 group">
+        <div className="hidden lg:flex w-56 shrink-0 flex-col min-h-0 bg-slate-900/40 border-r border-white/[0.06]">
+          <div className="shrink-0 px-4 py-4 border-b border-white/[0.06]">
+            <h2 className="text-sm font-semibold text-slate-200">Çalışmalar</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto py-3 flex flex-col gap-4 min-h-0 custom-scrollbar">
+            <div className="px-2">
+              <p className="px-2 mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">Genel</p>
+              <div className="flex flex-col gap-0.5">
                 <button
                   type="button"
-                  onClick={() => setListSidebar({ type: 'category', id: cat.id })}
-                  className={`flex flex-1 min-w-0 items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-all text-left ${listSidebar.type === 'category' && listSidebar.id === cat.id ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 shadow-lg' : 'text-slate-400 hover:text-white border border-transparent'}`}
+                  onClick={() => setListSidebar({ type: 'all' })}
+                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13px] transition-colors ${
+                    listSidebar.type === 'all'
+                      ? 'bg-white/[0.06] text-white'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
+                  }`}
                 >
-                  <Folder className="w-4 h-4 shrink-0 opacity-80" />
-                  <span className="truncate">{cat.name}</span>
+                  <ListChecks className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                  <span className="truncate">Tüm çalışmalar</span>
                 </button>
                 <button
                   type="button"
-                  title="Kategoriyi sil"
-                  onClick={() => deleteStudyCategory(cat.id)}
-                  className="shrink-0 px-2 rounded-xl text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 opacity-80 group-hover:opacity-100 transition-opacity"
-                  aria-label="Kategoriyi sil"
+                  onClick={() => setListSidebar({ type: 'favorites' })}
+                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13px] transition-colors ${
+                    listSidebar.type === 'favorites'
+                      ? 'bg-white/[0.06] text-white'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
+                  }`}
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Star className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                  <span className="truncate">Favoriler</span>
                 </button>
               </div>
-            ))}
+            </div>
+
+            <div className="px-2">
+              <p className="px-2 mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">Öğrenci</p>
+              <button
+                type="button"
+                onClick={() => setListSidebar({ type: 'studentShares' })}
+                className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-[13px] transition-colors ${
+                  listSidebar.type === 'studentShares'
+                    ? 'bg-white/[0.06] text-white'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
+                }`}
+              >
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <Users className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                  <span className="truncate text-left">Paylaşımlar</span>
+                </span>
+                <span className="shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-md bg-white/[0.06] text-[10px] font-medium text-slate-400 tabular-nums">
+                  {studentSharedStudies.length}
+                </span>
+              </button>
+            </div>
+
+            <div className="px-2">
+              <div className="mx-2 mb-2 border-t border-white/[0.06]" />
+              <p className="px-2 mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">Kategoriler</p>
+              <div className="mb-1.5">
+                <button
+                  type="button"
+                  onClick={() => setCategoryAddOpen(true)}
+                  className="flex w-full items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium text-slate-400 border border-dashed border-white/10 hover:border-white/20 hover:text-slate-300 transition-colors"
+                >
+                  <FolderPlus className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                  Bölüm ekle
+                </button>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {studyCategories.map((cat) => (
+                  <div key={cat.id} className="flex items-stretch gap-0.5 group">
+                    <button
+                      type="button"
+                      onClick={() => setListSidebar({ type: 'category', id: cat.id })}
+                      className={`flex flex-1 min-w-0 items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13px] transition-colors text-left ${
+                        listSidebar.type === 'category' && listSidebar.id === cat.id
+                          ? 'bg-white/[0.06] text-white'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
+                      }`}
+                    >
+                      <Folder className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                      <span className="truncate">{cat.name}</span>
+                    </button>
+                    <button
+                      type="button"
+                      title="Kategoriyi sil"
+                      onClick={() => deleteStudyCategory(cat.id)}
+                      className="shrink-0 px-1.5 rounded-lg text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label="Kategoriyi sil"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="shrink-0 border-t border-white/10 p-3 bg-slate-900/40">
+          <div className="shrink-0 border-t border-white/[0.06] p-2.5">
             {categoryAddOpen ? (
               <div className="flex flex-col gap-2">
                 <input
@@ -3381,63 +3496,190 @@ const StudyPage: React.FC = () => {
             )}
           </div>
         </div>
-        <div className="flex-1 min-w-0 flex flex-col p-4 sm:p-6 lg:p-8 overflow-y-auto overflow-x-hidden">
-          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mb-6 sm:mb-8">
-            <div className="flex-1 min-w-0 relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-              <input type="text" value={listSearch} onChange={e => setListSearch(e.target.value)} placeholder="Ara..." className="w-full bg-slate-800 border border-slate-700/60 rounded-2xl pl-12 pr-5 py-3 text-sm text-white outline-none focus:border-teal-500/50" />
+        <div className="flex-1 min-w-0 flex flex-col p-4 sm:p-5 lg:p-6 overflow-y-auto overflow-x-hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 pb-4 border-b border-white/[0.06]">
+            <div className="min-w-0">
+              <h1 className="text-base font-semibold text-slate-100">{listPageTitle}</h1>
+              <p className="mt-0.5 text-xs text-slate-500">
+                {isStudentShareView
+                  ? `${filteredStudies.length} paylaşım · öğrencilerin antrenörle paylaştığı çalışmalar`
+                  : listSidebar.type === 'category'
+                    ? 'Yeni çalışma bu klasöre eklenir.'
+                    : listSidebar.type === 'favorites'
+                      ? 'Beğendiğiniz çalışmalar.'
+                      : 'Kulüp ve antrenör çalışmaları.'}
+              </p>
             </div>
-            <button type="button" onClick={addStudy} className="shrink-0 w-full sm:w-auto justify-center px-5 sm:px-6 py-3 bg-teal-500 hover:bg-teal-400 text-black font-bold rounded-2xl shadow-xl shadow-teal-500/10 transition-all flex items-center gap-2">
-              <Plus className="w-4 h-4" /> Yeni Çalışma
-            </button>
+            {!isStudentShareView ? (
+              <button
+                type="button"
+                onClick={addStudy}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3.5 py-2 bg-teal-600 hover:bg-teal-500 text-white text-xs font-medium rounded-lg transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Yeni çalışma
+              </button>
+            ) : null}
           </div>
-          {listSidebar.type === 'category' && (
-            <p className="text-sm text-slate-400 mb-4 px-0.5">
-              <span className="text-teal-400/90 font-semibold">
-                {studyCategories.find((c) => c.id === listSidebar.id)?.name ?? 'Kategori'}
-              </span>
-              {' '}
-              — Yeni çalışma bu klasöre eklenir. Mevcut çalışmayı taşımak için çalışma ayarlarından kategori seçin.
-            </p>
-          )}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {filteredStudies.map(s => (
-              <div key={s.id} onClick={() => openStudyInEditor(s.id)} className="cursor-pointer rounded-3xl bg-slate-800/40 border border-white/5 p-6 hover:border-teal-500/40 transition-all group backdrop-blur-sm relative">
+
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mb-4">
+            <div className="flex-1 min-w-0 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+              <input
+                type="text"
+                value={listSearch}
+                onChange={e => setListSearch(e.target.value)}
+                placeholder={isStudentShareView ? 'Öğrenci veya çalışma ara...' : 'Ara...'}
+                className="w-full bg-slate-900/60 border border-white/[0.08] rounded-lg pl-9 pr-3 py-2 text-sm text-white outline-none focus:border-slate-600 transition-colors"
+              />
+            </div>
+            <div className="inline-flex rounded-lg border border-white/[0.08] bg-slate-900/40 p-0.5 shrink-0 self-start">
+              <button
+                type="button"
+                onClick={() => setListSort('date')}
+                className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${listSort === 'date' ? 'bg-white/[0.08] text-slate-200' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                Tarih
+              </button>
+              <button
+                type="button"
+                onClick={() => setListSort('likes')}
+                className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${listSort === 'likes' ? 'bg-white/[0.08] text-slate-200' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                Beğeni
+              </button>
+            </div>
+          </div>
+
+          <div className={`grid gap-3 ${isStudentShareView ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'}`}>
+            {filteredStudies.length === 0 ? (
+              <div className={`rounded-lg border border-dashed px-5 py-10 text-center ${
+                isStudentShareView
+                  ? 'lg:col-span-2 border-white/10 bg-slate-900/20'
+                  : 'md:col-span-2 xl:col-span-3 border-white/10 bg-slate-900/20'
+              }`}>
+                <p className="text-sm text-slate-400">
+                  {isStudentShareView
+                    ? 'Henüz paylaşılmış öğrenci çalışması yok.'
+                    : 'Bu filtrede gösterilecek çalışma yok.'}
+                </p>
+                <p className="mt-1 text-xs text-slate-600">
+                  {isStudentShareView
+                    ? 'Öğrenci «Antrenör ile paylaş» seçeneğini açınca burada görünür.'
+                    : 'Arama veya filtreyi değiştirin.'}
+                </p>
+              </div>
+            ) : filteredStudies.map(s => {
+              const studentName = resolveStudyStudentName(s, students);
+              const displayTitle = isStudentShareView
+                ? shortenStudentStudyTitle(s, studentName)
+                : s.title;
+              const updatedLabel = formatStudyListDate(s.updatedAt ?? s.createdAt);
+
+              if (isStudentShareView) {
+                return (
+                  <div
+                    key={s.id}
+                    onClick={() => openStudyInEditor(s.id)}
+                    className="cursor-pointer rounded-lg border border-white/[0.08] bg-slate-900/40 px-4 py-3.5 hover:border-white/[0.14] hover:bg-slate-900/60 transition-colors group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="shrink-0 w-9 h-9 rounded-md bg-slate-800 border border-white/[0.08] flex items-center justify-center text-[11px] font-medium text-slate-300">
+                        {studentName ? studentInitials(studentName) : studyDisplayEmoji(s)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-sm font-medium text-slate-100 truncate group-hover:text-white">
+                          {displayTitle}
+                        </h3>
+                        <p className="mt-0.5 text-xs text-slate-500 truncate">
+                          {studentName ?? 'Öğrenci'}
+                          <span className="text-slate-700"> · </span>
+                          {s.chapters.length} bölüm
+                          {updatedLabel ? (
+                            <>
+                              <span className="text-slate-700"> · </span>
+                              {updatedLabel}
+                            </>
+                          ) : null}
+                        </p>
+                      </div>
+                      <div className="shrink-0 flex items-center gap-0.5 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setStudentPreviewStudyId(s.id); }}
+                          className="p-1.5 rounded-md text-slate-500 hover:text-slate-300 hover:bg-white/[0.05]"
+                          title="Önizle"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        {canCloneStudy(s, auth) ? (
+                          <button type="button" onClick={e => { e.stopPropagation(); cloneStudy(s); }} className="p-1.5 rounded-md text-slate-500 hover:text-slate-300 hover:bg-white/[0.05]" title="Klonla">
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const ok = await confirmDialog({
+                              title: 'Çalışmayı sil',
+                              message: `"${s.title}" silinsin mi?`,
+                              confirmLabel: 'Sil',
+                              variant: 'danger',
+                            });
+                            if (!ok) return;
+                            deletedIdsRef.current.add(s.id);
+                            setStudies(prev => prev.filter(x => x.id !== s.id));
+                            deleteStudyAsync(s.id);
+                          }}
+                          className="p-1.5 rounded-md text-slate-500 hover:text-rose-400 hover:bg-rose-500/10"
+                          title="Sil"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+              <div key={s.id} onClick={() => openStudyInEditor(s.id)} className="cursor-pointer rounded-lg bg-slate-900/40 border border-white/[0.08] p-4 hover:border-white/[0.14] hover:bg-slate-900/60 transition-colors group relative">
                 {(s.clonePermission === 'onlyMe' || s.shareExport === 'onlyMe') && auth?.role === 'admin' && (
                   <span className="absolute top-4 right-4 p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400" title="Sadece admin erişebilir">
                     <Lock className="w-3 h-3" />
                   </span>
                 )}
-                <div className="flex items-center gap-4 mb-4">
-                  <span className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-2xl">{studyDisplayEmoji(s)}</span>
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="w-9 h-9 rounded-md bg-slate-800 border border-white/[0.08] flex items-center justify-center text-lg">{studyDisplayEmoji(s)}</span>
                   <div className="min-w-0">
-                    <h3 className="font-bold text-white group-hover:text-teal-400 truncate">{s.title}</h3>
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest">
+                    <h3 className="text-sm font-medium text-slate-100 group-hover:text-white truncate">{s.title}</h3>
+                    <p className="text-xs text-slate-500 truncate">
                       {[
                         s.categoryId ? studyCategories.find((c) => c.id === s.categoryId)?.name : null,
-                        `${s.chapters.length} BÖLÜM`,
+                        `${s.chapters.length} bölüm`,
                       ]
                         .filter(Boolean)
                         .join(' · ')}
                     </p>
                   </div>
                 </div>
-                {s.description && <p className="text-xs text-slate-400 line-clamp-2 mb-4 leading-relaxed">{s.description}</p>}
-                <div className="flex items-center gap-2 pt-4 border-t border-white/5">
-                  <button type="button" onClick={e => { e.stopPropagation(); toggleLike(s.id); }} className={`p-2 rounded-xl ${s.liked ? 'text-rose-400 bg-rose-500/10' : 'text-slate-500 hover:text-rose-400'}`}><Heart className={`w-4 h-4 ${s.liked ? 'fill-current' : ''}`} /></button>
+                {s.description && <p className="text-xs text-slate-500 line-clamp-2 mb-3 leading-relaxed">{s.description}</p>}
+                <div className="flex items-center gap-1 pt-3 border-t border-white/[0.06]">
+                  <button type="button" onClick={e => { e.stopPropagation(); toggleLike(s.id); }} className={`p-1.5 rounded-md ${s.liked ? 'text-rose-400' : 'text-slate-500 hover:text-slate-300'}`}><Heart className={`w-3.5 h-3.5 ${s.liked ? 'fill-current' : ''}`} /></button>
                   <button
                     type="button"
                     onClick={e => { e.stopPropagation(); setStudentPreviewStudyId(s.id); }}
-                    className="p-2 rounded-xl text-slate-500 hover:text-indigo-400"
+                    className="p-1.5 rounded-md text-slate-500 hover:text-slate-300"
                     title="Öğrenci görünümü"
                   >
-                    <Eye className="w-4 h-4" />
+                    <Eye className="w-3.5 h-3.5" />
                   </button>
                   {canCloneStudy(s, auth) && (
-                    <button type="button" onClick={e => { e.stopPropagation(); cloneStudy(s); }} className="p-2 rounded-xl text-slate-500 hover:text-teal-400" title="Klonla"><Copy className="w-4 h-4" /></button>
+                    <button type="button" onClick={e => { e.stopPropagation(); cloneStudy(s); }} className="p-1.5 rounded-md text-slate-500 hover:text-slate-300" title="Klonla"><Copy className="w-3.5 h-3.5" /></button>
                   )}
                   {auth?.role === 'admin' && (
-                    <button type="button" onClick={e => openStudySettingsFromList(s, e)} className="p-2 rounded-xl text-slate-500 hover:text-teal-400" title="Ayarlar"><Settings2 className="w-4 h-4" /></button>
+                    <button type="button" onClick={e => openStudySettingsFromList(s, e)} className="p-1.5 rounded-md text-slate-500 hover:text-slate-300" title="Ayarlar"><Settings2 className="w-3.5 h-3.5" /></button>
                   )}
                   <button
                     type="button"
@@ -3454,13 +3696,14 @@ const StudyPage: React.FC = () => {
                       setStudies(prev => prev.filter(x => x.id !== s.id));
                       deleteStudyAsync(s.id);
                     }}
-                    className="p-2 rounded-xl text-slate-500 hover:text-rose-400 ml-auto"
+                    className="p-1.5 rounded-md text-slate-500 hover:text-rose-400 ml-auto"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -5819,7 +6062,7 @@ const StudyPage: React.FC = () => {
                     <div className="absolute inset-0">
                     <Chessboard
                       options={{
-                        position: p?.vcFen || DEFAULT_FEN,
+                        position: p?.fen || p?.vcFen || DEFAULT_FEN,
                         boardOrientation: p?.orientation || 'white',
                         darkSquareStyle: { backgroundColor: '#5d768e' },
                         lightSquareStyle: { backgroundColor: '#c1c9d2' },
@@ -5836,17 +6079,24 @@ const StudyPage: React.FC = () => {
                    <div>
                      <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4">Hamle Geçmişi</p>
                      <div className="flex flex-wrap gap-1.5">
-                       {p?.vcHistory?.map((m: string, i: number) => (
-                         <span key={i} className={`px-2 py-1 rounded text-[11px] font-bold ${i % 2 === 0 ? 'bg-white/5 text-slate-300' : 'bg-black/20 text-slate-400'}`}>
-                           {Math.floor(i/2) + 1}. {m}
-                         </span>
-                       ))}
-                       {(!p?.vcHistory || p.vcHistory.length === 0) && <p className="text-xs text-slate-600 italic">Henüz hamle yapılmadı.</p>}
+                       {(() => {
+                         const history = (Array.isArray(p?.vcHistory) ? p.vcHistory : null)
+                           ?? (Array.isArray(p?.history) ? p.history : null)
+                           ?? [];
+                         if (history.length === 0) {
+                           return <p className="text-xs text-slate-600 italic">Henüz hamle yapılmadı.</p>;
+                         }
+                         return history.map((m: string, i: number) => (
+                           <span key={i} className={`px-2 py-1 rounded text-[11px] font-bold ${i % 2 === 0 ? 'bg-white/5 text-slate-300' : 'bg-black/20 text-slate-400'}`}>
+                             {Math.floor(i / 2) + 1}. {m}
+                           </span>
+                         ));
+                       })()}
                      </div>
                    </div>
                    
                    <div className="mt-auto pt-6 border-t border-white/5">
-                      <EngineAnalysis fen={p?.vcFen || DEFAULT_FEN} enabled={false} onToggle={() => {}} />
+                      <EngineAnalysis fen={p?.fen || p?.vcFen || DEFAULT_FEN} enabled={false} onToggle={() => {}} />
                    </div>
                 </div>
               </div>

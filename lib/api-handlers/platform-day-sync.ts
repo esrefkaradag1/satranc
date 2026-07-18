@@ -5,7 +5,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { istanbulDayKey } from '../homeworkDayUtils';
+import { istanbulDayKey, shiftIstanbulDayKey } from '../homeworkDayUtils';
 import { mergePlatformDayStats, type PlatformDayStats } from '../homeworkPlatformUtils';
 import { computePlatformWeekStats } from './platform-week-stats';
 
@@ -33,19 +33,25 @@ function mapStudentRow(row: Record<string, unknown>) {
 
 export async function runPlatformDaySync(
   env: Env = process.env,
-  opts?: { day?: string },
-): Promise<{ ok: boolean; day: string; students: number; saved: number; error?: string }> {
-  const day = (opts?.day || istanbulDayKey()).slice(0, 10);
+  opts?: { day?: string; days?: string[] },
+): Promise<{ ok: boolean; day: string; days: string[]; students: number; saved: number; error?: string }> {
+  const today = istanbulDayKey();
+  const daysToSync = opts?.days?.length
+    ? [...new Set(opts.days.map((d) => d.slice(0, 10)))]
+    : opts?.day
+      ? [opts.day.slice(0, 10)]
+      : [shiftIstanbulDayKey(today, -1), today];
+  const day = daysToSync[daysToSync.length - 1] ?? today;
   const sb = supabaseFromEnv(env);
   if (!sb) {
-    return { ok: false, day, students: 0, saved: 0, error: 'Supabase yapılandırması eksik' };
+    return { ok: false, day, days: daysToSync, students: 0, saved: 0, error: 'Supabase yapılandırması eksik' };
   }
 
   const { data, error } = await sb
     .from('students')
     .select('id, lichess_username, chess_com_username, chesscom_username');
   if (error) {
-    return { ok: false, day, students: 0, saved: 0, error: error.message };
+    return { ok: false, day, days: daysToSync, students: 0, saved: 0, error: error.message };
   }
 
   const students = (data ?? [])
@@ -53,6 +59,7 @@ export async function runPlatformDaySync(
     .filter((s): s is NonNullable<typeof s> => Boolean(s));
 
   let saved = 0;
+  for (const syncDay of daysToSync) {
   for (let i = 0; i < students.length; i += CHUNK) {
     const chunk = students.slice(i, i + CHUNK);
     const chunkIds = chunk.map((s) => s.id);
@@ -62,7 +69,7 @@ export async function runPlatformDaySync(
     const { data: existingRows } = await sb
       .from('chess_platform_day_stats')
       .select('student_id, stats, time_seconds')
-      .eq('day', day)
+      .eq('day', syncDay)
       .in('student_id', chunkIds);
     for (const row of existingRows ?? []) {
       const sid = String((row as { student_id: string }).student_id);
@@ -76,13 +83,13 @@ export async function runPlatformDaySync(
       }
     }
 
-    const { stats } = await computePlatformWeekStats(chunk, [day]);
+    const { stats } = await computePlatformWeekStats(chunk, [syncDay]);
     const rows = Object.entries(stats).map(([studentId, byDay]) => {
-      const fresh = (byDay[day] ?? {}) as PlatformDayStats;
+      const fresh = (byDay[syncDay] ?? {}) as PlatformDayStats;
       const merged = mergePlatformDayStats(existingByStudent.get(studentId), fresh);
       return {
         student_id: studentId,
-        day,
+        day: syncDay,
         stats: merged,
         time_seconds: Math.max(0, Math.round(Number(merged.activityTimeSeconds) || 0)),
         updated_at: new Date().toISOString(),
@@ -98,9 +105,10 @@ export async function runPlatformDaySync(
     }
     saved += rows.length;
   }
+  }
 
-  console.log(`[platform-day-sync] day=${day} students=${students.length} saved=${saved}`);
-  return { ok: true, day, students: students.length, saved };
+  console.log(`[platform-day-sync] days=${daysToSync.join(',')} students=${students.length} saved=${saved}`);
+  return { ok: true, day, days: daysToSync, students: students.length, saved };
 }
 
 type Req = {
@@ -121,8 +129,8 @@ function headerValue(req: Req, name: string): string {
 
 function cronAuthorized(req: Req): boolean {
   const secret = String(process.env.CRON_SECRET || '').trim();
-  if (!secret) return true;
-  return headerValue(req, 'authorization') === `Bearer ${secret}`;
+  if (secret) return headerValue(req, 'authorization') === `Bearer ${secret}`;
+  return process.env.NODE_ENV !== 'production';
 }
 
 function dayFromReq(req: Req): string | undefined {

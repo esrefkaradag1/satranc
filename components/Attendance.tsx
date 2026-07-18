@@ -43,7 +43,7 @@ import {
   buildLessonAttendanceSessionId,
   parseAttendanceSessionId,
 } from '../lib/attendanceSession';
-import { computePrivateLessonBalance } from '../lib/privateLessonUsage';
+import { computePrivateLessonBalance, buildPrivateLessonUsageById } from '../lib/privateLessonUsage';
 import { consumeAttendanceEditBridge } from '../lib/attendanceEditBridge';
 import { StudentLessonLogInline } from './attendance/StudentLessonLogInline';
 import { ResponsiveTable } from './ui/ResponsiveTable';
@@ -524,16 +524,40 @@ const Attendance: React.FC = () => {
     filteredStudents.forEach((student) => {
       const sale = selectedLessonPackageSalesByStudentId.get(student.id);
       if (!sale) return;
+      const studentSales = transactions
+        .filter((t) => t.category === 'Özel Ders' && t.studentId === student.id)
+        .sort((a, b) => b.date.localeCompare(a.date));
+      const usageMap = buildPrivateLessonUsageById(
+        studentSales,
+        attendanceRecords,
+        student.id,
+        () => selectedLessonPackage?.lessonCount ?? null,
+      );
+      const usage = usageMap.get(String(sale.id));
+      if (usage) {
+        // Recompute with pending today status on top of scoped usage.
+        const balance = computePrivateLessonBalance(sale, attendanceRecords, {
+          studentId: student.id,
+          fallbackTotalLessons: selectedLessonPackage?.lessonCount,
+          pendingTodayStatus: attendance[student.id] ?? null,
+          todayIso: currentDay,
+          allSalesNewestFirst: studentSales,
+          carriedInLessons: usage.carriedInLessons ?? 0,
+        });
+        if (balance) map.set(student.id, balance);
+        return;
+      }
       const balance = computePrivateLessonBalance(sale, attendanceRecords, {
         studentId: student.id,
         fallbackTotalLessons: selectedLessonPackage?.lessonCount,
         pendingTodayStatus: attendance[student.id] ?? null,
         todayIso: currentDay,
+        allSalesNewestFirst: studentSales,
       });
       if (balance) map.set(student.id, balance);
     });
     return map;
-  }, [attendanceType, selectedLessonPackage, date, filteredStudents, selectedLessonPackageSalesByStudentId, attendanceRecords, attendance]);
+  }, [attendanceType, selectedLessonPackage, date, filteredStudents, selectedLessonPackageSalesByStudentId, attendanceRecords, attendance, transactions]);
 
   const sessionDraftRecord = useMemo(
     () => ({

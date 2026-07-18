@@ -42,6 +42,8 @@ RUN npm ci --omit=dev --ignore-scripts
 
 COPY server/docker-api.mjs server/docker-production.mjs /app/server/
 COPY lib/*.mjs /app/lib/
+COPY scripts/run-nightly.sh /app/scripts/run-nightly.sh
+RUN chmod +x /app/scripts/run-nightly.sh
 COPY --from=builder /app/server/generated /app/server/generated
 COPY --from=builder /app/dist /app/dist
 

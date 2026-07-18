@@ -179,7 +179,9 @@ function sortStudiesForPicker(studies: Study[]): Study[] {
 
 function splitStudiesForExportPicker(studies: Study[]): { myStudies: Study[]; contributedStudies: Study[] } {
   const myStudies = sortStudiesForPicker(studies.filter((s) => !s.studentCreated));
-  const contributedStudies = sortStudiesForPicker(studies.filter((s) => s.studentCreated));
+  const contributedStudies = sortStudiesForPicker(
+    studies.filter((s) => s.studentCreated && s.sharedWithCoach === true),
+  );
   return { myStudies, contributedStudies };
 }
 const BOARD_SCALE_STEP = 5;

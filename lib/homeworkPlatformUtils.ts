@@ -114,6 +114,10 @@ export async function fetchStudentPlatformDayStats(
     chessComPuzzleFailed: chessComPuzzles.failed ?? 0,
     lichessError: lichessUsername ? lichessError : undefined,
     chessComError: chessComUsername ? chessComError : undefined,
+    ...((() => {
+      const puzzleSec = ((lichessDay.puzzles.count ?? 0) + (chessComPuzzles.count ?? 0)) * 45;
+      return puzzleSec > 0 ? { activityTimeSeconds: puzzleSec } : {};
+    })()),
   };
 }
 

@@ -12,7 +12,7 @@ import {
 import { Study, StudyChapter, StudyChatMessage, BottomTab } from '../lib/studyTypes';
 import StudyCallPanel from './StudyCallPanel';
 import { createStudyCall } from '../services/studyCall';
-import { loadStudiesAsync, saveStudyAsync, subscribeToStudies } from '../studyStorage';
+import { loadStudiesAsync, saveStudyAsync, deleteStudyAsync, subscribeToStudies } from '../studyStorage';
 import {
   getBestMove,
   getBestMoveAsync,
@@ -107,8 +107,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   previewStudyId = null,
   onExitPreview,
 }) => {
-  const { students, coaches, auth } = useApp();
+  const { students, coaches, auth, confirmDialog } = useApp();
   const [studies, setStudies] = useState<Study[]>([]);
+  const deletedIdsRef = useRef<Set<string>>(new Set());
   const selectedStudyIdRef = useRef<string | null>(
     previewMode && previewStudyId ? previewStudyId : null,
   );
@@ -206,7 +207,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   }, []);
 
   const mergeStudiesFromServer = useCallback((prev: Study[], fresh: Study[]) => {
-    const next = fresh.map(migrateStudy);
+    const next = fresh
+      .filter((s) => !deletedIdsRef.current.has(s.id))
+      .map(migrateStudy);
     const activeId = selectedStudyIdRef.current;
     if (!activeId || next.some((s) => s.id === activeId)) return next;
     const pinned = prev.find((s) => s.id === activeId);
@@ -280,6 +283,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       likes: 0,
       studentCreated: true,
       createdByStudentId: studentId,
+      sharedWithCoach: false,
       studentPlaysColor: 'white',
     });
     setStudies((prev) => [...prev, study]);
@@ -289,6 +293,34 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setSelectedChapterIndex(0);
     setCurrentMoveIndex(0);
   }, [studentId, studentName, myStudies.length]);
+
+  const canDeleteOwnStudy = useCallback((study: Study) => {
+    if (!studentId || previewMode) return false;
+    return (
+      study.studentCreated === true
+      && String(study.createdByStudentId ?? '') === String(studentId)
+    );
+  }, [studentId, previewMode]);
+
+  const deleteStudentStudy = useCallback(async (study: Study, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!canDeleteOwnStudy(study)) return;
+    const ok = await confirmDialog({
+      title: 'Çalışmayı sil',
+      message: `"${study.title}" kalıcı olarak silinsin mi?`,
+      confirmLabel: 'Sil',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    deletedIdsRef.current.add(study.id);
+    setStudies((prev) => prev.filter((s) => s.id !== study.id));
+    if (selectedStudyId === study.id) {
+      setSelectedStudyId(null);
+      setSelectedChapterIndex(0);
+      setCurrentMoveIndex(0);
+    }
+    void deleteStudyAsync(study.id);
+  }, [canDeleteOwnStudy, confirmDialog, selectedStudyId]);
 
   useEffect(() => {
     if (previewMode) return;
@@ -564,6 +596,18 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     updateStudyMembers(selectedStudy.memberIds.filter((id) => id !== memberId));
   }, [selectedStudy, studentId, updateStudyMembers]);
 
+  const toggleShareWithCoach = useCallback(() => {
+    if (!selectedStudy || !canManageMembers) return;
+    const next = !selectedStudy.sharedWithCoach;
+    const updated = {
+      ...selectedStudy,
+      sharedWithCoach: next,
+      updatedAt: new Date().toISOString(),
+    };
+    setStudies((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+    void saveStudyAsync(updated);
+  }, [selectedStudy, canManageMembers]);
+
   const [presenceByUserId, setPresenceByUserId] = useState<Record<string, any>>({});
   const pendingCoachChapterIdRef = useRef<string | null>(null);
 
@@ -621,7 +665,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     return () => { mounted = false; unsub(); };
   }, [selectedStudy?.id, selectedStudy?.syncEnabled, sticky, studentId, followCoachChapter, shouldFollowPresenceRow]);
 
-  // Öğrenci presence (antrenör bölüm takibi için)
+  // Öğrenci presence (antrenör bölüm takibi için) — payload gönderme; vsComputer state silinmesin.
   useEffect(() => {
     if (!selectedStudy?.id || !studentId || !effectiveChapter) return;
     const push = () => {
@@ -1994,23 +2038,43 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                </p>
              </div>
            ) : displayedStudies.map(s => (
-              <button
+              <div
                 key={s.id}
-                type="button"
-                onClick={() => {
-                  const saved = loadStudySelection(studentId);
-                  setSelectedStudyId(s.id);
-                  setSelectedChapterIndex(saved.studyId === s.id ? saved.chapterIndex : 0);
-                  setCurrentMoveIndex(0);
-                }}
-                className="p-6 rounded-3xl bg-slate-800/40 border border-white/5 hover:border-teal-500/30 transition-all text-left flex items-start gap-4 group"
+                className="p-6 rounded-3xl bg-slate-800/40 border border-white/5 hover:border-teal-500/30 transition-all flex items-start gap-4 group"
               >
-                 <span className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-3xl">{studyDisplayEmoji(s)}</span>
-                 <div className="flex-1">
-                    <h3 className="font-bold text-white group-hover:text-teal-400 mb-1">{s.title}</h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const saved = loadStudySelection(studentId);
+                    setSelectedStudyId(s.id);
+                    setSelectedChapterIndex(saved.studyId === s.id ? saved.chapterIndex : 0);
+                    setCurrentMoveIndex(0);
+                  }}
+                  className="flex items-start gap-4 flex-1 min-w-0 text-left"
+                >
+                  <span className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-3xl shrink-0">{studyDisplayEmoji(s)}</span>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-white group-hover:text-teal-400 mb-1 truncate">{s.title}</h3>
                     <p className="text-xs text-slate-500">{s.chapters.length} Bölüm</p>
-                 </div>
-              </button>
+                    {studyListCategory === 'mine' ? (
+                      <p className={`mt-1 text-[10px] font-bold uppercase tracking-wide ${s.sharedWithCoach ? 'text-teal-400' : 'text-slate-500'}`}>
+                        {s.sharedWithCoach ? 'Antrenörle paylaşıldı' : 'Özel — antrenör göremez'}
+                      </p>
+                    ) : null}
+                  </div>
+                </button>
+                {canDeleteOwnStudy(s) ? (
+                  <button
+                    type="button"
+                    onClick={(e) => void deleteStudentStudy(s, e)}
+                    className="shrink-0 p-2 rounded-xl text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                    title="Çalışmayı sil"
+                    aria-label="Çalışmayı sil"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                ) : null}
+              </div>
            ))}
         </div>
       </div>
@@ -2114,6 +2178,23 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
               })
             ) : (
               <div className="space-y-3">
+                {canManageMembers ? (
+                  <label className="flex items-start gap-3 p-3 rounded-lg bg-teal-500/10 border border-teal-500/20 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedStudy.sharedWithCoach === true}
+                      onChange={toggleShareWithCoach}
+                      className="mt-0.5 accent-teal-500"
+                    />
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-teal-100">Antrenör ile paylaş</span>
+                      <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
+                        Açıkken çalışmanız antrenör ve yönetici listesinde görünür.
+                      </p>
+                    </div>
+                  </label>
+                ) : null}
+
                 {memberStudents.length === 0 ? (
                   <div className="p-4 text-slate-500 text-xs text-center">Henüz üye eklenmedi.</div>
                 ) : (
@@ -2211,7 +2292,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   </div>
                 ) : (
                   <p className="px-2 text-[10px] text-slate-600 leading-relaxed">
-                    Antrenörün bu çalışmayı görmesi için çalışma sahibi Üyeler sekmesinden antrenörü eklemelidir.
+                    Bu çalışmanın üyelerini yalnızca çalışmayı oluşturan öğrenci düzenleyebilir.
                   </p>
                 )}
               </div>

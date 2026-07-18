@@ -107,20 +107,19 @@ import { fetchFidePlayer, federationLabel, resolveFideProfileForStudent, type Fi
 import { fetchUkdFromTsf } from '../services/ukdService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
 import { fetchLichessOAuthProfile, fetchLichessOAuthStatus } from '../services/lichessOAuthClient';
-import { formatMidnightCountdown, isoDateForWeekday, mondayOfWeek, todayDayKey } from '../lib/homeworkDayUtils';
+import { formatMidnightCountdown, homeworkDayKey } from '../lib/homeworkDayUtils';
 import {
-  fetchStudentPlatformDayStats,
   mergePlatformDayStats,
   platformSyncSummary,
   type PlatformDayStats,
 } from '../lib/homeworkPlatformUtils';
+import { homeworkWeekDaysUpToToday, syncStudentPlatformDays } from '../lib/platformStatsClientSync';
 import { nextHomeworkPuzzle } from '../lib/puzzlePlayUtils';
 import { attendanceRecordGroupName, attendanceRecordSessionScopeKey, attendanceRecordTime } from '../lib/attendanceSession';
-import { countPrivateLessonAttendanceUsage } from '../lib/privateLessonUsage';
+import { buildPrivateLessonUsageById } from '../lib/privateLessonUsage';
 import { requestTrainingNotifyCheck } from '../services/trainingNotifyClient';
 
 const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
-const PLATFORM_DAY_FETCH_TIMEOUT_MS = 12_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -382,13 +381,14 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const [externalStatsNote, setExternalStatsNote] = useState<string | null>(null);
   const [platformStatsFetched, setPlatformStatsFetched] = useState(false);
   const platformPollEnabledRef = useRef(false);
+  const platformInitialSyncDoneRef = useRef(false);
   const [midnightCountdown, setMidnightCountdown] = useState(() => formatMidnightCountdown());
-  const [homeworkDayKey, setHomeworkDayKey] = useState(() => todayDayKey());
+  const [homeworkDayKeyState, setHomeworkDayKeyState] = useState(() => homeworkDayKey());
 
   useEffect(() => {
     const tick = () => {
       setMidnightCountdown(formatMidnightCountdown());
-      setHomeworkDayKey(todayDayKey());
+      setHomeworkDayKeyState(homeworkDayKey());
     };
     tick();
     const id = window.setInterval(tick, 1000);
@@ -440,7 +440,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     return [...groupLessons, ...privateLessons];
   }, [student, lessons, trainingGroups]);
 
-  const refreshTodayExternalStats = useCallback(async () => {
+  const refreshTodayExternalStats = useCallback(async (opts?: { todayOnly?: boolean }) => {
     if (!student) {
       setTodayExternalGameCount(0);
       setTodayExternalPuzzleCount(0);
@@ -464,50 +464,33 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     }
     setLoadingExternalGameCount(true);
     platformPollEnabledRef.current = true;
-    const todayKey = todayDayKey();
-    const monday = mondayOfWeek();
-    const daysToFetch: string[] = [];
-    for (let d = 1; d <= 7; d++) {
-      const iso = isoDateForWeekday(monday, d);
-      if (iso <= todayKey) daysToFetch.push(iso);
-    }
-    const pause = (ms: number) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
+    const todayKey = homeworkDayKey();
+    const weekDays = homeworkWeekDaysUpToToday(todayKey);
+    const todayOnly = opts?.todayOnly === true || platformInitialSyncDoneRef.current;
+    const apiDays = todayOnly ? [todayKey] : weekDays;
+    platformInitialSyncDoneRef.current = true;
     try {
-      const nextWeek: Record<string, PlatformDayStats> = { ...weekPlatformStatsRef.current };
-      for (let i = 0; i < daysToFetch.length; i++) {
-        if (i > 0) await pause(500);
-        const iso = daysToFetch[i];
-        const fresh = await withTimeout(
-          fetchStudentPlatformDayStats(student, iso),
-          PLATFORM_DAY_FETCH_TIMEOUT_MS,
-          mergePlatformDayStats(nextWeek[iso], {
-            games: 0,
-            puzzleSolved: 0,
-            puzzlePassed: 0,
-            puzzleFailed: 0,
-            lichessGames: 0,
-            lichessPuzzles: 0,
-            lichessPuzzlePassed: 0,
-            lichessPuzzleFailed: 0,
-            chessComGames: 0,
-            chessComPuzzles: 0,
-            chessComPuzzlePassed: 0,
-            chessComPuzzleFailed: 0,
-            lichessError: true,
-          }),
-        );
-        nextWeek[iso] = mergePlatformDayStats(nextWeek[iso], fresh);
-      }
+      const nextWeek = await withTimeout(
+        syncStudentPlatformDays(student, weekDays, apiDays),
+        55_000,
+        { ...weekPlatformStatsRef.current },
+      );
       weekPlatformStatsRef.current = nextWeek;
       setWeekPlatformStatsByDate(nextWeek);
-      let stats = nextWeek[todayKey];
-      if (!stats) {
-        const freshToday = await fetchStudentPlatformDayStats(student, todayKey);
-        stats = mergePlatformDayStats(undefined, freshToday);
-        nextWeek[todayKey] = stats;
-        weekPlatformStatsRef.current = nextWeek;
-        setWeekPlatformStatsByDate({ ...nextWeek });
-      }
+      const stats = nextWeek[todayKey] ?? mergePlatformDayStats(undefined, {
+        games: 0,
+        puzzleSolved: 0,
+        puzzlePassed: 0,
+        puzzleFailed: 0,
+        lichessGames: 0,
+        lichessPuzzles: 0,
+        lichessPuzzlePassed: 0,
+        lichessPuzzleFailed: 0,
+        chessComGames: 0,
+        chessComPuzzles: 0,
+        chessComPuzzlePassed: 0,
+        chessComPuzzleFailed: 0,
+      });
       setTodayExternalGameCount(stats.games);
       setTodayExternalPuzzleCount(stats.puzzleSolved);
       setTodayExternalPuzzlePassed(stats.puzzlePassed);
@@ -520,7 +503,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         setExternalStatsNote(syncNote);
       }
     } catch {
-      const todayKey = todayDayKey();
       const kept = weekPlatformStatsRef.current[todayKey];
       if (kept) {
         setTodayExternalGameCount(kept.games);
@@ -538,9 +520,10 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   useEffect(() => {
     setPlatformStatsFetched(false);
     platformPollEnabledRef.current = false;
+    platformInitialSyncDoneRef.current = false;
     weekPlatformStatsRef.current = {};
     setWeekPlatformStatsByDate({});
-  }, [homeworkDayKey, student?.id]);
+  }, [homeworkDayKeyState, student?.id]);
 
   const handleDailyGoalsComplete = useCallback((homeworkId: string) => {
     if (!student) return;
@@ -576,24 +559,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [studentTransactions]);
 
   const privateLessonUsageById = useMemo(() => {
-    const map = new Map<string, { totalLessons?: number; usedLessons: number; attendanceUsedLessons: number; startingUsedLessons: number; remainingLessons?: number }>();
-    privateLessonTransactions.forEach((t) => {
-      const totalLessons = t.lessonCount;
-      const attendanceUsedLessons = countPrivateLessonAttendanceUsage(t, studentAttendances, studentId);
-      const rawStartingUsed = Number(t.startingUsedLessons ?? 0);
-      const startingUsedLessons = Number.isFinite(rawStartingUsed)
-        ? Math.max(0, totalLessons != null ? Math.min(rawStartingUsed, totalLessons) : rawStartingUsed)
-        : 0;
-      const usedLessons = attendanceUsedLessons + startingUsedLessons;
-      map.set(t.id, {
-        totalLessons,
-        usedLessons,
-        attendanceUsedLessons,
-        startingUsedLessons,
-        remainingLessons: totalLessons != null ? Math.max(0, totalLessons - usedLessons) : undefined,
-      });
-    });
-    return map;
+    return buildPrivateLessonUsageById(privateLessonTransactions, studentAttendances, studentId);
   }, [privateLessonTransactions, studentAttendances, studentId]);
 
   const studentPrivateLessonSummary = useMemo(() => {
@@ -1131,26 +1097,26 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if ((activeTab !== 'puzzles' && activeTab !== 'analyses') || !student) return;
     if (viewAs === 'parent' && activeTab === 'analyses') return;
     void refreshTodayExternalStats();
-  }, [activeTab, student?.id, homeworkDayKey, refreshTodayExternalStats, viewAs]);
+  }, [activeTab, student?.id, homeworkDayKeyState, refreshTodayExternalStats, viewAs]);
 
   useEffect(() => {
     if ((activeTab !== 'puzzles' && activeTab !== 'analyses') || !student) return;
     if (viewAs === 'parent' && activeTab === 'analyses') return;
     const id = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refreshTodayExternalStats();
+      if (document.visibilityState === 'visible') void refreshTodayExternalStats({ todayOnly: true });
     }, PLATFORM_AUTO_POLL_MS);
     return () => window.clearInterval(id);
-  }, [activeTab, student?.id, homeworkDayKey, refreshTodayExternalStats, viewAs]);
+  }, [activeTab, student?.id, homeworkDayKeyState, refreshTodayExternalStats, viewAs]);
 
   useEffect(() => {
     if (!student?.id || !platformStatsFetched || loadingExternalGameCount) return;
     if (activeTab !== 'puzzles' && activeTab !== 'summary') return;
-    void requestTrainingNotifyCheck(student.id, homeworkDayKey);
+    void requestTrainingNotifyCheck(student.id, homeworkDayKeyState);
   }, [
     student?.id,
     platformStatsFetched,
     loadingExternalGameCount,
-    homeworkDayKey,
+    homeworkDayKeyState,
     activeTab,
     weekPlatformStatsByDate,
   ]);
@@ -1453,7 +1419,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               homeworkAttempts={homeworkAttempts}
               homeworkSubmissions={homeworkSubmissions}
               homeworksLoading={homeworksLoading}
-              homeworkDayKey={homeworkDayKey}
+              homeworkDayKey={homeworkDayKeyState}
               todayExternalGameCount={todayExternalGameCount}
               todayExternalPuzzleCount={todayExternalPuzzleCount}
               todayExternalPuzzlePassed={todayExternalPuzzlePassed}

@@ -112,7 +112,7 @@ import SalePaymentCell from './SalePaymentCell';
 import { attendanceRecordGroupName, attendanceRecordSessionScopeKey, attendanceRecordTime } from '../lib/attendanceSession';
 import { attendanceEditBridgePayloadFromRecord, saveAttendanceEditBridge } from '../lib/attendanceEditBridge';
 import { writePanelHash } from '../lib/panelRouting';
-import { countPrivateLessonAttendanceUsage } from '../lib/privateLessonUsage';
+import { buildPrivateLessonUsageById, findPreviousPrivateLessonSale, getPreviousPrivateLessonRemaining } from '../lib/privateLessonUsage';
 import { UkdFideRatingsPanel } from './student/UkdFideRatingsPanel';
 
 import { REMINDER_DAY_OPTIONS, DEFAULT_REMINDER_DAY } from '../lib/reminderDays';
@@ -1069,14 +1069,41 @@ const StudentDetail: React.FC<{
     closeAnalysisModal();
   }, [studentId, student, analysisFormMeta, analysisCategories, editingAnalysisId, addPerformanceAnalysis, updatePerformanceAnalysis, closeAnalysisModal]);
 
+  const resolvePackageLessonCount = useCallback((sale: { lessonPackageId?: string; lessonPackageName?: string; lessonDiscipline?: string; lessonBranchOffice?: string }) => {
+    const pkgId = String(sale.lessonPackageId ?? '').trim();
+    if (pkgId) {
+      const byId = lessonPackages.find((pkg) => pkg.id === pkgId);
+      if (byId) return byId.lessonCount;
+    }
+    const name = String(sale.lessonPackageName ?? '').trim().toLocaleLowerCase('tr-TR');
+    if (!name) return null;
+    const byName = lessonPackages.find((pkg) => {
+      if (pkg.name.trim().toLocaleLowerCase('tr-TR') !== name) return false;
+      const d = String(sale.lessonDiscipline ?? '').trim();
+      const o = String(sale.lessonBranchOffice ?? '').trim();
+      if (d && pkg.discipline.trim() !== d) return false;
+      if (o && pkg.branchOffice.trim() !== o) return false;
+      return true;
+    });
+    return byName?.lessonCount ?? null;
+  }, [lessonPackages]);
+
   const openEditTransaction = useCallback((t: Transaction) => {
-    const attendanceUsedLessons = countPrivateLessonAttendanceUsage(t, attendanceRecords, studentId);
-    const totalLessons = t.lessonCount;
-    const startingUsedLessons = Math.max(0, Number(t.startingUsedLessons ?? 0));
-    const currentRemainingLessons =
-      totalLessons != null
-        ? Math.max(0, totalLessons - startingUsedLessons - attendanceUsedLessons)
-        : undefined;
+    const privateSales = transactions
+      .filter((row) => row.studentId === studentId && row.category === 'Özel Ders')
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const usageMap = buildPrivateLessonUsageById(
+      privateSales,
+      attendanceRecords,
+      studentId,
+      resolvePackageLessonCount,
+    );
+    const usage = usageMap.get(t.id);
+    const totalLessons = usage?.totalLessons ?? t.lessonCount;
+    const currentRemainingLessons = usage?.remainingLessons
+      ?? (totalLessons != null
+        ? Math.max(0, totalLessons - Math.max(0, Number(t.startingUsedLessons ?? 0)))
+        : undefined);
     setEditingTransactionId(t.id);
     setEditTxnAmount(String(t.amount));
     setEditTxnTotalAmount(t.totalAmount != null ? String(t.totalAmount) : '');
@@ -1086,7 +1113,7 @@ const StudentDetail: React.FC<{
     setEditTxnPaymentType(t.paymentType);
     setEditTxnProcessedBy(t.processedBy || '');
     setEditTxnDescription(t.description || '');
-  }, [attendanceRecords, studentId]);
+  }, [attendanceRecords, studentId, transactions, resolvePackageLessonCount]);
 
   const salePaymentPreview = useMemo(() => {
     const total = Number(String(saleTotalAmount).replace(/\s/g, '').replace(',', '.'));
@@ -1146,11 +1173,40 @@ const StudentDetail: React.FC<{
     setSaleBranchOffice(pkg.branchOffice);
     setSaleDiscipline(pkg.discipline);
     setSalePackageName(pkg.name);
-    setSaleTotalHours(String(pkg.lessonCount));
-    setSaleRemainingLessons(String(pkg.lessonCount));
+    const privateSales = transactions
+      .filter((row) => row.studentId === studentId && row.category === 'Özel Ders')
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const draftSale = {
+      id: '__draft__',
+      date: new Date().toISOString().slice(0, 10),
+      studentId,
+      lessonPackageId: pkg.id,
+      lessonPackageName: pkg.name,
+      lessonDiscipline: pkg.discipline,
+      lessonBranchOffice: pkg.branchOffice,
+      lessonCount: pkg.lessonCount,
+    };
+    const previousSale = findPreviousPrivateLessonSale(draftSale, privateSales);
+    const previousBalance = previousSale
+      ? buildPrivateLessonUsageById(privateSales, attendanceRecords, studentId, resolvePackageLessonCount).get(String(previousSale.id))
+      : undefined;
+    const previousRemaining = previousSale
+      ? getPreviousPrivateLessonRemaining(
+          previousSale,
+          attendanceRecords,
+          privateSales,
+          studentId,
+          draftSale.date,
+          previousBalance?.totalLessons,
+          previousBalance?.startingUsedLessons,
+        )
+      : 0;
+    const totalWithCarry = pkg.lessonCount + Math.max(0, previousRemaining);
+    setSaleTotalHours(String(totalWithCarry));
+    setSaleRemainingLessons(String(totalWithCarry));
     setSaleValidityDays(String(pkg.validityDays));
     setSaleTotalAmount(String(pkg.packageFee));
-  }, [lessonPackages]);
+  }, [lessonPackages, transactions, studentId, attendanceRecords, resolvePackageLessonCount]);
 
   const resetSalePackageFields = useCallback(() => {
     setSaleLessonPackageId('');
@@ -1406,25 +1462,20 @@ const StudentDetail: React.FC<{
   const headerGroupLabel = student?.group?.trim() || headerPrivateLessonMeta?.group || 'Grup Belirtilmemiş';
 
   const privateLessonUsageById = useMemo(() => {
-    const map = new Map<string, { totalLessons?: number; usedLessons: number; attendanceUsedLessons: number; startingUsedLessons: number; remainingLessons?: number }>();
-    privateLessonTransactions.forEach((t) => {
-      const totalLessons = t.lessonCount;
-      const attendanceUsedLessons = countPrivateLessonAttendanceUsage(t, studentAttendances, studentId);
-      const rawStartingUsed = Number(t.startingUsedLessons ?? 0);
-      const startingUsedLessons = Number.isFinite(rawStartingUsed)
-        ? Math.max(0, totalLessons != null ? Math.min(rawStartingUsed, totalLessons) : rawStartingUsed)
-        : 0;
-      const usedLessons = attendanceUsedLessons + startingUsedLessons;
-      map.set(t.id, {
-        totalLessons,
-        usedLessons,
-        attendanceUsedLessons,
-        startingUsedLessons,
-        remainingLessons: totalLessons != null ? Math.max(0, totalLessons - usedLessons) : undefined,
-      });
-    });
-    return map;
-  }, [privateLessonTransactions, studentAttendances, studentId]);
+    return buildPrivateLessonUsageById(
+      privateLessonTransactions,
+      studentAttendances,
+      studentId,
+      resolvePackageLessonCount,
+    );
+  }, [privateLessonTransactions, studentAttendances, studentId, resolvePackageLessonCount]);
+
+  const formatPrivateLessonUsageLabel = useCallback((transactionId: string) => {
+    const usage = privateLessonUsageById.get(transactionId);
+    if (!usage || usage.remainingLessons == null || usage.totalLessons == null) return '';
+    if (usage.transferredOut) return 'Yeni pakete devredildi';
+    return `Kalan ${usage.remainingLessons}/${usage.totalLessons} ders`;
+  }, [privateLessonUsageById]);
 
   const financePrivateLessonSummary = useMemo(() => {
     if (!student) return null;
@@ -2138,7 +2189,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
     {t.category === 'Özel Ders' && (t.lessonBranchOffice || t.lessonDiscipline || privateLessonUsageById.get(t.id)?.remainingLessons != null) ? (
       <div className="text-[11px] text-slate-400">
         {[t.lessonBranchOffice, t.lessonDiscipline].filter(Boolean).join(' · ')}
-        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}Kalan ${privateLessonUsageById.get(t.id)?.remainingLessons}/${privateLessonUsageById.get(t.id)?.totalLessons} ders` : ''}
+        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}${formatPrivateLessonUsageLabel(t.id)}` : ''}
       </div>
     ) : null}
   </div>
@@ -2292,7 +2343,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
     {t.category === 'Özel Ders' && (t.lessonBranchOffice || t.lessonDiscipline || privateLessonUsageById.get(t.id)?.remainingLessons != null) ? (
       <div className="text-[11px] text-slate-400">
         {[t.lessonBranchOffice, t.lessonDiscipline].filter(Boolean).join(' · ')}
-        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}Kalan ${privateLessonUsageById.get(t.id)?.remainingLessons}/${privateLessonUsageById.get(t.id)?.totalLessons} ders` : ''}
+        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}${formatPrivateLessonUsageLabel(t.id)}` : ''}
       </div>
     ) : null}
   </div>
@@ -2371,7 +2422,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
     {(t.lessonBranchOffice || t.lessonDiscipline || privateLessonUsageById.get(t.id)?.remainingLessons != null) ? (
       <div className="text-[11px] text-slate-400">
         {[t.lessonBranchOffice, t.lessonDiscipline].filter(Boolean).join(' · ')}
-        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}Kalan ${privateLessonUsageById.get(t.id)?.remainingLessons}/${privateLessonUsageById.get(t.id)?.totalLessons} ders` : ''}
+        {privateLessonUsageById.get(t.id)?.remainingLessons != null ? `${t.lessonBranchOffice || t.lessonDiscipline ? ' · ' : ''}${formatPrivateLessonUsageLabel(t.id)}` : ''}
       </div>
     ) : null}
   </div>
@@ -3210,7 +3261,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
              </div>
              <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-sm text-amber-200">
                <Clock className="w-4 h-4 text-amber-400 shrink-0" />
-              Süre dolduğunda veya saatler bittiğinde paket kapanır. Diger programdan aktariyorsan kalan hakki buraya 3 gibi girerek 3/8 mantigini baslatabilirsin.
+              Önceki paketten kalan ders otomatik eklenir (ör. 2 kalan + 8 yeni = 10). Başka programdan aktarıyorsan Mevcut Kalan alanını elle düzenleyebilirsin.
              </div>
            </>
          )}
@@ -3280,7 +3331,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
               const currentRemainingLessons =
                 lessonCount != null
                   ? (!Number.isNaN(remainingRaw) && remainingRaw >= 0
-                      ? Math.min(Math.round(remainingRaw), lessonCount)
+                      ? Math.round(remainingRaw)
                       : lessonCount)
                   : undefined;
               const startingUsedLessons =

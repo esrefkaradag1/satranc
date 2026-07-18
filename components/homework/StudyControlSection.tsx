@@ -12,6 +12,7 @@ import { loadStudyPresence, subscribeStudyPresence } from '../../services/studyA
 import { buildStudyStudentStats, type StudyStudentStat } from '../../lib/studyHomeworkStats';
 import { useApp } from '../../AppContext';
 import { canShowStudentCounts } from '../../lib/studentCountVisibility';
+import { filterStudiesForCoachView } from '../../lib/studyPermissions';
 import { StudyGroupResultsTable } from './StudyGroupResultsTable';
 import { StudyChapterReplayPanel } from './StudyChapterReplayPanel';
 
@@ -34,6 +35,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   const [loadingStudyEvents, setLoadingStudyEvents] = useState(false);
   const [resultsStudyEvents, setResultsStudyEvents] = useState<StudyEvent[]>([]);
   const [loadingResults, setLoadingResults] = useState(false);
+  const [selectedResultsStudyId, setSelectedResultsStudyId] = useState('');
 
   const getVsComputerHistory = (payload: unknown): string[] => {
     if (!payload || typeof payload !== 'object') return [];
@@ -128,17 +130,13 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
 
   const studentIds = useMemo(() => new Set(students.map((s) => s.id)), [students]);
 
+  const coachVisibleStudies = useMemo(() => filterStudiesForCoachView(studies), [studies]);
+
   const relevantStudies = useMemo(() => {
-    return studies.filter((st) =>
+    return coachVisibleStudies.filter((st) =>
       st.memberIds.some((id) => studentIds.has(id)),
     );
-  }, [studies, studentIds]);
-
-  const unassignedStudies = useMemo(() => {
-    return studies.filter((st) =>
-      !st.memberIds.some((id) => studentIds.has(id)),
-    );
-  }, [studies, studentIds]);
+  }, [coachVisibleStudies, studentIds]);
 
   const selectedStudent = useMemo(
     () => students.find((student) => student.id === selectedStudentId) ?? null,
@@ -184,7 +182,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
 
   const selectedStudentStudies = useMemo(() => {
     if (!selectedStudentId) return [];
-    return studies
+    return coachVisibleStudies
       .filter((study) => study.memberIds.includes(selectedStudentId))
       .map((study) => {
         const stat = buildStudyStudentStats(study, students.filter((s) => s.id === selectedStudentId))[0];
@@ -199,7 +197,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
         if (a.activityCount !== b.activityCount) return b.activityCount - a.activityCount;
         return a.study.title.localeCompare(b.study.title, 'tr');
       });
-  }, [studies, selectedStudentId, students]);
+  }, [coachVisibleStudies, selectedStudentId, students]);
 
   const openStudyLogForStat = (study: Study, stat: StudyStudentStat) => {
     const student = students.find((s) => s.id === stat.studentId);
@@ -356,12 +354,14 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
               className="input-base min-w-[200px]"
             >
               <option value="">Çalışma seçin</option>
-              {unassignedStudies.map((s) => (
-                <option key={s.id} value={s.id}>{studyDisplayEmoji(s)} {s.title}</option>
-              ))}
-              {studies.map((s) => (
-                <option key={`all-${s.id}`} value={s.id}>{studyDisplayEmoji(s)} {s.title}</option>
-              ))}
+              {coachVisibleStudies.map((s) => {
+                const isUnassigned = !s.memberIds.some((id) => studentIds.has(id));
+                return (
+                  <option key={s.id} value={s.id}>
+                    {studyDisplayEmoji(s)} {s.title}{isUnassigned ? ' · atanmamış' : ''}
+                  </option>
+                );
+              })}
             </select>
             <button
               type="button"

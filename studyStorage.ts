@@ -52,6 +52,7 @@ function rowToStudy(row: any): Study {
       normalizeStudentPlaysColor(row.student_plays_color),
     studentCreated:   row.student_created ?? false,
     createdByStudentId: row.created_by_student_id ?? null,
+    sharedWithCoach: row.shared_with_coach === true,
     practiceLogs:     row.practice_logs && typeof row.practice_logs === 'object' ? row.practice_logs : {},
     createdAt:        row.created_at ?? new Date().toISOString(),
     updatedAt:        row.updated_at ?? row.created_at ?? undefined,
@@ -64,6 +65,7 @@ function rowToStudy(row: any): Study {
 
 let _hasCategoryIdColumn: boolean | null = null;
 let _hasPracticeLogsColumn: boolean | null = null;
+let _hasSharedWithCoachColumn: boolean | null = null;
 
 function isPgColumnError(err: unknown): boolean {
   const e = err as { status?: number; code?: string; message?: string };
@@ -86,6 +88,8 @@ function detectOptionalColumnsFromRow(row: Record<string, unknown>): void {
   else if (_hasCategoryIdColumn === null) _hasCategoryIdColumn = false;
   if ('practice_logs' in row) _hasPracticeLogsColumn = true;
   else if (_hasPracticeLogsColumn === null) _hasPracticeLogsColumn = false;
+  if ('shared_with_coach' in row) _hasSharedWithCoachColumn = true;
+  else if (_hasSharedWithCoachColumn === null) _hasSharedWithCoachColumn = false;
 }
 
 function studyToRow(s: Study) {
@@ -116,6 +120,9 @@ function studyToRow(s: Study) {
     created_at:        s.createdAt,
     updated_at:        s.updatedAt ?? now,
   };
+  if (_hasSharedWithCoachColumn !== false) {
+    row.shared_with_coach = s.sharedWithCoach === true;
+  }
   if (_hasCategoryIdColumn !== false) {
     row.category_id =
       s.categoryId && String(s.categoryId).trim() !== '' ? String(s.categoryId).trim() : null;
@@ -138,6 +145,7 @@ async function upsertStudyRow(
     const col = missingColumnName(error);
     if (col === 'category_id') _hasCategoryIdColumn = false;
     else if (col === 'practice_logs') _hasPracticeLogsColumn = false;
+    else if (col === 'shared_with_coach') _hasSharedWithCoachColumn = false;
     else break;
     row = studyToRow(study);
     ({ error } = await client.from(TABLE).upsert(row, { onConflict: 'id' }));

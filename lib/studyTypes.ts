@@ -66,6 +66,8 @@ export interface Study {
   studentCreated?: boolean;
   /** Çalışmayı oluşturan öğrenci id'si (varsa). */
   createdByStudentId?: string | null;
+  /** Öğrenci çalışması antrenör/admin listesinde görünsün mü? */
+  sharedWithCoach?: boolean;
   /** Öğrenci bazlı senkronize uygulama günlükleri (Admin görünümü için). */
   practiceLogs?: Record<string, any[]>;
   /** Antrenör listesi klasörleri; yerel netchess_study_categories + StudyPage */

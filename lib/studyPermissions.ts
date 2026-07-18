@@ -34,3 +34,13 @@ export function canCloneStudy(study: Study, auth: AuthUser | null | undefined): 
 export function canExportStudy(study: Study, auth: AuthUser | null | undefined): boolean {
   return checkPermission(study.shareExport, study, auth);
 }
+
+/** Antrenör/admin listelerinde gösterilecek mi? Öğretmen çalışmaları her zaman; öğrenci çalışması yalnızca paylaşıldıysa. */
+export function isStudentStudyVisibleToCoach(study: Study): boolean {
+  if (!study.studentCreated) return true;
+  return study.sharedWithCoach === true;
+}
+
+export function filterStudiesForCoachView(studies: Study[]): Study[] {
+  return studies.filter(isStudentStudyVisibleToCoach);
+}

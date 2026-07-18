@@ -26,6 +26,7 @@ import { loadStudiesAsync, saveStudyAsync } from '../studyStorage';
 import { loadStudyCategoriesAsync, type StudyCategoryMeta } from '../studyCategoriesStorage';
 import { applyPuzzleMove, initCoachStyleSession, materializeLichessPuzzleRecord, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
 import type { Study } from '../lib/studyTypes';
+import { filterStudiesForCoachView } from '../lib/studyPermissions';
 import { genId, migrateStudy, migrateChapter } from '../lib/studyUtils';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
@@ -228,7 +229,7 @@ const ChessBoard: React.FC = () => {
     setStudyPickerLoading(true);
     void Promise.all([loadStudiesAsync(), loadStudyCategoriesAsync()])
       .then(([studies, cats]) => {
-        setStudiesPickerList(studies ?? []);
+        setStudiesPickerList(filterStudiesForCoachView(studies ?? []));
         setStudyPickerCategories(cats);
       })
       .catch(() => {

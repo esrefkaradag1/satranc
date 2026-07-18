@@ -13,12 +13,14 @@ export function shiftIstanbulDayKey(day: string, deltaDays: number): string {
   return istanbulDayKey(d);
 }
 
-/** Yerel takvim günü: YYYY-MM-DD */
+/** Ödev/platform gün anahtarı — sunucu cron ile aynı (Europe/Istanbul). */
+export function homeworkDayKey(ref = new Date()): string {
+  return istanbulDayKey(ref);
+}
+
+/** @deprecated Ödev/platform için homeworkDayKey kullanın. */
 export function todayDayKey(ref = new Date()): string {
-  const y = ref.getFullYear();
-  const m = String(ref.getMonth() + 1).padStart(2, '0');
-  const d = String(ref.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return homeworkDayKey(ref);
 }
 
 export function localDayKeyFromMs(ms: number): string {
@@ -46,11 +48,11 @@ export function msUntilLocalMidnight(ref = new Date()): number {
   return Math.max(0, end.getTime() - ref.getTime());
 }
 
-/** Günlük ödev günü kapanışına (23:59) kalan süre */
+/** Günlük ödev günü kapanışına (23:59 İstanbul) kalan süre */
 export function msUntilDailyHomeworkClose(ref = new Date()): number {
-  const closeAt = new Date(ref);
-  closeAt.setHours(23, 59, 0, 0);
-  return Math.max(0, closeAt.getTime() - ref.getTime());
+  const today = homeworkDayKey(ref);
+  const closeMs = new Date(`${today}T23:59:59+03:00`).getTime();
+  return Math.max(0, closeMs - ref.getTime());
 }
 
 export function formatMidnightCountdown(ref = new Date()): string {
@@ -62,18 +64,17 @@ export function formatMidnightCountdown(ref = new Date()): string {
 }
 
 export function isToday(isoDate: string): boolean {
-  return isoDate === todayDayKey();
+  return isoDate.slice(0, 10) === homeworkDayKey();
 }
 
 /** Günlük hedef günü kapandı mı? (geçmiş günler veya bugün 23:59 sonrası) */
 export function isDailyHomeworkDayClosed(isoDate: string, ref = new Date()): boolean {
   const day = isoDate.slice(0, 10);
-  const today = todayDayKey(ref);
+  const today = homeworkDayKey(ref);
   if (day < today) return true;
   if (day > today) return false;
-  const closeAt = new Date(ref);
-  closeAt.setHours(23, 59, 0, 0);
-  return ref.getTime() >= closeAt.getTime();
+  const closeMs = new Date(`${today}T23:59:59+03:00`).getTime();
+  return ref.getTime() >= closeMs;
 }
 
 export function resolveDayCompletionStatus(
@@ -86,7 +87,7 @@ export function resolveDayCompletionStatus(
   if (isDailyHomeworkDayClosed(isoDate, ref)) {
     return hasActivity ? 'partial' : 'missed';
   }
-  if (isoDate.slice(0, 10) > todayDayKey(ref)) return 'pending';
+  if (isoDate.slice(0, 10) > homeworkDayKey(ref)) return 'pending';
   return 'pending';
 }
 
@@ -110,9 +111,7 @@ export function dayCompletionLabel(
 
 /** ISO gün anahtarında ±N gün kaydırır */
 export function shiftDayKey(isoDate: string, deltaDays: number): string {
-  const d = new Date(`${isoDate.slice(0, 10)}T12:00:00`);
-  d.setDate(d.getDate() + deltaDays);
-  return todayDayKey(d);
+  return shiftIstanbulDayKey(isoDate.slice(0, 10), deltaDays);
 }
 
 export type DayCompletionStatus = 'done' | 'missed' | 'partial' | 'pending' | 'none';
@@ -131,5 +130,5 @@ export function mondayOfWeek(ref = new Date()): Date {
 export function isoDateForWeekday(monday: Date, weekday: number): string {
   const d = new Date(monday);
   d.setDate(d.getDate() + weekday - 1);
-  return todayDayKey(d);
+  return homeworkDayKey(d);
 }

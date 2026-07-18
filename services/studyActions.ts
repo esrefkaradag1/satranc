@@ -135,22 +135,26 @@ export async function upsertPresence(args: {
   chapterId: string | null;
   path: string | null;
   sticky: boolean;
+  /** Omit to keep existing payload (path/sticky heartbeats must not wipe vsComputer state). */
   payload?: any;
 }) {
   if (!isSupabaseBackend()) return;
   const client = getServiceSupabase() ?? supabase;
-  const { error } = await client.from(PRESENCE_TABLE).upsert(
-    {
-      study_id: args.studyId,
-      user_id: args.userId,
-      chapter_id: args.chapterId,
-      path: args.path,
-      sticky: args.sticky,
-      payload: args.payload || {},
-      last_seen: new Date().toISOString(),
-    },
-    { onConflict: 'study_id,user_id' },
-  );
+  // merge-duplicates: columns omitted from the row are left unchanged on conflict.
+  const row: Record<string, unknown> = {
+    study_id: args.studyId,
+    user_id: args.userId,
+    chapter_id: args.chapterId,
+    path: args.path,
+    sticky: args.sticky,
+    last_seen: new Date().toISOString(),
+  };
+  if (args.payload !== undefined) {
+    row.payload = args.payload ?? {};
+  }
+  const { error } = await client.from(PRESENCE_TABLE).upsert(row, {
+    onConflict: 'study_id,user_id',
+  });
   if (error) console.warn('[StudyActions] presence upsert error:', error.message);
 }
 

@@ -473,6 +473,7 @@ ALTER TABLE public.chess_studies ADD COLUMN IF NOT EXISTS category_id text;
 ALTER TABLE public.chess_studies ADD COLUMN IF NOT EXISTS student_plays_color text NOT NULL DEFAULT 'both';
 ALTER TABLE public.chess_studies ADD COLUMN IF NOT EXISTS student_created boolean NOT NULL DEFAULT false;
 ALTER TABLE public.chess_studies ADD COLUMN IF NOT EXISTS created_by_student_id text;
+ALTER TABLE public.chess_studies ADD COLUMN IF NOT EXISTS shared_with_coach boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS public.chess_study_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

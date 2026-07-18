@@ -26,8 +26,8 @@ function headerValue(req: Req, name: string): string {
 
 function cronAuthorized(req: Req): boolean {
   const secret = String(process.env.CRON_SECRET || '').trim();
-  if (!secret) return true;
-  return headerValue(req, 'authorization') === `Bearer ${secret}`;
+  if (secret) return headerValue(req, 'authorization') === `Bearer ${secret}`;
+  return process.env.NODE_ENV !== 'production';
 }
 
 export const config = { maxDuration: 300 };

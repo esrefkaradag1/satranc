@@ -248,6 +248,7 @@ export function migrateStudy(s: Partial<Study>): Study {
     studentPlaysColor: normalizeStudentPlaysColor(s.studentPlaysColor),
     studentCreated: s.studentCreated ?? false,
     createdByStudentId: s.createdByStudentId ?? null,
+    sharedWithCoach: s.sharedWithCoach ?? false,
     practiceLogs: s.practiceLogs ?? {},
     categoryId:
       typeof s.categoryId === 'string' && s.categoryId.trim() !== '' ? s.categoryId.trim() : null,
