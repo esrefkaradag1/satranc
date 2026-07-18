@@ -373,7 +373,7 @@ const StudyPage: React.FC = () => {
   const [ncFenInput, setNcFenInput] = useState('');
   const [ncOrientation, setNcOrientation] = useState<'white' | 'black'>('white');
   const [ncMode, setNcMode] = useState<'normal' | 'interactive'>('normal');
-  const [ncInteractiveType, setNcInteractiveType] = useState<'puzzle' | 'liveAnalysis' | 'vsComputer'>('puzzle');
+  const [ncInteractiveType, setNcInteractiveType] = useState<'puzzle' | 'vsComputer'>('puzzle');
   const [ncEditorTool, setNcEditorTool] = useState<string | null>(null);
   const [ncCastling, setNcCastling] = useState({ K: true, Q: true, k: true, q: true });
   const [ncTurn, setNcTurn] = useState<'w' | 'b'>('w');
@@ -5131,18 +5131,24 @@ const StudyPage: React.FC = () => {
 
       {/* New Chapter modal */}
       {showNewChapterModal && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setShowNewChapterModal(false)}>
-          <div className="bg-[#15181c] border border-white/5 rounded-3xl shadow-[0_0_100px_rgba(0,0,0,0.8)] w-full max-w-xl max-h-[92vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
+          onClick={() => setShowNewChapterModal(false)}
+        >
+          <div
+            className="bg-[#15181c] border border-white/5 rounded-2xl sm:rounded-3xl shadow-[0_0_100px_rgba(0,0,0,0.8)] w-full max-w-3xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200"
+            onClick={e => e.stopPropagation()}
+          >
             {/* Header */}
-            <div className="p-6 border-b border-white/5 flex items-center justify-between bg-slate-900/50">
-              <h3 className="font-black text-white text-xl uppercase tracking-tighter flex items-center gap-2">
+            <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-b border-white/5 flex items-center justify-between bg-slate-900/50">
+              <h3 className="font-black text-white text-lg sm:text-xl uppercase tracking-tighter flex items-center gap-2">
                 Yeni bölüm
                 <Info className="w-4 h-4 text-slate-600" />
               </h3>
               <button type="button" onClick={() => setShowNewChapterModal(false)} className="p-2 text-slate-500 hover:text-white rounded-xl hover:bg-white/5 transition-all"><X className="w-6 h-6" /></button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-5 custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-6 py-4 space-y-4 custom-scrollbar">
               {/* İsim */}
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">İsim</label>
@@ -5167,7 +5173,7 @@ const StudyPage: React.FC = () => {
                     key={key}
                     type="button"
                     onClick={() => setNcTab(key)}
-                    className={`px-5 py-3 text-[11px] font-bold uppercase tracking-wider transition-all relative ${
+                    className={`px-4 sm:px-5 py-2.5 text-[11px] font-bold uppercase tracking-wider transition-all relative shrink-0 ${
                       ncTab === key ? 'text-amber-400' : 'text-slate-500 hover:text-slate-300'
                     }`}
                   >
@@ -5187,27 +5193,27 @@ const StudyPage: React.FC = () => {
                         key={p}
                         type="button"
                         onClick={() => setNcEditorTool(ncEditorTool === p ? null : p)}
-                        className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${ncEditorTool === p ? 'bg-teal-500/30 ring-2 ring-teal-500 shadow-[0_0_10px_rgba(20,184,166,0.3)]' : 'hover:bg-white/10'}`}
+                        className={`w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center transition-all ${ncEditorTool === p ? 'bg-teal-500/30 ring-2 ring-teal-500 shadow-[0_0_10px_rgba(20,184,166,0.3)]' : 'hover:bg-white/10'}`}
                       >
-                        <img src={LICHESS_PIECE(p)} alt={p} className="w-7 h-7" />
+                        <img src={LICHESS_PIECE(p)} alt={p} className="w-6 h-6 sm:w-7 sm:h-7" />
                       </button>
                     ))}
                     <div className="flex-1" />
                     <button
                       type="button"
                       onClick={() => setNcEditorTool(ncEditorTool === 'trash' ? null : 'trash')}
-                      className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${ncEditorTool === 'trash' ? 'bg-rose-500/30 ring-2 ring-rose-500' : 'hover:bg-white/10'}`}
+                      className={`w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center transition-all ${ncEditorTool === 'trash' ? 'bg-rose-500/30 ring-2 ring-rose-500' : 'hover:bg-white/10'}`}
                       title="Taş sil"
                     >
                       <Trash2 className="w-4 h-4 text-slate-400" />
                     </button>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-4">
+                  <div className="flex flex-col lg:flex-row gap-3 lg:gap-4">
                     {/* Board */}
                     <ChessBoardFrame
                       boardOrientation={ncOrientation}
-                      className="w-full max-w-[min(100%,280px)] mx-auto sm:mx-0 shrink-0 rounded-xl overflow-hidden border border-white/5 shadow-xl cursor-crosshair"
+                      className="w-full max-w-[min(100%,220px)] sm:max-w-[min(100%,240px)] mx-auto lg:mx-0 shrink-0 rounded-xl overflow-hidden border border-white/5 shadow-xl cursor-crosshair"
                       boardClassName="overflow-hidden"
                     >
                       <div className="absolute inset-0">
@@ -5271,7 +5277,7 @@ const StudyPage: React.FC = () => {
                     </ChessBoardFrame>
 
                     {/* Side controls */}
-                    <div className="flex-1 space-y-3 text-xs">
+                    <div className="flex-1 space-y-3 text-xs min-w-0">
                       <select
                         value={ncTurn}
                         onChange={e => { const t = e.target.value as 'w' | 'b'; setNcTurn(t); ncUpdateFenMeta(t, ncCastling); }}
@@ -5333,9 +5339,9 @@ const StudyPage: React.FC = () => {
                         key={p}
                         type="button"
                         onClick={() => setNcEditorTool(ncEditorTool === p ? null : p)}
-                        className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${ncEditorTool === p ? 'bg-teal-500/30 ring-2 ring-teal-500 shadow-[0_0_10px_rgba(20,184,166,0.3)]' : 'hover:bg-white/10'}`}
+                        className={`w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center transition-all ${ncEditorTool === p ? 'bg-teal-500/30 ring-2 ring-teal-500 shadow-[0_0_10px_rgba(20,184,166,0.3)]' : 'hover:bg-white/10'}`}
                       >
-                        <img src={LICHESS_PIECE(p)} alt={p} className="w-7 h-7" />
+                        <img src={LICHESS_PIECE(p)} alt={p} className="w-6 h-6 sm:w-7 sm:h-7" />
                       </button>
                     ))}
                   </div>
@@ -5376,7 +5382,7 @@ const StudyPage: React.FC = () => {
                   <textarea
                     value={ncFenInput}
                     onChange={e => setNcFenInput(e.target.value)}
-                    rows={5}
+                    rows={4}
                     className="w-full bg-slate-900 border border-white/5 rounded-xl px-4 py-3 text-white font-mono text-xs outline-none focus:ring-2 focus:ring-teal-500/50 resize-none custom-scrollbar"
                     placeholder={"FEN veya PGN yapıştırın...\n\nÖrnek FEN:\nrnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1\n\nÖrnek PGN:\n1. e4 e5 2. Nf3 Nc6 3. Bb5"}
                   />
@@ -5603,11 +5609,10 @@ const StudyPage: React.FC = () => {
                   <label className="block text-[10px] font-bold text-teal-400/70 uppercase tracking-widest">Etkileşim tipi</label>
                   <select
                     value={ncInteractiveType}
-                    onChange={e => setNcInteractiveType(e.target.value as 'puzzle' | 'liveAnalysis' | 'vsComputer')}
+                    onChange={e => setNcInteractiveType(e.target.value as 'puzzle' | 'vsComputer')}
                     className="w-full bg-slate-900 border border-teal-500/30 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:ring-2 focus:ring-teal-500/40"
                   >
                     <option value="puzzle">Bulmaca (Hamle Bul)</option>
-                    <option value="liveAnalysis">Canlı Analiz</option>
                     <option value="vsComputer">Bilgisayara Karşı Antrenman</option>
                   </select>
                   {ncInteractiveType === 'vsComputer' ? (
@@ -5618,7 +5623,7 @@ const StudyPage: React.FC = () => {
             </div>
 
             {/* Footer */}
-            <div className="p-5 border-t border-white/5 bg-black/20 flex justify-end">
+            <div className="shrink-0 px-4 sm:px-5 py-3 sm:py-4 border-t border-white/5 bg-black/20 flex justify-end">
               <button
                 type="button"
                 onClick={createChapterFromModal}
@@ -5636,13 +5641,13 @@ const StudyPage: React.FC = () => {
 
       {/* Chapter edit modal */}
       {editingChapterId && chapterDraft && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in" onClick={() => setEditingChapterId(null)}>
-          <div className="bg-[#15181c] border border-white/10 rounded-3xl shadow-[0_0_100px_rgba(0,0,0,0.8)] w-full max-w-lg overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-            <div className="p-6 border-b border-white/5 flex items-center justify-between bg-slate-900/50">
-              <h3 className="font-black text-white text-xl uppercase tracking-tighter">Bölümü Düzenle</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in" onClick={() => setEditingChapterId(null)}>
+          <div className="bg-[#15181c] border border-white/10 rounded-2xl sm:rounded-3xl shadow-[0_0_100px_rgba(0,0,0,0.8)] w-full max-w-lg max-h-[calc(100dvh-1rem)] overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+            <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-b border-white/5 flex items-center justify-between bg-slate-900/50">
+              <h3 className="font-black text-white text-lg sm:text-xl uppercase tracking-tighter">Bölümü Düzenle</h3>
               <button type="button" onClick={() => setEditingChapterId(null)} className="p-2 text-slate-500 hover:text-white rounded-xl hover:bg-white/5 transition-all"><X className="w-6 h-6" /></button>
             </div>
-            <div className="p-6 space-y-6">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-6 py-4 space-y-5 custom-scrollbar">
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Bölüm Başlığı</label>
                 <input type="text" value={chapterDraft.title} onChange={e => setChapterDraft(d => d ? { ...d, title: e.target.value } : d)} className="w-full bg-slate-900 border border-white/10 rounded-xl px-4 py-2.5 text-white font-bold focus:ring-2 focus:ring-teal-500/50 outline-none" />
@@ -5654,11 +5659,16 @@ const StudyPage: React.FC = () => {
 
               {chapterDraft.lessonMode === 'interactive' && (
                 <div className="p-4 bg-teal-500/5 border border-teal-500/20 rounded-2xl space-y-4 animate-in slide-in-from-top-2">
-                  <Sel label="Etkileşim Tipi" value={chapterDraft.interactiveType} onChange={v => setChapterDraft(d => d ? { ...d, interactiveType: v as any, difficulty: v === 'vsComputer' ? 10 : d.difficulty } : d)} options={[['puzzle', 'Bulmaca (Hamle Bul)'], ['liveAnalysis', 'Canlı Analiz'], ['vsComputer', 'Bilgisayara Karşı Antrenman']]} />
+                  <Sel
+                    label="Etkileşim Tipi"
+                    value={chapterDraft.interactiveType === 'liveAnalysis' ? 'puzzle' : (chapterDraft.interactiveType ?? 'puzzle')}
+                    onChange={v => setChapterDraft(d => d ? { ...d, interactiveType: v as any, difficulty: v === 'vsComputer' ? 10 : d.difficulty } : d)}
+                    options={[['puzzle', 'Bulmaca (Hamle Bul)'], ['vsComputer', 'Bilgisayara Karşı Antrenman']]}
+                  />
                   {chapterDraft.interactiveType === 'vsComputer' ? (
                     <p className="text-[11px] text-teal-300/80">Bilgisayar karşısında antrenman en yüksek seviyede başlar.</p>
                   ) : null}
-                  {(chapterDraft.interactiveType ?? 'puzzle') === 'puzzle' ? (
+                  {(chapterDraft.interactiveType ?? 'puzzle') === 'puzzle' || chapterDraft.interactiveType === 'liveAnalysis' ? (
                   <div>
                     <label className="block text-[10px] font-bold text-teal-400/70 uppercase tracking-widest mb-1.5">İpucu (Hint)</label>
                     <input type="text" value={chapterDraft.moveHint} onChange={e => setChapterDraft(d => d ? { ...d, moveHint: e.target.value } : d)} className="w-full bg-slate-900 border border-white/5 rounded-xl px-3 py-2 text-xs text-white outline-none" placeholder="Sıkışan öğrenciye gösterilecek mesaj..." />
@@ -5687,7 +5697,7 @@ const StudyPage: React.FC = () => {
                 )}
               </div>
             </div>
-            <div className="p-6 border-t border-white/5 bg-black/20 flex items-center justify-between">
+            <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-t border-white/5 bg-black/20 flex items-center justify-between">
               <button type="button" onClick={() => deleteChapter(editingChapterId)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-rose-500 hover:bg-rose-500/10 font-bold text-xs"><Trash2 className="w-4 h-4" /> SİL</button>
               <div className="flex gap-3">
                 <button type="button" onClick={() => setEditingChapterId(null)} className="px-6 py-2.5 rounded-xl text-slate-400 font-bold text-sm hover:text-white transition-colors">İPTAL</button>
