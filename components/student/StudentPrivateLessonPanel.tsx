@@ -12,6 +12,8 @@ export type PrivateLessonSummary = {
   remainingLessons?: number;
   attendanceUsedLessons: number;
   startingUsedLessons: number;
+  purchasedLessons?: number;
+  carriedInLessons?: number;
   saleDate: string;
 };
 
@@ -21,6 +23,10 @@ type UsageInfo = {
   attendanceUsedLessons: number;
   startingUsedLessons: number;
   remainingLessons?: number;
+  purchasedLessons?: number;
+  carriedInLessons?: number;
+  transferredOut?: boolean;
+  transferredOutLessons?: number;
 };
 
 type Props = {
@@ -116,6 +122,14 @@ export const StudentPrivateLessonPanel: React.FC<Props> = ({
             <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Toplam ders</p>
               <p className="mt-1 text-2xl font-black text-white tabular-nums">{summary.totalLessons ?? '—'}</p>
+              {(summary.carriedInLessons ?? 0) > 0 || summary.purchasedLessons != null ? (
+                <p className="text-[10px] text-slate-500 mt-1">
+                  {[
+                    summary.purchasedLessons != null ? `Paket ${summary.purchasedLessons}` : null,
+                    (summary.carriedInLessons ?? 0) > 0 ? `Devreden ${summary.carriedInLessons}` : null,
+                  ].filter(Boolean).join(' + ')}
+                </p>
+              ) : null}
             </div>
             <div className="rounded-xl bg-amber-500/10 border border-amber-500/25 p-4">
               <p className="text-[10px] font-bold text-amber-200/80 uppercase tracking-wider">Kullanılan</p>
@@ -132,12 +146,9 @@ export const StudentPrivateLessonPanel: React.FC<Props> = ({
                 <p className="text-[10px] text-rose-300/90 mt-1 font-medium">Paket tükenmek üzere</p>
               ) : null}
             </div>
-            <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Kullanım detayı</p>
-              <p className="mt-1 text-sm font-bold text-white">
-                Yoklama {summary.attendanceUsedLessons}
-                <span className="text-slate-500 font-medium"> · Elle {summary.startingUsedLessons}</span>
-              </p>
+            <div className="rounded-xl bg-sky-500/10 border border-sky-500/25 p-4">
+              <p className="text-[10px] font-bold text-sky-200/80 uppercase tracking-wider">Devreden</p>
+              <p className="mt-1 text-2xl font-black text-sky-200 tabular-nums">{summary.carriedInLessons ?? 0}</p>
             </div>
           </div>
         ) : null}
@@ -166,8 +177,15 @@ export const StudentPrivateLessonPanel: React.FC<Props> = ({
                   </div>
                   <div className="text-right shrink-0">
                     <p className="text-sm font-black text-emerald-300 tabular-nums">
-                      Kalan {usage?.remainingLessons ?? '—'}/{usage?.totalLessons ?? t.lessonCount ?? '—'}
+                      {usage?.transferredOut
+                        ? (usage.transferredOutLessons
+                            ? `Yeni pakete devredildi (${usage.transferredOutLessons} ders)`
+                            : 'Yeni pakete devredildi')
+                        : `Kalan ${usage?.remainingLessons ?? '—'}/${usage?.totalLessons ?? t.lessonCount ?? '—'}`}
                     </p>
+                    {(usage?.carriedInLessons ?? 0) > 0 && !usage?.transferredOut ? (
+                      <p className="text-[10px] text-sky-400">Devreden {usage?.carriedInLessons}</p>
+                    ) : null}
                     <p className="text-[10px] text-slate-500">₺{(t.amount ?? 0).toLocaleString('tr-TR')}</p>
                   </div>
                 </div>

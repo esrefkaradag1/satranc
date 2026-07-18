@@ -580,6 +580,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       remainingLessons,
       attendanceUsedLessons: usage?.attendanceUsedLessons ?? 0,
       startingUsedLessons: usage?.startingUsedLessons ?? 0,
+      purchasedLessons: usage?.purchasedLessons,
+      carriedInLessons: usage?.carriedInLessons ?? 0,
       saleDate: String(latest.date ?? ''),
     };
   }, [privateLessonTransactions, privateLessonUsageById]);
@@ -2108,6 +2110,12 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                         <p className="mt-1 text-lg font-bold text-white">
                           {studentPrivateLessonSummary.usedLessons}/{studentPrivateLessonSummary.totalLessons ?? '—'}
                         </p>
+                        {(studentPrivateLessonSummary.carriedInLessons ?? 0) > 0 ? (
+                          <p className="text-xs text-sky-400 mt-0.5">
+                            Devreden {studentPrivateLessonSummary.carriedInLessons}
+                            {studentPrivateLessonSummary.purchasedLessons != null ? ` + paket ${studentPrivateLessonSummary.purchasedLessons}` : ''}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="rounded-xl bg-slate-900/60 border border-slate-700/50 p-4">
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Aktif paket</p>

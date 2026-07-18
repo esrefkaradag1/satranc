@@ -1473,8 +1473,13 @@ const StudentDetail: React.FC<{
   const formatPrivateLessonUsageLabel = useCallback((transactionId: string) => {
     const usage = privateLessonUsageById.get(transactionId);
     if (!usage || usage.remainingLessons == null || usage.totalLessons == null) return '';
-    if (usage.transferredOut) return 'Yeni pakete devredildi';
-    return `Kalan ${usage.remainingLessons}/${usage.totalLessons} ders`;
+    if (usage.transferredOut) {
+      const n = usage.transferredOutLessons ?? 0;
+      return n > 0 ? `Yeni pakete devredildi (${n} ders)` : 'Yeni pakete devredildi';
+    }
+    const carry = usage.carriedInLessons ?? 0;
+    const base = `Kalan ${usage.remainingLessons}/${usage.totalLessons} ders`;
+    return carry > 0 ? `${base} · Devreden ${carry}` : base;
   }, [privateLessonUsageById]);
 
   const financePrivateLessonSummary = useMemo(() => {
@@ -1496,6 +1501,8 @@ const StudentDetail: React.FC<{
       remainingLessons,
       attendanceUsedLessons: usage?.attendanceUsedLessons ?? 0,
       startingUsedLessons: usage?.startingUsedLessons ?? 0,
+      purchasedLessons: usage?.purchasedLessons,
+      carriedInLessons: usage?.carriedInLessons ?? 0,
       saleDate: String(latest.date ?? ''),
     };
   }, [student, privateLessonTransactions, privateLessonUsageById]);
@@ -1921,7 +1928,9 @@ const StudentDetail: React.FC<{
     }
     subtitle={
       financePrivateLessonSummary.remainingLessons != null
-        ? `Kalan ${financePrivateLessonSummary.remainingLessons} ders`
+        ? (financePrivateLessonSummary.carriedInLessons > 0
+            ? `Kalan ${financePrivateLessonSummary.remainingLessons} · Devreden ${financePrivateLessonSummary.carriedInLessons}`
+            : `Kalan ${financePrivateLessonSummary.remainingLessons} ders`)
         : 'Kalan ders bilgisi yok'
     }
     accent={financePrivateLessonSummary.remainingLessons === 0 ? 'amber' : 'emerald'}
@@ -1973,10 +1982,18 @@ const StudentDetail: React.FC<{
             {[financePrivateLessonSummary.branchOffice, financePrivateLessonSummary.discipline].filter(Boolean).join(' · ') || 'Özel ders paketi'}
           </div>
         </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4">
           <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 p-3">
             <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Toplam Ders</div>
             <div className="mt-2 text-xl font-black text-white">{financePrivateLessonSummary.totalLessons ?? '—'}</div>
+            {financePrivateLessonSummary.purchasedLessons != null || (financePrivateLessonSummary.carriedInLessons ?? 0) > 0 ? (
+              <div className="mt-1 text-[10px] text-slate-500">
+                {[
+                  financePrivateLessonSummary.purchasedLessons != null ? `Paket ${financePrivateLessonSummary.purchasedLessons}` : null,
+                  (financePrivateLessonSummary.carriedInLessons ?? 0) > 0 ? `Devreden ${financePrivateLessonSummary.carriedInLessons}` : null,
+                ].filter(Boolean).join(' + ')}
+              </div>
+            ) : null}
           </div>
           <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
             <div className="text-[10px] font-bold uppercase tracking-widest text-amber-200/80">Kullanılan</div>
@@ -1985,6 +2002,14 @@ const StudentDetail: React.FC<{
           <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
             <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-200/80">Kalan</div>
             <div className="mt-2 text-xl font-black text-emerald-200">{financePrivateLessonSummary.remainingLessons ?? '—'}</div>
+          </div>
+          <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-sky-200/80">Devreden</div>
+            <div className="mt-2 text-xl font-black text-sky-200">{financePrivateLessonSummary.carriedInLessons ?? 0}</div>
+          </div>
+          <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-violet-200/80">Satın Alınan</div>
+            <div className="mt-2 text-xl font-black text-violet-200">{financePrivateLessonSummary.purchasedLessons ?? '—'}</div>
           </div>
           <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 p-3">
             <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Satış Tarihi</div>
@@ -3261,7 +3286,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
              </div>
              <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-sm text-amber-200">
                <Clock className="w-4 h-4 text-amber-400 shrink-0" />
-              Önceki paketten kalan ders otomatik eklenir (ör. 2 kalan + 8 yeni = 10). Başka programdan aktarıyorsan Mevcut Kalan alanını elle düzenleyebilirsin.
+              Önceki paketten kalan otomatik devreder (ör. 3 kalan + 8 yeni = 11). Yoklama yeni paketten düşer. Özet ekranında Satın Alınan ve Devreden ayrı görünür.
              </div>
            </>
          )}

@@ -79,10 +79,14 @@ export type PrivateLessonBalance = {
   remainingLessons: number;
   attendanceUsedLessons: number;
   startingUsedLessons: number;
-  /** Önceki paketten devreden kalan (gösterim / satış için). */
+  /** Bu satışta satın alınan paket saati (katalog). */
+  purchasedLessons?: number;
+  /** Önceki paketten devreden kalan. */
   carriedInLessons?: number;
   /** Kalan ders sonraki pakete aktarıldı. */
   transferredOut?: boolean;
+  /** Sonraki pakete aktarılan ders sayısı. */
+  transferredOutLessons?: number;
 };
 
 export function computePrivateLessonBalance(
@@ -225,7 +229,7 @@ export function countPrivateLessonAttendanceBeforeDate(
   const fromDate = String(transaction.date ?? '').slice(0, 10);
   const lessonPackageId = String(transaction.lessonPackageId ?? '').trim();
   const sessionRecord = buildPrivateLessonSessionRecord(transaction);
-  const includeUntil = options?.includeUntilDate !== false; // default: satış günü dahil
+  const includeUntil = options?.includeUntilDate === true;
   const includeBeforeSale = options?.includeBeforeSaleDate !== false; // default: satış öncesi de say
 
   return attendanceRecords.filter((record) => {
@@ -242,8 +246,8 @@ export function countPrivateLessonAttendanceBeforeDate(
 
 /**
  * Yeni satışta önceki paketten kalan dersi hesaplar.
- * Aynı gün hem ders hem paket yenilemede: satış günü yoklaması eski bakiyeden düşülür
- * (yoksa 2 kalan → 3 görünüp 3+8=11 olur); yeni paketteki kullanım ayrıca sayılır.
+ * Satış günündeki yoklama yeni pakete aittir; devir bakiyesine dahil edilmez
+ * (ör. 3 kalan + 8 yeni = 11; bugün 1 yoklama → 1/11).
  */
 export function getPreviousPrivateLessonRemaining(
   previousSale: PrivateLessonSaleRef | null | undefined,
@@ -263,7 +267,8 @@ export function getPreviousPrivateLessonRemaining(
     attendanceRecords,
     studentId,
     nextSaleDate,
-    { includeUntilDate: true, includeBeforeSaleDate: true },
+    // Satış günü yeni pakete yazılır; devir için satış gününden önceki yoklama.
+    { includeUntilDate: false, includeBeforeSaleDate: true },
   );
   return Math.max(0, total - starting - usedBefore);
 }
@@ -344,41 +349,50 @@ export function buildPrivateLessonUsageById(
           previousBalance?.startingUsedLessons,
         )
       : 0;
+
     const packageLessonCount = getPackageLessonCount?.(sale) ?? null;
     const startingUsed = Math.max(0, Number(sale.startingUsedLessons ?? 0) || 0);
     const storedTotal = Number(sale.lessonCount ?? 0) || 0;
 
-    let saleForCompute: PrivateLessonSaleRef = sale;
-    let carriedInLessons = inferCarriedInLessons({
+    // 1) Gösterim için çıkarılan devir (henüz kayda yazılmamış eski satışlar)
+    let inferredCarry = inferCarriedInLessons({
       sale,
       previousSale,
       previousRemaining,
       packageLessonCount,
     });
 
-    // Yanlış devirle kaydedilmiş toplamı düzelt (ör. 3+8=11 → 2+8=10).
-    const catalogOrPrevious =
-      (packageLessonCount != null && packageLessonCount > 0 ? packageLessonCount : null)
-      ?? (previousSale?.lessonCount != null && Number(previousSale.lessonCount) > 0
-        ? Number(previousSale.lessonCount)
-        : null);
-    if (startingUsed === 0 && catalogOrPrevious != null && storedTotal > catalogOrPrevious) {
-      const correctTotal = catalogOrPrevious + previousRemaining;
-      if (correctTotal > 0 && correctTotal !== storedTotal) {
-        saleForCompute = { ...sale, lessonCount: correctTotal };
-        carriedInLessons = 0;
-      }
+    // 2) Satın alınan paket saati
+    let purchasedLessons =
+      packageLessonCount != null && packageLessonCount > 0
+        ? packageLessonCount
+        : inferredCarry > 0
+          ? Math.max(0, storedTotal - inferredCarry)
+          : storedTotal;
+
+    // 3) Kayıtta toplam zaten paket+devir (ör. 11) ise tekrar ekleme; devreden = 11-8
+    let addCarryToTotal = inferredCarry;
+    let displayCarried = inferredCarry;
+    if (startingUsed === 0 && purchasedLessons > 0 && storedTotal > purchasedLessons) {
+      displayCarried = storedTotal - purchasedLessons;
+      addCarryToTotal = 0;
     }
 
-    const balance = computePrivateLessonBalance(saleForCompute, attendanceRecords, {
+    const balance = computePrivateLessonBalance(sale, attendanceRecords, {
       studentId,
       allSalesNewestFirst: scoped,
-      carriedInLessons,
+      carriedInLessons: addCarryToTotal,
     });
-    if (balance) map.set(String(sale.id), balance);
+    if (!balance) continue;
+
+    map.set(String(sale.id), {
+      ...balance,
+      purchasedLessons,
+      carriedInLessons: displayCarried || balance.carriedInLessons || 0,
+    });
   }
 
-  // Devredilen eski paketlerde kalanı 0 göster (çift sayım olmasın: 10 + 3 gibi).
+  // Devredilen eski paketlerde kalanı 0 göster; aktarılan miktarı etiketle.
   const seenLatest = new Set<string>();
   for (const sale of scoped) {
     const key = packageIdentityKey(sale);
@@ -387,6 +401,7 @@ export function buildPrivateLessonUsageById(
     if (seenLatest.has(key)) {
       map.set(String(sale.id), {
         ...balance,
+        transferredOutLessons: balance.remainingLessons,
         remainingLessons: 0,
         transferredOut: true,
       });
