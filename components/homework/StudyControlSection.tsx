@@ -50,10 +50,18 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   };
 
   const buildPresenceStudyEvents = (study: Study, student: Student, rows: unknown[]): StudyEvent[] => {
+    const vsChapterIds = new Set(
+      study.chapters
+        .filter((ch) => ch.lessonMode === 'interactive' && ch.interactiveType === 'vsComputer')
+        .map((ch) => ch.id),
+    );
+
     const normalizedRows = rows
       .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
       .filter((row) => String(row.user_id ?? '') === String(student.id))
       .filter((row) => {
+        const chapterId = String(row.chapter_id ?? '');
+        if (!chapterId || !vsChapterIds.has(chapterId)) return false;
         const payload = row.payload;
         return !!payload && typeof payload === 'object' && Boolean((payload as Record<string, unknown>).vsComputer);
       })
@@ -304,29 +312,42 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
       if (!grouped.has(chapterId)) {
         const chapter = chapterById.get(chapterId);
         const interactiveType = chapter?.interactiveType ?? 'puzzle';
-        const chapterType =
-          chapter?.lessonMode === 'interactive' && interactiveType === 'vsComputer'
-            ? 'Bilgisayara karşı'
-            : chapter?.lessonMode === 'interactive'
-              ? 'Hamle bul'
-              : 'Çalışma';
+        const isVs = chapter?.lessonMode === 'interactive' && interactiveType === 'vsComputer';
+        const chapterType = isVs
+          ? 'Bilgisayara karşı'
+          : chapter?.lessonMode === 'interactive'
+            ? 'Hamle bul'
+            : 'Çalışma';
         grouped.set(chapterId, {
           chapterId,
           chapterTitle: chapter?.title ?? 'Bilinmeyen Bölüm',
           chapterType,
           chapter,
           events: [],
-          vsMoveHistory: extractVsComputerHistory(
-            activeStudyPresenceRows,
-            activeStudyLog.student.id,
-            chapterId,
-          ),
+          vsMoveHistory: isVs
+            ? extractVsComputerHistory(
+              activeStudyPresenceRows,
+              activeStudyLog.student.id,
+              chapterId,
+            )
+            : [],
         });
       }
-      grouped.get(chapterId)!.events.push({ ...event, chapterId });
+      const entry = grouped.get(chapterId)!;
+      // Presence vs-computer satırlarını bulmaca bölümlerine karıştırma
+      if (
+        event.id.startsWith('presence-')
+        && !(entry.chapter?.lessonMode === 'interactive' && entry.chapter.interactiveType === 'vsComputer')
+      ) {
+        return;
+      }
+      entry.events.push({ ...event, chapterId });
     });
 
     return [...grouped.values()].map((entry) => {
+      const isVs =
+        entry.chapter?.lessonMode === 'interactive' && entry.chapter.interactiveType === 'vsComputer';
+      if (!isVs) return { ...entry, vsMoveHistory: [] };
       const fromPresence = entry.vsMoveHistory;
       const full = resolveFullVsMoveList(entry.chapter, entry.events, fromPresence);
       return { ...entry, vsMoveHistory: full.length > 0 ? full : fromPresence };
@@ -604,9 +625,9 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
                           <span className="block text-xs font-bold truncate">{chapter.chapterTitle}</span>
                           <span className="block text-[10px] text-slate-500 truncate">
                             {chapter.chapterType}
-                            {chapter.vsMoveHistory.length > 0
+                            {chapter.chapterType === 'Bilgisayara karşı' && chapter.vsMoveHistory.length > 0
                               ? ` · ${chapter.vsMoveHistory.length} hamle`
-                              : ` · ${chapter.events.length} kayıt`}
+                              : ` · ${chapter.events.filter((e) => !e.id.startsWith('presence-')).length} kayıt`}
                           </span>
                         </button>
                       );

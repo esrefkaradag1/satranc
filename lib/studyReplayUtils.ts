@@ -1,7 +1,8 @@
 import type { StudyChapter } from './studyTypes';
 import type { StudyEvent } from '../studyEvents';
 import { DEFAULT_FEN, applyMove, makeBuilderGame } from './studyUtils';
-import { applyPuzzleAutoReplies, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
+import { normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
+import { mainlineSansFromTree } from './studySync/moveList';
 
 export type ReplayStep = {
   fen: string;
@@ -41,7 +42,7 @@ export function chapterReplayStartFen(chapter: StudyChapter | undefined): string
   if (!chapter) return DEFAULT_FEN;
   const isPuzzle =
     chapter.lessonMode === 'interactive' && (chapter.interactiveType ?? 'puzzle') === 'puzzle';
-  if (isPuzzle) return normalizeStudyChapterPuzzle(chapter).startFen;
+  if (isPuzzle) return normalizeStudyChapterPuzzle(enrichChapterMoves(chapter)).startFen;
   return chapter.fen?.trim() || DEFAULT_FEN;
 }
 
@@ -51,6 +52,20 @@ function isVsComputerChapter(chapter: StudyChapter | undefined): boolean {
 
 function isPuzzleChapter(chapter: StudyChapter | undefined): boolean {
   return chapter?.lessonMode === 'interactive' && (chapter.interactiveType ?? 'puzzle') === 'puzzle';
+}
+
+/** seedTree ana hattını chapter.moves ile birleştir (ödev replay ağacı da görsün). */
+function enrichChapterMoves(chapter: StudyChapter): StudyChapter {
+  const legacy = (chapter.moves ?? []).filter(Boolean);
+  if (!chapter.seedTree?.mainline?.length) return chapter;
+  try {
+    const rootFen = chapter.fen?.trim() || DEFAULT_FEN;
+    const fromTree = mainlineSansFromTree(chapter.seedTree, rootFen);
+    if (fromTree.length <= legacy.length) return chapter;
+    return { ...chapter, moves: fromTree };
+  } catch {
+    return chapter;
+  }
 }
 
 function getVsComputerHistory(payload: unknown): string[] {
@@ -71,20 +86,20 @@ export function extractVsComputerHistory(
 ): string[] {
   const sid = String(studentId);
   const cid = String(chapterId);
+  if (!cid) return [];
+
   const rows = presenceRows
     .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
     .filter((row) => String(row.user_id ?? '') === sid)
+    .filter((row) => String(row.chapter_id ?? '') === cid)
     .filter((row) => {
       const payload = row.payload;
       return !!payload && typeof payload === 'object' && Boolean((payload as Record<string, unknown>).vsComputer);
     })
     .sort((a, b) => String(b.last_seen ?? '').localeCompare(String(a.last_seen ?? '')));
 
-  const forChapter = rows.filter((row) => String(row.chapter_id ?? '') === cid);
-  const candidates = forChapter.length > 0 ? forChapter : rows;
-
   let best: string[] = [];
-  for (const row of candidates) {
+  for (const row of rows) {
     const history = getVsComputerHistory(row.payload);
     if (history.length > best.length) best = history;
   }
@@ -114,7 +129,6 @@ export function reconstructVsFullMoveList(
       return dfs(next.fen(), left.slice(1), [...path, san]);
     }
 
-    // Bilgisayar sırası: sonraki öğrenci hamlesini mümkün kılan yasal cevap(lar)
     for (const reply of game.moves()) {
       const next = makeBuilderGame(fen || DEFAULT_FEN);
       if (!applyMove(next, reply)) continue;
@@ -132,6 +146,15 @@ function isComputerLoggedEvent(event: StudyEvent): boolean {
   return expected === 'bilgisayar' || expected === 'engine' || expected === 'computer';
 }
 
+/** Presence kaynaklı vs-computer satırlarını bulmaca bölümlerinden ayıkla. */
+function puzzleStudentEvents(events: StudyEvent[]): StudyEvent[] {
+  return dedupeStudyEvents(events).filter((e) => {
+    if (e.id.startsWith('presence-')) return false;
+    if (isComputerLoggedEvent(e)) return false;
+    return !!(e.playedMove ?? '').trim();
+  });
+}
+
 /**
  * DB + presence olaylarından veya presence geçmişinden tam ply listesi.
  * Bilgisayar hamleleri kayıtlı değilse öğrenci hamlelerinden geri kurulur.
@@ -141,8 +164,8 @@ export function resolveFullVsMoveList(
   events: StudyEvent[],
   vsMoveHistory: string[] = [],
 ): string[] {
-  if (vsMoveHistory.length > 0) return vsMoveHistory;
   if (!isVsComputerChapter(chapter)) return [];
+  if (vsMoveHistory.length > 0) return vsMoveHistory;
 
   const ordered = dedupeStudyEvents(events).filter((e) => (e.playedMove ?? '').trim());
   if (ordered.length === 0) return [];
@@ -157,13 +180,11 @@ export function resolveFullVsMoveList(
       if (san) slots[idx] = san;
     }
     const filled = slots.filter((m) => !!m).length;
-    // Tam dolu dizi = her iki renk (presence / bilgisayar loglu)
     if (filled === slots.length && slots.length > 0) {
       return slots as string[];
     }
   }
 
-  // moveIndex sırası 0..n-1 ise (presence live events)
   const sequential = [...ordered].sort((a, b) => (a.moveIndex ?? 0) - (b.moveIndex ?? 0));
   if (
     sequential.length > 1
@@ -172,9 +193,8 @@ export function resolveFullVsMoveList(
     return sequential.map((e) => String(e.playedMove).trim());
   }
 
-  // Yalnızca öğrenci hamleleri (seyrek moveIndex): bilgisayar ply'lerini geri kur
   const studentSans = ordered
-    .filter((e) => !isComputerLoggedEvent(e))
+    .filter((e) => !isComputerLoggedEvent(e) && !e.id.startsWith('presence-'))
     .map((e) => String(e.playedMove).trim())
     .filter(Boolean);
   const reconstructed = reconstructVsFullMoveList(
@@ -186,6 +206,7 @@ export function resolveFullVsMoveList(
 
   return [];
 }
+
 function buildStepsFromMoveList(startFen: string, moves: string[]): ReplayStep[] {
   const steps: ReplayStep[] = [{ fen: startFen, eventIndex: null, label: 'Başlangıç', isWrong: false }];
   const game = makeBuilderGame(startFen || DEFAULT_FEN);
@@ -204,55 +225,91 @@ function buildStepsFromMoveList(startFen: string, moves: string[]): ReplayStep[]
   return steps;
 }
 
+function syncLineCursorToFen(startFen: string, line: string[], targetFen: string): number {
+  const g = makeBuilderGame(startFen || DEFAULT_FEN);
+  if (g.fen() === targetFen) return 0;
+  for (let i = 0; i < line.length; i++) {
+    if (!applyMove(g, line[i]!)) return i;
+    if (g.fen() === targetFen) return i + 1;
+  }
+  return line.length;
+}
+
+/**
+ * Bulmaca için oynanan tam ply listesi (öğrenci + karşı hamleler).
+ * Önce çözüm hattı + kayıtlar; hat yoksa öğrenci SAN'larından geri kurulum.
+ */
+function resolvePuzzlePlayedMoves(
+  chapter: StudyChapter,
+  events: StudyEvent[],
+): { startFen: string; moves: string[]; studentColor: 'w' | 'b' } {
+  const enriched = enrichChapterMoves(chapter);
+  const normalized = normalizeStudyChapterPuzzle(enriched);
+  const line = normalized.studentMoves;
+  const startFen = normalized.startFen;
+  const studentColor = normalized.studentColor;
+  const ordered = puzzleStudentEvents(events);
+  const orientation = chapter.orientation === 'black' ? 'black' : 'white';
+
+  if (line.length > 0 && ordered.length > 0) {
+    const g = makeBuilderGame(startFen || DEFAULT_FEN);
+    const played: string[] = [];
+    let cursor = 0;
+    let solved = false;
+
+    for (const event of ordered) {
+      if (event.result === 'wrong') continue;
+      const san = (event.playedMove ?? '').trim();
+      if (!san) continue;
+
+      while (cursor < line.length && g.turn() !== studentColor) {
+        if (!applyMove(g, line[cursor]!)) break;
+        played.push(line[cursor]!);
+        cursor += 1;
+      }
+
+      if (!applyMove(g, san)) continue;
+      played.push(san);
+      cursor = syncLineCursorToFen(startFen, line, g.fen());
+
+      while (cursor < line.length && g.turn() !== studentColor) {
+        if (!applyMove(g, line[cursor]!)) break;
+        played.push(line[cursor]!);
+        cursor += 1;
+      }
+
+      if (event.result === 'solution') solved = true;
+    }
+
+    if (solved) {
+      while (cursor < line.length) {
+        if (!applyMove(g, line[cursor]!)) break;
+        played.push(line[cursor]!);
+        cursor += 1;
+      }
+    }
+
+    if (played.length > 0) return { startFen, moves: played, studentColor };
+  }
+
+  const studentSans = ordered
+    .filter((e) => e.result !== 'wrong')
+    .map((e) => String(e.playedMove ?? '').trim())
+    .filter(Boolean);
+  const reconstructed = reconstructVsFullMoveList(startFen, studentSans, orientation);
+  if (reconstructed.length > 0) return { startFen, moves: reconstructed, studentColor };
+
+  return { startFen, moves: studentSans, studentColor };
+}
+
 function buildPuzzleReplaySteps(
   chapter: StudyChapter,
   events: StudyEvent[],
 ): ReplayStep[] {
-  const normalized = normalizeStudyChapterPuzzle(chapter);
-  const startFen = normalized.startFen;
-  const steps: ReplayStep[] = [{ fen: startFen, eventIndex: null, label: 'Başlangıç', isWrong: false }];
-  const game = makeBuilderGame(startFen || DEFAULT_FEN);
-  const ordered = dedupeStudyEvents(events);
+  const { startFen, moves } = resolvePuzzlePlayedMoves(chapter, events);
+  if (moves.length > 0) return buildStepsFromMoveList(startFen, moves);
 
-  ordered.forEach((event, idx) => {
-    const san = (event.playedMove ?? '').trim();
-    if (!san) return;
-    if (event.result === 'wrong') {
-      steps.push({
-        fen: game.fen(),
-        eventIndex: idx,
-        label: `${san} (yanlış)`,
-        isWrong: true,
-      });
-      return;
-    }
-    if (!applyMove(game, san)) return;
-    steps.push({
-      fen: game.fen(),
-      eventIndex: idx,
-      label: san,
-      isWrong: false,
-    });
-
-    let plyIndex = typeof event.moveIndex === 'number' ? event.moveIndex : 0;
-    const auto = applyPuzzleAutoReplies(
-      game.fen(),
-      chapter.moves ?? normalized.studentMoves,
-      plyIndex + 1,
-      normalized.studentColor,
-    );
-    for (const reply of auto.playedSans) {
-      if (!applyMove(game, reply)) break;
-      steps.push({
-        fen: game.fen(),
-        eventIndex: idx,
-        label: reply,
-        isWrong: false,
-      });
-    }
-  });
-
-  return steps;
+  return [{ fen: startFen, eventIndex: null, label: 'Başlangıç', isWrong: false }];
 }
 
 export function buildChapterReplaySteps(
@@ -380,6 +437,7 @@ export function buildReplayTableRows(
   if (isVsComputerChapter(chapter) && fullMoves.length > 0) {
     const studentOrientation = chapter?.orientation ?? 'white';
     const studentEvents = ordered.filter((e) => {
+      if (e.id.startsWith('presence-') && isComputerLoggedEvent(e)) return false;
       const ply = e.moveIndex;
       if (typeof ply !== 'number') return !!(e.playedMove ?? '').trim();
       const isWhitePly = ply % 2 === 0;
@@ -413,78 +471,44 @@ export function buildReplayTableRows(
     });
   }
 
-  // Bulmaca: öğrenci hamlesi + otomatik cevapları birlikte göster / oynat
   if (isPuzzleChapter(chapter) && chapter) {
-    const rows: ReplayTableRow[] = [];
-    const normalized = normalizeStudyChapterPuzzle(chapter);
-    const game = makeBuilderGame(normalized.startFen || DEFAULT_FEN);
-    let stepIndex = 0;
-    ordered.forEach((event, idx) => {
-      const san = (event.playedMove ?? '').trim();
-      if (!san) return;
-      const beforeTurn = game.turn();
-      const plyBefore = game.history().length;
-      if (event.result === 'wrong') {
-        stepIndex += 1;
-        rows.push({
-          id: `${event.id}-wrong`,
-          plyIndex: plyBefore,
-          stepIndex,
-          moveNo: Math.floor(plyBefore / 2) + 1,
-          side: beforeTurn === 'w' ? 'white' : 'black',
-          isStudent: true,
-          playedMove: san,
-          expectedLabel: event.expectedMove || 'Bulmaca',
-          result: 'wrong',
-          thinkMs: event.thinkMs ?? 0,
-          createdAt: event.createdAt ?? null,
-        });
-        return;
-      }
-      if (!applyMove(game, san)) return;
-      stepIndex += 1;
-      rows.push({
-        id: event.id,
-        plyIndex: plyBefore,
-        stepIndex,
-        moveNo: Math.floor(plyBefore / 2) + 1,
-        side: beforeTurn === 'w' ? 'white' : 'black',
-        isStudent: true,
-        playedMove: san,
-        expectedLabel: event.expectedMove || 'Bulmaca',
-        result: event.result === 'solution' ? 'solution' : 'correct',
-        thinkMs: event.thinkMs ?? 0,
-        createdAt: event.createdAt ?? null,
-      });
+    const { startFen, moves, studentColor } = resolvePuzzlePlayedMoves(chapter, events);
+    if (moves.length === 0) return [];
 
-      let plyIndex = typeof event.moveIndex === 'number' ? event.moveIndex : 0;
-      const auto = applyPuzzleAutoReplies(
-        game.fen(),
-        chapter.moves ?? normalized.studentMoves,
-        plyIndex + 1,
-        normalized.studentColor,
-      );
-      for (const reply of auto.playedSans) {
-        const replyTurn = game.turn();
-        const replyPly = game.history().length;
-        if (!applyMove(game, reply)) break;
-        stepIndex += 1;
-        rows.push({
-          id: `${event.id}-auto-${replyPly}-${reply}`,
-          plyIndex: replyPly,
-          stepIndex,
-          moveNo: Math.floor(replyPly / 2) + 1,
-          side: replyTurn === 'w' ? 'white' : 'black',
-          isStudent: false,
-          playedMove: reply,
-          expectedLabel: 'Karşı hamle',
-          result: 'engine',
-          thinkMs: 0,
-          createdAt: null,
-        });
+    const studentEvents = puzzleStudentEvents(events).filter((e) => e.result !== 'wrong');
+    let studentEventCursor = 0;
+    const game = makeBuilderGame(startFen || DEFAULT_FEN);
+
+    return moves.map((move, plyIdx) => {
+      const turnBefore = game.turn();
+      applyMove(game, move);
+      const isStudent = turnBefore === studentColor;
+      let thinkMs = 0;
+      let createdAt: string | null = null;
+      let result: ReplayTableRow['result'] = isStudent ? 'correct' : 'engine';
+      let expectedLabel = isStudent ? 'Bulmaca' : 'Karşı hamle';
+      if (isStudent && studentEventCursor < studentEvents.length) {
+        const ev = studentEvents[studentEventCursor];
+        thinkMs = ev?.thinkMs ?? 0;
+        createdAt = ev?.createdAt ?? null;
+        expectedLabel = ev?.expectedMove || 'Bulmaca';
+        if (ev?.result === 'solution') result = 'solution';
+        studentEventCursor += 1;
       }
+      return {
+        id: `puzzle-full-${plyIdx}-${move}`,
+        plyIndex: plyIdx,
+        stepIndex: plyIdx + 1,
+        moveNo: Math.floor(plyIdx / 2) + 1,
+        side: turnBefore === 'w' ? 'white' as const : 'black' as const,
+        isStudent,
+        playedMove: move,
+        expectedLabel,
+        result,
+        thinkMs,
+        createdAt,
+      };
     });
-    return rows;
   }
 
   return ordered.map((event, idx) => {
