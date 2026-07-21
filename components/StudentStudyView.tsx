@@ -40,7 +40,7 @@ import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
   genId, migrateStudy, migrateChapter, studyDisplayEmoji,
   normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
 } from '../lib/studyUtils';
-import { applyPuzzleAutoReplies, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares, expectedMoveSan } from '../lib/puzzlePlayUtils';
+import { applyPuzzleAutoReplies, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares } from '../lib/puzzlePlayUtils';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
@@ -369,6 +369,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     return selectedStudy.chapters[idx];
   }, [selectedStudy, selectedChapterIndex]);
 
+  const chapterInteractiveType = useMemo(
+    () =>
+      selectedChapter?.lessonMode === 'interactive'
+        ? (selectedChapter.interactiveType ?? 'puzzle')
+        : null,
+    [selectedChapter?.lessonMode, selectedChapter?.interactiveType],
+  );
+
+  const isLiveAnalysis = chapterInteractiveType === 'liveAnalysis';
+  const isInteractivePuzzle = chapterInteractiveType === 'puzzle';
+
   const {
     legacyChapter,
     syncState,
@@ -389,6 +400,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     initialSticky: false,
     initialWrite: false,
   });
+
+  /** Bulmacada paylaşılan sync ağacı çözüm hattını kirletmesin — statik bölüm tanımı kullan. */
+  const effectiveChapter = useMemo(() => {
+    if (!selectedChapter) return legacyChapter;
+    if (isInteractivePuzzle) return selectedChapter;
+    return legacyChapter ?? selectedChapter;
+  }, [selectedChapter, legacyChapter, isInteractivePuzzle]);
 
   const coachPresenceUserIds = useMemo(() => {
     const ids = new Set<string>();
@@ -432,25 +450,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     void setSticky(false);
   }, [setSticky]);
 
-  const effectiveChapter = legacyChapter;
-
-  const isLiveAnalysis = useMemo(
-    () => !!effectiveChapter && effectiveChapter.lessonMode === 'interactive' && effectiveChapter.interactiveType === 'liveAnalysis',
-    [effectiveChapter?.lessonMode, effectiveChapter?.interactiveType]
-  );
-
-  const isInteractivePuzzle = useMemo(
-    () =>
-      !!effectiveChapter &&
-      effectiveChapter.lessonMode === 'interactive' &&
-      (effectiveChapter.interactiveType ?? 'puzzle') === 'puzzle',
-    [effectiveChapter?.id, effectiveChapter?.lessonMode, effectiveChapter?.interactiveType]
-  );
-
   const puzzlePlayNorm = useMemo(() => {
-    if (!isInteractivePuzzle || !effectiveChapter) return null;
-    return normalizeStudyChapterPuzzle(effectiveChapter);
-  }, [isInteractivePuzzle, effectiveChapter?.fen, effectiveChapter?.moves, effectiveChapter?.orientation, effectiveChapter?.id]);
+    if (!isInteractivePuzzle || !selectedChapter) return null;
+    return normalizeStudyChapterPuzzle(selectedChapter);
+  }, [isInteractivePuzzle, selectedChapter?.id, selectedChapter?.fen, selectedChapter?.moves, selectedChapter?.orientation]);
 
   const boardPgnDisplay = useMemo(() => {
     if (!selectedStudy || !effectiveChapter) return null;
@@ -462,7 +465,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     );
   }, [selectedStudy?.title, effectiveChapter?.title, effectiveChapter?.pgnTags, selectedChapterIndex]);
 
-  /** Tahta = sync ana hat; liste eski chapter.moves'ta kaldığında burada birleştirilir. */
+  /** Tahta = bulmacada normalize çözüm hattı (sync kirlenmesin). */
   const chapterMovesForUi = useMemo(() => {
     if (isLiveAnalysis) return liveSessionMoves;
     if (isInteractivePuzzle && puzzlePlayNorm) return puzzlePlayNorm.studentMoves;
@@ -974,7 +977,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         ),
       );
       if (rows.length === 0) return;
-      setChapterMoveAnalysis(rows.map((row) => ({
+      setChapterMoveAnalysis(rows.filter((row) => row.isCorrect).map((row) => ({
         id: row.id,
         moveNo: row.moveNo,
         played: row.playedSan,
@@ -1467,23 +1470,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         const expectedApplied = expectedSan ? applyMove(expectedGame, expectedSan) : null;
         const matchesMainline = expectedApplied && expectedGame.fen() === nextFen;
 
-        let matchedNodeId: string | null = null;
-        const currentPath = syncState?.currentPath || [];
-        const currentNodeId = currentPath[currentPath.length - 1] || syncState?.tree?.rootId;
-        const currentNode = currentNodeId ? syncState?.tree?.nodes[currentNodeId] : null;
-        
-        if (currentNode?.children) {
-          for (const childId of currentNode.children) {
-            const childNode = syncState?.tree?.nodes[childId];
-            if (childNode && childNode.fen === nextFen) {
-              matchedNodeId = childId;
-              break;
-            }
-          }
-        }
-
         let matched = false;
-        if (matchesMainline || matchedNodeId) {
+        if (matchesMainline) {
           matched = true;
         } else {
           const playedSan = (result.san || '').trim();
@@ -1549,33 +1537,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           }
           return true;
         } else {
-          setChapterMoveAnalysis((prev) => {
-            const next = [
-              ...prev,
-              {
-                id: `${now}-${prev.length}`,
-                moveNo: Math.floor(currentMoveIndex / 2) + 1,
-                played: result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
-                expected: expectedSan || '—',
-                isCorrect: false,
-                thinkMs,
-                atIso: new Date(now).toISOString(),
-              },
-            ];
-            persistChapterPracticeLogs(next);
-            return next;
-          });
           showFeedback('wrong');
-          logStudyEvent({
-            studyId: selectedStudy?.id,
-            chapterId: effectiveChapter?.id ?? selectedChapter?.id,
-            studentId,
-            moveIndex: currentMoveIndex,
-            expectedMove: expectedSan,
-            playedMove: result.san,
-            result: 'wrong',
-            thinkMs,
-          });
           return false;
         }
       } catch (e) {
@@ -1603,52 +1565,37 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, pushLiveSessionMove, syncState, progressKey, makeMove, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs]);
+  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs]);
 
   const puzzleBranchChoices = useMemo(() => {
-    if (!hideEngineForStudentPuzzle || !syncState?.tree || isComplete) return [];
-    const tree = syncState.tree;
-    let nodeId: string | null = null;
-    for (const [id, node] of Object.entries(tree.nodes)) {
-      if (node.fen === studyBoardFen) {
-        nodeId = id;
-        break;
-      }
-    }
-    if (!nodeId) {
-      const path = syncState.currentPath ?? [];
-      nodeId = path[path.length - 1] ?? tree.rootId;
-    }
-    const node = tree.nodes[nodeId];
-    if (!node?.children || node.children.length < 2) return [];
-    const expectedRaw = chapterMovesForUi[currentMoveIndex];
-    const expectedSan = expectedRaw ? expectedMoveSan(studyBoardFen, expectedRaw) : null;
-    return node.children
-      .map((cid) => tree.nodes[cid])
-      .filter((n) => n?.san)
-      .map((n) => ({
-        nodeId: n!.id,
-        san: n!.san!,
-        isCorrect: !!(expectedSan && n!.san === expectedSan),
-      }));
-  }, [
-    hideEngineForStudentPuzzle,
-    syncState?.tree,
-    syncState?.currentPath,
-    isComplete,
-    studyBoardFen,
-    chapterMovesForUi,
-    currentMoveIndex,
-  ]);
+    // Öğrenci bulmacasında sync ağacındaki deneme varyasyonları gösterilmez.
+    return [];
+  }, []);
 
   const restartPuzzleChapter = useCallback(() => {
     setCurrentMoveIndex(0);
+    setCurrentVariation(null);
     setFeedback(null);
     setFeedbackText(null);
     setFreePlayFen(null);
+    setHoverPly(null);
     setLaHint(null);
-    if (!isInteractivePuzzle) void jumpToMoveIndex(0);
-  }, [isInteractivePuzzle, jumpToMoveIndex]);
+    setChapterMoveAnalysis([]);
+    setBoardArrows([]);
+    setCircleMarks({});
+    setOptionSquares({});
+    setLastMoveSquares({});
+    const now = Date.now();
+    setChapterStartMs(now);
+    setLastActionMs(now);
+    if (progressKey) {
+      setProgress((prev) => {
+        const next = { ...prev, [progressKey]: 0 };
+        saveProgress(next);
+        return next;
+      });
+    }
+  }, [progressKey]);
 
   const handlePuzzleBranchPick = useCallback((san: string) => {
     const exp = resolveExpectedMoveSquares(studyBoardFen, san);
@@ -1718,10 +1665,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     }
     setCurrentVariation(null);
     setCurrentMoveIndex(nextIdx);
-    if (!isLiveAnalysis) void jumpToMoveIndex(nextIdx);
+    if (!isLiveAnalysis && !isInteractivePuzzle) void jumpToMoveIndex(nextIdx);
     setFeedback(null);
     setFeedbackText(null);
-  }, [vsComputer, effectiveChapter, isVcGameOver, vcHistory, vcStartFen, restartVcGame, moveListChapter, totalMoves, isLiveAnalysis, jumpToMoveIndex, hideEngineForStudentPuzzle, currentMoveIndex]);
+  }, [vsComputer, effectiveChapter, isVcGameOver, vcHistory, vcStartFen, restartVcGame, moveListChapter, totalMoves, isLiveAnalysis, isInteractivePuzzle, jumpToMoveIndex, hideEngineForStudentPuzzle, currentMoveIndex]);
 
   const navMaxPly = vsComputer ? vcHistory.length : totalMoves;
 
@@ -1952,16 +1899,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
          setVcFen(nextFen);
          setCurrentMoveIndex(newHistory.length);
          setLastMoveSquares(lastMoveHighlightFromSan(fen, san));
-         logStudyEvent({
-           studyId: selectedStudy?.id,
-           chapterId: effectiveChapter?.id ?? selectedChapter?.id,
-           studentId,
-           moveIndex: newHistory.length - 1,
-           expectedMove: 'Bilgisayar',
-           playedMove: san,
-           result: 'correct',
-           thinkMs: 0,
-         });
          void updatePresencePayload({
            vsComputer: true,
            fen: nextFen,
@@ -2049,17 +1986,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         ];
         persistChapterPracticeLogs(next);
         return next;
-      });
-
-      logStudyEvent({
-        studyId: selectedStudy?.id,
-        chapterId: effectiveChapter?.id ?? selectedChapter?.id,
-        studentId,
-        moveIndex: vcHistory.length,
-        expectedMove: null,
-        playedMove: playedSan,
-        result: 'correct',
-        thinkMs,
       });
 
       // Immediate sync

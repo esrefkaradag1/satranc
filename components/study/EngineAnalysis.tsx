@@ -116,11 +116,12 @@ function fenAfterUciPlies(startFen: string, uciMoves: string[], plies: number): 
   }
 }
 
-function formatScore(line: PvLine, turn: 'w' | 'b'): string {
+function formatScore(line: PvLine, turn: 'w' | 'b', lineIndex = 0): string {
   const flip = turn === 'b' ? -1 : 1;
   if (line.mate !== null) {
     const m = line.mate * flip;
     if (m === 0) return 'Bitti';
+    if (lineIndex > 0) return '···';
     const n = Math.max(1, Math.abs(Math.round(m)));
     return `${n} hamlede mat`;
   }
@@ -811,7 +812,7 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
               >
                 <div className="w-12 shrink-0">
                   <span className={`text-[12px] font-bold font-mono tabular-nums ${scoreColorClass(line, turn)}`}>
-                    {formatScore(line, turn)}
+                    {formatScore(line, turn, i)}
                   </span>
                 </div>
                 <div className="flex-1 min-w-0 overflow-hidden">

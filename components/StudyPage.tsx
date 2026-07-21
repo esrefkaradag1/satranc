@@ -719,6 +719,14 @@ const StudyPage: React.FC = () => {
     return normalizeStudyChapterPuzzle(selectedChapter);
   }, [isInteractivePuzzleChapter, selectedChapter?.fen, selectedChapter?.moves, selectedChapter?.id]);
 
+  /** Bulmaca bölümünde sync ağacındaki deneme varyasyonlarını gösterme — yalnızca seed. */
+  const puzzleAdminTree = useMemo(() => {
+    if (!isInteractivePuzzleChapter) return effectiveStudyTree;
+    const seed = selectedChapterRaw?.seedTree;
+    if (seed?.rootId && (seed.mainline?.length ?? 0) > 1) return seed;
+    return null;
+  }, [isInteractivePuzzleChapter, effectiveStudyTree, selectedChapterRaw?.seedTree]);
+
   const chapterMovesForUi = useMemo(() => {
     if (isInteractivePuzzleChapter && puzzlePlayNorm) return puzzlePlayNorm.studentMoves;
     if (practiceMode && !recording) return selectedChapter?.moves ?? [];
@@ -4960,8 +4968,8 @@ const StudyPage: React.FC = () => {
                   inlineNotation={boardSettings.inlineNotation}
                   figurineNotation={boardSettings.figurineNotation}
                   showMoveAnnotations={boardSettings.showMoveAnnotations}
-                  tree={viewingStudentId ? null : effectiveStudyTree}
-                  currentPath={viewingStudentId ? undefined : effectiveStudyPath}
+                  tree={viewingStudentId ? null : puzzleAdminTree}
+                  currentPath={viewingStudentId ? undefined : (isInteractivePuzzleChapter ? puzzleAdminTree?.mainline : effectiveStudyPath)}
                   onSelectPath={viewingStudentId ? undefined : (path) => { void jumpToNodePath(path); }}
                   onSelectMove={(idx, varData) => {
                     if (varData) {

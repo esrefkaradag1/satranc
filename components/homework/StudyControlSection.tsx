@@ -94,7 +94,8 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   const mergeVisibleStudyEvents = (persistedEvents: StudyEvent[], liveEvents: StudyEvent[]): StudyEvent[] => {
     const merged: StudyEvent[] = [];
     const seen = new Set<string>();
-    for (const event of [...persistedEvents, ...liveEvents]) {
+    const withoutWrong = persistedEvents.filter((event) => event.result !== 'wrong');
+    for (const event of [...withoutWrong, ...liveEvents]) {
       const key = [
         String(event.studentId ?? ''),
         String(event.chapterId ?? ''),
@@ -258,11 +259,17 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
         ]);
         if (cancelled) return;
         setActiveStudyPresenceRows(presenceRows);
-        const persisted = mergeStudyAnalysisEvents(dbEvents, study).filter(
-          (event) => String(event.studentId) === String(student.id),
-        );
+        const persisted = mergeStudyAnalysisEvents(dbEvents, study)
+          .filter((event) => String(event.studentId) === String(student.id))
+          .filter((event) => event.result !== 'wrong');
         const live = buildPresenceStudyEvents(study, student, presenceRows);
-        setActiveStudyEvents(mergeVisibleStudyEvents(persisted, live));
+        const vsChapterIds = new Set(
+          study.chapters
+            .filter((ch) => ch.lessonMode === 'interactive' && ch.interactiveType === 'vsComputer')
+            .map((ch) => ch.id),
+        );
+        const persistedNonVs = persisted.filter((event) => !vsChapterIds.has(String(event.chapterId ?? '')));
+        setActiveStudyEvents(mergeVisibleStudyEvents(persistedNonVs, live));
       } catch {
         if (!cancelled) setActiveStudyEvents([]);
       } finally {
