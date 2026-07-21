@@ -30,13 +30,14 @@ export function getTerminalEval(fen: string): TerminalEval | null {
       return {
         kind: 'checkmate',
         whiteAdvantage: winnerIsWhite,
-        label: winnerIsWhite ? 'Beyaz mat' : 'Siyah mat',
+        /** Eval çubuğu: bitmiş oyunda rakam yok */
+        label: 'Bitti',
       };
     }
     if (g.isStalemate()) {
-      return { kind: 'stalemate', whiteAdvantage: false, label: 'Pat' };
+      return { kind: 'stalemate', whiteAdvantage: false, label: 'Bitti' };
     }
-    return { kind: 'draw', whiteAdvantage: false, label: 'Berabere' };
+    return { kind: 'draw', whiteAdvantage: false, label: 'Bitti' };
   } catch {
     return null;
   }

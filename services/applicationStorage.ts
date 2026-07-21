@@ -194,9 +194,56 @@ export function getApplicationFormUrl(clubSlug?: string): string {
   return `${base}#/basvuru`;
 }
 
+/**
+ * Veli imza linki — WhatsApp #/ hash'i sık kırdığı için sorgu parametresi kullanılır.
+ * App hem `?veli-imza=` hem `#/veli-imza/` okur.
+ */
 export function getParentConsentFormUrl(token: string): string {
-  const base = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
-  return `${base}#/veli-imza/${encodeURIComponent(token)}`;
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://satrancedu.com';
+  return `${origin}/?veli-imza=${encodeURIComponent(token)}`;
+}
+
+function newInviteToken(): string {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID().replace(/-/g, '')
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Davet token'ının gerçekten kaydedilmiş başvuruda olduğundan emin ol.
+ * createApplicationAsync duplicate bulursa yeni token'ı kaydetmeyebilir — bu yüzden burada yamalarız.
+ */
+async function persistParentConsentInvite(
+  student: Student,
+  app: StudentApplication,
+  preferredToken?: string,
+  extras?: Partial<StudentApplication>,
+): Promise<{ token: string; url: string; application: StudentApplication }> {
+  const existingToken = app.inviteToken?.trim() || '';
+  const token = existingToken || preferredToken || newInviteToken();
+  const needsWrite =
+    app.inviteToken !== token ||
+    app.source !== 'admin_student' ||
+    app.studentId !== student.id ||
+    Boolean(extras && Object.keys(extras).length > 0);
+
+  let application = app;
+  if (needsWrite) {
+    application = {
+      ...app,
+      ...extras,
+      studentId: student.id,
+      source: 'admin_student',
+      inviteToken: token,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveApplicationAsync(application);
+  }
+
+  return { token, url: getParentConsentFormUrl(token), application };
 }
 
 function studentToConsentDraft(student: Student) {
@@ -257,11 +304,8 @@ export async function createSignedApplicationFromAdminAsync(
     clientIp?: string;
   }
 ): Promise<{ token: string; url: string; application: StudentApplication }> {
-  const token =
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID().replace(/-/g, '')
-      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-  const app = await createApplicationAsync({
+  const token = newInviteToken();
+  const draft = {
     ...studentToConsentDraft(student),
     inviteToken: token,
     registrarSignatureDataUrl: signature.signatureDataUrl,
@@ -272,9 +316,28 @@ export async function createSignedApplicationFromAdminAsync(
     kvkkAccepted: false,
     kvkkAcceptedAt: '',
     clientIp: signature.clientIp ?? '',
+    status: 'pending' as const,
+  };
+  let app = await createApplicationAsync(draft);
+  const unusable =
+    Boolean(app.signatureDataUrl?.trim()) ||
+    app.signatureDataUrl === '__HAS_SIGNATURE__' ||
+    (app.studentId != null && String(app.studentId) !== String(student.id)) ||
+    app.status === 'signed';
+  if (unusable || app.inviteToken !== token) {
+    app = await createApplicationAsync(draft, { skipDuplicateCheck: true });
+  }
+  return persistParentConsentInvite(student, app, token, {
+    registrarSignatureDataUrl: signature.signatureDataUrl,
+    registrarSignatureName: signature.signatureName,
+    signatureDataUrl: '',
+    signatureName: '',
+    signedAt: '',
+    kvkkAccepted: false,
+    kvkkAcceptedAt: '',
+    clientIp: signature.clientIp ?? '',
     status: 'pending',
   });
-  return { token, url: getParentConsentFormUrl(token), application: app };
 }
 
 /** Admin tarafından eklenen öğrenci için veli imza daveti (varsa mevcut bekleyeni döner) */
@@ -286,27 +349,31 @@ export async function getOrCreateParentConsentInviteAsync(
     (a) =>
       a.studentId === student.id &&
       a.source === 'admin_student' &&
-      !a.signatureDataUrl?.trim()
+      !a.signatureDataUrl?.trim() &&
+      a.signatureDataUrl !== '__HAS_SIGNATURE__'
   );
-  if (pending?.inviteToken) {
+  if (pending) {
     const application = isApplicationSummary(pending)
       ? (await loadApplicationByIdAsync(pending.id)) ?? pending
       : pending;
-    return {
-      token: pending.inviteToken,
-      url: getParentConsentFormUrl(pending.inviteToken),
-      application,
-    };
+    return persistParentConsentInvite(student, application);
   }
-  const token =
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID().replace(/-/g, '')
-      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-  const app = await createApplicationAsync({
+  const token = newInviteToken();
+  const draft = {
     ...studentToConsentDraft(student),
     inviteToken: token,
-  });
-  return { token, url: getParentConsentFormUrl(token), application: app };
+  };
+  let app = await createApplicationAsync(draft);
+  // Aynı TC ile eski (imzalı veya başka öğrenci id) kayıt dönmüşse yeni davet zorla oluştur
+  const unusable =
+    Boolean(app.signatureDataUrl?.trim()) ||
+    app.signatureDataUrl === '__HAS_SIGNATURE__' ||
+    (app.studentId != null && String(app.studentId) !== String(student.id)) ||
+    app.status === 'signed';
+  if (unusable || app.inviteToken !== token) {
+    app = await createApplicationAsync(draft, { skipDuplicateCheck: true });
+  }
+  return persistParentConsentInvite(student, app, token);
 }
 
 export async function loadApplicationByInviteToken(
@@ -647,7 +714,10 @@ export async function deleteApplicationAsync(id: string): Promise<void> {
 }
 
 export async function createApplicationAsync(
-  input: Omit<StudentApplication, 'id' | 'applicationNo' | 'status' | 'createdAt' | 'updatedAt'>
+  input: Omit<StudentApplication, 'id' | 'applicationNo' | 'status' | 'createdAt' | 'updatedAt'> & {
+    status?: ApplicationStatus;
+  },
+  opts?: { skipDuplicateCheck?: boolean }
 ): Promise<StudentApplication> {
   const cleanTc = input.tcNo?.replace(/\D/g, '') || '';
   const cleanName = formatPersonName(input.name);
@@ -662,6 +732,7 @@ export async function createApplicationAsync(
       : input.registrarSignatureName,
   };
 
+  if (!opts?.skipDuplicateCheck) {
   // 1. Local duplicate check (instantly catches double-submits and page refreshes)
   const localList = readLocal();
   const localDup = localList.find((a) => {
@@ -718,6 +789,7 @@ export async function createApplicationAsync(
       console.warn('[Applications] Duplicate check failed, creating new:', e);
     }
   }
+  }
 
   const year = new Date().getFullYear();
   const seq = (await countApplicationsForYear(year)) + 1;
@@ -726,7 +798,7 @@ export async function createApplicationAsync(
     ...normalizedInput,
     id: genId(),
     applicationNo: `B-${year}-${String(seq).padStart(4, '0')}`,
-    status: 'pending',
+    status: input.status ?? 'pending',
     createdAt: now,
     updatedAt: now,
   };

@@ -48,17 +48,23 @@ import { readPanelHash as readHash, writePanelHash as writeHash } from './lib/pa
 const FULL_BLEED_TABS = new Set(['study', 'lessons']);
 
 function getPublicFormRoute(): { route: 'basvuru'; clubSlug?: string } | { route: 'veli-imza' } | null {
+  if (getVeliImzaToken()) return { route: 'veli-imza' };
   const parts = window.location.hash.replace(/^#\/?/, '').split('/');
   const head = parts[0];
   if (head === 'basvuru') {
     const slug = parts[1] ? decodeURIComponent(parts[1]).trim().toLowerCase() : undefined;
     return { route: 'basvuru', clubSlug: slug || undefined };
   }
-  if (head === 'veli-imza' && parts[1]) return { route: 'veli-imza' };
   return null;
 }
 
 function getVeliImzaToken(): string | null {
+  try {
+    const fromQuery = new URLSearchParams(window.location.search).get('veli-imza')?.trim();
+    if (fromQuery) return fromQuery;
+  } catch {
+    /* ignore */
+  }
   const parts = window.location.hash.replace(/^#\/?/, '').split('/');
   return parts[0] === 'veli-imza' && parts[1] ? decodeURIComponent(parts[1]) : null;
 }
@@ -90,9 +96,10 @@ function isCoachAllowedTab(tab: string): boolean {
 
 /** Giriş yapılmamışsa Login; role'e göre Veli/Öğrenci paneli, Antrenör, Kulüp veya Admin */
 const AppRoot: React.FC = () => {
-  const { auth, logout } = useApp();
+  const { auth, logout, students, apiStudent } = useApp();
   const [publicForm, setPublicForm] = useState(() => getPublicFormRoute());
   const [adminLoginRoute, setAdminLoginRoute] = useState(() => isAdminLoginRoute());
+  const [passiveBlocked, setPassiveBlocked] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
@@ -111,12 +118,37 @@ const AppRoot: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (!auth || (auth.role !== 'student' && auth.role !== 'parent')) {
+      setPassiveBlocked(false);
+      return;
+    }
+    const sid = auth.studentId;
+    const fromList = students.find((s) => s.id === sid);
+    const current = fromList ?? (apiStudent?.id === sid ? apiStudent : null);
+    if (current?.status === 'inactive') {
+      setPassiveBlocked(true);
+      logout();
+    }
+  }, [auth, students, apiStudent, logout]);
+
   if (publicForm?.route === 'basvuru') return <ApplicationForm clubSlug={publicForm.clubSlug} />;
   if (publicForm?.route === 'veli-imza') {
     const token = getVeliImzaToken();
     if (token) return <ParentConsentForm token={token} />;
   }
-  if (!auth) return <Login adminOnly={adminLoginRoute} />;
+  if (!auth) {
+    return (
+      <>
+        {passiveBlocked ? (
+          <div className="fixed top-4 left-1/2 z-[200] -translate-x-1/2 max-w-md w-[calc(100%-2rem)] rounded-xl border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-center text-sm font-bold text-amber-100 shadow-xl">
+            Hesabınız pasiftir. Sisteme giriş yapamazsınız.
+          </div>
+        ) : null}
+        <Login adminOnly={adminLoginRoute} />
+      </>
+    );
+  }
   if (auth.role === 'parent') return <StudentPanel studentId={auth.studentId} onLogout={logout} viewAs="parent" />;
   if (auth.role === 'student') return <StudentPanel studentId={auth.studentId} onLogout={logout} viewAs="student" />;
   if (auth.role === 'coach') return <CoachLayout onLogout={logout} />;

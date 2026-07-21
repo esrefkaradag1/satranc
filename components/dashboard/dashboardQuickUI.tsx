@@ -40,12 +40,18 @@ export const QuickMenuButton: React.FC<{
   label: string;
   color: string;
   onClick: () => void;
-}> = ({ icon, label, color, onClick }) => (
+  badge?: number | string | null;
+}> = ({ icon, label, color, onClick, badge }) => (
   <button
     type="button"
     onClick={onClick}
-    className={`group flex flex-col items-center justify-center gap-2 p-3 sm:p-4 rounded-2xl bg-gradient-to-br ${quickMenuColors[color]} text-white shadow-md hover:shadow-lg transition-all hover:-translate-y-0.5 active:translate-y-0 border border-white/10 w-full`}
+    className={`group relative flex flex-col items-center justify-center gap-2 p-3 sm:p-4 rounded-2xl bg-gradient-to-br ${quickMenuColors[color]} text-white shadow-md hover:shadow-lg transition-all hover:-translate-y-0.5 active:translate-y-0 border border-white/10 w-full`}
   >
+    {badge != null && badge !== 0 && badge !== '0' ? (
+      <span className="absolute top-2 right-2 min-w-[1.25rem] h-5 px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center shadow-md">
+        {badge}
+      </span>
+    ) : null}
     <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center border border-white/20 group-hover:bg-white/25 transition-colors">
       {icon}
     </div>

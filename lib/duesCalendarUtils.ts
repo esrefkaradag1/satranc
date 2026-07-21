@@ -59,49 +59,66 @@ export function getDuesMonthCell(
 ): DuesMonthCell {
   const beforeRegistration = isMonthBeforeRegistration(student, calendarYear, monthNum);
   const waivedMonth = isMonthDuesWaived(student, calendarYear, monthNum, trainingGroups, disciplineBranches);
-  const inactiveMonth = beforeRegistration || waivedMonth;
+  const studentPassive = student.status === 'inactive';
   const dueInfo = getExpectedDueForMonth(student, calendarYear, monthNum, trainingGroups, disciplineBranches);
-  const expected = inactiveMonth ? 0 : (student.registrationType === 'package' ? 0 : dueInfo.expected);
   const nowMonth = new Date().getMonth() + 1;
   const nowYear = new Date().getFullYear();
   const isFuture = calendarYear > nowYear || (calendarYear === nowYear && monthNum > nowMonth);
+
+  // Pasif öğrencide ödenmemiş aylar donar (borç / bekleyen tahakkuk yok)
+  const frozenUnpaid =
+    studentPassive
+    && !beforeRegistration
+    && student.registrationType !== 'package'
+    && !dueInfo.isScholarship
+    && !waivedMonth
+    && paid < dueInfo.expected;
+
+  const inactiveMonth = beforeRegistration || waivedMonth || frozenUnpaid;
+  const expected = inactiveMonth && !frozenUnpaid
+    ? 0
+    : (student.registrationType === 'package' ? 0 : dueInfo.expected);
 
   const state =
     beforeRegistration
       ? 'Kayıt öncesi'
       : waivedMonth
         ? 'Muaf'
-        : student.registrationType === 'package'
-          ? (paid > 0 ? 'Ödendi' : 'Paket')
-          : dueInfo.isScholarship
-            ? 'Burslu'
-            : isFuture && paid <= 0
-              ? 'Bekliyor'
-              : paid >= expected && expected > 0
-                ? 'Ödendi'
-                : paid > 0
-                  ? 'Kısmi'
-                  : 'Ödenmedi';
+        : frozenUnpaid
+          ? 'Dondu'
+          : student.registrationType === 'package'
+            ? (paid > 0 ? 'Ödendi' : 'Paket')
+            : dueInfo.isScholarship
+              ? 'Burslu'
+              : isFuture && paid <= 0
+                ? 'Bekliyor'
+                : paid >= expected && expected > 0
+                  ? 'Ödendi'
+                  : paid > 0
+                    ? 'Kısmi'
+                    : 'Ödenmedi';
 
   const tone =
-    inactiveMonth
+    beforeRegistration || waivedMonth
       ? 'bg-slate-900/50 border-slate-700/40 opacity-60'
-      : student.registrationType === 'package'
-        ? paid > 0
-          ? 'bg-emerald-500/30 border-emerald-400/55 shadow-sm shadow-emerald-500/15'
-          : 'bg-slate-800/70 border-slate-600/70'
-        : dueInfo.isScholarship
-          ? 'bg-emerald-500/20 border-emerald-400/40'
-          : isFuture && paid <= 0
-            ? 'bg-slate-800/70 border-slate-600/70'
-            : paid >= expected && expected > 0
-              ? 'bg-emerald-500/30 border-emerald-400/55 shadow-sm shadow-emerald-500/15'
-              : paid > 0
-                ? 'bg-amber-500/30 border-amber-400/55 shadow-sm shadow-amber-500/15'
-                : 'bg-rose-500/30 border-rose-400/55 shadow-sm shadow-rose-500/15';
+      : frozenUnpaid
+        ? 'bg-slate-800/60 border-slate-500/50 opacity-80'
+        : student.registrationType === 'package'
+          ? paid > 0
+            ? 'bg-emerald-500/30 border-emerald-400/55 shadow-sm shadow-emerald-500/15'
+            : 'bg-slate-800/70 border-slate-600/70'
+          : dueInfo.isScholarship
+            ? 'bg-emerald-500/20 border-emerald-400/40'
+            : isFuture && paid <= 0
+              ? 'bg-slate-800/70 border-slate-600/70'
+              : paid >= expected && expected > 0
+                ? 'bg-emerald-500/30 border-emerald-400/55 shadow-sm shadow-emerald-500/15'
+                : paid > 0
+                  ? 'bg-amber-500/30 border-amber-400/55 shadow-sm shadow-amber-500/15'
+                  : 'bg-rose-500/30 border-rose-400/55 shadow-sm shadow-rose-500/15';
 
   const stateColor =
-    state === 'Kayıt öncesi' || state === 'Muaf' ? 'text-slate-500'
+    state === 'Kayıt öncesi' || state === 'Muaf' || state === 'Dondu' ? 'text-slate-500'
       : state === 'Ödendi' ? 'text-emerald-200'
         : state === 'Burslu' ? 'text-emerald-300'
           : state === 'Kısmi' ? 'text-amber-200'
@@ -110,7 +127,9 @@ export function getDuesMonthCell(
                 : state === 'Paket' ? 'text-indigo-300' : 'text-slate-400';
 
   let amountLabel = '—';
-  if (!inactiveMonth) {
+  if (frozenUnpaid) {
+    amountLabel = `₺${Number(dueInfo.expected).toLocaleString('tr-TR')}`;
+  } else if (!inactiveMonth) {
     if (student.registrationType !== 'package' && dueInfo.isScholarship) {
       amountLabel = 'Burslu';
     } else if (student.registrationType === 'package') {
@@ -133,7 +152,9 @@ export function getDuesMonthCell(
     && paid < expected
     && !isFuture
       ? `Kalan: ₺${Number(expected - paid).toLocaleString('tr-TR')}`
-      : null;
+      : frozenUnpaid
+        ? 'Pasif — donduruldu'
+        : null;
 
   return {
     monthLabel: MONTHS_TR[monthNum - 1] ?? String(monthNum),
@@ -174,6 +195,7 @@ export function computeDuesFinanceSummary(
       else if (cell.state === 'Ödenmedi' || cell.state === 'Kısmi') unpaidMonths += 1;
       else if (cell.state === 'Bekliyor') waitingMonths += 1;
 
+      if (student.status === 'inactive') continue;
       if (m > currentMonth) continue;
       if (isMonthBeforeRegistration(student, calendarYear, m)) continue;
       const dueInfo = getExpectedDueForMonth(student, calendarYear, m, trainingGroups, disciplineBranches);
@@ -183,7 +205,12 @@ export function computeDuesFinanceSummary(
     }
   }
 
-  const duesDebt = expectedThisYear > 0 ? Math.max(0, expectedThisYear - totalPaidThisYear) : 0;
+  const duesDebt =
+    student.status === 'inactive'
+      ? 0
+      : expectedThisYear > 0
+        ? Math.max(0, expectedThisYear - totalPaidThisYear)
+        : 0;
 
   return {
     totalPaidThisYear,

@@ -20,7 +20,7 @@ function getHeaders(): HeadersInit {
 export async function apiLocalAuthParentLogin(
   phoneOrStudentId: string,
   pin: string
-): Promise<{ studentId: string; student: Student } | null> {
+): Promise<{ studentId: string; student: Student } | { error: string } | null> {
   const res = await fetch('/api/auth-parent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -29,8 +29,10 @@ export async function apiLocalAuthParentLogin(
       pin: pin.trim(),
     }),
   }).catch(() => null);
-  if (!res?.ok) return null;
+  if (!res) return null;
   const data = await res.json().catch(() => null);
+  if (res.status === 403 && data?.error) return { error: String(data.error) };
+  if (!res.ok) return null;
   if (!data?.studentId || !data?.student) return null;
   return { studentId: String(data.studentId), student: data.student as Student };
 }
@@ -39,7 +41,7 @@ export async function apiLocalAuthParentLogin(
 export async function apiParentLogin(
   phoneOrStudentId: string,
   pin: string
-): Promise<{ studentId: string; student: Student } | null> {
+): Promise<{ studentId: string; student: Student } | { error: string } | null> {
   const base = getBase();
   if (!base) return null;
   const res = await fetch(`${base}/api/auth/parent`, {
@@ -47,8 +49,10 @@ export async function apiParentLogin(
     headers: getHeaders(),
     body: JSON.stringify({ phoneOrStudentId: phoneOrStudentId.trim(), pin: pin.trim() }),
   }).catch(() => null);
-  if (!res || !res.ok) return null;
+  if (!res) return null;
   const data = await res.json().catch(() => null);
+  if (res.status === 403 && data?.error) return { error: String(data.error) };
+  if (!res.ok) return null;
   if (!data?.studentId || !data?.student) return null;
   if (data.token) {
     try {

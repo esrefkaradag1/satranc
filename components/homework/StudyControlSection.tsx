@@ -626,7 +626,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
                           <span className="block text-[10px] text-slate-500 truncate">
                             {chapter.chapterType}
                             {chapter.chapterType === 'Bilgisayara karşı' && chapter.vsMoveHistory.length > 0
-                              ? ` · ${chapter.vsMoveHistory.length} hamle`
+                              ? ` · ${Math.ceil(chapter.vsMoveHistory.length / 2)} hamle`
                               : ` · ${chapter.events.filter((e) => !e.id.startsWith('presence-')).length} kayıt`}
                           </span>
                         </button>

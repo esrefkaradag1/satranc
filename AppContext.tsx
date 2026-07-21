@@ -210,8 +210,8 @@ interface AppContextType {
   loginAdmin: (password: string) => boolean;
   loginCoach: (identifier: string, password: string) => boolean;
   loginClub: (username: string, password: string) => Promise<boolean>;
-  loginParent: (studentIdOrPhone: string, pin: string) => Promise<boolean>;
-  loginStudent: (studentIdOrPhone: string, pin: string) => Promise<boolean>;
+  loginParent: (studentIdOrPhone: string, pin: string) => Promise<true | false | 'inactive'>;
+  loginStudent: (studentIdOrPhone: string, pin: string) => Promise<true | false | 'inactive'>;
   logout: () => void;
   /** Sunucu modunda API girişi sonrası auth + öğrenci bilgisini set eder. */
   setAuthWithStudent: (auth: AuthUser | null, student: Student | null) => void;
@@ -2013,13 +2013,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   }, [clubs, useSupabase]);
 
-  const loginParent = useCallback(async (studentIdOrPhone: string, pin: string): Promise<boolean> => {
+  const loginParent = useCallback(async (studentIdOrPhone: string, pin: string): Promise<true | false | 'inactive'> => {
     const trimmedPin = pin.trim();
     if (!studentIdOrPhone.trim() || !trimmedPin) return false;
 
-    const attempt = (list: Student[]): boolean => {
+    const attempt = (list: Student[]): true | false | 'inactive' => {
       const student = findStudentForLogin(list, studentIdOrPhone);
       if (!student) return false;
+      if (student.status === 'inactive') return 'inactive';
       if (student.parentPin && student.parentPin === trimmedPin) {
         setAuth({ role: 'parent', studentId: student.id });
         return true;
@@ -2042,6 +2043,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const applyApiLogin = (apiResult: { studentId: string; student: Student }) => {
+      if (apiResult.student.status === 'inactive') return 'inactive' as const;
       setAuth({ role: 'parent', studentId: apiResult.studentId });
       setStudents((prev) => {
         const idx = prev.findIndex((s) => s.id === apiResult.studentId);
@@ -2052,25 +2054,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return [...prev, apiResult.student];
       });
-      return true;
+      return true as const;
     };
 
-    if (attempt(students)) return true;
+    const local = attempt(students);
+    if (local === true || local === 'inactive') return local;
 
     if (useSupabase) {
       const apiResult = await apiLocalAuthParentLogin(studentIdOrPhone, trimmedPin);
-      if (apiResult) return applyApiLogin(apiResult);
+      if (apiResult && 'error' in apiResult) {
+        if (/pasif/i.test(apiResult.error)) return 'inactive';
+        return false;
+      }
+      if (apiResult && 'studentId' in apiResult) return applyApiLogin(apiResult);
     }
 
     const sb = getServiceSupabase();
     if (useSupabase && sb) {
       try {
-        const { data, error } = await sb.from('students').select('*').neq('status', 'inactive');
+        const { data, error } = await sb.from('students').select('*');
         if (!error && data?.length) {
           learnStudentColumnsFromRows(data as Record<string, unknown>[]);
           const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
           setStudents(loaded);
-          if (attempt(loaded)) return true;
+          const r = attempt(loaded);
+          if (r === true || r === 'inactive') return r;
         }
       } catch {
         /* anon ile devam */
@@ -2084,7 +2092,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           learnStudentColumnsFromRows(data as Record<string, unknown>[]);
           const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
           setStudents(loaded);
-          if (attempt(loaded)) return true;
+          const r = attempt(loaded);
+          if (r === true || r === 'inactive') return r;
         }
       } catch {
         /* yerel liste ile devam */
@@ -2095,19 +2104,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [students, useSupabase]);
 
   /** Öğrenci girişi: öğrenci no, kullanıcı adı veya veli telefonu + şifre/PIN */
-  const loginStudent = useCallback(async (studentIdOrPhone: string, pin: string): Promise<boolean> => {
+  const loginStudent = useCallback(async (studentIdOrPhone: string, pin: string): Promise<true | false | 'inactive'> => {
     const idRaw = studentIdOrPhone.trim();
     const trimmedPin = pin.trim();
     if (!idRaw || !trimmedPin) return false;
 
-    const attempt = (list: Student[]): boolean => {
+    const attempt = (list: Student[]): true | false | 'inactive' => {
       const student = findStudentForLogin(list, idRaw);
       if (!student || !verifyStudentLoginPin(student, trimmedPin)) return false;
+      if (student.status === 'inactive') return 'inactive';
       setAuth({ role: 'student', studentId: student.id });
       return true;
     };
 
     const applyApiLogin = (apiResult: { studentId: string; student: Student }) => {
+      if (apiResult.student.status === 'inactive') return 'inactive' as const;
       setAuth({ role: 'student', studentId: apiResult.studentId });
       setStudents((prev) => {
         const idx = prev.findIndex((s) => s.id === apiResult.studentId);
@@ -2118,25 +2129,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return [...prev, apiResult.student];
       });
-      return true;
+      return true as const;
     };
 
-    if (attempt(students)) return true;
+    const local = attempt(students);
+    if (local === true || local === 'inactive') return local;
 
     if (useSupabase) {
       const apiResult = await apiLocalAuthParentLogin(idRaw, trimmedPin);
-      if (apiResult) return applyApiLogin(apiResult);
+      if (apiResult && 'error' in apiResult) {
+        if (/pasif/i.test(apiResult.error)) return 'inactive';
+        return false;
+      }
+      if (apiResult && 'studentId' in apiResult) return applyApiLogin(apiResult);
     }
 
     const sb = getServiceSupabase();
     if (useSupabase && sb) {
       try {
-        const { data, error } = await sb.from('students').select('*').neq('status', 'inactive');
+        const { data, error } = await sb.from('students').select('*');
         if (!error && data?.length) {
           learnStudentColumnsFromRows(data as Record<string, unknown>[]);
           const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
           setStudents(loaded);
-          if (attempt(loaded)) return true;
+          const r = attempt(loaded);
+          if (r === true || r === 'inactive') return r;
         }
       } catch {
         /* anon ile devam */
@@ -2150,7 +2167,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           learnStudentColumnsFromRows(data as Record<string, unknown>[]);
           const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
           setStudents(loaded);
-          if (attempt(loaded)) return true;
+          const r = attempt(loaded);
+          if (r === true || r === 'inactive') return r;
         }
       } catch {
         /* yerel liste ile devam */

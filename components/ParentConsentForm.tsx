@@ -56,8 +56,10 @@ const ParentConsentForm: React.FC<Props> = ({ token }) => {
   const [app, setApp] = useState<Awaited<ReturnType<typeof loadApplicationByInviteToken>>>(null);
 
   useEffect(() => {
+    let cancelled = false;
     fetchClientIp().then(setClientIp);
     loadApplicationByInviteToken(token).then((found) => {
+      if (cancelled) return;
       if (!found) {
         setNotFound(true);
       } else if (found.signatureDataUrl?.trim()) {
@@ -68,7 +70,13 @@ const ParentConsentForm: React.FC<Props> = ({ token }) => {
         setSignatureName(found.fatherName || found.motherName || '');
       }
       setLoading(false);
+    }).catch(() => {
+      if (!cancelled) {
+        setNotFound(true);
+        setLoading(false);
+      }
     });
+    return () => { cancelled = true; };
   }, [token]);
 
   const validate = () => {
@@ -117,7 +125,10 @@ const ParentConsentForm: React.FC<Props> = ({ token }) => {
         <div className="max-w-md w-full rounded-2xl bg-white border border-rose-200 p-8 text-center">
           <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
           <h1 className="text-xl font-black text-slate-900">Link geçersiz</h1>
-          <p className="text-sm text-slate-600 mt-2">Veli onay formu bulunamadı veya süresi dolmuş olabilir.</p>
+          <p className="text-sm text-slate-600 mt-2">
+            Veli onay formu bulunamadı. Kulüpten yeni imza linki istemeniz gerekebilir
+            (eski mesajdaki link kayda bağlanmamış olabilir).
+          </p>
         </div>
       </div>
     );

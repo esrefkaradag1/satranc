@@ -19,9 +19,11 @@ export function evalBarWhitePercent(scoreOrChances: number): number {
 
 export function formatEvalLabel(scoreOrChances: number): string {
   if (Math.abs(scoreOrChances) <= 1) {
-    return scoreOrChances > 0.98 ? '#1' : scoreOrChances < -0.98 ? '-#1' : `${scoreOrChances >= 0 ? '+' : ''}${(scoreOrChances * 10).toFixed(1)}`;
+    if (scoreOrChances > 0.98) return '1 hamlede mat';
+    if (scoreOrChances < -0.98) return '1 hamlede mat';
+    return `${scoreOrChances >= 0 ? '+' : ''}${(scoreOrChances * 10).toFixed(1)}`;
   }
-  if (Math.abs(scoreOrChances) >= EVAL_BAR_DECISIVE_SCORE) return 'Mat';
+  if (Math.abs(scoreOrChances) >= EVAL_BAR_DECISIVE_SCORE) return 'Bitti';
   const sign = scoreOrChances > 0 ? '+' : '';
   return `${sign}${scoreOrChances.toFixed(1)}`;
 }

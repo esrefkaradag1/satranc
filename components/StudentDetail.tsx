@@ -135,6 +135,7 @@ import {
   lessonPackageNamesForSelection,
   trainingGroupNamesForSelection,
 } from '../lib/trainingGroupUtils';
+import { getDuesMonthCell } from '../lib/duesCalendarUtils';
 import type { GroupLessonSlot } from '../types';
 
 const MONTHS_TR = [
@@ -330,12 +331,14 @@ const StatTile: React.FC<{ icon: React.ReactNode; title: string; value: React.Re
     emerald: 'from-emerald-500/20 to-emerald-600/5 border-emerald-500/20 group-hover:border-emerald-500/40',
     amber: 'from-amber-500/20 to-amber-600/5 border-amber-500/20 group-hover:border-amber-500/40',
     violet: 'from-violet-500/20 to-violet-600/5 border-violet-500/20 group-hover:border-violet-500/40',
+    slate: 'from-slate-500/20 to-slate-600/5 border-slate-500/20 group-hover:border-slate-500/40',
   };
   const iconMap: Record<string, string> = {
     indigo: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
     emerald: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
     amber: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
     violet: 'bg-violet-500/20 text-violet-400 border-violet-500/30',
+    slate: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
   };
   return (
     <div className={`group relative overflow-hidden rounded-xl sm:rounded-2xl bg-gradient-to-br ${accentMap[accent] || accentMap.indigo} border backdrop-blur-xl p-3 sm:p-5 transition-all duration-300 sm:hover:shadow-lg sm:hover:scale-[1.02]`}>
@@ -1565,12 +1568,17 @@ const StudentDetail: React.FC<{
               : totalPaidThisYear > 0
                 ? 'partial'
                 : 'unpaid';
-    const duesDebt = expectedThisYear > 0 ? Math.max(0, expectedThisYear - totalPaidThisYear) : 0;
+    const duesDebt =
+      student.status === 'inactive'
+        ? 0
+        : expectedThisYear > 0
+          ? Math.max(0, expectedThisYear - totalPaidThisYear)
+          : 0;
 
     // Calculate active dues debt up to current month (excluding future months)
     const currentMonth = new Date().getMonth() + 1; // 1-indexed
     let activeDuesDebt = 0;
-    if (student.registrationType !== 'package' && !student.isScholarshipStudent) {
+    if (student.status !== 'inactive' && student.registrationType !== 'package' && !student.isScholarshipStudent) {
       for (let m = 1; m <= 12; m++) {
         if (m > currentMonth) continue; // Exclude future months
         if (isMonthBeforeRegistration(student, calendarYearForDerived, m)) continue;
@@ -1893,29 +1901,33 @@ const StudentDetail: React.FC<{
 <div className={`grid grid-cols-2 gap-2 sm:gap-4 ${financePrivateLessonSummary ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
  <StatTile icon={<CalendarCheck className="w-5 h-5" />} title="Devam Oranı (30 Gün)" value={derived.attendanceRate} accent="indigo" />
 <StatTile
-  icon={derived.activeDuesDebt > 0 ? <XCircle className="w-5 h-5" /> : <BadgeCheck className="w-5 h-5" />}
+  icon={student.status === 'inactive' ? <Lock className="w-5 h-5" /> : derived.activeDuesDebt > 0 ? <XCircle className="w-5 h-5" /> : <BadgeCheck className="w-5 h-5" />}
   title="Aidat Durumu"
   value={
-    derived.duesState === 'scholarship'
-      ? 'Burslu'
-      : derived.duesState === 'package'
-        ? 'Paket'
-        : derived.activeDuesDebt > 0
-          ? `₺${Number(derived.activeDuesDebt).toLocaleString('tr-TR')}`
-          : `₺${Number(derived.totalPaidThisYear).toLocaleString('tr-TR')}`
+    student.status === 'inactive'
+      ? 'Dondu'
+      : derived.duesState === 'scholarship'
+        ? 'Burslu'
+        : derived.duesState === 'package'
+          ? 'Paket'
+          : derived.activeDuesDebt > 0
+            ? `₺${Number(derived.activeDuesDebt).toLocaleString('tr-TR')}`
+            : `₺${Number(derived.totalPaidThisYear).toLocaleString('tr-TR')}`
   }
   subtitle={
-    derived.duesState === 'scholarship'
-      ? 'Aidat ödemesi yok'
-      : derived.duesState === 'package'
-        ? 'Paket kaydı'
-        : derived.activeDuesDebt > 0
-          ? `Ödenmemiş Borç · Kalan: ₺${Number(derived.activeDuesDebt).toLocaleString('tr-TR')}`
-          : derived.totalPaidThisYear > 0
-            ? `Ödemeler tamamlandı · Toplam: ₺${Number(derived.totalPaidThisYear).toLocaleString('tr-TR')}`
-            : 'Ödeme bulunmamaktadır'
+    student.status === 'inactive'
+      ? 'Öğrenci pasif — aidatlar donduruldu'
+      : derived.duesState === 'scholarship'
+        ? 'Aidat ödemesi yok'
+        : derived.duesState === 'package'
+          ? 'Paket kaydı'
+          : derived.activeDuesDebt > 0
+            ? `Ödenmemiş Borç · Kalan: ₺${Number(derived.activeDuesDebt).toLocaleString('tr-TR')}`
+            : derived.totalPaidThisYear > 0
+              ? `Ödemeler tamamlandı · Toplam: ₺${Number(derived.totalPaidThisYear).toLocaleString('tr-TR')}`
+              : 'Ödeme bulunmamaktadır'
   }
-  accent={derived.activeDuesDebt > 0 ? 'rose' : 'emerald'}
+  accent={student.status === 'inactive' ? 'slate' : derived.activeDuesDebt > 0 ? 'rose' : 'emerald'}
 />
 {financePrivateLessonSummary ? (
   <StatTile
@@ -2039,61 +2051,16 @@ const StudentDetail: React.FC<{
 {MONTHS_TR.map((m, idx) => {
  const monthNum = idx + 1;
  const paid = duesByMonth[monthNum] ?? 0;
- const beforeRegistration = isMonthBeforeRegistration(student, calendarYear, monthNum);
- const waivedMonth = isMonthDuesWaived(student, calendarYear, monthNum, trainingGroups, disciplineBranches);
- const inactiveMonth = beforeRegistration || waivedMonth;
  const dueInfo = getExpectedDueForMonth(student, calendarYear, monthNum, trainingGroups, disciplineBranches);
- const expected = inactiveMonth ? 0 : (student.registrationType === 'package' ? 0 : dueInfo.expected);
- const nowMonth = new Date().getMonth() + 1;
- const nowYear = new Date().getFullYear();
- const isFuture = calendarYear > nowYear || (calendarYear === nowYear && monthNum > nowMonth);
- const state =
-   beforeRegistration
-     ? 'Kayıt öncesi'
-     : waivedMonth
-       ? 'Muaf'
-     : student.registrationType === 'package'
-     ? (paid > 0 ? 'Ödendi' : 'Paket')
-     : dueInfo.isScholarship
-       ? 'Burslu'
-       : isFuture && paid <= 0
-         ? 'Bekliyor'
-         : paid >= expected && expected > 0
-           ? 'Ödendi'
-           : paid > 0
-             ? 'Kısmi'
-             : 'Ödenmedi';
- const tone =
-   inactiveMonth
-     ? 'bg-slate-900/50 border-slate-700/40 opacity-60'
-     : student.registrationType === 'package'
-     ? paid > 0
-       ? 'bg-emerald-500/30 border-emerald-400/55 shadow-sm shadow-emerald-500/15'
-       : 'bg-slate-800/70 border-slate-600/70'
-     : dueInfo.isScholarship
-       ? 'bg-emerald-500/20 border-emerald-400/40'
-       : isFuture && paid <= 0
-         ? 'bg-slate-800/70 border-slate-600/70'
-         : paid >= expected && expected > 0
-           ? 'bg-emerald-500/30 border-emerald-400/55 shadow-sm shadow-emerald-500/15'
-           : paid > 0
-             ? 'bg-amber-500/30 border-amber-400/55 shadow-sm shadow-amber-500/15'
-             : 'bg-rose-500/30 border-rose-400/55 shadow-sm shadow-rose-500/15';
- const stateColor =
-   state === 'Kayıt öncesi' || state === 'Muaf' ? 'text-slate-500' :
-   state === 'Ödendi' ? 'text-emerald-200' :
-   state === 'Burslu' ? 'text-emerald-300' :
-   state === 'Kısmi' ? 'text-amber-200' :
-   state === 'Ödenmedi' ? 'text-rose-200' :
-   state === 'Bekliyor' ? 'text-slate-400' :
-   state === 'Paket' ? 'text-indigo-300' : 'text-slate-400';
+ const cell = getDuesMonthCell(student, calendarYear, monthNum, paid, trainingGroups, disciplineBranches);
+ const planExpected = cell.state === 'Dondu' ? dueInfo.expected : (cell.inactive ? 0 : (student.registrationType === 'package' ? 0 : dueInfo.expected));
  return (
-   <div key={m} className={`relative rounded-lg border p-2.5 sm:p-4 ${tone}`}>
+   <div key={m} className={`relative rounded-lg border p-2.5 sm:p-4 ${cell.tone}`}>
      <button
        type="button"
        onClick={() => {
          setDuesPlanMonth(String(monthNum));
-         setDuesPlanAmount(String(expected || ''));
+         setDuesPlanAmount(String(planExpected || ''));
          setDuesPlanNote(student.duesOverrideNotes?.[monthKey(calendarYear, monthNum)] || '');
          setShowDuesPlanModal(true);
        }}
@@ -2106,7 +2073,7 @@ const StudentDetail: React.FC<{
        type="button"
        onClick={() => {
          setDuesMonth(String(monthNum));
-         setDuesAmount(student.registrationType === 'package' ? '' : String(expected || derived.monthlyFee || ''));
+         setDuesAmount(student.registrationType === 'package' ? '' : String(planExpected || derived.monthlyFee || ''));
          setDuesPaymentType('Nakit');
          setDuesProcessedBy('');
          setShowDuesModal(true);
@@ -2115,27 +2082,31 @@ const StudentDetail: React.FC<{
      >
        <div className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 text-center">{m}</div>
        <div className="mt-1 sm:mt-2 text-center">
-         {inactiveMonth ? (
+         {cell.state === 'Dondu' ? (
+           <div className="space-y-0.5">
+             <div className="text-sm sm:text-lg font-black text-slate-400">{cell.amountLabel}</div>
+             <div className="text-[9px] font-bold text-slate-500">Pasif</div>
+           </div>
+         ) : cell.inactive ? (
            <div className="text-sm sm:text-lg font-black text-slate-600">—</div>
          ) : student.registrationType !== 'package' && dueInfo.isScholarship ? (
            <div className="text-sm sm:text-lg font-black text-emerald-300">Burslu</div>
          ) : student.registrationType !== 'package' && dueInfo.discountAmount > 0 ? (
            <div className="space-y-0.5">
              <div className="text-[10px] sm:text-xs text-slate-500 line-through">₺{Number(dueInfo.baseFee).toLocaleString('tr-TR')}</div>
-             <div className="text-sm sm:text-lg font-black text-white">₺{Number(expected).toLocaleString('tr-TR')}</div>
+             <div className="text-sm sm:text-lg font-black text-white">{cell.amountLabel}</div>
              <div className="text-[9px] sm:text-[10px] font-bold text-emerald-400">₺{Number(dueInfo.discountAmount).toLocaleString('tr-TR')} ind.</div>
            </div>
          ) : (
-           <div className="text-sm sm:text-lg font-black text-white">
-             {student.registrationType === 'package'
-               ? (paid > 0 ? `₺${Number(paid).toLocaleString('tr-TR')}` : '—')
-               : `₺${Number(expected).toLocaleString('tr-TR')}`}
-           </div>
+           <div className="text-sm sm:text-lg font-black text-white">{cell.amountLabel}</div>
          )}
        </div>
-       <div className={`mt-1 text-center text-xs font-black uppercase tracking-wide ${stateColor}`}>{state}</div>
-       {paid > 0 && student.registrationType !== 'package' && (
-         <div className="mt-1 text-center text-[10px] text-slate-500">Tahsil: ₺{Number(paid).toLocaleString('tr-TR')}</div>
+       <div className={`mt-1 text-center text-xs font-black uppercase tracking-wide ${cell.stateColor}`}>{cell.state}</div>
+       {cell.paidLabel && (
+         <div className="mt-1 text-center text-[10px] text-slate-500">{cell.paidLabel}</div>
+       )}
+       {cell.remainingLabel && cell.state === 'Dondu' && (
+         <div className="mt-1 text-center text-[10px] text-slate-500">{cell.remainingLabel}</div>
        )}
      </button>
    </div>

@@ -53,7 +53,7 @@ import { filterLessonsToActiveGroups, isTrainingGroupLessonId, trainingGroupIdFr
 import { findTrainingGroupForStudent, hasCustomLessonSchedule, WEEKDAY_OPTIONS } from '../lib/trainingGroupUtils';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
 import { LeaderboardPreview } from './leaderboard/LeaderboardPreview';
-import { StudentSummaryDashboard } from './student/StudentSummaryDashboard';
+import { StudentSummaryDashboard, type StudentDashboardAlert } from './student/StudentSummaryDashboard';
 import { StudentAttendanceHistory } from './student/StudentAttendanceHistory';
 import { StudentHomeworkPanel } from './student/StudentHomeworkPanel';
 import { StudentAnalysesPanel } from './student/StudentAnalysesPanel';
@@ -75,6 +75,9 @@ import { filterNavByPermissions } from '../lib/rolePermissions';
 import { isServerMode } from '../apiConfig';
 import { apiHomeworksForStudent, apiScheduleForStudent } from '../services/backendApi';
 import { getServiceSupabase, isSupabaseBackend } from '../services/supabase';
+import { loadStudiesAsync } from '../studyStorage';
+import { loadProgress } from '../lib/studyUtils';
+import type { Study } from '../lib/studyTypes';
 import {
   fetchLichessUser,
   fetchLichessActivity,
@@ -656,6 +659,80 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     );
   }, [student, studentId, homeworks]);
   const assignedHomeworks = isServerMode() ? apiHomeworks : assignedHomeworksFromContext;
+
+  const [assignedStudies, setAssignedStudies] = useState<Study[]>([]);
+  useEffect(() => {
+    if (!studentId || viewAs !== 'student') {
+      setAssignedStudies([]);
+      return;
+    }
+    let cancelled = false;
+    void loadStudiesAsync()
+      .then((list) => {
+        if (cancelled) return;
+        setAssignedStudies(
+          list.filter((s) => s.memberIds.some((id) => String(id) === String(studentId))),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setAssignedStudies([]);
+      });
+    return () => { cancelled = true; };
+  }, [studentId, viewAs, activeTab]);
+
+  const pendingHomeworkCount = useMemo(() => {
+    if (!student) return 0;
+    return assignedHomeworks.filter((hw) => {
+      const puzzleIds = hw.puzzles ?? [];
+      if (puzzleIds.length === 0) {
+        // Platform / günlük hedef ödevi — gönderim yoksa bekliyor say
+        const submitted = homeworkSubmissions.some(
+          (s) => s.studentId === studentId && s.homeworkId === hw.id,
+        );
+        return !submitted;
+      }
+      const solved = new Set(
+        homeworkAttempts
+          .filter((a) => a.studentId === studentId && a.homeworkId === hw.id && a.correct)
+          .map((a) => a.puzzleId),
+      );
+      return puzzleIds.some((id) => !solved.has(id));
+    }).length;
+  }, [student, assignedHomeworks, homeworkAttempts, homeworkSubmissions, studentId]);
+
+  const pendingStudyCount = useMemo(() => {
+    const progress = loadProgress();
+    return assignedStudies.filter((study) => {
+      const chapters = study.chapters ?? [];
+      if (chapters.length === 0) return true;
+      return chapters.some((ch) => (progress[`${study.id}_${ch.id}`] ?? 0) < 100);
+    }).length;
+  }, [assignedStudies]);
+
+  const dashboardAlerts = useMemo((): StudentDashboardAlert[] => {
+    const items: StudentDashboardAlert[] = [];
+    if (pendingHomeworkCount > 0) {
+      items.push({
+        id: 'homework',
+        kind: 'training',
+        title: pendingHomeworkCount === 1 ? 'Antrenman / ödeviniz var' : `${pendingHomeworkCount} antrenman / ödeviniz var`,
+        detail: 'Tamamlanmamış ödevlerinize göz atın',
+        tab: 'puzzles',
+      });
+    }
+    if (pendingStudyCount > 0) {
+      items.push({
+        id: 'study',
+        kind: 'study',
+        title: pendingStudyCount === 1 ? 'Çalışmanız var' : `${pendingStudyCount} çalışmanız var`,
+        detail: assignedStudies[0]?.title
+          ? `Örn: ${assignedStudies[0].title}`
+          : 'Öğretmenin paylaştığı çalışmalara girin',
+        tab: 'study',
+      });
+    }
+    return items;
+  }, [pendingHomeworkCount, pendingStudyCount, assignedStudies]);
 
   const studentAnalyses = useMemo(() => {
     return performanceAnalyses.filter((a) => a.studentId === studentId).sort((a, b) => b.analysisDate.localeCompare(a.analysisDate));
@@ -1296,6 +1373,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             ageFromBirthDate={ageFromBirthDate}
             initials={initials}
             clubDisplay={studentClubDisplay}
+            alerts={dashboardAlerts}
+            pendingHomeworkCount={pendingHomeworkCount}
+            pendingStudyCount={pendingStudyCount}
           />
         )}
 

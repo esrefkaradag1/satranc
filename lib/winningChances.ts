@@ -50,6 +50,12 @@ export function pvLineToWinningChances(
   return whitePovWinningChances(line, turn);
 }
 
+/** Motor mat skoru → "N hamlede mat" (beyaz lehine pozitif) */
+export function formatMateInMovesLabel(whitePovMate: number): string {
+  const n = Math.max(1, Math.abs(Math.round(whitePovMate)));
+  return `${n} hamlede mat`;
+}
+
 export function formatEngineEvalLabel(
   line: EngineScoreLine | null | undefined,
   turn: 'w' | 'b',
@@ -58,7 +64,8 @@ export function formatEngineEvalLabel(
   const flip = turn === 'b' ? -1 : 1;
   if (line.mate !== null) {
     const m = line.mate * flip;
-    return m > 0 ? `#${Math.abs(m)}` : `-#${Math.abs(m)}`;
+    if (m === 0) return 'Bitti';
+    return formatMateInMovesLabel(m);
   }
   const s = line.score * flip;
   return `${s >= 0 ? '+' : ''}${s.toFixed(1)}`;

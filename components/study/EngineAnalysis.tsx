@@ -7,6 +7,7 @@ import { useStockfish, type PvLine } from '../../hooks/useStockfish';
 import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
 import { useStableEvalDisplay, type EvalBarDisplay } from '../../hooks/useStableEvalDisplay';
 import { evalWinningChances } from '../../lib/winningChances';
+import { getTerminalEval, terminalEvalToBarPercent } from '../../lib/analysisTerminal';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
 import type { StudentPlaysColor } from '../../lib/studyTypes';
 import { studentPlaysColorLabel } from '../../lib/studyUtils';
@@ -119,8 +120,9 @@ function formatScore(line: PvLine, turn: 'w' | 'b'): string {
   const flip = turn === 'b' ? -1 : 1;
   if (line.mate !== null) {
     const m = line.mate * flip;
-    if (m === 0) return '#';
-    return m > 0 ? `M${m}` : `-M${Math.abs(m)}`;
+    if (m === 0) return 'Bitti';
+    const n = Math.max(1, Math.abs(Math.round(m)));
+    return `${n} hamlede mat`;
   }
   const s = line.score * flip;
   return s > 0 ? `+${s.toFixed(1)}` : s.toFixed(1);
@@ -580,10 +582,15 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   };
 
   const turn = (fen.split(' ')[1] ?? 'w') as 'w' | 'b';
+  const terminalEval = useMemo(() => getTerminalEval(fen), [fen]);
   const mainLine = pvLines[0] ?? null;
-  const mainScore = mainLine ? formatScore(mainLine, turn) : '0.0';
+  const mainScore = terminalEval
+    ? terminalEval.label
+    : mainLine
+      ? formatScore(mainLine, turn)
+      : '0.0';
 
-  const hasFreshLines = !!mainLine && depth > 0;
+  const hasFreshLines = !!mainLine && depth > 0 && !terminalEval;
   const filledPvCount = pvLines.filter((l): l is PvLine => l !== null).length;
 
   // Lichess sortPvsInPlace mantığı: eval çubuğu için hatların en iyisini (sıra
@@ -601,8 +608,20 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
     fen,
     enabled && hasFreshLines ? bestEvalLine : null,
     turn,
-    enabled && !!onEvalBarChange,
+    enabled && !!onEvalBarChange && !terminalEval,
   );
+
+  const terminalEvalBarDisplay = useMemo((): EvalBarDisplay | null => {
+    if (!terminalEval) return null;
+    return {
+      whitePercent: terminalEvalToBarPercent(terminalEval),
+      label: terminalEval.label,
+      winningChances: terminalEval.kind === 'checkmate'
+        ? (terminalEval.whiteAdvantage ? 1 : -1)
+        : 0,
+      pending: false,
+    };
+  }, [terminalEval]);
 
   useEffect(() => {
     if (!ready || !hasFreshLines || !mainLine?.pv || mainLine.pv.length === 0) {
@@ -624,14 +643,15 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
       onEvalBarChange({ whitePercent: 50, label: '—', winningChances: 0, pending: false });
       return;
     }
-    onEvalBarChange(evalBarDisplay);
-    if (!evalBarDisplay.pending) {
+    const display = terminalEvalBarDisplay ?? evalBarDisplay;
+    onEvalBarChange(display);
+    if (!display.pending) {
       setEvalHistory((prev) => {
-        const next = [...prev, evalBarDisplay.winningChances];
+        const next = [...prev, display.winningChances];
         return next.length > 48 ? next.slice(-48) : next;
       });
     }
-  }, [enabled, evalBarDisplay, onEvalBarChange]);
+  }, [enabled, evalBarDisplay, terminalEvalBarDisplay, onEvalBarChange]);
 
   return (
     <div className="shrink-0 border-b border-white/5 bg-[#0f172a]">

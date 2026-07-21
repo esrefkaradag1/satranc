@@ -503,18 +503,19 @@ const Attendance: React.FC = () => {
   const filteredStudents = useMemo(() => {
     const byName = (list: typeof students) =>
       [...list].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'tr'));
+    const activeOnly = students.filter((s) => s.status !== 'inactive');
     const groupName = group.trim();
     if (!groupName) return [];
     if (attendanceType === 'lesson') {
       return byName(
-        students.filter((s) => {
+        activeOnly.filter((s) => {
           if (selectedLessonPackageSalesByStudentId.has(s.id)) return true;
           return (s.group ?? '').trim() === groupName;
         }),
       );
     }
-    if (selectedTrainingGroup) return byName(studentsInTrainingGroup(students, selectedTrainingGroup));
-    return byName(students.filter((s) => (s.group ?? '').trim() === groupName));
+    if (selectedTrainingGroup) return byName(studentsInTrainingGroup(activeOnly, selectedTrainingGroup));
+    return byName(activeOnly.filter((s) => (s.group ?? '').trim() === groupName));
   }, [students, group, attendanceType, selectedTrainingGroup, selectedLessonPackageSalesByStudentId]);
 
   const privateLessonBalanceByStudentId = useMemo(() => {

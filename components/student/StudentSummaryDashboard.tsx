@@ -1,7 +1,7 @@
 import React from 'react';
 import {
-  Calendar, CalendarCheck, CalendarDays, CheckSquare, ChevronRight,
-  ExternalLink, GraduationCap, Image as ImageIcon, ShieldCheck, Trophy,
+  Bell, Calendar, CalendarCheck, CalendarDays, CheckSquare, ChevronRight,
+  ExternalLink, GraduationCap, Image as ImageIcon, BookOpen, ShieldCheck, Trophy,
   User, Users, Video, Wallet, BarChart3,
 } from 'lucide-react';
 import type { Student, Transaction } from '../../types';
@@ -14,6 +14,14 @@ import type { ClubDisplayInfo } from '../../lib/clubDisplay';
 import { clubNameInitials } from '../../lib/clubDisplay';
 
 type PanelTab = string;
+
+export type StudentDashboardAlert = {
+  id: string;
+  kind: 'homework' | 'study' | 'training';
+  title: string;
+  detail: string;
+  tab: PanelTab;
+};
 
 type Props = {
   student: Student;
@@ -44,6 +52,9 @@ type Props = {
   ageFromBirthDate: (iso?: string) => number | null;
   initials: (name: string) => string;
   clubDisplay?: ClubDisplayInfo | null;
+  alerts?: StudentDashboardAlert[];
+  pendingHomeworkCount?: number;
+  pendingStudyCount?: number;
 };
 
 export const StudentSummaryDashboard: React.FC<Props> = ({
@@ -62,6 +73,9 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
   ageFromBirthDate,
   initials: studentInitials,
   clubDisplay,
+  alerts = [],
+  pendingHomeworkCount = 0,
+  pendingStudyCount = 0,
 }) => {
   const firstName = student.name.split(' ')[0];
   const todayLabel = new Date().toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -137,13 +151,58 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
           </div>
         </section>
 
+        {viewAs === 'student' && alerts.length > 0 ? (
+          <section className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] p-4 sm:p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-300">
+                <Bell className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-amber-400/90 uppercase tracking-widest">Bildirimler</p>
+                <p className="text-sm font-bold text-white">Sizin için bekleyen görevler var</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {alerts.map((alert) => (
+                <button
+                  key={alert.id}
+                  type="button"
+                  onClick={() => onTabChange(alert.tab)}
+                  className="w-full flex items-center gap-3 rounded-xl border border-white/10 bg-black/20 px-3.5 py-3 text-left hover:bg-black/30 hover:border-amber-500/30 transition-colors"
+                >
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                    alert.kind === 'study'
+                      ? 'bg-teal-500/20 text-teal-300'
+                      : alert.kind === 'training'
+                        ? 'bg-emerald-500/20 text-emerald-300'
+                        : 'bg-indigo-500/20 text-indigo-300'
+                  }`}>
+                    {alert.kind === 'study' ? <BookOpen className="w-4 h-4" /> : <CheckSquare className="w-4 h-4" />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-white truncate">{alert.title}</p>
+                    <p className="text-xs text-slate-400 truncate">{alert.detail}</p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {/* Hızlı menü */}
         <section className="grid grid-cols-3 sm:grid-cols-6 gap-2.5 sm:gap-3">
           <QuickMenuButton icon={<Trophy className="w-5 h-5" />} label="Liderlik" color="amber" onClick={() => onTabChange('leaderboard')} />
           {viewAs === 'parent' ? (
             <QuickMenuButton icon={<BarChart3 className="w-5 h-5" />} label="Analiz" color="indigo" onClick={() => onTabChange('analyses')} />
           ) : (
-            <QuickMenuButton icon={<CheckSquare className="w-5 h-5" />} label="Ödevler" color="emerald" onClick={() => onTabChange('puzzles')} />
+            <QuickMenuButton
+              icon={<CheckSquare className="w-5 h-5" />}
+              label="Ödevler"
+              color="emerald"
+              badge={pendingHomeworkCount > 0 ? pendingHomeworkCount : null}
+              onClick={() => onTabChange('puzzles')}
+            />
           )}
           <QuickMenuButton icon={<CalendarDays className="w-5 h-5" />} label="Program" color="indigo" onClick={() => onTabChange('schedule')} />
           {viewAs === 'parent' && privateLessonSummary ? (

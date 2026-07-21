@@ -53,6 +53,7 @@ import { liveLessonFenAt } from '../lib/liveLessonVariations';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
 import type { EvalBarDisplay } from '../hooks/useStableEvalDisplay';
 import { cpWinningChances, winningChancesToBarPercent } from '../lib/winningChances';
+import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStudyBoardSettings } from '../hooks/useStudyBoardSettings';
 import { engineMasterTogglePatch } from '../lib/studyBoardSettings';
 import { useStudyKeyboardShortcuts } from '../hooks/useStudyKeyboardShortcuts';
@@ -72,6 +73,30 @@ function materialEvalToBarDisplay(pawns: number): EvalBarDisplay {
     winningChances: chances,
     pending: false,
   };
+}
+
+function lastMoveHighlightFromSan(fenBefore: string, san: string): Record<string, React.CSSProperties> {
+  try {
+    const g = makeBuilderGame(fenBefore);
+    const m = g.move(san);
+    if (!m) return {};
+    const style: React.CSSProperties = { backgroundColor: 'rgba(155, 199, 0, 0.41)' };
+    return { [m.from]: style, [m.to]: style };
+  } catch {
+    return {};
+  }
+}
+
+function fenAfterSans(startFen: string, sans: string[]): string {
+  try {
+    const g = makeBuilderGame(startFen);
+    for (const san of sans) {
+      if (!g.move(san)) break;
+    }
+    return g.fen();
+  } catch {
+    return startFen;
+  }
 }
 
 
@@ -153,6 +178,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [vcOptionSquares, setVcOptionSquares] = useState<Record<string, React.CSSProperties>>({});
   const [vcLastMoveSquares, setVcLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const [vcMoveFrom, setVcMoveFrom] = useState<string | null>(null);
+  /** VS bitince geçmişi incelemek için gösterilen ply (null = canlı uç) */
+  const [vcReviewPly, setVcReviewPly] = useState<number | null>(null);
 
   const [showCallPanel, setShowCallPanel] = useState(false);
   const [liveAnalysisNote, setLiveAnalysisNote] = useState<string | null>(null);
@@ -715,15 +742,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [selectedStudy?.chatMessages?.length]);
-  const scenarioText = useMemo(() => {
-    if (effectiveChapter?.guidedPrompt?.trim()) return effectiveChapter.guidedPrompt.trim();
-    if (effectiveChapter?.comment?.trim()) return effectiveChapter.comment.trim();
-    if (isInteractivePuzzle && puzzlePlayNorm) {
-      const colorLabel = puzzlePlayNorm.studentColor === 'w' ? 'Beyaz' : 'Siyah';
-      return `Sıra sizde. ${colorLabel} için en iyi hamleyi bulun.`;
-    }
-    return 'Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.';
-  }, [effectiveChapter, isInteractivePuzzle, puzzlePlayNorm]);
   const hintText = useMemo(() => {
     if (!effectiveChapter) return '';
     if (effectiveChapter.moveHint?.trim()) return effectiveChapter.moveHint.trim();
@@ -740,15 +758,37 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const totalMoves = chapterMovesForUi.length;
   const isComplete = isLiveAnalysis ? false : totalMoves > 0 && currentMoveIndex >= totalMoves;
 
+  const scenarioText = useMemo(() => {
+    if (vsComputer && isVcGameOver) {
+      return vcOutcome
+        ? `${vcOutcome.title}. ${vcOutcome.subtitle}`
+        : 'Oyun bitti.';
+    }
+    if (isInteractivePuzzle && isComplete) {
+      return 'Bölüm tamamlandı. Sonraki bölüme geçebilir veya tekrar deneyebilirsiniz.';
+    }
+    if (effectiveChapter?.guidedPrompt?.trim()) return effectiveChapter.guidedPrompt.trim();
+    if (effectiveChapter?.comment?.trim()) return effectiveChapter.comment.trim();
+    if (isInteractivePuzzle && puzzlePlayNorm) {
+      const colorLabel = puzzlePlayNorm.studentColor === 'w' ? 'Beyaz' : 'Siyah';
+      return `Sıra sizde. ${colorLabel} için en iyi hamleyi bulun.`;
+    }
+    return 'Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.';
+  }, [effectiveChapter, isInteractivePuzzle, puzzlePlayNorm, vsComputer, isVcGameOver, vcOutcome, isComplete]);
+
   const currentFen = useMemo(() => {
     if (isLiveAnalysis && moveListChapter) {
       return fenToCurrentFen(moveListChapter, currentMoveIndex);
     }
-    // Çözüm bittikten veya doğrudan analiz bölümünde antrenör SYNC ile yönlendirir
-    if ((!isInteractivePuzzle || isComplete) && syncPathFen) return syncPathFen;
+    // Öğrenci bulmacasında sync köküne dönme — çözüm bitince sonda kalır
+    if (isInteractivePuzzle) {
+      if (!moveListChapter) return DEFAULT_FEN;
+      return fenToCurrentFen(moveListChapter, currentMoveIndex);
+    }
+    if (syncPathFen) return syncPathFen;
     if (!moveListChapter) return DEFAULT_FEN;
     return fenToCurrentFen(moveListChapter, currentMoveIndex);
-  }, [isLiveAnalysis, moveListChapter, currentMoveIndex, isInteractivePuzzle, isComplete, syncPathFen]);
+  }, [isLiveAnalysis, moveListChapter, currentMoveIndex, isInteractivePuzzle, syncPathFen]);
 
   /** Bulmacada çözüm sızmasın: motor, ana hat hamle listesi ve ileri sarma kapalı; ipuçları butonlarla. */
   const hideEngineForStudentPuzzle = useMemo(
@@ -761,7 +801,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [puzzleSetupPreviewFen, setPuzzleSetupPreviewFen] = useState<string | null>(null);
 
   useEffect(() => {
-    if (hideEngineForStudentPuzzle || vsComputer || isLiveAnalysis) return;
+    // Bulmaca çözümünde sticky sync başa atmasın
+    if (isInteractivePuzzle || hideEngineForStudentPuzzle || vsComputer || isLiveAnalysis) return;
     if (!sticky) return;
     if (currentMoveIndexFromSync === currentMoveIndex) return;
     const now = Date.now();
@@ -770,12 +811,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       setCurrentVariation(null);
       setFreePlayFen(null);
     }
-  }, [hideEngineForStudentPuzzle, vsComputer, isLiveAnalysis, sticky, currentMoveIndexFromSync, currentMoveIndex, lastActionMs]);
+  }, [isInteractivePuzzle, hideEngineForStudentPuzzle, vsComputer, isLiveAnalysis, sticky, currentMoveIndexFromSync, currentMoveIndex, lastActionMs]);
 
   useEffect(() => {
-    if (!sticky || vsComputer || isLiveAnalysis || hideEngineForStudentPuzzle) return;
+    if (!sticky || vsComputer || isLiveAnalysis || hideEngineForStudentPuzzle || isInteractivePuzzle) return;
     void catchUp();
-  }, [selectedChapter?.id, sticky, vsComputer, isLiveAnalysis, hideEngineForStudentPuzzle, catchUp]);
+  }, [selectedChapter?.id, sticky, vsComputer, isLiveAnalysis, hideEngineForStudentPuzzle, isInteractivePuzzle, catchUp]);
 
   useEffect(() => {
     if (!hideEngineForStudentPuzzle) return;
@@ -811,15 +852,29 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const [freePlayFen, setFreePlayFen] = useState<string | null>(null);
 
+  const vcStartFen = useMemo(() => {
+    if (!effectiveChapter) return DEFAULT_FEN;
+    try {
+      return fenToCurrentFen(effectiveChapter, 0);
+    } catch {
+      return effectiveChapter.fen || DEFAULT_FEN;
+    }
+  }, [effectiveChapter?.id, effectiveChapter?.fen, effectiveChapter?.moves]);
+
   const studyBoardFen = useMemo(() => {
-    if (vsComputer) return vcFen;
+    if (vsComputer) {
+      if (vcReviewPly != null && vcReviewPly >= 0 && vcReviewPly < vcHistory.length) {
+        return fenAfterSans(vcStartFen, vcHistory.slice(0, vcReviewPly));
+      }
+      return vcFen;
+    }
     if (puzzleSetupPreviewFen && hideEngineForStudentPuzzle) return puzzleSetupPreviewFen;
     if (isComplete && hoverPly !== null && (moveListChapter ?? effectiveChapter) && totalMoves > 0) {
       return fenToCurrentFen(moveListChapter ?? effectiveChapter!, Math.min(Math.max(0, hoverPly), totalMoves));
     }
     if (freePlayFen != null) return freePlayFen;
     return currentFen;
-  }, [vsComputer, vcFen, puzzleSetupPreviewFen, hideEngineForStudentPuzzle, isComplete, hoverPly, effectiveChapter, moveListChapter, totalMoves, freePlayFen, currentFen]);
+  }, [vsComputer, vcFen, vcReviewPly, vcHistory, vcStartFen, puzzleSetupPreviewFen, hideEngineForStudentPuzzle, isComplete, hoverPly, effectiveChapter, moveListChapter, totalMoves, freePlayFen, currentFen]);
 
   const turn = sideToMove(studyBoardFen);
   const studentTurnCode: 'w' | 'b' | null =
@@ -841,6 +896,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   useEffect(() => {
     if (engineDrivesEvalBar) return;
+    const terminal = getTerminalEval(studyBoardFen);
+    if (terminal) {
+      setEvalBar({
+        whitePercent: terminalEvalToBarPercent(terminal),
+        label: terminal.label,
+        winningChances: terminal.kind === 'checkmate' ? (terminal.whiteAdvantage ? 1 : -1) : 0,
+        pending: false,
+      });
+      return;
+    }
     if (vsComputer) {
       try {
         setEvalBar(materialEvalToBarDisplay(getEvaluationPawns(makeBuilderGame(studyBoardFen))));
@@ -882,6 +947,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setChapterStartMs(now);
     setLastActionMs(now);
     setChapterMoveAnalysis([]);
+    setVcReviewPly(null);
+    setLastMoveSquares({});
     if (!effectiveChapter) { setCurrentMoveIndex(0); return; }
     setCurrentMoveIndex(0);
     setFreePlayFen(null);
@@ -1603,19 +1670,34 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (next < selectedStudy.chapters.length) selectChapterIndex(next);
   }, [selectedStudy, selectedChapterIndex, selectChapterIndex]);
 
+  const restartVcGame = useCallback(() => {
+    if (!effectiveChapter) return;
+    setVcHistory([]);
+    setVcFen(vcStartFen);
+    setCurrentMoveIndex(0);
+    setVcReviewPly(null);
+    setVcManualGameOver(false);
+    setLastMoveSquares({});
+    setFeedback(null);
+    setFeedbackText(null);
+  }, [effectiveChapter, vcStartFen]);
+
   const goToMove = useCallback((idx: number) => {
     if (vsComputer && effectiveChapter) {
-      if (idx > 0) return; // Prevent undo/takebacks in vsComputer mode. Only allow restart (idx === 0)
-      let startFen: string;
-      try {
-        startFen = fenToCurrentFen(effectiveChapter, 0);
-      } catch {
-        startFen = effectiveChapter.fen || DEFAULT_FEN;
+      // Oyun devam ederken geri alma yok; bitince geçmişte gezinmeye izin ver
+      if (!isVcGameOver) {
+        if (idx === 0) restartVcGame();
+        return;
       }
-      setVcHistory([]);
-      setVcFen(startFen);
-      setCurrentMoveIndex(0);
-      setVcManualGameOver(false);
+      const target = Math.max(0, Math.min(vcHistory.length, idx));
+      setVcReviewPly(target < vcHistory.length ? target : null);
+      setCurrentMoveIndex(target);
+      if (target > 0) {
+        const before = fenAfterSans(vcStartFen, vcHistory.slice(0, target - 1));
+        setLastMoveSquares(lastMoveHighlightFromSan(before, vcHistory[target - 1]));
+      } else {
+        setLastMoveSquares({});
+      }
       setFeedback(null);
       setFeedbackText(null);
       return;
@@ -1639,7 +1721,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (!isLiveAnalysis) void jumpToMoveIndex(nextIdx);
     setFeedback(null);
     setFeedbackText(null);
-  }, [vsComputer, effectiveChapter, vcHistory, moveListChapter, totalMoves, isLiveAnalysis, jumpToMoveIndex, hideEngineForStudentPuzzle, currentMoveIndex]);
+  }, [vsComputer, effectiveChapter, isVcGameOver, vcHistory, vcStartFen, restartVcGame, moveListChapter, totalMoves, isLiveAnalysis, jumpToMoveIndex, hideEngineForStudentPuzzle, currentMoveIndex]);
 
   const navMaxPly = vsComputer ? vcHistory.length : totalMoves;
 
@@ -1676,9 +1758,19 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     goToMove(currentMoveIndex + 1);
   }, [currentVariation, chapterForNav, jumpToVariation, goToMove, totalMoves, currentMoveIndex]);
 
-  const wheelPrev = useCallback(() => goStudyPrev(), [goStudyPrev]);
-  const wheelNext = useCallback(() => goStudyNext(), [goStudyNext]);
-  const studyBoardWheelRef = useChessWheelNavigation(wheelPrev, wheelNext, vsComputer || totalMoves > 0);
+  const wheelPrev = useCallback(() => {
+    if (vsComputer && !isVcGameOver) return;
+    goStudyPrev();
+  }, [vsComputer, isVcGameOver, goStudyPrev]);
+  const wheelNext = useCallback(() => {
+    if (vsComputer && !isVcGameOver) return;
+    goStudyNext();
+  }, [vsComputer, isVcGameOver, goStudyNext]);
+  const studyBoardWheelRef = useChessWheelNavigation(
+    wheelPrev,
+    wheelNext,
+    (vsComputer && isVcGameOver) || (!vsComputer && totalMoves > 0),
+  );
 
   const goStudyStart = useCallback(() => goToMove(0), [goToMove]);
   const goStudyEnd = useCallback(() => goToMove(navMaxPly), [goToMove, navMaxPly]);
@@ -1837,6 +1929,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const doComputerMove = useCallback(async (fen: string) => {
      setVcThinking(true);
+     setVcReviewPly(null);
      try {
        const san = await getBestMoveWithTimeout(
          fen,
@@ -1858,6 +1951,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
          });
          setVcFen(nextFen);
          setCurrentMoveIndex(newHistory.length);
+         setLastMoveSquares(lastMoveHighlightFromSan(fen, san));
          logStudyEvent({
            studyId: selectedStudy?.id,
            chapterId: effectiveChapter?.id ?? selectedChapter?.id,
@@ -1936,6 +2030,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       setVcFen(nf);
       setVcHistory(nextHistory);
       setCurrentMoveIndex(nextHistory.length);
+      setVcReviewPly(null);
+      setLastMoveSquares(lastMoveHighlightFromSan(vcFen, playedSan));
       setLastActionMs(now);
 
       setChapterMoveAnalysis((prev) => {
@@ -2595,22 +2691,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                         }
                       }}
                     />
-                    {boardGameOutcome && (!vsComputer || isVcGameOver || !vcThinking) && (
-                      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-2 pb-2 pt-10 bg-gradient-to-t from-black/80 via-black/35 to-transparent rounded-sm">
-                        <div
-                          className={`rounded-xl border px-3 py-2.5 shadow-lg ${
-                            boardGameOutcome.kind === 'checkmate'
-                              ? 'bg-rose-950/92 border-rose-400/45 text-rose-50'
-                              : boardGameOutcome.kind === 'stalemate'
-                                ? 'bg-amber-950/88 border-amber-400/40 text-amber-50'
-                                : 'bg-slate-900/92 border-slate-500/40 text-slate-100'
-                          }`}
-                        >
-                          <p className="text-sm font-black tracking-wide">{boardGameOutcome.title}</p>
-                          <p className="text-[11px] font-medium opacity-95 mt-0.5 leading-snug">{boardGameOutcome.subtitle}</p>
-                        </div>
-                      </div>
-                    )}
                     {vsComputer && vcThinking && (
                       <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/10 backdrop-blur-[2px] rounded-sm animate-in fade-in duration-300">
                         <div className="bg-[#1e293b]/90 border border-white/10 px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3">
@@ -2621,6 +2701,20 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                     )}
                 </div>
                 </ChessBoardFrame>
+                {boardGameOutcome && (!vsComputer || isVcGameOver) && !vcThinking ? (
+                  <div
+                    className={`mt-2 w-full rounded-xl border px-3 py-2.5 shadow-lg ${
+                      boardGameOutcome.kind === 'checkmate'
+                        ? 'bg-rose-950/92 border-rose-400/45 text-rose-50'
+                        : boardGameOutcome.kind === 'stalemate'
+                          ? 'bg-amber-950/88 border-amber-400/40 text-amber-50'
+                          : 'bg-slate-900/92 border-slate-500/40 text-slate-100'
+                    }`}
+                  >
+                    <p className="text-sm font-black tracking-wide">{boardGameOutcome.title}</p>
+                    <p className="text-[11px] font-medium opacity-95 mt-0.5 leading-snug">{boardGameOutcome.subtitle}</p>
+                  </div>
+                ) : null}
                 {boardPgnDisplay ? (
                   <StudyBoardPgnHeader
                     display={boardPgnDisplay}
@@ -2636,35 +2730,43 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   <button type="button" title="Tahtayı çevir (F)" onClick={() => setStudentBoardOrientation(o => o === 'white' ? 'black' : 'white')} className="p-2.5 sm:p-2 rounded-sm hover:bg-[rgba(255,255,255,0.05)] text-[#999] hover:text-[#bababa] transition-colors"><FlipHorizontal className="w-4 h-4" /></button>
                   <div className="w-px h-5 bg-[rgba(255,255,255,0.05)] mx-0.5" />
                   <button 
-                     disabled={vsComputer} 
-                     onClick={() => !vsComputer && goToMove(0)} 
-                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     disabled={vsComputer && !isVcGameOver} 
+                     onClick={() => goToMove(0)} 
+                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     title={vsComputer && isVcGameOver ? 'Başa git (inceleme)' : 'Başa git'}
                    >
                      <SkipBack className="w-4 h-4" />
                    </button>
                    <button 
-                     disabled={vsComputer} 
-                     onClick={() => !vsComputer && goToMove(currentMoveIndex - 1)} 
-                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     disabled={vsComputer && !isVcGameOver} 
+                     onClick={() => goToMove(currentMoveIndex - 1)} 
+                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
                    >
                      <ChevronLeft className="w-4 h-4" />
                    </button>
                    <button 
-                     disabled={vsComputer} 
-                     onClick={() => !vsComputer && goToMove(currentMoveIndex + 1)} 
-                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     disabled={vsComputer && !isVcGameOver} 
+                     onClick={() => goToMove(currentMoveIndex + 1)} 
+                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
                    >
                      <ChevronRight className="w-4 h-4" />
                    </button>
                    <button 
-                     disabled={vsComputer} 
-                     onClick={() => !vsComputer && goToMove(navMaxPly)} 
-                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     disabled={vsComputer && !isVcGameOver} 
+                     onClick={() => goToMove(navMaxPly)} 
+                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
                    >
                      <SkipForward className="w-4 h-4" />
                    </button>
                   <div className="w-px h-5 bg-[rgba(255,255,255,0.05)] mx-0.5" />
-                  <button onClick={() => goToMove(0)} className="p-2.5 sm:p-2 rounded-sm hover:bg-[rgba(255,255,255,0.05)] text-[#999] hover:text-[#bababa] transition-colors"><RotateCcw className="w-4 h-4" /></button>
+                  <button
+                    type="button"
+                    title={vsComputer ? 'Tekrar oyna' : 'Başa dön'}
+                    onClick={() => (vsComputer ? restartVcGame() : goToMove(0))}
+                    className="p-2.5 sm:p-2 rounded-sm hover:bg-[rgba(255,255,255,0.05)] text-[#999] hover:text-[#bababa] transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
                 </div>
              </div>
              <div className="w-full sm:max-w-[min(66vh,66vw)] min-w-0">
@@ -2798,7 +2900,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                     </div>
                     <button
                       type="button"
-                      onClick={() => goToMove(0)}
+                      onClick={restartVcGame}
                       className="mt-1 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs active:scale-95 transition-all shadow-md shadow-emerald-500/20"
                     >
                       Tekrar Oyna
@@ -2843,9 +2945,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                               <td data-label="#" className="py-2.5 pl-2 text-slate-600 font-bold bg-white/[0.02] rounded-l-lg group-hover:text-slate-400 transition-colors">{i + 1}.</td>
                               <td 
                                 data-label="BEYAZ"
-                                onClick={() => !vsComputer && goToMove(wPly)}
+                                onClick={() => (isVcGameOver || !vsComputer) && goToMove(wPly)}
                                 className={`py-2.5 px-2 font-bold transition-all bg-white/[0.02] ${
-                                  vsComputer 
+                                  vsComputer && !isVcGameOver
                                     ? 'cursor-default text-slate-400' 
                                     : 'cursor-pointer text-slate-200 hover:bg-white/[0.05]'
                                 } ${
@@ -2856,9 +2958,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                               </td>
                               <td 
                                 data-label="SİYAH"
-                                onClick={() => !vsComputer && vcHistory[i * 2 + 1] && goToMove(bPly)}
+                                onClick={() => (isVcGameOver || !vsComputer) && vcHistory[i * 2 + 1] && goToMove(bPly)}
                                 className={`py-2.5 px-2 font-bold transition-all bg-white/[0.02] rounded-r-lg ${
-                                  vsComputer 
+                                  vsComputer && !isVcGameOver
                                     ? 'cursor-default text-slate-500' 
                                     : 'cursor-pointer text-indigo-400 hover:bg-white/[0.05]'
                                 } ${

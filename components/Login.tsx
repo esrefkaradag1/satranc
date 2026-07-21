@@ -174,21 +174,37 @@ const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
       setParentLoading(true);
       try {
         const r = await apiParentLogin(parentIdOrPhone, parentPin);
-        if (r) {
+        if (r && 'error' in r) {
+          setParentError(r.error);
+          setParentLoading(false);
+          return;
+        }
+        if (r && 'studentId' in r) {
           setAuthWithStudent({ role: 'parent', studentId: r.studentId }, r.student);
           return;
         }
       } catch {
         /* ignore */
       }
-      if (await loginParent(parentIdOrPhone, parentPin)) return;
+      const local = await loginParent(parentIdOrPhone, parentPin);
+      if (local === true) return;
+      if (local === 'inactive') {
+        setParentError('Hesabınız pasiftir. Sisteme giriş yapamazsınız.');
+        setParentLoading(false);
+        return;
+      }
       setParentLoading(false);
       setParentError('Giriş başarısız. Öğrenci no veya telefon ile PIN kontrol edin.');
       return;
     }
     setParentLoading(true);
     try {
-      if (await loginParent(parentIdOrPhone, parentPin)) return;
+      const local = await loginParent(parentIdOrPhone, parentPin);
+      if (local === true) return;
+      if (local === 'inactive') {
+        setParentError('Hesabınız pasiftir. Sisteme giriş yapamazsınız.');
+        return;
+      }
       setParentError('Öğrenci bulunamadı veya PIN hatalı.');
     } finally {
       setParentLoading(false);
@@ -206,7 +222,12 @@ const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
       setStudentLoading(true);
       try {
         const r = await apiParentLogin(studentIdOrPhone, studentPin);
-        if (r) {
+        if (r && 'error' in r) {
+          setStudentError(r.error);
+          setStudentLoading(false);
+          return;
+        }
+        if (r && 'studentId' in r) {
           setAuthWithStudent({ role: 'student', studentId: r.studentId }, r.student);
           setStudentLoading(false);
           return;
@@ -214,14 +235,25 @@ const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
       } catch {
         /* ignore */
       }
-      if (await loginStudent(studentIdOrPhone, studentPin)) return;
+      const local = await loginStudent(studentIdOrPhone, studentPin);
+      if (local === true) return;
+      if (local === 'inactive') {
+        setStudentError('Hesabınız pasiftir. Sisteme giriş yapamazsınız.');
+        setStudentLoading(false);
+        return;
+      }
       setStudentLoading(false);
       setStudentError('Giriş başarısız.');
       return;
     }
     setStudentLoading(true);
     try {
-      if (await loginStudent(studentIdOrPhone, studentPin)) return;
+      const local = await loginStudent(studentIdOrPhone, studentPin);
+      if (local === true) return;
+      if (local === 'inactive') {
+        setStudentError('Hesabınız pasiftir. Sisteme giriş yapamazsınız.');
+        return;
+      }
       setStudentError('Öğrenci bulunamadı veya şifre/PIN hatalı.');
     } finally {
       setStudentLoading(false);
