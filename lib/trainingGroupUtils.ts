@@ -226,9 +226,7 @@ export function getBaseMonthlyFeeForStudent(
   disciplineBranches: DisciplineBranch[]
 ): number {
   if (student.monthlyFee != null && student.monthlyFee > 0) return student.monthlyFee;
-  const group =
-    findTrainingGroupById(trainingGroups, student.trainingGroupId ?? '') ??
-    findTrainingGroupByName(trainingGroups, student.group);
+  const group = findTrainingGroupForStudent(student, trainingGroups);
   if (group) return getGroupMonthlyFee(group, disciplineBranches);
   const branch = findDisciplineBranch(disciplineBranches, student.branch ?? '', student.branchOffice);
   return branch?.monthlyFee ?? 0;
@@ -358,16 +356,19 @@ export function lessonSchedulesEqual(
 }
 
 export function findTrainingGroupForStudent(
-  student: Pick<Student, 'trainingGroupId' | 'group'>,
+  student: Pick<Student, 'trainingGroupId' | 'group' | 'branchOffice' | 'branch'>,
   trainingGroups: TrainingGroup[],
 ): TrainingGroup | undefined {
   if (student.trainingGroupId) {
-    const byId = trainingGroups.find((g) => g.id === student.trainingGroupId);
+    const byId = findTrainingGroupById(trainingGroups, student.trainingGroupId);
     if (byId) return byId;
   }
-  const groupName = (student.group || '').trim().toLowerCase();
+  const groupName = (student.group ?? '').trim();
   if (!groupName) return undefined;
-  return trainingGroups.find((g) => g.name.trim().toLowerCase() === groupName);
+  return findTrainingGroupByName(trainingGroups, groupName, {
+    branchOffice: student.branchOffice,
+    discipline: student.branch,
+  });
 }
 
 /** Öğrenciye özel kayıtlı program, gruptan farklı mı? */

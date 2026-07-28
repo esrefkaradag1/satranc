@@ -319,7 +319,7 @@ function devApiPlugin(env: Record<string, string>): Plugin {
               } else if (route === '/api/site-messages') {
                 result = await insertSiteMessageViaEnv(body, env);
               } else if (route === '/api/whatsapp') {
-                result = await whatsappApiPostHandler(body, env);
+                result = await whatsappApiPostHandler(body, env, fullUrl);
               } else if (route === '/api/lichess-oauth-token') {
                 result = await lichessOAuthTokenViaEnv(body, env, req.headers as Record<string, string | string[] | undefined>);
               } else if (route === '/api/lichess-oauth-disconnect') {

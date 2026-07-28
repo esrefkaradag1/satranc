@@ -29,14 +29,23 @@ function saveJson(key: string, value: unknown) {
 }
 
 export const DEFAULT_WHATSAPP_CONFIG: WhatsAppConfig = {
-  apiBaseUrl: '',
+  provider: 'wamessage',
+  apiBaseUrl: 'https://api.toplusms.app',
   apiKey: '',
-  instanceName: 'netchess',
+  instanceName: '',
+  devicePhone: '',
+  loginIdentifier: '',
   enabled: false,
 };
 
 export function loadWhatsAppConfig(): WhatsAppConfig {
-  return { ...DEFAULT_WHATSAPP_CONFIG, ...loadJson<Partial<WhatsAppConfig>>(CONFIG_KEY, {}) };
+  const stored = loadJson<Partial<WhatsAppConfig>>(CONFIG_KEY, {});
+  const merged: WhatsAppConfig = { ...DEFAULT_WHATSAPP_CONFIG, ...stored };
+  if (!merged.provider) merged.provider = 'wamessage';
+  if (merged.provider === 'wamessage' && !String(merged.apiBaseUrl || '').trim()) {
+    merged.apiBaseUrl = DEFAULT_WHATSAPP_CONFIG.apiBaseUrl;
+  }
+  return merged;
 }
 
 export function saveWhatsAppConfig(config: WhatsAppConfig) {

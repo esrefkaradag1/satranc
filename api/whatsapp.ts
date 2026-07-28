@@ -28,7 +28,7 @@ export default async function handler(req: Req, res: Res) {
       req.method === 'GET'
         ? await whatsappApiGetHandler(req.url, process.env)
         : req.method === 'POST'
-          ? await whatsappApiPostHandler(parseBody(req), process.env)
+          ? await whatsappApiPostHandler(parseBody(req), process.env, req.url)
           : { status: 405, body: { error: 'Yalnızca GET ve POST' } };
     res.status(result.status).json(result.body);
   } catch (e) {

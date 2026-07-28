@@ -74,9 +74,9 @@ alter table public.whatsapp_message_logs          enable row level security;
 --   ('training_incomplete', true)
 -- on conflict (event) do update set enabled = excluded.enabled;
 
--- (Opsiyonel) Sağlayıcıyı env yerine DB'den yönetmek istersen:
+-- (Opsiyonel) Sağlayıcıyı env yerine DB'den yönetmek istersen (WaMessage):
 -- insert into public.whatsapp_config (id, api_base_url, api_key, instance_name, enabled)
--- values ('default', 'https://EVOLUTION_HOST', 'EVOLUTION_APIKEY', 'netchess', true)
+-- values ('default', 'https://api.toplusms.app', 'WAMESSAGE_API_KEY', 'REG_ID', true)
 -- on conflict (id) do update set
 --   api_base_url = excluded.api_base_url,
 --   api_key = excluded.api_key,

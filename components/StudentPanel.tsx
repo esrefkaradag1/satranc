@@ -71,6 +71,7 @@ import { filterDuesTransactions } from '../lib/transactionUtils';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { STUDENT_NAV_CATEGORIES } from '../constants';
 import { clubDisplayForStudent } from '../lib/clubDisplay';
+import { normalizeClubKey } from '../lib/clubScope';
 import { filterNavByPermissions } from '../lib/rolePermissions';
 import { isServerMode } from '../apiConfig';
 import { apiHomeworksForStudent, apiScheduleForStudent } from '../services/backendApi';
@@ -297,7 +298,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, clubs } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(() =>
@@ -400,10 +401,22 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   const student = useMemo<Student | null>(() => {
     const fromList = students.find((s) => s.id === studentId) ?? null;
+    if (fromList && apiStudent?.id === studentId) {
+      return { ...apiStudent, ...fromList };
+    }
     if (fromList) return fromList;
     if (isServerMode() && apiStudent?.id === studentId) return apiStudent;
     return null;
   }, [students, studentId, apiStudent]);
+
+  /** Aidat hesabı: öğrencinin şubesindeki gruplar (aynı isimli farklı şube grupları karışmasın) */
+  const trainingGroupsForDues = useMemo(() => {
+    if (!student?.branchOffice?.trim()) return scopedTrainingGroups.length ? scopedTrainingGroups : trainingGroups;
+    const key = student.branchOffice.trim();
+    const pool = scopedTrainingGroups.length ? scopedTrainingGroups : trainingGroups;
+    const filtered = pool.filter((g) => normalizeClubKey(g.branchOffice) === normalizeClubKey(key));
+    return filtered.length ? filtered : pool;
+  }, [student?.branchOffice, scopedTrainingGroups, trainingGroups]);
 
   const studentClubDisplay = useMemo(
     () => clubDisplayForStudent(student, clubs),
@@ -2214,7 +2227,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               student={student}
               calendarYear={calendarYear}
               duesByMonth={duesByMonth}
-              trainingGroups={trainingGroups}
+              trainingGroups={trainingGroupsForDues}
               disciplineBranches={scopedDisciplineBranches}
               privateLessonSummary={derived.isPackageRegistration ? studentPrivateLessonSummary : null}
               formatDateTR={formatDateTR}

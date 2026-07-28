@@ -577,12 +577,23 @@ export interface TournamentStanding {
   points: number;
 }
 
-/** WhatsApp API yapılandırması (Evolution API / benzeri) */
+/** WhatsApp API sağlayıcısı — varsayılan WaMessage (app.wamessage.app) */
+export type WhatsAppProvider = 'wamessage' | 'evolution';
+
+/** WhatsApp API yapılandırması (WaMessage / Evolution) */
 export interface WhatsAppConfig {
+  /** wamessage = api.toplusms.app · evolution = self-host Evolution API */
+  provider: WhatsAppProvider;
   apiBaseUrl: string;
+  /** WaMessage: X-Api-Key (Api Entegrasyonu → API Key Göster) · Evolution: apikey */
   apiKey: string;
+  /** WaMessage: cihaz reg_id · Evolution: instance adı */
   instanceName: string;
   enabled: boolean;
+  /** Gönderici WhatsApp numarası (905xxxxxxxxx veya +90…) — QR / check için */
+  devicePhone?: string;
+  /** @deprecated SMS login kullanılmıyor; X-Api-Key yeterli */
+  loginIdentifier?: string;
   /** Şube bazlı ayar — boşsa tüm şubeler */
   branchOffice?: string;
 }
