@@ -3,7 +3,8 @@ import {
   CheckCircle2, XCircle, Clock, Users, Search, Eye, Trash2, Share2, Copy, MessageCircle,
   FileText, PenLine, X, UserPlus, Loader2, Filter, Link2, QrCode, Send,
 } from 'lucide-react';
-import { isValidWhatsAppPhone, openWhatsAppSend } from '../lib/whatsappUtils';
+import { isValidWhatsAppPhone } from '../lib/whatsappUtils';
+import { sendWhatsAppMessage } from '../services/whatsappClient';
 import { useApp } from '../AppContext';
 import type { ApplicationStatus, StudentApplication } from '../lib/applicationTypes';
 import { KVKK_TEXT } from '../lib/applicationTypes';
@@ -172,8 +173,19 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
       return;
     }
     setWhatsappPhoneError('');
-    openWhatsAppSend(trimmed, applicationShareMessage);
-    setShareOpen(false);
+    void (async () => {
+      const r = await sendWhatsAppMessage({
+        phone: trimmed,
+        message: applicationShareMessage,
+        openManualFallback: false,
+      });
+      if (r.ok && r.mode === 'api') {
+        showToast('Başvuru linki WhatsApp ile gönderildi.', 'success');
+        setShareOpen(false);
+      } else {
+        showToast(r.error || 'Gönderilemedi. WhatsApp Yönetimi → API Key, reg_id ve otomatik gönderim.', 'error');
+      }
+    })();
   };
 
   const handleStatus = async (id: string, status: ApplicationStatus) => {

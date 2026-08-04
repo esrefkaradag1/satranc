@@ -69,7 +69,8 @@ import { syncStudentsPlatformDays } from '../lib/platformStatsClientSync';
 import { puzzleBoardOrientationForFen, puzzleBoardOrientationForStudent, formatPuzzleHintText, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
 
 /** Platform API otomatik kontrol aralığı (manuel yenileme sonrası / sekme açıkken) */
-const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
+const PLATFORM_IDLE_POLL_MS = 30 * 1000;
+const PLATFORM_ACTIVE_POLL_MS = 10 * 1000;
 /** Gün içi otomatik poll: yalnızca bugün, program sekmesinde */
 const PLATFORM_TODAY_AUTO_REFRESH_ENABLED = true;
 /** Çoklu öğrenci istemci yedeği: öğrenci başına tek batch (gün döngüsü yok) */
@@ -373,6 +374,20 @@ const Homework: React.FC = () => {
     [filteredHomeworks],
   );
 
+  /** Program sekmesi listesindeki tüm günlük programların öğrenci birleşimi */
+  const allProgramAssignees = useMemo(() => {
+    const seen = new Set<string>();
+    const out: typeof students = [];
+    for (const hw of programHomeworks) {
+      for (const s of getAssignees(hw)) {
+        if (!targetStudentIds.has(s.id) || seen.has(s.id)) continue;
+        seen.add(s.id);
+        out.push(s);
+      }
+    }
+    return out;
+  }, [programHomeworks, getAssignees, targetStudentIds]);
+
   const hwPuzzles = useMemo(() => {
     if (!selectedHw) return [];
     return puzzles.filter(p => selectedHw.puzzles.includes(p.id));
@@ -404,6 +419,28 @@ const Homework: React.FC = () => {
     if (panelTab !== 'program') return null;
     return programHomeworks[0] ?? null;
   }, [programSelectedHw, panelTab, programHomeworks]);
+
+  /** Liste: tüm program öğrencileri; detay: seçili ödevin öğrencileri */
+  const programPlatformSyncAssignees = useMemo(() => {
+    if (panelTab !== 'program') return [];
+    if (programAnalysisView === 'list') return allProgramAssignees;
+    const hw = programSelectedHw ?? programHomework;
+    if (!hw) return allProgramAssignees;
+    return getAssignees(hw).filter((s) => targetStudentIds.has(s.id));
+  }, [
+    panelTab,
+    programAnalysisView,
+    allProgramAssignees,
+    programSelectedHw,
+    programHomework,
+    getAssignees,
+    targetStudentIds,
+  ]);
+
+  const programPlatformSyncAssigneeIdsKey = useMemo(
+    () => programPlatformSyncAssignees.map((s) => s.id).sort().join(','),
+    [programPlatformSyncAssignees],
+  );
 
   const programAssignees = useMemo(
     () => (programHomework ? getAssignees(programHomework) : []),
@@ -629,32 +666,60 @@ const Homework: React.FC = () => {
 
   useEffect(() => {
     if (!PLATFORM_TODAY_AUTO_REFRESH_ENABLED) return;
-    if (panelTab !== 'program' || !programHomework) return;
-    const assignees = getAssignees(programHomework).filter((s) => targetStudentIds.has(s.id));
-    if (assignees.length === 0) return;
+    if (panelTab !== 'program' || programPlatformSyncAssignees.length === 0) return;
     let cancelled = false;
     const today = homeworkDayKey();
-    void syncStudentsPlatformDays(assignees, [today], [today]).then((patch) => {
+    void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then((patch) => {
       if (cancelled || Object.keys(patch).length === 0) return;
       applyPlatformStatsPatch(patch);
     });
     return () => { cancelled = true; };
-  }, [panelTab, programHomework?.id, targetStudentIds, getAssignees, applyPlatformStatsPatch]);
+  }, [panelTab, programPlatformSyncAssigneeIdsKey, programPlatformSyncAssignees, applyPlatformStatsPatch]);
 
   useEffect(() => {
     if (!PLATFORM_TODAY_AUTO_REFRESH_ENABLED) return;
-    if (panelTab !== 'program' || !programHomework) return;
-    const assignees = getAssignees(programHomework).filter((s) => targetStudentIds.has(s.id));
-    if (assignees.length === 0) return;
+    if (panelTab !== 'program' || programPlatformSyncAssignees.length === 0) return;
     const today = homeworkDayKey();
+    const hasLiveActivity = programPlatformSyncAssignees.some((s) => {
+      const stats = studentPlatformWeekStats[s.id]?.[today];
+      return (stats?.games ?? 0) > 0 || (stats?.puzzleSolved ?? 0) > 0;
+    });
+    const pollMs = hasLiveActivity ? PLATFORM_ACTIVE_POLL_MS : PLATFORM_IDLE_POLL_MS;
     const id = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      void syncStudentsPlatformDays(assignees, [today], [today]).then((patch) => {
+      void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then((patch) => {
         if (Object.keys(patch).length > 0) applyPlatformStatsPatch(patch);
       });
-    }, PLATFORM_AUTO_POLL_MS);
+    }, pollMs);
     return () => window.clearInterval(id);
-  }, [panelTab, programHomework?.id, targetStudentIds, getAssignees, applyPlatformStatsPatch]);
+  }, [
+    panelTab,
+    programPlatformSyncAssigneeIdsKey,
+    programPlatformSyncAssignees,
+    applyPlatformStatsPatch,
+    studentPlatformWeekStats,
+  ]);
+
+  useEffect(() => {
+    if (!PLATFORM_TODAY_AUTO_REFRESH_ENABLED) return;
+    if (panelTab !== 'program' || programPlatformSyncAssignees.length === 0) return;
+    const today = homeworkDayKey();
+    const triggerRefresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then((patch) => {
+        if (Object.keys(patch).length > 0) applyPlatformStatsPatch(patch);
+      });
+    };
+    const handleVisibility = () => { if (document.visibilityState === 'visible') triggerRefresh(); };
+    window.addEventListener('focus', triggerRefresh);
+    window.addEventListener('online', triggerRefresh);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('focus', triggerRefresh);
+      window.removeEventListener('online', triggerRefresh);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [panelTab, programPlatformSyncAssigneeIdsKey, programPlatformSyncAssignees, applyPlatformStatsPatch]);
 
   useEffect(() => {
     if (!PLATFORM_TODAY_AUTO_REFRESH_ENABLED) return;
@@ -673,9 +738,7 @@ const Homework: React.FC = () => {
   // DB önbelleğini yükle: geçmiş günlerin verisi API'den gelmese de gösterilir.
   useEffect(() => {
     if (panelTab !== 'program') return;
-    const hw = programSelectedHw ?? programHomework;
-    if (!hw) return;
-    const assignees = getAssignees(hw).filter((s) => targetStudentIds.has(s.id));
+    const assignees = programPlatformSyncAssignees;
     if (assignees.length === 0) return;
 
     const ids = assignees.map((s) => s.id);
@@ -700,14 +763,18 @@ const Homework: React.FC = () => {
     return () => { cancelled = true; };
   }, [
     panelTab,
-    programSelectedHw?.id,
-    programHomework?.id,
+    programPlatformSyncAssigneeIdsKey,
+    programPlatformSyncAssignees,
     viewDate,
-    targetStudentIds,
-    getAssignees,
     applyPlatformStatsPatch,
     applyPlatformTimePatch,
   ]);
+
+  /** Detay ekranı açılınca seçili gün için platform verisini sessizce çek */
+  useEffect(() => {
+    if (panelTab !== 'program' || programAnalysisView !== 'detail' || !programSelectedHw) return;
+    void refreshDailyPlatformStats({ silent: true });
+  }, [panelTab, programAnalysisView, programSelectedHw?.id, viewDate, refreshDailyPlatformStats]);
 
   useEffect(() => {
     studentPlatformWeekStatsRef.current = studentPlatformWeekStats;

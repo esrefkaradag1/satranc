@@ -435,6 +435,9 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   const formatDues = (s: Student) => {
     if (s.registrationType === 'package') return 'Ders paketi';
     if (s.isScholarshipStudent) return <span className="text-emerald-400 font-semibold">Burslu</span>;
+    if (s.status === 'inactive') {
+      return <span className="text-slate-500 font-semibold">Dondu</span>;
+    }
 
     // Calculate dynamic dues debt matching the calendar up to current month (excluding future months)
     const currentYear = new Date().getFullYear();

@@ -1182,12 +1182,14 @@ export function normalizeStudyChapterPuzzle(chapter: {
 
   if (fromOrientation && rawSolution.length > 0) {
     const stripped = stripLeadingOpponentSetup(rawFen, rawSolution, fromOrientation);
-    return {
-      startFen: stripped.startFen,
-      studentMoves: stripped.remainingMoves,
-      studentColor: fromOrientation,
-      setupMoveSan: stripped.setupMoveSan,
-    };
+    if (stripped.remainingMoves.length > 0) {
+      return {
+        startFen: stripped.startFen,
+        studentMoves: stripped.remainingMoves,
+        studentColor: fromOrientation,
+        setupMoveSan: stripped.setupMoveSan,
+      };
+    }
   }
 
   if (rawSolution.length === 0) {

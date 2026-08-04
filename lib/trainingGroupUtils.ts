@@ -304,7 +304,7 @@ export function getExpectedDuesForYear(
 export function applyGroupDefaultsToStudent(
   group: TrainingGroup,
   disciplineBranches: DisciplineBranch[]
-): Pick<Student, 'group' | 'trainingGroupId' | 'branch' | 'branchOffice' | 'monthlyFee' | 'lessonSchedule'> {
+): Pick<Student, 'group' | 'trainingGroupId' | 'branch' | 'branchOffice' | 'monthlyFee' | 'lessonSchedule' | 'lessonScheduleCustom'> {
   return {
     group: group.name,
     trainingGroupId: group.id,
@@ -312,6 +312,7 @@ export function applyGroupDefaultsToStudent(
     branchOffice: group.branchOffice,
     monthlyFee: getGroupMonthlyFee(group, disciplineBranches),
     lessonSchedule: group.lessonSlots.map((s) => ({ ...s })),
+    lessonScheduleCustom: false,
   };
 }
 
@@ -371,30 +372,35 @@ export function findTrainingGroupForStudent(
   });
 }
 
-/** Öğrenciye özel kayıtlı program, gruptan farklı mı? */
+/** Öğrenciye özel kayıtlı program (grup dışı veya grupta slot tanımı yok). */
 export function hasCustomLessonSchedule(
-  student: Pick<Student, 'lessonSchedule' | 'trainingGroupId' | 'group'>,
+  student: Pick<Student, 'lessonSchedule' | 'lessonScheduleCustom' | 'trainingGroupId' | 'group'>,
   trainingGroups: TrainingGroup[],
 ): boolean {
-  const stored = student.lessonSchedule ?? [];
-  if (!stored.length) return false;
+  const stored = (student.lessonSchedule ?? []).filter((s) => s.startTime?.trim());
+  if (student.lessonScheduleCustom === true && stored.length > 0) return true;
   const group = findTrainingGroupForStudent(student, trainingGroups);
-  const groupSlots = group?.lessonSlots ?? [];
-  if (!groupSlots.length) return true;
-  return !lessonSchedulesEqual(stored, groupSlots);
+  const groupSlots = (group?.lessonSlots ?? []).filter((s) => s.startTime?.trim());
+  if (groupSlots.length > 0) return false;
+  return stored.length > 0;
 }
 
 /** Görüntüleme: önce canlı grup programı; yalnızca özelleştirilmişse öğrenci kaydı. */
 export function resolveStudentLessonSchedule(
-  student: Pick<Student, 'lessonSchedule' | 'trainingGroupId' | 'group'>,
+  student: Pick<Student, 'lessonSchedule' | 'lessonScheduleCustom' | 'trainingGroupId' | 'group' | 'branchOffice' | 'branch'>,
   trainingGroups: TrainingGroup[],
 ): GroupLessonSlot[] {
+  if (hasCustomLessonSchedule(student, trainingGroups)) {
+    return (student.lessonSchedule ?? [])
+      .filter((s) => s.startTime?.trim())
+      .map((s) => ({ ...s }));
+  }
   const group = findTrainingGroupForStudent(student, trainingGroups);
-  const groupSlots = group?.lessonSlots ?? [];
-  const stored = student.lessonSchedule ?? [];
-  if (hasCustomLessonSchedule(student, trainingGroups)) return stored.map((s) => ({ ...s }));
+  const groupSlots = (group?.lessonSlots ?? []).filter((s) => s.startTime?.trim());
   if (groupSlots.length) return groupSlots.map((s) => ({ ...s }));
-  return stored.map((s) => ({ ...s }));
+  return (student.lessonSchedule ?? [])
+    .filter((s) => s.startTime?.trim())
+    .map((s) => ({ ...s }));
 }
 
 export function studentsInTrainingGroup(students: Student[], group: TrainingGroup): Student[] {

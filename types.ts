@@ -76,6 +76,8 @@ export interface Student {
   trainingGroupId?: string;
   /** Ders günleri ve saatleri (gruptan kopyalanır; öğrenci bazında düzenlenebilir) */
   lessonSchedule?: GroupLessonSlot[];
+  /** true ise lessonSchedule grup programını geçersiz kılar (admin özelleştirmesi) */
+  lessonScheduleCustom?: boolean;
   /** Ay bazlı beklenen aidat tutarı: "2026-01" -> ₺ */
   duesOverrides?: Record<string, number>;
   /** Ay bazlı aidat notu: "2026-01" -> "Eksik hafta" */

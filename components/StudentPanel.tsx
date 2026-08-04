@@ -49,8 +49,8 @@ import StudentPuzzlePlayModal from './StudentPuzzlePlayModal';
 import StudentStudyView from './StudentStudyView';
 import LiveLesson, { type LiveLessonRoom } from './LiveLesson';
 import ScheduleWeeklyView from './ScheduleWeeklyView';
-import { filterLessonsToActiveGroups, isTrainingGroupLessonId, trainingGroupIdFromLessonId } from '../lib/syncGroupLessons';
-import { findTrainingGroupForStudent, hasCustomLessonSchedule, WEEKDAY_OPTIONS } from '../lib/trainingGroupUtils';
+import { lessonsFromGroupLessonSlots } from '../lib/syncGroupLessons';
+import { findTrainingGroupForStudent, resolveStudentLessonSchedule } from '../lib/trainingGroupUtils';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
 import { LeaderboardPreview } from './leaderboard/LeaderboardPreview';
 import { StudentSummaryDashboard, type StudentDashboardAlert } from './student/StudentSummaryDashboard';
@@ -123,7 +123,8 @@ import { attendanceRecordGroupName, attendanceRecordSessionScopeKey, attendanceR
 import { buildPrivateLessonUsageById } from '../lib/privateLessonUsage';
 import { requestTrainingNotifyCheck } from '../services/trainingNotifyClient';
 
-const PLATFORM_AUTO_POLL_MS = 10 * 60 * 1000;
+const PLATFORM_IDLE_POLL_MS = 30 * 1000;
+const PLATFORM_ACTIVE_POLL_MS = 10 * 1000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -427,34 +428,18 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if (!student) return [];
 
     const privateLessons = lessons.filter((l) => String(l.studentId ?? '') === String(student.id));
-    const trainingGroup = findTrainingGroupForStudent(student, trainingGroups);
-    const useCustomSchedule = hasCustomLessonSchedule(student, trainingGroups);
+    const trainingGroupsForSchedule = trainingGroupsForDues;
+    const trainingGroup = findTrainingGroupForStudent(student, trainingGroupsForSchedule);
+    const schedule = resolveStudentLessonSchedule(student, trainingGroupsForSchedule);
+    const groupName = trainingGroup?.name?.trim() || student.group?.trim() || '';
 
-    if (useCustomSchedule && student.lessonSchedule?.length) {
-      const customLessons = student.lessonSchedule.map((slot, idx) => ({
-        id: `custom-slot-${student.id}-${idx}`,
-        day:
-          slot.dayLabel?.trim() ||
-          WEEKDAY_OPTIONS.find((d) => d.value === slot.dayOfWeek)?.label ||
-          'Pazartesi',
-        startTime: slot.startTime || '13:00',
-        endTime: slot.endTime || '18:30',
-        group: student.group || '',
-        topic: student.group || 'Ders',
-      }));
-      return [...customLessons, ...privateLessons];
-    }
-
-    const groupLessons = filterLessonsToActiveGroups(lessons, trainingGroups).filter((l) => {
-      if (l.studentId) return false;
-      if (trainingGroup && isTrainingGroupLessonId(l.id)) {
-        return trainingGroupIdFromLessonId(l.id) === trainingGroup.id;
-      }
-      return (l.group || '').trim().toLowerCase() === (student.group || '').trim().toLowerCase();
+    const groupLessons = lessonsFromGroupLessonSlots(schedule, {
+      groupName,
+      idPrefix: `student-schedule-${student.id}`,
     });
 
     return [...groupLessons, ...privateLessons];
-  }, [student, lessons, trainingGroups]);
+  }, [student, lessons, trainingGroupsForDues]);
 
   const refreshTodayExternalStats = useCallback(async (opts?: { todayOnly?: boolean }) => {
     if (!student) {
@@ -616,7 +601,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     const attendanceRate = expected30 > 0 ? `${Math.round((last30 / expected30) * 100)}%` : totalAttendance > 0 ? '100%' : '—';
     const isPackageRegistration = student.registrationType === 'package';
     const duesLabel =
-      student.isScholarshipStudent
+      student.status === 'inactive'
+        ? 'Dondu'
+        : student.isScholarshipStudent
         ? 'Burslu'
         : isPackageRegistration
           ? 'Özel Ders Paketi'
@@ -626,7 +613,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             ? 'Kısmi'
             : 'Borç';
     const duesSubtitle =
-      student.isScholarshipStudent
+      student.status === 'inactive'
+        ? 'Öğrenci pasif — aidatlar donduruldu'
+        : student.isScholarshipStudent
         ? 'Aidat Ödemesi Yok'
         : isPackageRegistration
           ? 'Ders kullanımına göre takip edilir'
@@ -1194,10 +1183,38 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   useEffect(() => {
     if ((activeTab !== 'puzzles' && activeTab !== 'analyses') || !student) return;
     if (viewAs === 'parent' && activeTab === 'analyses') return;
+    const pollMs = (todayExternalGameCount > 0 || todayExternalPuzzleCount > 0)
+      ? PLATFORM_ACTIVE_POLL_MS
+      : PLATFORM_IDLE_POLL_MS;
     const id = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refreshTodayExternalStats({ todayOnly: true });
-    }, PLATFORM_AUTO_POLL_MS);
+    }, pollMs);
     return () => window.clearInterval(id);
+  }, [
+    activeTab,
+    student?.id,
+    homeworkDayKeyState,
+    refreshTodayExternalStats,
+    todayExternalGameCount,
+    todayExternalPuzzleCount,
+    viewAs,
+  ]);
+
+  useEffect(() => {
+    if ((activeTab !== 'puzzles' && activeTab !== 'analyses') || !student) return;
+    if (viewAs === 'parent' && activeTab === 'analyses') return;
+    const triggerRefresh = () => {
+      if (document.visibilityState === 'visible') void refreshTodayExternalStats({ todayOnly: true });
+    };
+    const handleVisibility = () => { if (document.visibilityState === 'visible') triggerRefresh(); };
+    window.addEventListener('focus', triggerRefresh);
+    window.addEventListener('online', triggerRefresh);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('focus', triggerRefresh);
+      window.removeEventListener('online', triggerRefresh);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [activeTab, student?.id, homeworkDayKeyState, refreshTodayExternalStats, viewAs]);
 
   useEffect(() => {

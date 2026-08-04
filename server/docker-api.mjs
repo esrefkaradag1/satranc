@@ -6,6 +6,7 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { URL } from 'node:url';
 import { insertHomeworkAttemptViaEnv } from '../lib/homeworkAttemptDb.mjs';
+import { insertStudyEventViaEnv, appendStudyPracticeLogsViaEnv } from '../lib/studyEventDb.mjs';
 import { appendLiveLessonChatViaEnv } from '../lib/liveLessonChatDb.mjs';
 import { replaceSessionMediaViaEnv, sessionMediaOpViaEnv } from '../lib/liveLessonSessionMediaDb.mjs';
 import { insertSiteMessageViaEnv, listSiteMessagesViaEnv } from '../lib/siteMessagesDb.mjs';
@@ -112,6 +113,18 @@ async function runGeneratedHandler(name, reqLike, res) {
 async function handleHomeworkAttempt(req, res) {
   const body = await readJsonBody(req);
   const result = await insertHomeworkAttemptViaEnv(body);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleStudyEvent(req, res) {
+  const body = await readJsonBody(req);
+  const result = await insertStudyEventViaEnv(body);
+  return sendJson(res, result.status, result.body);
+}
+
+async function handleStudyPracticeLog(req, res) {
+  const body = await readJsonBody(req);
+  const result = await appendStudyPracticeLogsViaEnv(body);
   return sendJson(res, result.status, result.body);
 }
 
@@ -590,6 +603,14 @@ export async function dispatchApi(req, res, url) {
     }
     if (path === '/api/homework-attempt' && req.method === 'POST') {
       await handleHomeworkAttempt(req, res);
+      return true;
+    }
+    if (path === '/api/study-event' && req.method === 'POST') {
+      await handleStudyEvent(req, res);
+      return true;
+    }
+    if (path === '/api/study-practice-log' && req.method === 'POST') {
+      await handleStudyPracticeLog(req, res);
       return true;
     }
     if (path === '/api/auth-parent' && req.method === 'POST') {

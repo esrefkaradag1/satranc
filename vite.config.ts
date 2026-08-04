@@ -3,6 +3,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { insertHomeworkAttemptViaEnv } from './lib/homeworkAttemptDb.mjs';
+import { insertStudyEventViaEnv, appendStudyPracticeLogsViaEnv } from './lib/studyEventDb.mjs';
 import { appendLiveLessonChatViaEnv } from './lib/liveLessonChatDb.mjs';
 import { replaceSessionMediaViaEnv, sessionMediaOpViaEnv } from './lib/liveLessonSessionMediaDb.mjs';
 import { insertSiteMessageViaEnv, listSiteMessagesViaEnv } from './lib/siteMessagesDb.mjs';
@@ -61,6 +62,8 @@ const DEV_GET_ROUTES = new Set([
 ]);
 const DEV_POST_ROUTES = new Set([
   '/api/homework-attempt',
+  '/api/study-event',
+  '/api/study-practice-log',
   '/api/live-lesson-chat',
   '/api/live-lesson-session-media',
   '/api/site-messages',
@@ -314,6 +317,10 @@ function devApiPlugin(env: Record<string, string>): Plugin {
               let result;
               if (route === '/api/homework-attempt') {
                 result = await insertHomeworkAttemptViaEnv(body, env);
+              } else if (route === '/api/study-event') {
+                result = await insertStudyEventViaEnv(body, env);
+              } else if (route === '/api/study-practice-log') {
+                result = await appendStudyPracticeLogsViaEnv(body, env);
               } else if (route === '/api/live-lesson-chat') {
                 result = await appendLiveLessonChatViaEnv(body, env);
               } else if (route === '/api/site-messages') {

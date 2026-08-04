@@ -35,9 +35,11 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   const [activeStudyEvents, setActiveStudyEvents] = useState<StudyEvent[]>([]);
   const [loadingStudyEvents, setLoadingStudyEvents] = useState(false);
   const [resultsStudyEvents, setResultsStudyEvents] = useState<StudyEvent[]>([]);
+  const [resultsStudyPresenceRows, setResultsStudyPresenceRows] = useState<unknown[]>([]);
   const [loadingResults, setLoadingResults] = useState(false);
   const [selectedResultsStudyId, setSelectedResultsStudyId] = useState('');
   const [activeLogChapterId, setActiveLogChapterId] = useState<string | null>(null);
+  const [studentStudyStatsById, setStudentStudyStatsById] = useState<Record<string, StudyStudentStat | undefined>>({});
 
   const getVsComputerHistory = (payload: unknown): string[] => {
     if (!payload || typeof payload !== 'object') return [];
@@ -113,6 +115,28 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
     });
   };
 
+  const mergeStudyEventsForStats = (persistedEvents: StudyEvent[], liveEvents: StudyEvent[]): StudyEvent[] => {
+    const merged: StudyEvent[] = [];
+    const seen = new Set<string>();
+    for (const event of [...persistedEvents, ...liveEvents]) {
+      const key = [
+        String(event.studentId ?? ''),
+        String(event.chapterId ?? ''),
+        String(event.moveIndex ?? 0),
+        String(event.playedMove ?? ''),
+        String(event.result ?? ''),
+      ].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(event);
+    }
+    return merged.sort((a, b) => {
+      const createdAtDiff = (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0);
+      if (createdAtDiff !== 0) return createdAtDiff;
+      return (a.moveIndex ?? 0) - (b.moveIndex ?? 0);
+    });
+  };
+
   useEffect(() => {
     let cancelled = false;
     loadStudiesAsync()
@@ -170,33 +194,97 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   useEffect(() => {
     if (!selectedResultsStudyId) {
       setResultsStudyEvents([]);
+      setResultsStudyPresenceRows([]);
       return;
     }
     let cancelled = false;
-    setLoadingResults(true);
-    void loadStudiesAsync()
-      .then((all) => {
-        if (!cancelled && all.length > 0) setStudies(all);
-      })
-      .catch(() => { /* mevcut liste korunur */ });
-    void loadStudyEvents(selectedResultsStudyId)
-      .then((events) => { if (!cancelled) setResultsStudyEvents(events); })
-      .catch(() => { if (!cancelled) setResultsStudyEvents([]); })
-      .finally(() => { if (!cancelled) setLoadingResults(false); });
-    return () => { cancelled = true; };
+
+    const refreshResults = (showLoading: boolean) => {
+      if (showLoading) setLoadingResults(true);
+      void loadStudiesAsync()
+        .then((all) => {
+          if (!cancelled && all.length > 0) setStudies(all);
+        })
+        .catch(() => { /* mevcut liste korunur */ });
+      void Promise.all([
+        loadStudyEvents(selectedResultsStudyId),
+        loadStudyPresence(selectedResultsStudyId),
+      ])
+        .then(([events, presenceRows]) => {
+          if (cancelled) return;
+          setResultsStudyEvents(events);
+          setResultsStudyPresenceRows(presenceRows);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setResultsStudyEvents([]);
+          setResultsStudyPresenceRows([]);
+        })
+        .finally(() => { if (!cancelled && showLoading) setLoadingResults(false); });
+    };
+
+    refreshResults(true);
+    const pollId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshResults(false);
+    }, 15_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+    };
   }, [selectedResultsStudyId]);
 
   const resultsStats = useMemo(() => {
     if (!selectedResultsStudy) return [];
-    return buildStudyStudentStats(selectedResultsStudy, students, resultsStudyEvents);
-  }, [selectedResultsStudy, students, resultsStudyEvents]);
+    const liveEvents = students.flatMap((student) =>
+      buildPresenceStudyEvents(selectedResultsStudy, student, resultsStudyPresenceRows),
+    );
+    const merged = mergeStudyEventsForStats(resultsStudyEvents, liveEvents);
+    return buildStudyStudentStats(selectedResultsStudy, students, merged);
+  }, [selectedResultsStudy, students, resultsStudyEvents, resultsStudyPresenceRows]);
+
+  useEffect(() => {
+    if (!selectedStudentId) {
+      setStudentStudyStatsById({});
+      return;
+    }
+    const targetStudies = coachVisibleStudies.filter((study) => study.memberIds.includes(selectedStudentId));
+    if (targetStudies.length === 0) {
+      setStudentStudyStatsById({});
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(targetStudies.map(async (study) => {
+      try {
+        const [events, presenceRows] = await Promise.all([
+          loadStudyEvents(study.id),
+          loadStudyPresence(study.id),
+        ]);
+        const student = students.find((s) => s.id === selectedStudentId);
+        if (!student) return [study.id, undefined] as const;
+        const liveEvents = buildPresenceStudyEvents(study, student, presenceRows);
+        const merged = mergeStudyEventsForStats(events, liveEvents);
+        const stat = buildStudyStudentStats(study, [student], merged)[0];
+        return [study.id, stat] as const;
+      } catch {
+        const student = students.find((s) => s.id === selectedStudentId);
+        const stat = student ? buildStudyStudentStats(study, [student])[0] : undefined;
+        return [study.id, stat] as const;
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      setStudentStudyStatsById(Object.fromEntries(entries));
+    });
+    return () => { cancelled = true; };
+  }, [coachVisibleStudies, selectedStudentId, students]);
 
   const selectedStudentStudies = useMemo(() => {
     if (!selectedStudentId) return [];
     return coachVisibleStudies
       .filter((study) => study.memberIds.includes(selectedStudentId))
       .map((study) => {
-        const stat = buildStudyStudentStats(study, students.filter((s) => s.id === selectedStudentId))[0];
+        const stat = studentStudyStatsById[study.id]
+          ?? buildStudyStudentStats(study, students.filter((s) => s.id === selectedStudentId))[0];
         return {
           study,
           activityCount: stat?.totalMoves ?? 0,
@@ -208,7 +296,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
         if (a.activityCount !== b.activityCount) return b.activityCount - a.activityCount;
         return a.study.title.localeCompare(b.study.title, 'tr');
       });
-  }, [coachVisibleStudies, selectedStudentId, students]);
+  }, [coachVisibleStudies, selectedStudentId, studentStudyStatsById, students]);
 
   const openStudyLogForStat = (study: Study, stat: StudyStudentStat) => {
     const student = students.find((s) => s.id === stat.studentId);

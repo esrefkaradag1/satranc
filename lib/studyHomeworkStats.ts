@@ -23,7 +23,7 @@ export type StudyStudentStat = {
 function isTrackedChapter(ch: StudyChapter): boolean {
   if (ch.lessonMode !== 'interactive') return false;
   const t = ch.interactiveType ?? 'puzzle';
-  return t === 'puzzle' || t === 'vsComputer';
+  return t === 'puzzle' || t === 'vsComputer' || t === 'liveAnalysis';
 }
 
 function normalizeLogEntry(raw: unknown): MoveAnalysisLogEntry | null {
@@ -57,11 +57,17 @@ function chapterCompleted(
   const type = chapter.interactiveType ?? 'puzzle';
   if (type === 'puzzle') {
     if (chapterEvents.some((e) => e.result === 'solution')) return true;
+    if (chapterLogs.some((e) => e.isCorrect)) return true;
+    if (chapterEvents.some((e) => e.result === 'correct')) return true;
     const mainlineMoves = chapter.moves?.length ?? 0;
     if (mainlineMoves <= 0) return chapterEvents.length > 0 || chapterLogs.length > 0;
     const studentMoves = chapterEvents.filter((e) => e.result !== 'wrong').length
       + chapterLogs.filter((e) => e.isCorrect).length;
     return studentMoves >= Math.ceil(mainlineMoves / 2);
+  }
+  if (type === 'liveAnalysis') {
+    return chapterEvents.some((e) => e.chapterId === chapter.id)
+      || logEntries.some((e) => e.chapterId === chapter.id);
   }
   if (type === 'vsComputer') {
     return studentEvents.some((e) => e.chapterId === chapter.id)

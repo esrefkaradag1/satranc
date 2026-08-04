@@ -7,7 +7,7 @@ import {
   buildCoachReportWhatsAppMessage,
   getStudentParentPhone,
 } from '../../lib/coachReportShare';
-import { openWhatsAppSend } from '../../lib/whatsappUtils';
+import { sendWhatsAppMessage } from '../../services/whatsappClient';
 
 interface SendCoachReportBarProps {
   student: Student;
@@ -60,27 +60,40 @@ export const SendCoachReportBar: React.FC<SendCoachReportBarProps> = ({
       showToast('Veli telefon numarası bulunamadı. Öğrenci profilini güncelleyin.', 'warning');
       return;
     }
-    const now = new Date().toISOString();
-    const title = `Kapsamlı AI Analizi · ${new Date().toLocaleDateString('tr-TR')}`;
-    const msg = buildCoachReportWhatsAppMessage(student, {
-      title,
-      summary,
-      eksiklikler,
-      hamleler,
-      createdAt: now,
-    });
-    openWhatsAppSend(parentPhone, msg);
-    addCoachAiReport({
-      studentId: student.id,
-      createdAt: now,
-      title,
-      summary,
-      eksiklikler,
-      hamleler,
-      skillSnapshot: skillSnapshot as CoachAiReportSkillSnapshot | undefined,
-      publishedToParent: true,
-    });
-    showToast('WhatsApp mesajı hazırlandı.', 'success');
+    void (async () => {
+      const now = new Date().toISOString();
+      const title = `Kapsamlı AI Analizi · ${new Date().toLocaleDateString('tr-TR')}`;
+      const msg = buildCoachReportWhatsAppMessage(student, {
+        title,
+        summary,
+        eksiklikler,
+        hamleler,
+        createdAt: now,
+      });
+      const r = await sendWhatsAppMessage({
+        phone: parentPhone,
+        message: msg,
+        studentId: student.id,
+        studentName: student.name,
+        branchOffice: student.branchOffice,
+        openManualFallback: false,
+      });
+      addCoachAiReport({
+        studentId: student.id,
+        createdAt: now,
+        title,
+        summary,
+        eksiklikler,
+        hamleler,
+        skillSnapshot: skillSnapshot as CoachAiReportSkillSnapshot | undefined,
+        publishedToParent: true,
+      });
+      if (r.ok && r.mode === 'api') {
+        showToast('Rapor veliye WhatsApp ile gönderildi.', 'success');
+      } else {
+        showToast(r.error || 'WhatsApp gönderilemedi.', 'error');
+      }
+    })();
   }, [
     parentPhone,
     student,

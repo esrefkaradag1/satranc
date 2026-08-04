@@ -240,7 +240,7 @@ const WhatsAppManagement: React.FC = () => {
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
       if (!config.enabled) {
-        showToast('API kapalı — mesajlar WhatsApp Web ile açıldı. API Ayarları\'ndan otomatik gönderimi açın.', 'warning');
+        showToast('Otomatik gönderim kapalı — API Ayarlarından açın (WaMessage).', 'warning');
       } else if (r.sent > 0) {
         showToast(`${r.sent} mesaj API ile gönderildi${r.failed ? ` (${r.failed} hata)` : ''}.`, r.failed ? 'warning' : 'success');
       } else if (r.manual > 0) {
@@ -739,7 +739,7 @@ const WhatsAppManagement: React.FC = () => {
             <input type="checkbox" checked={config.enabled} onChange={(e) => persistConfig({ ...config, enabled: e.target.checked })} />
             API ile otomatik gönderim aktif
           </label>
-          <p className="text-xs text-slate-500">Kapalıyken mesajlar WhatsApp Web üzerinden manuel açılır. Kredi 0 ise gönderim düşmez.</p>
+          <p className="text-xs text-slate-500">API Key + reg_id tanımlıyken mesajlar WaMessage üzerinden gider; tarayıcıda WhatsApp linki açılmaz. Otomatik gönderim kapalıysa hata gösterilir.</p>
           <button type="button" onClick={() => { persistConfig({ ...DEFAULT_WHATSAPP_CONFIG }); showToast('Ayarlar sıfırlandı.', 'info'); }} className="text-xs text-rose-400 font-bold">Sıfırla</button>
         </Panel>
       )}

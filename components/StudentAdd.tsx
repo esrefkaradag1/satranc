@@ -25,8 +25,7 @@ import { getServiceSupabase } from '../services/supabase';
 import { DEFAULT_REMINDER_DAY, REMINDER_DAY_OPTIONS } from '../lib/reminderDays';
 import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
 import { getOrCreateParentConsentInviteAsync } from '../services/applicationStorage';
-import { openWhatsAppSend } from '../lib/whatsappUtils';
-import { triggerWhatsAppAuto } from '../services/whatsappClient';
+import { triggerWhatsAppAuto, sendWhatsAppMessage } from '../services/whatsappClient';
 import type { GroupLessonSlot, Student } from '../types';
 import {
   applyGroupDefaultsToStudent,
@@ -295,6 +294,7 @@ const StudentAdd: React.FC<{
     scopedLessonPackages,
     scopedCoaches,
     auth,
+    showToast,
   } = useApp();
   const tcUniquenessPool = auth?.role === 'admin' ? students : scopedStudents;
   const branchOfficeOptions = useMemo(() => {
@@ -751,16 +751,25 @@ const StudentAdd: React.FC<{
           contacts[0] ||
           '';
         if (phone) {
+          const consentMsg = `Merhaba,\n\n${newStudent.name} için kulüp kayıt formunu onaylamanız ve dijital imzanızı eklemeniz gerekmektedir.\n\nForm linki:\n${signed.url}\n\nTeşekkürler.`;
           const consentCount = await triggerWhatsAppAuto('parent_consent', {
             student: newStudent,
             formUrl: signed.url,
             branchOffice: newStudent.branchOffice,
           });
-          setWhatsAppSent(consentCount > 0);
-          if (consentCount === 0) {
-            const msg = `Merhaba,\n\n${newStudent.name} için kulüp kayıt formunu onaylamanız ve dijital imzanızı eklemeniz gerekmektedir.\n\nForm linki:\n${signed.url}\n\nTeşekkürler.`;
-            openWhatsAppSend(phone, msg);
+          if (consentCount > 0) {
             setWhatsAppSent(true);
+          } else {
+            const r = await sendWhatsAppMessage({
+              phone,
+              message: consentMsg,
+              studentId: newStudent.id,
+              studentName: newStudent.name,
+              branchOffice: newStudent.branchOffice,
+              templateKey: 'parent_consent',
+              openManualFallback: false,
+            });
+            setWhatsAppSent(r.ok && r.mode === 'api');
           }
         }
         void triggerWhatsAppAuto('parent_login', {
@@ -1457,13 +1466,29 @@ const StudentAdd: React.FC<{
                     <button
                       type="button"
                       onClick={() => {
-                        const phone =
-                          savedStudent.fatherPhone ||
-                          savedStudent.motherPhone ||
-                          savedStudent.parentPhone ||
-                          '';
-                        const msg = `Merhaba,\n\n${savedStudent.name} için kulüp kayıt formunu onaylamanız ve dijital imzanızı eklemeniz gerekmektedir.\n\nForm linki:\n${parentFormUrl}\n\nTeşekkürler.`;
-                        openWhatsAppSend(phone, msg);
+                        void (async () => {
+                          const phone =
+                            savedStudent.fatherPhone ||
+                            savedStudent.motherPhone ||
+                            savedStudent.parentPhone ||
+                            '';
+                          if (!phone) return;
+                          const msg = `Merhaba,\n\n${savedStudent.name} için kulüp kayıt formunu onaylamanız ve dijital imzanızı eklemeniz gerekmektedir.\n\nForm linki:\n${parentFormUrl}\n\nTeşekkürler.`;
+                          const r = await sendWhatsAppMessage({
+                            phone,
+                            message: msg,
+                            studentId: savedStudent.id,
+                            studentName: savedStudent.name,
+                            branchOffice: savedStudent.branchOffice,
+                            templateKey: 'parent_consent',
+                            openManualFallback: false,
+                          });
+                          if (r.ok && r.mode === 'api') {
+                            showToast('Veli formu WhatsApp ile gönderildi.', 'success');
+                          } else {
+                            showToast(r.error || 'Gönderilemedi. API Ayarları → otomatik gönderim açık ve cihaz bağlı olmalı.', 'error');
+                          }
+                        })();
                       }}
                       className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
                     >

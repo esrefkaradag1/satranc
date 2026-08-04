@@ -3120,7 +3120,10 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
            <button
              type="button"
              onClick={() => {
-               updateStudent(student.id, { lessonSchedule: scheduleDraft.length ? scheduleDraft : undefined });
+               updateStudent(student.id, {
+                 lessonSchedule: scheduleDraft.length ? scheduleDraft : undefined,
+                 lessonScheduleCustom: scheduleDraft.length > 0,
+               });
                setShowScheduleModal(false);
              }}
              className="flex-1 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm"
@@ -3991,6 +3994,7 @@ const EditStudentModal: React.FC<{
                             branchOffice: defaults.branchOffice || f.branchOffice,
                             monthlyFee: defaults.monthlyFee ?? f.monthlyFee,
                             lessonSchedule: defaults.lessonSchedule,
+                            lessonScheduleCustom: defaults.lessonScheduleCustom,
                           }));
                         } else {
                           setFields(f => ({ ...f, group: groupName }));

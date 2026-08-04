@@ -1,4 +1,4 @@
-import { getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
+import { getServiceSupabase, isSupabaseBackend, supabase, canWriteSupabase } from './services/supabase';
 
 export type StudyEventResult = 'correct' | 'wrong' | 'solution';
 
@@ -17,6 +17,31 @@ export interface StudyEvent {
 
 const TABLE = 'chess_study_events';
 
+async function postStudyEventViaApi(args: {
+  studyId: string;
+  chapterId: string;
+  studentId: string;
+  moveIndex: number;
+  expectedMove: string | null;
+  playedMove: string | null;
+  result: StudyEventResult;
+  thinkMs: number;
+}) {
+  try {
+    const res = await fetch('/api/study-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({})) as { error?: string };
+      console.warn('[StudyEvents] API log failed:', payload.error ?? res.status);
+    }
+  } catch (e) {
+    console.warn('[StudyEvents] API log failed:', e);
+  }
+}
+
 export async function logStudyEvent(args: {
   studyId: string | null | undefined;
   chapterId: string | null | undefined;
@@ -31,20 +56,37 @@ export async function logStudyEvent(args: {
   const { studyId, chapterId, studentId } = args;
   if (!studyId || !chapterId || !studentId) return;
 
+  const payload = {
+    studyId,
+    chapterId,
+    studentId: String(studentId),
+    moveIndex: args.moveIndex,
+    expectedMove: args.expectedMove,
+    playedMove: args.playedMove,
+    result: args.result,
+    thinkMs: args.thinkMs,
+  };
+
+  if (!canWriteSupabase()) {
+    await postStudyEventViaApi(payload);
+    return;
+  }
+
   try {
     const client = getServiceSupabase() ?? supabase;
     await client.from(TABLE).insert({
-      study_id: studyId,
-      chapter_id: chapterId,
-      student_id: String(studentId),
-      move_index: args.moveIndex,
-      expected_move: args.expectedMove,
-      played_move: args.playedMove,
-      result: args.result,
-      think_ms: args.thinkMs,
+      study_id: payload.studyId,
+      chapter_id: payload.chapterId,
+      student_id: payload.studentId,
+      move_index: payload.moveIndex,
+      expected_move: payload.expectedMove,
+      played_move: payload.playedMove,
+      result: payload.result,
+      think_ms: payload.thinkMs,
     });
   } catch (e) {
-    console.warn('[StudyEvents] log failed:', e);
+    console.warn('[StudyEvents] direct log failed, trying API:', e);
+    await postStudyEventViaApi(payload);
   }
 }
 
@@ -78,4 +120,3 @@ export async function loadStudyEvents(studyId: string): Promise<StudyEvent[]> {
     return [];
   }
 }
-

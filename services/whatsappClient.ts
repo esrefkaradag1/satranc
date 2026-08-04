@@ -1,4 +1,4 @@
-import type { Student, WhatsAppMessageLog, WhatsAppMessageStatus } from '../types';
+import type { Student, WhatsAppMessageLog, WhatsAppMessageStatus, WhatsAppConfig } from '../types';
 import { openWhatsAppSend } from '../lib/whatsappUtils';
 import {
   appendWhatsAppLog,
@@ -18,6 +18,20 @@ function genId(): string {
 }
 
 type SendResult = { ok: boolean; mode: 'api' | 'manual' | 'failed'; error?: string };
+
+/** API Key + reg_id tanımlı mı (WaMessage otomatik gönderim için) */
+export function isWhatsAppApiConfigured(config?: WhatsAppConfig): boolean {
+  const c = config ?? loadWhatsAppConfig();
+  return Boolean(String(c.apiKey ?? '').trim() && String(c.instanceName ?? '').trim());
+}
+
+/** Tarayıcıda wa.me / WhatsApp Web açılsın mı? Yapılandırılmış API varken asla açma. */
+function shouldOpenWhatsAppWeb(config: WhatsAppConfig, explicit?: boolean): boolean {
+  if (explicit === false) return false;
+  if (explicit === true) return true;
+  if (isWhatsAppApiConfigured(config)) return false;
+  return !config.enabled;
+}
 
 async function callWhatsAppApi(
   action: string,
@@ -140,30 +154,35 @@ export async function sendWhatsAppMessage(options: {
   templateKey?: WhatsAppMessageLog['templateKey'];
   openManualFallback?: boolean;
 }): Promise<SendResult> {
-  const { phone, message, openManualFallback = true } = options;
+  const { phone, message, openManualFallback } = options;
   let result: SendResult = { ok: false, mode: 'failed' };
   const config = loadWhatsAppConfig();
+  const allowWeb = shouldOpenWhatsAppWeb(config, openManualFallback);
 
   try {
     const data = await callWhatsAppApi('send', { phone, message });
     if (data.ok && data.mode === 'api') {
       result = { ok: true, mode: 'api' };
     } else if (data.mode === 'manual') {
-      if (openManualFallback) {
+      const err = String(
+        data.error ?? 'API ile otomatik gönderim kapalı — WhatsApp Yönetimi → API Ayarlarından açın.',
+      );
+      if (allowWeb) {
         openWhatsAppSend(phone, message);
-        result = { ok: true, mode: 'manual', error: String(data.error ?? '') };
+        result = { ok: true, mode: 'manual', error: err };
       } else {
-        result = { ok: false, mode: 'failed', error: String(data.error ?? 'API kapalı') };
+        result = { ok: false, mode: 'failed', error: err };
       }
     } else {
       result = { ok: false, mode: 'failed', error: String(data.error ?? 'Gönderilemedi') };
     }
   } catch (e) {
-    if (openManualFallback && !config.enabled) {
+    const err = e instanceof Error ? e.message : 'Hata';
+    if (allowWeb) {
       openWhatsAppSend(phone, message);
       result = { ok: true, mode: 'manual' };
     } else {
-      result = { ok: false, mode: 'failed', error: e instanceof Error ? e.message : 'Hata' };
+      result = { ok: false, mode: 'failed', error: err };
     }
   }
 
@@ -194,6 +213,7 @@ export async function sendWhatsAppBulk(
   options?: { delayMs?: number; branchOffice?: string },
 ): Promise<{ sent: number; failed: number; manual: number; error?: string }> {
   const config = loadWhatsAppConfig();
+  const allowWeb = shouldOpenWhatsAppWeb(config);
   let sent = 0;
   let failed = 0;
   let manual = 0;
@@ -229,18 +249,34 @@ export async function sendWhatsAppBulk(
           createdAt: new Date().toISOString(),
         });
       } else if (r.mode === 'manual' && rec) {
-        openWhatsAppSend(rec.phone, rec.message);
-        manual += 1;
-        appendWhatsAppLog({
-          id: genId(),
-          phone: rec.phone,
-          message: rec.message,
-          status: 'manual',
-          studentId: rec.studentId,
-          studentName: rec.studentName,
-          branchOffice: options?.branchOffice,
-          createdAt: new Date().toISOString(),
-        });
+        if (allowWeb) {
+          openWhatsAppSend(rec.phone, rec.message);
+          manual += 1;
+          appendWhatsAppLog({
+            id: genId(),
+            phone: rec.phone,
+            message: rec.message,
+            status: 'manual',
+            studentId: rec.studentId,
+            studentName: rec.studentName,
+            branchOffice: options?.branchOffice,
+            createdAt: new Date().toISOString(),
+          });
+        } else {
+          failed += 1;
+          if (!firstError) firstError = r.error || 'Otomatik gönderim kapalı';
+          appendWhatsAppLog({
+            id: genId(),
+            phone: r.phone,
+            message: rec?.message ?? '',
+            status: 'failed',
+            studentId: rec?.studentId,
+            studentName: rec?.studentName,
+            branchOffice: options?.branchOffice,
+            error: r.error || 'Otomatik gönderim kapalı',
+            createdAt: new Date().toISOString(),
+          });
+        }
       } else {
         failed += 1;
         if (!firstError && r.error) firstError = r.error;
@@ -320,8 +356,9 @@ export async function triggerWhatsAppAuto(
       studentName: ctx.student.name,
       branchOffice: ctx.branchOffice ?? ctx.student.branchOffice,
       templateKey: tpl.key,
+      openManualFallback: false,
     });
-    if (r.ok) count += 1;
+    if (r.ok && r.mode === 'api') count += 1;
   }
   return count;
 }

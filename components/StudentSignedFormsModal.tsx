@@ -3,7 +3,7 @@ import { X, FileText, Printer, Loader2, Send } from 'lucide-react';
 import { useApp } from '../AppContext';
 import type { Student } from '../types';
 import type { StudentApplication } from '../lib/applicationTypes';
-import { openWhatsAppSend } from '../lib/whatsappUtils';
+import { sendWhatsAppMessage } from '../services/whatsappClient';
 import {
   buildApplicationPreviewFromStudent,
   getOrCreateParentConsentInviteAsync,
@@ -104,8 +104,20 @@ const StudentSignedFormsModal: React.FC<Props> = ({ student, onClose }) => {
         const msg = parentConsentMessage(student.name, url);
 
         if (phone) {
-          openWhatsAppSend(phone, msg);
-          showToast('Veli formu WhatsApp ile açıldı.', 'success');
+          const r = await sendWhatsAppMessage({
+            phone,
+            message: msg,
+            studentId: student.id,
+            studentName: student.name,
+            branchOffice: student.branchOffice,
+            templateKey: 'parent_consent',
+            openManualFallback: false,
+          });
+          if (r.ok && r.mode === 'api') {
+            showToast('Veli formu WhatsApp ile gönderildi.', 'success');
+          } else {
+            showToast(r.error || 'Gönderilemedi. API ayarlarını kontrol edin.', 'error');
+          }
         } else {
           await navigator.clipboard?.writeText(url);
           showToast('Veli telefonu yok; form linki panoya kopyalandı.', 'info');

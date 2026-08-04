@@ -22,7 +22,9 @@ import {
   VS_COMPUTER_MAX_WAIT_MS,
   VS_COMPUTER_SEARCH_DEPTH,
 } from '../services/chessEngine';
+import { canWriteSupabase } from '../services/supabase';
 import { logStudyEvent, loadStudyEvents } from '../studyEvents';
+import { appendStudyPracticeLogs } from '../studyPracticeLogs';
 import { studyEventsToMoveAnalysis, mergePracticeLogEntries } from '../lib/studyAnalysisEvents';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, squareMarksToStyles, SQUARE_MARK_BUTTON_PREVIEW, type SquareMarkColor } from '../lib/chessBoardUi';
@@ -40,7 +42,7 @@ import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
   genId, migrateStudy, migrateChapter, studyDisplayEmoji,
   normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
 } from '../lib/studyUtils';
-import { applyPuzzleAutoReplies, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares } from '../lib/puzzlePlayUtils';
+import { applyPuzzleAutoReplies, dropMatchesSolutionMove, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares } from '../lib/puzzlePlayUtils';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
@@ -62,8 +64,12 @@ import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
 import { computeThreatOverlay } from '../lib/chessThreats';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { coachIdFromMemberId, isCoachMemberId, resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
+import { fetchStudentActivityAuto } from '../lib/studentActivityPull';
+import { fetchStudentLivePlatformStatus } from '../lib/studentExternalGamePull';
 
 const OFF_EVAL_BAR: EvalBarDisplay = { whitePercent: 50, label: '—', winningChances: 0, pending: false };
+const STUDY_PLATFORM_IDLE_POLL_MS = 20_000;
+const STUDY_PLATFORM_ACTIVE_POLL_MS = 8_000;
 
 function materialEvalToBarDisplay(pawns: number): EvalBarDisplay {
   const chances = cpWinningChances(Math.round(pawns * 100));
@@ -154,6 +160,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [progress, setProgress] = useState<Record<string, number>>(loadProgress);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoReplyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [platformActivityLoading, setPlatformActivityLoading] = useState(false);
+  const [platformActivityError, setPlatformActivityError] = useState<string | null>(null);
+  const [platformActivitySummary, setPlatformActivitySummary] = useState<string | null>(null);
+  const [platformActivityUpdatedAt, setPlatformActivityUpdatedAt] = useState<string | null>(null);
+  const [platformLiveFlags, setPlatformLiveFlags] = useState<{
+    lichessLive: boolean;
+    chesscomLive: boolean;
+    lichessPuzzleRecent: boolean;
+    chesscomPuzzleRecent: boolean;
+  } | null>(null);
 
   // Board UI state
   const [optionSquares, setOptionSquares] = useState<Record<string, React.CSSProperties>>({});
@@ -742,6 +758,72 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       .filter(({ ch }) => chapterListLabelMatches(ch, q, selectedStudy.chapters));
   }, [selectedStudy, chapterSearch]);
 
+  const refreshPlatformActivity = useCallback(async () => {
+    if (!studentId || !selectedStudy) {
+      setPlatformActivitySummary(null);
+      setPlatformActivityUpdatedAt(null);
+      setPlatformLiveFlags(null);
+      setPlatformActivityError(null);
+      return;
+    }
+    setPlatformActivityLoading(true);
+    try {
+      const [activity, liveFlags] = await Promise.all([
+        fetchStudentActivityAuto(studentId),
+        fetchStudentLivePlatformStatus(studentId),
+      ]);
+      setPlatformLiveFlags(liveFlags);
+      if (activity.ok && activity.snapshot) {
+        const sourceLabel = activity.snapshot.source === 'chesscom' ? 'Chess.com' : 'Lichess';
+        const kindLabel = activity.snapshot.activityKind === 'puzzle' ? 'bulmaca' : 'canlı oyun';
+        setPlatformActivitySummary(`${sourceLabel} üzerinde ${kindLabel}: ${activity.snapshot.label}`);
+        setPlatformActivityUpdatedAt(activity.snapshot.updatedAt || new Date().toISOString());
+        setPlatformActivityError(null);
+      } else {
+        setPlatformActivitySummary(null);
+        setPlatformActivityUpdatedAt(null);
+        setPlatformActivityError(activity.error || null);
+      }
+    } catch {
+      setPlatformActivityError('Platform aktivitesi şu an alınamadı.');
+    } finally {
+      setPlatformActivityLoading(false);
+    }
+  }, [studentId, selectedStudy]);
+
+  useEffect(() => {
+    if (!studentId || !selectedStudy) {
+      setPlatformActivitySummary(null);
+      setPlatformActivityUpdatedAt(null);
+      setPlatformLiveFlags(null);
+      setPlatformActivityError(null);
+      return;
+    }
+    const hasLiveActivity = !!platformLiveFlags && (
+      platformLiveFlags.lichessLive
+      || platformLiveFlags.chesscomLive
+      || platformLiveFlags.lichessPuzzleRecent
+      || platformLiveFlags.chesscomPuzzleRecent
+    );
+    const pollMs = hasLiveActivity ? STUDY_PLATFORM_ACTIVE_POLL_MS : STUDY_PLATFORM_IDLE_POLL_MS;
+    void refreshPlatformActivity();
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshPlatformActivity();
+    }, pollMs);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void refreshPlatformActivity();
+    };
+    window.addEventListener('focus', handleVisibility);
+    window.addEventListener('online', handleVisibility);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', handleVisibility);
+      window.removeEventListener('online', handleVisibility);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [studentId, selectedStudy?.id, platformLiveFlags, refreshPlatformActivity]);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [selectedStudy?.chatMessages?.length]);
@@ -1236,6 +1318,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       thinkMs: item.thinkMs,
       atIso: item.atIso,
     }));
+    void appendStudyPracticeLogs({
+      studyId: selectedStudy.id,
+      studentId: String(studentId),
+      chapterId: effectiveChapter.id,
+      entries: logEntries,
+    });
     setStudies((prev) => {
       const next = prev.map((study) => {
         if (study.id !== selectedStudy.id) return study;
@@ -1248,7 +1336,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         };
       });
       const updated = next.find((study) => study.id === selectedStudy.id);
-      if (updated) void saveStudyAsync(updated);
+      if (updated && canWriteSupabase()) void saveStudyAsync(updated);
       return next;
     });
   }, [previewMode, studentId, selectedStudy?.id, effectiveChapter?.id]);
@@ -1451,95 +1539,84 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     const isInteractivePuzzle = effectiveChapter.lessonMode === 'interactive' && (effectiveChapter.interactiveType ?? 'puzzle') === 'puzzle';
     
     if (isInteractivePuzzle && !isComplete && currentMoveIndex < totalMoves && puzzlePlayNorm) {
+      if (puzzleSetupPreviewFen && hideEngineForStudentPuzzle) return false;
+
+      const playFen = studyBoardFen;
       const studentColor = puzzlePlayNorm.studentColor;
-      const turnCode = sideToMove(currentFen) === 'white' ? 'w' : 'b';
+      const turnCode = sideToMove(playFen) === 'white' ? 'w' : 'b';
       if (turnCode !== studentColor) return false;
 
-      const game = makeBuilderGame(currentFen);
-      const expectedSan = chapterMovesForUi[currentMoveIndex];
+      const expectedSan = chapterMovesForUi[currentMoveIndex] ?? '';
       
       try {
+        const match = dropMatchesSolutionMove(playFen, sourceSquare, targetSquare, expectedSan);
+        if (!match.ok) {
+          showFeedback('wrong');
+          return false;
+        }
+
+        const game = makeBuilderGame(playFen);
         const result = game.move({ from: sourceSquare as any, to: targetSquare as any, promotion: 'q' });
         if (!result) { showFeedback('wrong'); return false; }
         const nextFen = game.fen();
         const now = Date.now();
         const thinkMs = Math.max(0, now - lastActionMs);
+        const playedSan = result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`;
 
-        // Matching logic
-        const expectedGame = makeBuilderGame(currentFen);
-        const expectedApplied = expectedSan ? applyMove(expectedGame, expectedSan) : null;
-        const matchesMainline = expectedApplied && expectedGame.fen() === nextFen;
+        setLastActionMs(now);
+        const afterStudentIdx = currentMoveIndex + 1;
+        const auto = applyPuzzleAutoReplies(
+          nextFen,
+          chapterMovesForUi,
+          afterStudentIdx,
+          studentColor,
+        );
+        const nextIdx = auto.nextIndex;
+        
+        setChapterMoveAnalysis((prev) => {
+          const next = [
+            ...prev,
+            {
+              id: `${now}-${prev.length}`,
+              moveNo: Math.floor(currentMoveIndex / 2) + 1,
+              played: playedSan,
+              expected: expectedSan || 'variation',
+              isCorrect: true,
+              thinkMs,
+              atIso: new Date(now).toISOString(),
+            },
+          ];
+          persistChapterPracticeLogs(next);
+          return next;
+        });
 
-        let matched = false;
-        if (matchesMainline) {
-          matched = true;
-        } else {
-          const playedSan = (result.san || '').trim();
-          const playedLan = (result.from + result.to).trim();
-          const targetSan = (expectedSan || '').trim();
-          if (playedSan === targetSan || playedLan === targetSan) {
-            matched = true;
-          }
-        }
+        logStudyEvent({
+          studyId: selectedStudy?.id,
+          chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+          studentId,
+          moveIndex: currentMoveIndex,
+          expectedMove: expectedSan || 'variation',
+          playedMove: playedSan,
+          result: nextIdx >= totalMoves ? 'solution' : 'correct',
+          thinkMs,
+        });
 
-        if (matched) {
-          setLastActionMs(now);
-          const afterStudentIdx = currentMoveIndex + 1;
-          const auto = applyPuzzleAutoReplies(
-            nextFen,
-            chapterMovesForUi,
-            afterStudentIdx,
-            studentColor,
+        setFreePlayFen(null);
+        setCurrentMoveIndex(nextIdx);
+
+        if (nextIdx >= totalMoves) {
+          const outcome = describeGameOutcomeFromFen(auto.fen);
+          showFeedback(
+            'solved',
+            outcome
+              ? `${outcome.title}! ${outcome.subtitle}`
+              : 'Tebrikler! Bu bölümü tamamladınız.',
           );
-          const nextIdx = auto.nextIndex;
-          
-          setChapterMoveAnalysis((prev) => {
-            const next = [
-              ...prev,
-              {
-                id: `${now}-${prev.length}`,
-                moveNo: Math.floor(currentMoveIndex / 2) + 1,
-                played: result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
-                expected: expectedSan || 'variation',
-                isCorrect: true,
-                thinkMs,
-                atIso: new Date(now).toISOString(),
-              },
-            ];
-            persistChapterPracticeLogs(next);
-            return next;
-          });
-
-          logStudyEvent({
-            studyId: selectedStudy?.id,
-            chapterId: effectiveChapter?.id ?? selectedChapter?.id,
-            studentId,
-            moveIndex: currentMoveIndex,
-            expectedMove: expectedSan || 'variation',
-            playedMove: result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`,
-            result: nextIdx >= totalMoves ? 'solution' : 'correct',
-            thinkMs,
-          });
-
-          setCurrentMoveIndex(nextIdx);
-
-          if (nextIdx >= totalMoves) {
-            const outcome = describeGameOutcomeFromFen(auto.fen);
-            showFeedback(
-              'solved',
-              outcome
-                ? `${outcome.title}! ${outcome.subtitle}`
-                : 'Tebrikler! Bu bölümü tamamladınız.',
-            );
-            recordProgress(progressKey ?? '', 100);
-          } else {
-            showFeedback('correct');
-          }
-          return true;
+          recordProgress(progressKey ?? '', 100);
         } else {
-          showFeedback('wrong');
-          return false;
+          showFeedback('correct');
         }
+        return true;
       } catch (e) {
         console.error('Puzzle move error:', e);
         showFeedback('wrong');
@@ -1565,7 +1642,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, chapterMovesForUi, currentFen, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs]);
+  }, [selectedStudy, effectiveChapter, selectedChapter, chapterMovesForUi, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs, puzzleSetupPreviewFen, hideEngineForStudentPuzzle]);
 
   const puzzleBranchChoices = useMemo(() => {
     // Öğrenci bulmacasında sync ağacındaki deneme varyasyonları gösterilmez.
@@ -1988,6 +2065,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         return next;
       });
 
+      logStudyEvent({
+        studyId: selectedStudy?.id,
+        chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+        studentId,
+        moveIndex: vcHistory.length,
+        expectedMove: 'Bilgisayara karşı',
+        playedMove: playedSan,
+        result: 'correct',
+        thinkMs,
+      });
+
       // Immediate sync
       void updatePresencePayload({
         vsComputer: true,
@@ -2134,6 +2222,41 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             <ArrowLeft className="w-3.5 h-3.5" />
             Düzenlemeye dön
           </button>
+        </div>
+      )}
+      {studentId && selectedStudy && (
+        <div className="shrink-0 px-3 sm:px-4 pt-3">
+          <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-widest text-cyan-300">Canlı Platform Aktivitesi</p>
+              <p className="text-xs text-slate-200 truncate">
+                {platformActivityLoading && !platformActivitySummary
+                  ? 'Platform aktivitesi kontrol ediliyor...'
+                  : platformActivitySummary ?? platformActivityError ?? 'Henüz canlı platform aktivitesi bulunamadı.'}
+              </p>
+              <p className="text-[10px] text-slate-400 mt-1">
+                {platformLiveFlags
+                  ? `Lichess oyun ${platformLiveFlags.lichessLive ? 'açık' : 'yok'} · Lichess bulmaca ${platformLiveFlags.lichessPuzzleRecent ? 'aktif' : 'yok'} · Chess.com oyun ${platformLiveFlags.chesscomLive ? 'açık' : 'yok'} · Chess.com bulmaca ${platformLiveFlags.chesscomPuzzleRecent ? 'aktif' : 'yok'}`
+                  : 'Lichess ve Chess.com durumu yükleniyor...'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {platformActivityUpdatedAt ? (
+                <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                  Son güncelleme {new Date(platformActivityUpdatedAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => { void refreshPlatformActivity(); }}
+                disabled={platformActivityLoading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-50 text-[11px] font-bold text-white transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${platformActivityLoading ? 'animate-spin' : ''}`} />
+                Yenile
+              </button>
+            </div>
+          </div>
         </div>
       )}
       <div className="flex flex-col lg:flex-row gap-0 lg:gap-4 flex-1 min-h-0 min-w-0 p-2 sm:p-4 pb-16 lg:pb-4">

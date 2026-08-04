@@ -1,4 +1,4 @@
-import type { Lesson, TrainingGroup } from '../types';
+import type { GroupLessonSlot, Lesson, TrainingGroup } from '../types';
 import { WEEKDAY_OPTIONS } from './trainingGroupUtils';
 
 export function trainingGroupLessonId(groupId: string, slotIndex: number): string {
@@ -27,21 +27,38 @@ function dayLabelForSlot(dayOfWeek: number, dayLabel?: string): string {
   return found?.label ?? 'Pazartesi';
 }
 
-/** Eğitim grubu ders slotlarını haftalık ders programı (lessons) kayıtlarına çevirir */
-export function lessonsFromTrainingGroup(group: TrainingGroup): Lesson[] {
-  const groupName = group.name.trim();
-  const discipline = group.discipline?.trim() || 'Satranç';
-  return (group.lessonSlots ?? [])
+/** Ders slot listesini haftalık görünüm (Lesson[]) kayıtlarına çevirir */
+export function lessonsFromGroupLessonSlots(
+  slots: GroupLessonSlot[],
+  opts: { groupName: string; idPrefix: string; topic?: string },
+): Lesson[] {
+  const groupName = opts.groupName.trim();
+  const topic = (opts.topic || groupName || 'Satranç').trim();
+  return (slots ?? [])
     .filter((slot) => slot.startTime?.trim())
     .map((slot, idx) => ({
-      id: trainingGroupLessonId(group.id, idx),
+      id: `${opts.idPrefix}-${idx}`,
       day: dayLabelForSlot(slot.dayOfWeek, slot.dayLabel),
       startTime: slot.startTime.trim(),
       endTime: (slot.endTime || '').trim() || '18:30',
       group: groupName,
-      topic: groupName || discipline,
-      branch: group.branchOffice?.trim() || undefined,
+      topic: topic || groupName || 'Satranç',
     }));
+}
+
+/** Eğitim grubu ders slotlarını haftalık ders programı (lessons) kayıtlarına çevirir */
+export function lessonsFromTrainingGroup(group: TrainingGroup): Lesson[] {
+  const groupName = group.name.trim();
+  const discipline = group.discipline?.trim() || 'Satranç';
+  return lessonsFromGroupLessonSlots(group.lessonSlots ?? [], {
+    groupName,
+    idPrefix: `tg-${group.id}`,
+    topic: groupName || discipline,
+  }).map((lesson, idx) => ({
+    ...lesson,
+    id: trainingGroupLessonId(group.id, idx),
+    branch: group.branchOffice?.trim() || undefined,
+  }));
 }
 
 /** Mevcut listeden bu gruba ait otomatik dersleri çıkarıp yenilerini ekler */
