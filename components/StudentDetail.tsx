@@ -1140,7 +1140,7 @@ const StudentDetail: React.FC<{
 
   const saleDisciplineOptions = useMemo(() => {
     const office = saleBranchOffice.trim();
-    return Array.from(
+    const fromPackages = Array.from(
       new Set(
         lessonPackages
           .filter((pkg) => !office || pkg.branchOffice.trim() === office)
@@ -1148,13 +1148,24 @@ const StudentDetail: React.FC<{
           .filter(Boolean),
       ),
     ).sort((a, b) => a.localeCompare(b, 'tr'));
-  }, [lessonPackages, saleBranchOffice]);
+    const studentDiscipline = student?.branch?.trim() || '';
+    if (studentDiscipline && !fromPackages.includes(studentDiscipline)) {
+      return [studentDiscipline, ...fromPackages];
+    }
+    return fromPackages;
+  }, [lessonPackages, saleBranchOffice, student?.branch]);
 
   const saleLessonPackageOptions = useMemo(() => {
     const office = saleBranchOffice.trim();
     const discipline = saleDiscipline.trim();
+    const strict = lessonPackages.filter(
+      (pkg) => (!office || pkg.branchOffice.trim() === office) && (!discipline || pkg.discipline.trim() === discipline),
+    );
+    if (strict.length > 0) {
+      return strict.sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+    }
     return lessonPackages
-      .filter((pkg) => (!office || pkg.branchOffice.trim() === office) && (!discipline || pkg.discipline.trim() === discipline))
+      .filter((pkg) => !office || pkg.branchOffice.trim() === office)
       .sort((a, b) => a.name.localeCompare(b.name, 'tr'));
   }, [lessonPackages, saleBranchOffice, saleDiscipline]);
 
@@ -1209,6 +1220,7 @@ const StudentDetail: React.FC<{
     setSaleRemainingLessons(String(totalWithCarry));
     setSaleValidityDays(String(pkg.validityDays));
     setSaleTotalAmount(String(pkg.packageFee));
+    setSaleAmountReceived(String(pkg.packageFee));
   }, [lessonPackages, transactions, studentId, attendanceRecords, resolvePackageLessonCount]);
 
   const resetSalePackageFields = useCallback(() => {
@@ -1220,14 +1232,21 @@ const StudentDetail: React.FC<{
     setSaleTotalAmount('');
   }, []);
 
-  const openSaleModal = useCallback((nextType: 'aylik-paket' | 'ozel-ders' = 'aylik-paket') => {
+  const openSaleModal = useCallback((nextType?: 'aylik-paket' | 'ozel-ders') => {
     const defaultOffice = student?.branchOffice?.trim() || '';
     const defaultDiscipline = student?.branch?.trim() || '';
-    setSaleType(nextType);
+    const hasPrivateSales = transactions.some(
+      (row) => row.studentId === studentId && row.category === 'Özel Ders',
+    );
+    const resolvedType =
+      nextType
+      ?? (student?.registrationType === 'package' || hasPrivateSales ? 'ozel-ders' : 'aylik-paket');
+
+    setSaleType(resolvedType);
     setSaleStartDate('');
     setSaleEndDate('');
-    setSaleBranchOffice(nextType === 'ozel-ders' ? defaultOffice : '');
-    setSaleDiscipline(nextType === 'ozel-ders' ? defaultDiscipline : '');
+    setSaleBranchOffice(resolvedType === 'ozel-ders' ? defaultOffice : '');
+    setSaleDiscipline(resolvedType === 'ozel-ders' ? defaultDiscipline : '');
     setSaleLessonPackageId('');
     setSaleTotalHours('');
     setSaleRemainingLessons('');
@@ -1239,7 +1258,156 @@ const StudentDetail: React.FC<{
     setSaleDownPayment('');
     setSaleInstallmentCount(4);
     setShowSaleModal(true);
+
+    if (resolvedType !== 'ozel-ders') return;
+
+    const groupName = student?.group?.trim() || '';
+    const office = defaultOffice;
+    const discipline = defaultDiscipline;
+    let candidates = lessonPackages.filter(
+      (pkg) => !office || pkg.branchOffice.trim() === office,
+    );
+    if (discipline) {
+      const byDiscipline = candidates.filter((pkg) => pkg.discipline.trim() === discipline);
+      if (byDiscipline.length > 0) candidates = byDiscipline;
+    }
+    const matched =
+      candidates.find((pkg) => pkg.name.trim() === groupName)
+      ?? candidates.find((pkg) => groupName && pkg.name.trim().toLowerCase().includes(groupName.toLowerCase()))
+      ?? candidates[0];
+    if (matched) {
+      window.setTimeout(() => applySaleLessonPackage(matched.id), 0);
+    }
+  }, [student?.branchOffice, student?.branch, student?.group, student?.registrationType, studentId, transactions, lessonPackages, applySaleLessonPackage]);
+
+  const switchSaleType = useCallback((nextType: 'aylik-paket' | 'ozel-ders') => {
+    setSaleType(nextType);
+    if (nextType !== 'ozel-ders') return;
+    const defaultOffice = student?.branchOffice?.trim() || '';
+    const defaultDiscipline = student?.branch?.trim() || '';
+    setSaleBranchOffice((prev) => prev.trim() || defaultOffice);
+    setSaleDiscipline((prev) => prev.trim() || defaultDiscipline);
   }, [student?.branchOffice, student?.branch]);
+
+  const completePackageSale = useCallback(() => {
+    if (!student) return;
+
+    const amount = Number(String(saleAmountReceived).replace(/\s/g, '').replace(',', '.'));
+    if (Number.isNaN(amount) || amount < 0) {
+      showToast('Alınan tutarı girin (0 olabilir).', 'warning');
+      return;
+    }
+
+    const totalRaw = saleTotalAmount.trim() ? Number(String(saleTotalAmount).replace(/\s/g, '').replace(',', '.')) : NaN;
+    const totalAmount = !Number.isNaN(totalRaw) && totalRaw > 0 ? totalRaw : undefined;
+
+    if (saleType === 'aylik-paket') {
+      if (!saleStartDate.trim() || !saleEndDate.trim()) {
+        showToast('Aylık paket için başlangıç ve bitiş tarihi seçin.', 'warning');
+        return;
+      }
+      if (saleStartDate > saleEndDate) {
+        showToast('Bitiş tarihi başlangıçtan önce olamaz.', 'warning');
+        return;
+      }
+    }
+
+    if (saleType === 'ozel-ders') {
+      const office = saleBranchOffice.trim() || student.branchOffice?.trim() || '';
+      const discipline = saleDiscipline.trim() || student.branch?.trim() || '';
+      if (!office || !discipline) {
+        showToast('Özel ders satışı için şube ve branş seçin.', 'warning');
+        return;
+      }
+      if (!selectedSaleLessonPackage && !salePackageName.trim()) {
+        showToast('Paket seçin veya paket/ders adı yazın.', 'warning');
+        return;
+      }
+      const lessonCountRaw = saleTotalHours.trim() ? Number(saleTotalHours) : NaN;
+      if (Number.isNaN(lessonCountRaw) || lessonCountRaw <= 0) {
+        showToast('Toplam ders/saat sayısını girin.', 'warning');
+        return;
+      }
+    }
+
+    const lessonCountRaw = saleType === 'ozel-ders' && saleTotalHours.trim() ? Number(saleTotalHours) : NaN;
+    const lessonCount = !Number.isNaN(lessonCountRaw) && lessonCountRaw >= 0 ? Math.round(lessonCountRaw) : undefined;
+    const remainingRaw = saleType === 'ozel-ders' && saleRemainingLessons.trim() ? Number(saleRemainingLessons) : NaN;
+    const currentRemainingLessons =
+      lessonCount != null
+        ? (!Number.isNaN(remainingRaw) && remainingRaw >= 0
+            ? Math.round(remainingRaw)
+            : lessonCount)
+        : undefined;
+    const startingUsedLessons =
+      lessonCount != null && currentRemainingLessons != null
+        ? Math.max(0, lessonCount - currentRemainingLessons)
+        : undefined;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const category = saleType === 'aylik-paket' ? 'Paket' : 'Özel Ders';
+    let desc = salePackageName.trim() || (saleType === 'aylik-paket' ? `${saleStartDate || '—'} - ${saleEndDate || '—'} paket` : `${saleTotalHours || '—'} saat özel ders`);
+    if (salePaymentMethod === 'taksit') {
+      const pesinat = saleDownPayment.trim() ? `Peşinat: ${saleDownPayment}₺` : '';
+      desc = [desc, `${saleInstallmentCount} Taksit`, pesinat].filter(Boolean).join(' | ');
+    }
+
+    addTransaction({
+      type: 'income',
+      category,
+      description: desc,
+      paymentType: salePaymentMethod === 'taksit' ? 'Kredi Kartı' : 'Nakit',
+      amount,
+      totalAmount,
+      saleKind: saleType === 'aylik-paket' ? 'monthly_package' : 'private_lesson',
+      lessonPackageId: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.id || undefined) : undefined,
+      lessonPackageName: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.name || salePackageName.trim() || undefined) : undefined,
+      lessonDiscipline: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.discipline || saleDiscipline.trim() || undefined) : undefined,
+      lessonBranchOffice: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.branchOffice || saleBranchOffice.trim() || undefined) : undefined,
+      lessonCount: saleType === 'ozel-ders' ? lessonCount : undefined,
+      startingUsedLessons: saleType === 'ozel-ders' ? startingUsedLessons : undefined,
+      validityDays: saleType === 'ozel-ders' && saleValidityDays.trim() ? Number(saleValidityDays) : undefined,
+      studentId: student.id,
+      date: today,
+    });
+
+    if (saleType === 'aylik-paket') {
+      updateStudent(student.id, { registrationType: 'package' });
+    } else {
+      updateStudent(student.id, {
+        registrationType: 'package',
+        branchOffice: selectedSaleLessonPackage?.branchOffice || saleBranchOffice.trim() || student.branchOffice,
+        branch: selectedSaleLessonPackage?.discipline || saleDiscipline.trim() || student.branch,
+        group: selectedSaleLessonPackage?.name || salePackageName.trim() || student.group,
+      });
+    }
+
+    addActivityLog({ user: 'Sistem', action: category + ' satışı', target: student.name, type: 'success' });
+    showToast(`${category} satışı kaydedildi.`, 'success');
+    setShowSaleModal(false);
+    if (salePaymentMethod === 'taksit') setActiveDetailTab('taksitler');
+  }, [
+    student,
+    saleAmountReceived,
+    saleTotalAmount,
+    saleType,
+    saleStartDate,
+    saleEndDate,
+    saleBranchOffice,
+    saleDiscipline,
+    selectedSaleLessonPackage,
+    salePackageName,
+    saleTotalHours,
+    saleRemainingLessons,
+    saleValidityDays,
+    salePaymentMethod,
+    saleDownPayment,
+    saleInstallmentCount,
+    addTransaction,
+    updateStudent,
+    addActivityLog,
+    showToast,
+  ]);
 
   const studentAnalyses = useMemo(() => {
     if (!studentId) return [];
@@ -3152,7 +3320,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
          <div className="grid grid-cols-2 gap-3">
            <button
              type="button"
-             onClick={() => setSaleType('aylik-paket')}
+             onClick={() => switchSaleType('aylik-paket')}
              className={`flex flex-col items-center gap-1.5 py-4 rounded-xl border-2 transition-all ${saleType === 'aylik-paket' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-800/60 border-slate-600 text-slate-400 hover:border-slate-500'}`}
            >
              <Calendar className="w-6 h-6" />
@@ -3160,7 +3328,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
            </button>
            <button
              type="button"
-             onClick={() => setSaleType('ozel-ders')}
+             onClick={() => switchSaleType('ozel-ders')}
              className={`flex flex-col items-center gap-1.5 py-4 rounded-xl border-2 transition-all ${saleType === 'ozel-ders' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-800/60 border-slate-600 text-slate-400 hover:border-slate-500'}`}
            >
              <GraduationCap className="w-6 h-6" />
@@ -3271,7 +3439,13 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
          </div>
          <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Toplam Tutar (₺)</label>
-           <input type="number" min="0" step="0.01" value={saleTotalAmount} onChange={(e) => setSaleTotalAmount(e.target.value)} className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium" placeholder="0.00" />
+           <input type="number" min="0" step="0.01" value={saleTotalAmount} onChange={(e) => {
+             const next = e.target.value;
+             setSaleTotalAmount(next);
+             if (salePaymentMethod === 'pesin' && !saleAmountReceived.trim() && next.trim()) {
+               setSaleAmountReceived(next);
+             }
+           }} className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium" placeholder="0.00" />
          </div>
          <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Ödeme Şekli</label>
@@ -3319,63 +3493,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
            </button>
            <button
              type="button"
-             onClick={() => {
-               const amount = Number(String(saleAmountReceived).replace(/\s/g, '').replace(',', '.'));
-               if (Number.isNaN(amount) || amount < 0) return;
-               const totalRaw = saleTotalAmount.trim() ? Number(String(saleTotalAmount).replace(/\s/g, '').replace(',', '.')) : NaN;
-               const totalAmount = !Number.isNaN(totalRaw) && totalRaw > 0 ? totalRaw : undefined;
-              const lessonCountRaw = saleType === 'ozel-ders' && saleTotalHours.trim() ? Number(saleTotalHours) : NaN;
-              const lessonCount = !Number.isNaN(lessonCountRaw) && lessonCountRaw >= 0 ? Math.round(lessonCountRaw) : undefined;
-              const remainingRaw = saleType === 'ozel-ders' && saleRemainingLessons.trim() ? Number(saleRemainingLessons) : NaN;
-              const currentRemainingLessons =
-                lessonCount != null
-                  ? (!Number.isNaN(remainingRaw) && remainingRaw >= 0
-                      ? Math.round(remainingRaw)
-                      : lessonCount)
-                  : undefined;
-              const startingUsedLessons =
-                lessonCount != null && currentRemainingLessons != null
-                  ? Math.max(0, lessonCount - currentRemainingLessons)
-                  : undefined;
-               const today = new Date().toISOString().slice(0, 10);
-               const category = saleType === 'aylik-paket' ? 'Paket' : 'Özel Ders';
-               let desc = salePackageName.trim() || (saleType === 'aylik-paket' ? `${saleStartDate || '—'} - ${saleEndDate || '—'} paket` : `${saleTotalHours || '—'} saat özel ders`);
-               if (salePaymentMethod === 'taksit') {
-                 const pesinat = saleDownPayment.trim() ? `Peşinat: ${saleDownPayment}₺` : '';
-                 desc = [desc, `${saleInstallmentCount} Taksit`, pesinat].filter(Boolean).join(' | ');
-               }
-               addTransaction({
-                 type: 'income',
-                 category,
-                 description: desc,
-                 paymentType: salePaymentMethod === 'taksit' ? 'Kredi Kartı' : 'Nakit',
-                 amount,
-                 totalAmount,
-                saleKind: saleType === 'aylik-paket' ? 'monthly_package' : 'private_lesson',
-                lessonPackageId: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.id || undefined) : undefined,
-                lessonPackageName: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.name || salePackageName.trim() || undefined) : undefined,
-                lessonDiscipline: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.discipline || saleDiscipline.trim() || undefined) : undefined,
-                lessonBranchOffice: saleType === 'ozel-ders' ? (selectedSaleLessonPackage?.branchOffice || saleBranchOffice.trim() || undefined) : undefined,
-               lessonCount: saleType === 'ozel-ders' ? lessonCount : undefined,
-               startingUsedLessons: saleType === 'ozel-ders' ? startingUsedLessons : undefined,
-                validityDays: saleType === 'ozel-ders' && saleValidityDays.trim() ? Number(saleValidityDays) : undefined,
-                 studentId: student.id,
-                 date: today,
-               });
-               if (saleType === 'aylik-paket') {
-                 updateStudent(student.id, { registrationType: 'package' });
-               } else {
-                 updateStudent(student.id, {
-                   registrationType: 'package',
-                   branchOffice: selectedSaleLessonPackage?.branchOffice || saleBranchOffice.trim() || student.branchOffice,
-                   branch: selectedSaleLessonPackage?.discipline || saleDiscipline.trim() || student.branch,
-                   group: selectedSaleLessonPackage?.name || salePackageName.trim() || student.group,
-                 });
-               }
-               addActivityLog({ user: 'Sistem', action: category + ' satışı', target: student.name, type: 'success' });
-               setShowSaleModal(false);
-               if (salePaymentMethod === 'taksit') setActiveDetailTab('taksitler');
-             }}
+             onClick={() => completePackageSale()}
              className="flex-1 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm inline-flex items-center justify-center gap-2"
            >
              <CheckCircle className="w-4 h-4" /> Satışı Tamamla
