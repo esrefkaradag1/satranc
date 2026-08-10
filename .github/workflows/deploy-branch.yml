@@ -26,11 +26,13 @@ jobs:
           npm ci --ignore-scripts
           npm run sync:stockfish
           npm run build
+          npm run build:server
 
       - name: Create deploy bundle
         run: |
           mkdir -p deploy-bundle/server deploy-bundle/lib
           cp -r dist deploy-bundle/dist
+          cp -r server/generated deploy-bundle/server/generated
           cp package.json package-lock.json deploy-bundle/
           cp server/docker-api.mjs server/docker-production.mjs deploy-bundle/server/
           cp lib/*.mjs deploy-bundle/lib/
@@ -45,6 +47,7 @@ jobs:
           RUN npm ci --omit=dev --ignore-scripts
 
           COPY server/docker-api.mjs server/docker-production.mjs /app/server/
+          COPY server/generated /app/server/generated
           COPY lib/*.mjs /app/lib/
           COPY dist /app/dist
 
