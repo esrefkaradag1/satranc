@@ -280,6 +280,7 @@ export async function computePlatformWeekStats(
   const activityUpserts: Array<{ student_id: string; day: string; chessComPuzzles: RatedAttempt[] }> = [];
 
   const stats: Record<string, Record<string, PlatformDayStatsPayload>> = {};
+  const skipLichessGameTimeFetch = students.length > 6;
 
   for (const student of students) {
     const sid = String(student.id ?? '').trim();
@@ -366,7 +367,11 @@ export async function computePlatformWeekStats(
       }
 
       if (lichessUser && lichessGames > 0) {
-        activityTimeSeconds += await fetchLichessGamesTimeSecondsForDay(lichessUser, day, process.env);
+        if (skipLichessGameTimeFetch) {
+          activityTimeSeconds += lichessGames * 480;
+        } else {
+          activityTimeSeconds += await fetchLichessGamesTimeSecondsForDay(lichessUser, day, process.env);
+        }
       }
       if (lichessPuzzles.count > 0) {
         activityTimeSeconds += lichessPuzzles.count * 45;
@@ -456,7 +461,16 @@ export default async function handler(req: Req, res: Res) {
     return;
   }
 
-  const result = await computePlatformWeekStats(students, days);
-  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
-  res.status(200).json(result);
+  try {
+    const result = await computePlatformWeekStats(students, days);
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('[platform-week-stats] handler error:', err);
+    res.status(500).json({
+      error: 'Platform verisi hesaplanamadı',
+      stats: {},
+      days: [...new Set(days.map((d) => String(d).slice(0, 10)))],
+    });
+  }
 }

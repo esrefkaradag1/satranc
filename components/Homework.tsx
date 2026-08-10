@@ -586,7 +586,7 @@ const Homework: React.FC = () => {
         }
       }
 
-      const platformPatch = await syncStudentsPlatformDays(scopeAssignees, [dateKey], [dateKey]);
+      const { byStudent: platformPatch, batchFailed } = await syncStudentsPlatformDays(scopeAssignees, [dateKey], [dateKey]);
       let hadFreshData = false;
       if (Object.keys(platformPatch).length > 0) {
         for (const s of scopeAssignees) {
@@ -645,10 +645,14 @@ const Homework: React.FC = () => {
       }
 
       if (!opts?.silent) {
-        showToast(
-          hadFreshData ? 'Platform verileri güncellendi.' : 'Yeni aktivite yok; önceki veriler korundu.',
-          hadFreshData ? 'success' : 'info',
-        );
+        if (batchFailed) {
+          showToast('Sunucu platform verisini alamadı; önbellekteki kayıtlar gösteriliyor. Biraz sonra tekrar deneyin.', 'warning');
+        } else {
+          showToast(
+            hadFreshData ? 'Platform verileri güncellendi.' : 'Yeni aktivite yok; önceki veriler korundu.',
+            hadFreshData ? 'success' : 'info',
+          );
+        }
       }
     } catch {
       if (!opts?.silent) showToast('Platform verisi alınamadı.', 'warning');
@@ -679,7 +683,7 @@ const Homework: React.FC = () => {
     if (panelTab !== 'program' || programPlatformSyncAssignees.length === 0) return;
     let cancelled = false;
     const today = homeworkDayKey();
-    void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then((patch) => {
+    void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then(({ byStudent: patch }) => {
       if (cancelled || Object.keys(patch).length === 0) return;
       applyPlatformStatsPatch(patch);
     });
@@ -697,7 +701,7 @@ const Homework: React.FC = () => {
     const pollMs = hasLiveActivity ? PLATFORM_ACTIVE_POLL_MS : PLATFORM_IDLE_POLL_MS;
     const id = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then((patch) => {
+      void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then(({ byStudent: patch }) => {
         if (Object.keys(patch).length > 0) applyPlatformStatsPatch(patch);
       });
     }, pollMs);
@@ -716,7 +720,7 @@ const Homework: React.FC = () => {
     const today = homeworkDayKey();
     const triggerRefresh = () => {
       if (document.visibilityState !== 'visible') return;
-      void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then((patch) => {
+      void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then(({ byStudent: patch }) => {
         if (Object.keys(patch).length > 0) applyPlatformStatsPatch(patch);
       });
     };
@@ -738,7 +742,7 @@ const Homework: React.FC = () => {
     const scopeAssignees = getAssignees(programSelectedHw).filter((s) => targetStudentIds.has(s.id));
     if (scopeAssignees.length === 0) return;
     let cancelled = false;
-    void syncStudentsPlatformDays(scopeAssignees, [viewDate], [viewDate]).then((patch) => {
+    void syncStudentsPlatformDays(scopeAssignees, [viewDate], [viewDate]).then(({ byStudent: patch }) => {
       if (cancelled || Object.keys(patch).length === 0) return;
       applyPlatformStatsPatch(patch);
     });

@@ -2,8 +2,10 @@ import type { Student } from '../types';
 import type { PlatformDayStats } from '../lib/homeworkPlatformUtils';
 
 const BATCH_TIMEOUT_MS = 55_000;
+/** Sunucu maxDuration (60s) içinde kalması için öğrenci grubu boyutu */
+const STUDENT_CHUNK_SIZE = 12;
 
-export async function fetchStudentsPlatformWeekStats(
+async function fetchStudentsPlatformWeekStatsChunk(
   students: Student[],
   days: string[],
 ): Promise<Record<string, Record<string, PlatformDayStats>> | null> {
@@ -35,4 +37,35 @@ export async function fetchStudentsPlatformWeekStats(
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+export async function fetchStudentsPlatformWeekStats(
+  students: Student[],
+  days: string[],
+): Promise<Record<string, Record<string, PlatformDayStats>> | null> {
+  if (students.length === 0 || days.length === 0) return {};
+
+  if (students.length <= STUDENT_CHUNK_SIZE) {
+    return fetchStudentsPlatformWeekStatsChunk(students, days);
+  }
+
+  const merged: Record<string, Record<string, PlatformDayStats>> = {};
+  let anyOk = false;
+  let anyFailed = false;
+
+  for (let i = 0; i < students.length; i += STUDENT_CHUNK_SIZE) {
+    const chunk = students.slice(i, i + STUDENT_CHUNK_SIZE);
+    const chunkStats = await fetchStudentsPlatformWeekStatsChunk(chunk, days);
+    if (chunkStats === null) {
+      anyFailed = true;
+      continue;
+    }
+    anyOk = true;
+    for (const [sid, byDay] of Object.entries(chunkStats)) {
+      merged[sid] = { ...(merged[sid] ?? {}), ...byDay };
+    }
+  }
+
+  if (!anyOk && anyFailed) return null;
+  return merged;
 }

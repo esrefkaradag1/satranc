@@ -116,14 +116,19 @@ export async function syncStudentPlatformDays(
 }
 
 /** Çoklu öğrenci: DB + batch API → merge → DB. */
+export type StudentsPlatformSyncResult = {
+  byStudent: Record<string, Record<string, PlatformDayStats>>;
+  batchFailed: boolean;
+};
+
 export async function syncStudentsPlatformDays(
   students: Student[],
   allDays: string[],
   apiDays?: string[],
-): Promise<Record<string, Record<string, PlatformDayStats>>> {
+): Promise<StudentsPlatformSyncResult> {
   const days = normalizeDays(allDays);
   const refreshDays = normalizeDays(apiDays ?? days);
-  if (students.length === 0 || days.length === 0) return {};
+  if (students.length === 0 || days.length === 0) return { byStudent: {}, batchFailed: false };
 
   const ids = students.map((s) => String(s.id)).filter(Boolean);
   const db = await loadPlatformDayStatsFromDb(ids, days);
@@ -143,9 +148,12 @@ export async function syncStudentsPlatformDays(
   );
 
   let batchStats: Record<string, Record<string, PlatformDayStats>> | null = null;
-  if (effectiveRefreshDays.length > 0 && students.length > 0) {
+  const batchRequested = effectiveRefreshDays.length > 0 && students.length > 0;
+  if (batchRequested) {
     batchStats = await fetchStudentsPlatformWeekStats(students, effectiveRefreshDays);
   }
+  const batchFailed = batchRequested && batchStats === null;
+  const allowClientFallback = students.length === 1 && !batchFailed;
 
   const rowsToSave: PlatformDayCacheRow[] = [];
   for (const student of students) {
@@ -156,7 +164,7 @@ export async function syncStudentsPlatformDays(
       const fresh = batchStats?.[sid]?.[day];
       if (fresh) {
         merged = mergePlatformDayStats(merged, fresh);
-      } else if (effectiveRefreshDays.includes(day)) {
+      } else if (allowClientFallback && effectiveRefreshDays.includes(day)) {
         try {
           const clientFresh = await fetchStudentPlatformDayStats(student, day);
           merged = mergePlatformDayStats(merged, clientFresh);
@@ -175,5 +183,5 @@ export async function syncStudentsPlatformDays(
   if (rowsToSave.length > 0) {
     await savePlatformDayStatsToDb(rowsToSave);
   }
-  return out;
+  return { byStudent: out, batchFailed };
 }
