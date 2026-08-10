@@ -92,16 +92,21 @@ function saleMatchesSelectedLessonPackage(
 
 /* ── Alt bileşenler ─────────────────────────────────────────── */
 
+const fieldInputCls =
+  'w-full px-3 py-2.5 rounded-lg bg-slate-950/50 border border-white/[0.08] text-sm text-white font-medium focus:ring-2 focus:ring-indigo-500/35 outline-none transition-all';
+
 const SectionHeader: React.FC<{
  icon: React.ReactNode;
  title: string;
  subtitle?: string;
 }> = ({ icon, title, subtitle }) => (
- <div className="premium-gradient rounded-lg px-6 py-4 flex items-center gap-3 shadow-lg shadow-indigo-500/10">
- <div className="text-white/90">{icon}</div>
- <div>
- <div className="text-white font-black tracking-tight">{title}</div>
- {subtitle && <div className="text-white/70 text-xs font-medium">{subtitle}</div>}
+ <div className="px-3.5 sm:px-4 py-2.5 border-b border-white/[0.06] flex items-center gap-2.5 bg-slate-950/30">
+ <div className="w-8 h-8 rounded-lg bg-indigo-500/15 border border-indigo-400/20 flex items-center justify-center text-indigo-300 shrink-0">
+   {icon}
+ </div>
+ <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
+   <div className="text-sm font-black text-white tracking-tight">{title}</div>
+   {subtitle ? <div className="text-[11px] text-slate-500 font-medium">{subtitle}</div> : null}
  </div>
  </div>
 );
@@ -110,10 +115,11 @@ const SelectField: React.FC<{
  label: string;
  icon?: React.ReactNode;
  children: React.ReactNode;
-}> = ({ label, icon, children }) => (
- <div className="space-y-2">
- <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">
- {icon && <span className="text-indigo-600">{icon}</span>}
+ className?: string;
+}> = ({ label, icon, children, className = '' }) => (
+ <div className={`space-y-1 ${className}`}>
+ <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+ {icon && <span className="text-indigo-400">{icon}</span>}
  {label}
  </div>
  {children}
@@ -874,69 +880,71 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
   }, []);
 
  return (
- <div className="space-y-4 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-4 md:pb-0">
+ <div className="space-y-3 sm:space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-4 md:pb-0">
  {/* Sayfa başlığı + sekmeler */}
- <div className="premium-gradient rounded-lg px-4 sm:px-8 py-4 sm:py-6 shadow-xl shadow-indigo-500/10">
- <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-4">
- <div className="flex items-center gap-4">
- <div className="w-12 h-12 rounded-lg bg-white/20 flex items-center justify-center">
- <CalendarCheck className="w-6 h-6 text-white" />
+ <div className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/80 backdrop-blur-xl px-4 sm:px-5 py-3 sm:py-3.5">
+ <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+ <div className="flex items-center gap-2.5 min-w-0">
+ <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-400/20 flex items-center justify-center shrink-0">
+ <CalendarCheck className="w-4 h-4 text-indigo-300" />
  </div>
- <div>
- <h1 className="text-2xl font-black tracking-tight text-white">Yoklama</h1>
- <p className="text-white/80 text-sm mt-0.5">
- Yoklama alın veya geçmiş yoklama listesini görüntüleyin
+ <div className="min-w-0">
+ <h1 className="text-base sm:text-xl font-black tracking-tight text-white">Yoklama</h1>
+ <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate">
+ Yoklama al veya geçmiş oturumları incele
  </p>
  </div>
  </div>
- <div className="inline-flex w-full sm:w-auto rounded-lg bg-white/10 p-1">
+ <div className="flex flex-wrap items-center gap-2">
+ <div className="inline-flex flex-1 sm:flex-none rounded-xl bg-slate-950/50 border border-white/[0.06] p-1">
  <button
  type="button"
  onClick={() => { setViewMode('take'); setListFetched(false); }}
- className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold transition-all ${viewMode === 'take' ? 'bg-white text-indigo-700' : 'text-white/80 hover:text-white'}`}
+ className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all ${viewMode === 'take' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30' : 'text-slate-400 hover:text-slate-200'}`}
  >
- <CalendarCheck className="w-4 h-4" /> Yoklama Al
+ <CalendarCheck className="w-3.5 h-3.5" /> Yoklama Al
  </button>
  <button
  type="button"
  onClick={() => setViewMode('list')}
- className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold transition-all ${viewMode === 'list' ? 'bg-white text-indigo-700' : 'text-white/80 hover:text-white'}`}
+ className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all ${viewMode === 'list' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30' : 'text-slate-400 hover:text-slate-200'}`}
  >
- <List className="w-4 h-4" /> Yoklama Listesi
+ <List className="w-3.5 h-3.5" /> Liste
  </button>
  </div>
  {showStudents && viewMode === 'take' && (
  <button
  type="button"
  onClick={handleSave}
- className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#1e293b] text-indigo-700 font-black text-sm transition-all hover:bg-white/90 active:scale-95 shadow-lg"
+ className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all active:scale-95 shadow-lg shadow-emerald-900/30"
  >
- <Save className="w-4 h-4" />
- Yoklamayı Kaydet
+ <Save className="w-3.5 h-3.5" />
+ Kaydet
  </button>
  )}
+ </div>
  </div>
  </div>
 
  {/* Yoklama Listesi görünümü */}
  {viewMode === 'list' && (
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-slate-700/60 overflow-hidden">
- <SectionHeader icon={<List className="w-5 h-5" />} title="Yoklama Yapılan Listesi" subtitle="Tarih ile yoklama; grup seçince ders konuları aşağıda görünür" />
- <div className="p-6 space-y-4">
- <div className="flex flex-wrap items-end gap-4">
+ <div className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/75 overflow-hidden">
+ <SectionHeader icon={<List className="w-4 h-4" />} title="Yoklama listesi" subtitle="Tarih · grup · ders konuları" />
+ <div className="p-3 sm:p-4 space-y-3">
+ <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-end">
  <SelectField label="Tarih">
  <input
  type="date"
  value={listDate}
  onChange={(e) => { setListDate(e.target.value); setListFetched(false); }}
- className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
+ className={fieldInputCls}
  />
  </SelectField>
  <SelectField label="Grup (opsiyonel)">
  <select
  value={listGroup}
  onChange={(e) => { setListGroup(e.target.value); setListFetched(false); }}
- className="w-full min-w-[180px] px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
+ className={fieldInputCls}
  >
  <option value="">Tüm gruplar</option>
  {allGroupNames.map((g) => (
@@ -947,16 +955,16 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <button
  type="button"
  onClick={handleListeyiGetir}
- className="inline-flex items-center gap-2 px-6 py-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-black text-sm transition-all active:scale-95 shadow-lg"
+ className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all active:scale-95 shadow-lg shadow-indigo-900/25"
  >
- <RefreshCw className="w-4 h-4" /> Listeyi Getir
+ <RefreshCw className="w-3.5 h-3.5" /> Listeyi Getir
  </button>
  <button
  type="button"
  onClick={() => refreshFromStorage()}
- className="inline-flex items-center gap-2 px-4 py-4 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold transition-all"
+ className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.08] text-slate-200 text-xs font-bold transition-all"
  >
- <RefreshCw className="w-4 h-4" /> Veriyi Yenile
+ <RefreshCw className="w-3.5 h-3.5" /> Veriyi Yenile
  </button>
  </div>
 
@@ -967,63 +975,62 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
      onSave={(entries: StudentLessonLogEntry[]) => updateGroupLessonLog(listGroup, entries)}
    />
  ) : (
-   <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-3 text-xs text-slate-500">
-     Grup ders konularını görmek veya eklemek için yukarıdan bir grup seçin.
+   <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] px-3 py-2.5 text-[11px] text-slate-500">
+     Ders konularını görmek için bir grup seçin.
    </div>
  )}
 
  {listFetched && (
  <>
- <div className="rounded-lg px-4 py-3 bg-emerald-600/20 text-emerald-300 text-sm font-bold border border-emerald-500/30">
+ <div className="rounded-lg px-3 py-2 bg-emerald-500/10 text-emerald-300 text-xs font-bold border border-emerald-500/25">
 {listDate} {listGroup ? `· ${listGroup}` : ''} — {listRows.length} oturum
  </div>
  {listRows.length === 0 ? (
- <div className="py-12 text-center text-slate-400 rounded-lg border border-dashed border-slate-600">
+ <div className="py-10 text-center text-slate-400 rounded-xl border border-dashed border-white/10 text-sm">
  Bu tarih{listGroup ? ` ve grupta` : ''} yoklama kaydı bulunamadı.
  </div>
  ) : (
- <div className="space-y-2">
+ <div className="space-y-1.5">
  {listRows.map((row) => (
  <div
  key={row.key}
- className="flex flex-col gap-3 px-4 py-4 rounded-xl border border-white/10 bg-slate-900/40 md:flex-row md:items-center"
+ className="flex flex-col gap-2.5 px-3.5 py-3 rounded-xl border border-white/[0.06] bg-slate-950/35 hover:bg-white/[0.02] transition-colors md:flex-row md:items-center"
  >
  <div className="min-w-0 flex-1">
  <div className="flex flex-wrap items-center gap-2">
- <span className="font-bold text-white">{row.group}</span>
- <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wide border ${
+ <span className="font-bold text-white text-sm">{row.group}</span>
+ <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wide ${
    row.attendanceType === 'lesson'
-     ? 'border-indigo-500/30 bg-indigo-500/15 text-indigo-300'
-     : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+     ? 'bg-indigo-500/15 text-indigo-300'
+     : 'bg-emerald-500/15 text-emerald-300'
  }`}>
    {row.attendanceType === 'lesson' ? 'Ders' : 'Grup'}
  </span>
  </div>
- <div className="mt-1 text-xs text-slate-400">
+ <div className="mt-0.5 text-[11px] text-slate-500">
    {isoDateToTr(row.date)} · {row.time}
    {row.branch ? ` · ${row.branch}` : ''}
-   {row.branchOffice ? ` · ${row.branchOffice}` : ''}
  </div>
  {row.lessonSummary ? (
-   <div className="mt-1 text-xs text-slate-500 line-clamp-2">{row.lessonSummary}</div>
+   <div className="mt-0.5 text-[11px] text-slate-500 line-clamp-1">{row.lessonSummary}</div>
  ) : null}
  </div>
- <div className="flex flex-wrap items-center gap-2">
-   <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-emerald-500/20 text-emerald-300">{row.presentCount} Var</span>
-   <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-rose-500/20 text-rose-300">{row.absentCount} Yok</span>
+ <div className="flex flex-wrap items-center gap-1.5">
+   <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/15 text-emerald-300">{row.presentCount} Var</span>
+   <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/15 text-rose-300">{row.absentCount} Yok</span>
    {row.lateCount > 0 ? (
-     <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-amber-500/20 text-amber-300">{row.lateCount} Geç</span>
+     <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300">{row.lateCount} Geç</span>
    ) : null}
    {row.excusedCount > 0 ? (
-     <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-sky-500/20 text-sky-300">{row.excusedCount} İzinli</span>
+     <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-500/15 text-sky-300">{row.excusedCount} İzinli</span>
    ) : null}
  </div>
  <button
    type="button"
    onClick={() => openSessionForEdit(row)}
-   className="inline-flex items-center justify-center gap-2 rounded-lg border border-indigo-500/30 bg-indigo-500/15 px-3 py-2 text-xs font-black text-indigo-200 hover:bg-indigo-500/25 transition-all"
+   className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-500/25 bg-indigo-500/10 px-3 py-2 text-xs font-bold text-indigo-200 hover:bg-indigo-500/20 transition-all"
  >
-   <ClipboardList className="w-4 h-4" />
+   <ClipboardList className="w-3.5 h-3.5" />
    Düzenle
  </button>
  </div>
@@ -1039,49 +1046,59 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  {viewMode !== 'list' && (
  <>
  {/* Filtre kartı */}
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-slate-700/60 overflow-hidden">
+ <div className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/75 overflow-hidden">
  <SectionHeader
- icon={<CalendarCheck className="w-5 h-5" />}
- title="Yoklama Tip ve Grup Seçimi"
+ icon={<CalendarCheck className="w-4 h-4" />}
+ title="Yoklama seçimi"
+ subtitle="Tip · şube · grup · tarih"
  />
 
- <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
+ <div className="p-3 sm:p-4 space-y-3">
  {/* Yoklama Tipi */}
- <SelectField label="Yoklama Tipi">
- <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+ <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
  <button
  type="button"
  onClick={() => setAttendanceType('group')}
- className={`w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg font-black text-sm transition-all active:scale-[0.99] ${
+ className={`inline-flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left font-bold text-sm transition-all active:scale-[0.99] ${
  attendanceType === 'group'
- ? 'premium-gradient text-white shadow-lg shadow-indigo-500/20'
- : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60'
+ ? 'border border-indigo-500/40 bg-indigo-500/15 text-white ring-1 ring-indigo-500/20'
+ : 'border border-white/[0.06] bg-slate-950/40 text-slate-300 hover:border-indigo-500/25'
  }`}
  >
- <Check className="w-4 h-4" />
- Grup Bazlı Yoklama
+ <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${attendanceType === 'group' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
+   <Check className="w-4 h-4" />
+ </span>
+ <span className="min-w-0">
+   <span className="block">Grup Bazlı</span>
+   <span className={`block text-[11px] font-medium ${attendanceType === 'group' ? 'text-indigo-200/80' : 'text-slate-500'}`}>Eğitim grubu yoklaması</span>
+ </span>
  </button>
  <button
  type="button"
  onClick={() => setAttendanceType('lesson')}
- className={`w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg font-black text-sm transition-all active:scale-[0.99] ${
+ className={`inline-flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left font-bold text-sm transition-all active:scale-[0.99] ${
  attendanceType === 'lesson'
- ? 'premium-gradient text-white shadow-lg shadow-indigo-500/20'
- : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/60'
+ ? 'border border-indigo-500/40 bg-indigo-500/15 text-white ring-1 ring-indigo-500/20'
+ : 'border border-white/[0.06] bg-slate-950/40 text-slate-300 hover:border-indigo-500/25'
  }`}
  >
- <CalendarCheck className="w-4 h-4" />
- Ders Bazlı Yoklama
+ <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${attendanceType === 'lesson' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
+   <CalendarCheck className="w-4 h-4" />
+ </span>
+ <span className="min-w-0">
+   <span className="block">Ders Bazlı</span>
+   <span className={`block text-[11px] font-medium ${attendanceType === 'lesson' ? 'text-indigo-200/80' : 'text-slate-500'}`}>Özel ders / paket</span>
+ </span>
  </button>
  </div>
- </SelectField>
 
+ <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
  {/* Şube */}
  <SelectField label="Şube">
  <select
  value={branchOffice}
  onChange={(e) => { setBranchOffice(e.target.value); setSessionTime(''); }}
- className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
+ className={fieldInputCls}
  >
  <option value="">Şube Seçiniz</option>
  {attendanceBranchOffices.map((b) => (
@@ -1089,8 +1106,8 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  ))}
  </select>
  {attendanceBranchOffices.length === 0 && (
- <p className="mt-2 text-xs text-amber-400/90">
- Tanımlı şube yok. Branş & Grup sayfasından şube ve eğitim grubu ekleyin.
+ <p className="mt-1 text-[10px] text-amber-400/90">
+ Tanımlı şube yok. Branş & Grup’tan ekleyin.
  </p>
  )}
  </SelectField>
@@ -1100,7 +1117,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <select
  value={branch}
  onChange={(e) => { setBranch(e.target.value); setSessionTime(''); }}
- className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
+ className={fieldInputCls}
  >
  <option value="">Branş Seçiniz</option>
  {attendanceDisciplines.map((b) => (
@@ -1108,10 +1125,10 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  ))}
  </select>
  {branchOffice && attendanceDisciplines.length === 0 && (
- <p className="mt-2 text-xs text-amber-400/90">
+ <p className="mt-1 text-[10px] text-amber-400/90">
  {attendanceType === 'lesson'
-   ? 'Bu şubede ders paketi yok. Branş & Grup sayfasından özel ders paketi ekleyin.'
-   : 'Bu şubede grup branşı yok. Branş & Grup sayfasından eğitim grubu ekleyin.'}
+   ? 'Bu şubede ders paketi yok.'
+   : 'Bu şubede grup branşı yok.'}
  </p>
  )}
  </SelectField>
@@ -1121,7 +1138,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  <select
  value={group}
  onChange={(e) => { setGroup(e.target.value); setSessionTime(''); }}
- className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
+ className={fieldInputCls}
  >
  <option value="">{attendanceType === 'lesson' ? 'Paket Seçiniz' : 'Grup Seçiniz'}</option>
  {secondaryOptions.map((g) => (
@@ -1129,10 +1146,10 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  ))}
  </select>
  {secondaryOptions.length === 0 && branch && (
- <p className="mt-2 text-xs text-amber-400/90">
+ <p className="mt-1 text-[10px] text-amber-400/90">
  {attendanceType === 'lesson'
-   ? 'Bu branşta ders paketi tanımı yok. Yeni Ders Paketi ile özel ders ekleyin.'
-   : 'Bu branşta grup görünmüyor. Branş & Grup sayfasından grup ekleyin.'}
+   ? 'Bu branşta ders paketi yok.'
+   : 'Bu branşta grup yok.'}
  </p>
  )}
  </SelectField>
@@ -1143,16 +1160,16 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  type="date"
  value={date}
  onChange={(e) => { setDate(e.target.value); setSessionTime(''); }}
- className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
+ className={fieldInputCls}
  />
  </SelectField>
 
  {/* Öğretmen */}
- <SelectField label="Öğretmen / Antrenör" icon={<UserCheck className="w-4 h-4" />}>
+ <SelectField label="Öğretmen / Antrenör" icon={<UserCheck className="w-3.5 h-3.5" />} className="sm:col-span-2 xl:col-span-2">
  <select
  value={teacherName}
  onChange={(e) => setTeacherName(e.target.value)}
- className="w-full px-5 py-4 rounded-lg bg-[#1e293b] border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
+ className={fieldInputCls}
  >
  <option value="">Antrenör Seçiniz</option>
  {attendanceCoaches.map((c) => (
@@ -1160,11 +1177,12 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  ))}
  </select>
  {attendanceCoaches.length === 0 && branchOffice && (
- <p className="mt-2 text-xs text-amber-400/90">
- Bu kulüpte kayıtlı antrenör yok. Antrenörler sayfasından ekleyin.
+ <p className="mt-1 text-[10px] text-amber-400/90">
+ Bu kulüpte antrenör yok.
  </p>
  )}
  </SelectField>
+ </div>
 
  {group && attendanceType === 'group' ? (
    <GroupLessonLogPanel
@@ -1177,23 +1195,21 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
 
  {/* Devam butonu */}
  {!showStudents && (
-<div className="flex flex-col gap-3 pt-2">
+<div className="flex flex-col sm:flex-row sm:items-center gap-2.5 pt-1">
 {hasExistingSession ? (
-  <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-200">
-    Bu tarih ve {attendanceType === 'lesson' ? 'paket' : 'grup'} için zaten yoklama var. Başlatınca mevcut kayıt düzenleme modunda açılır.
+  <div className="flex-1 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] font-medium text-amber-200">
+    Bu tarih için yoklama var — başlatınca düzenleme açılır.
   </div>
 ) : null}
-<div className="flex gap-3">
  <button
  type="button"
  onClick={handleStart}
 disabled={!currentSessionId}
- className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-sm transition-all active:scale-95 shadow-lg shadow-indigo-500/20"
+ className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm transition-all active:scale-95 shadow-lg shadow-indigo-900/25 shrink-0"
  >
  <CalendarCheck className="w-4 h-4" />
  {hasExistingSession ? 'Yoklamayı Düzenle' : 'Yoklamayı Başlat'}
  </button>
-</div>
  </div>
  )}
  </div>
@@ -1201,32 +1217,39 @@ disabled={!currentSessionId}
 
  {/* Öğrenci yoklama listesi */}
  {showStudents && (
- <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
- <div className="rounded-xl px-4 sm:px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 premium-gradient shadow-lg shadow-indigo-500/20 ring-1 ring-indigo-500/20">
- <div className="font-bold tracking-tight text-sm sm:text-base text-white min-w-0">
-   {branchOffice} · {branch} · {group}
+ <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
+ <div className="rounded-2xl border border-indigo-400/25 bg-gradient-to-r from-indigo-600/25 via-indigo-500/10 to-transparent px-3.5 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-2.5">
+ <div className="font-bold tracking-tight text-sm text-white min-w-0">
+   <span className="text-slate-300 font-medium">{attendanceType === 'lesson' ? 'Paket' : 'Grup'}</span>
+   {' · '}
+   {group}
    {attendanceType === 'lesson' && selectedLessonPackage ? (
      <span className="text-indigo-200/80 font-medium"> · {selectedLessonPackage.lessonCount} ders</span>
    ) : null}
+   <div className="text-[11px] text-slate-400 font-medium mt-0.5 truncate">
+     {branchOffice}{branch ? ` · ${branch}` : ''}
+   </div>
   {isEditingSession ? (
-    <span className="ml-2 inline-flex items-center rounded-lg border border-amber-300/30 bg-amber-400/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-100">
-      Düzenleme Modu
+    <span className="mt-1 inline-flex items-center rounded-md bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-200">
+      Düzenleme
     </span>
   ) : null}
  </div>
- <div className="inline-flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-3 py-2">
-   <Calendar className="w-4 h-4 text-indigo-200 shrink-0" aria-hidden />
+ <div className="flex flex-wrap items-center gap-2">
+ <div className="inline-flex items-center gap-2 rounded-lg bg-slate-950/40 border border-white/10 px-2.5 py-1.5">
+   <Calendar className="w-3.5 h-3.5 text-indigo-300 shrink-0" aria-hidden />
    <input
      type="date"
      value={date}
      onChange={(e) => { setDate(e.target.value); setSessionTime(''); }}
-     className="bg-transparent border-none outline-none text-sm font-semibold text-white min-w-0 max-w-[11rem] [color-scheme:dark]"
+     className="bg-transparent border-none outline-none text-xs font-semibold text-white min-w-0 max-w-[10rem] [color-scheme:dark]"
      aria-label="Yoklama tarihi"
    />
  </div>
-<div className="inline-flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-sm font-semibold text-white">
-  Saat: {sessionTime.trim() || derivedSessionTime}
-</div>
+ <div className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950/40 border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-slate-200">
+  {sessionTime.trim() || derivedSessionTime || '—'}
+ </div>
+ </div>
  </div>
 
  <div className="flex gap-2 overflow-x-auto scrollbar-none -mx-0.5 px-0.5 pb-0.5">

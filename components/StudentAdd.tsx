@@ -6,7 +6,6 @@ import {
   Calendar,
   CreditCard,
   GraduationCap,
-  Heart,
   Phone,
   Save,
   Upload,
@@ -100,7 +99,7 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 /* ─── Primitive UI pieces ────────────────────────────────────────────────── */
 
 const inputCls =
-  'w-full px-3.5 py-2.5 rounded-xl text-sm font-semibold outline-none transition-all duration-200 bg-slate-900/50 border border-white/[0.08] text-white placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500/40';
+  'w-full px-3 py-2 rounded-lg text-sm font-semibold outline-none transition-all duration-200 bg-slate-900/50 border border-white/[0.08] text-white placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500/40';
 
 const selectCls = `${inputCls} appearance-none cursor-pointer`;
 
@@ -123,19 +122,19 @@ const Field: React.FC<{
   className?: string;
   children: React.ReactNode;
 }> = ({ label, required, error, hint, className = '', children }) => (
-  <div className={`space-y-1.5 ${className}`}>
-    <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+  <div className={`space-y-1 ${className}`}>
+    <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
       {label}
       {required && <span className="text-rose-400">*</span>}
     </label>
     {children}
     {error && (
-      <p className="flex items-center gap-1.5 text-[11px] text-rose-400 font-semibold animate-in fade-in slide-in-from-left-1">
-        <AlertCircle className="w-3.5 h-3.5 shrink-0" strokeWidth={2.5} /> {error}
+      <p className="flex items-center gap-1 text-[11px] text-rose-400 font-semibold animate-in fade-in slide-in-from-left-1">
+        <AlertCircle className="w-3 h-3 shrink-0" strokeWidth={2.5} /> {error}
       </p>
     )}
     {hint && !error && (
-      <p className="text-[11px] text-slate-500 font-medium leading-snug">{hint}</p>
+      <p className="text-[10px] text-slate-500 font-medium leading-snug">{hint}</p>
     )}
   </div>
 );
@@ -146,26 +145,32 @@ const Section: React.FC<{
   icon: React.ReactNode;
   children: React.ReactNode;
   noGrid?: boolean;
-  columns?: 2 | 3;
+  columns?: 2 | 3 | 4;
   accent?: SectionAccent;
 }> = ({ title, subtitle, icon, children, noGrid, columns = 2, accent = 'indigo' }) => {
   const styles = sectionAccentStyles[accent];
+  const gridCols =
+    columns === 4
+      ? 'md:grid-cols-2 xl:grid-cols-4'
+      : columns === 3
+        ? 'md:grid-cols-3'
+        : 'md:grid-cols-2';
   return (
-    <section className={`rounded-2xl border border-white/[0.06] bg-slate-800/40 backdrop-blur-xl shadow-xl overflow-hidden bg-gradient-to-br ${styles.glow} to-transparent`}>
-      <div className="px-4 sm:px-5 py-4 border-b border-white/[0.06] flex items-start gap-3">
-        <div className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${styles.icon}`}>
-          {React.cloneElement(icon as React.ReactElement<{ className?: string }>, { className: 'w-5 h-5' })}
+    <section className={`rounded-xl border border-white/[0.06] bg-slate-800/35 backdrop-blur-xl overflow-hidden bg-gradient-to-br ${styles.glow} to-transparent`}>
+      <div className="px-3.5 sm:px-4 py-2.5 border-b border-white/[0.06] flex items-center gap-2.5">
+        <div className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 ${styles.icon}`}>
+          {React.cloneElement(icon as React.ReactElement<{ className?: string }>, { className: 'w-4 h-4' })}
         </div>
-        <div className="min-w-0 pt-0.5">
+        <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
           <h2 className="text-sm font-black text-white">{title}</h2>
-          {subtitle ? <p className="text-[11px] text-slate-400 mt-0.5">{subtitle}</p> : null}
+          {subtitle ? <p className="text-[11px] text-slate-500">{subtitle}</p> : null}
         </div>
       </div>
       <div
         className={
           noGrid
-            ? 'p-4 sm:p-5'
-            : `p-4 sm:p-5 grid grid-cols-1 ${columns === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4`
+            ? 'p-3 sm:p-3.5'
+            : `p-3 sm:p-3.5 grid grid-cols-1 ${gridCols} gap-x-3 gap-y-2.5`
         }
       >
         {children}
@@ -174,30 +179,30 @@ const Section: React.FC<{
   );
 };
 
-/* ─── Kompakt fotoğraf (Başvuru Formu ile aynı boyut) ───────────────────── */
+/* ─── Kompakt fotoğraf ───────────────────────────────────────────────────── */
 const CompactPhotoField: React.FC<{
   preview: string | null;
   onPick: (file: File) => void;
   onRemove: () => void;
   error?: string;
 }> = ({ preview, onPick, onRemove, error }) => (
-  <Field label="Fotoğraf" error={error} className="md:col-span-2">
-    <div className="flex flex-wrap items-center gap-4">
+  <Field label="Fotoğraf" error={error}>
+    <div className="flex items-center gap-3">
       {preview ? (
         <div className="relative">
-          <img src={preview} alt="" className="w-24 h-24 rounded-xl object-cover border border-slate-600" />
+          <img src={preview} alt="" className="w-16 h-16 rounded-lg object-cover border border-slate-600" />
           <button
             type="button"
             onClick={onRemove}
-            className="absolute -top-2 -right-2 p-1 rounded-full bg-rose-500 text-white shadow"
+            className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-rose-500 text-white shadow"
           >
             <X className="w-3 h-3" />
           </button>
         </div>
       ) : (
-        <label className="flex flex-col items-center justify-center w-28 h-28 rounded-xl border-2 border-dashed border-white/[0.12] cursor-pointer hover:border-indigo-500/40 bg-slate-900/40 transition-colors">
-          <Upload className="w-5 h-5 text-slate-400 mb-1" />
-          <span className="text-[10px] text-slate-500 text-center px-2">JPG/PNG max 5MB</span>
+        <label className="flex flex-col items-center justify-center w-16 h-16 rounded-lg border border-dashed border-white/[0.14] cursor-pointer hover:border-indigo-500/40 bg-slate-900/40 transition-colors">
+          <Upload className="w-4 h-4 text-slate-400" />
+          <span className="text-[9px] text-slate-500 mt-0.5">Foto</span>
           <input
             type="file"
             accept="image/*"
@@ -213,7 +218,7 @@ const CompactPhotoField: React.FC<{
   </Field>
 );
 
-/* ─── Type Selector Card ─────────────────────────────────────────────────── */
+/* ─── Type Selector Card (yatay / kompakt) ───────────────────────────────── */
 const TypeCard: React.FC<{
   selected: boolean;
   icon: React.ReactNode;
@@ -225,45 +230,45 @@ const TypeCard: React.FC<{
   <button
     type="button"
     onClick={onClick}
-    className={`relative flex-1 flex flex-col items-start gap-3 p-4 sm:p-5 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] ${
+    className={`relative flex-1 flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] ${
       selected
-        ? 'border-indigo-500/50 bg-indigo-500/10 shadow-lg shadow-indigo-500/10 ring-1 ring-indigo-500/20'
+        ? 'border-indigo-500/50 bg-indigo-500/10 ring-1 ring-indigo-500/20'
         : 'border-white/[0.06] bg-slate-900/35 hover:border-indigo-500/25 hover:bg-slate-900/50'
     }`}
   >
-    <div className="flex justify-between items-start w-full gap-3">
-      <div
-        className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border transition-colors ${
-          selected
-            ? 'bg-indigo-500 text-white border-indigo-400/50'
-            : 'bg-slate-800/80 text-slate-400 border-white/[0.06]'
-        }`}
-      >
-        {React.cloneElement(icon as React.ReactElement<{ size?: number; strokeWidth?: number }>, { size: 20, strokeWidth: 2 })}
-      </div>
-      {selected ? (
-        <div className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center shrink-0">
-          <div className="w-2 h-2 rounded-full bg-white" />
-        </div>
-      ) : (
-        <div className="w-5 h-5 rounded-full border-2 border-slate-600 bg-transparent shrink-0" />
-      )}
+    <div
+      className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border transition-colors ${
+        selected
+          ? 'bg-indigo-500 text-white border-indigo-400/50'
+          : 'bg-slate-800/80 text-slate-400 border-white/[0.06]'
+      }`}
+    >
+      {React.cloneElement(icon as React.ReactElement<{ size?: number; strokeWidth?: number }>, { size: 16, strokeWidth: 2 })}
     </div>
-    <div className="min-w-0 w-full">
-      <h3 className={`font-bold text-sm tracking-tight ${selected ? 'text-white' : 'text-slate-300'}`}>
-        {title}
-      </h3>
-      <p className={`text-xs font-medium mt-1 leading-snug ${selected ? 'text-indigo-200/90' : 'text-slate-500'}`}>
+    <div className="min-w-0 flex-1">
+      <div className="flex items-center gap-2 flex-wrap">
+        <h3 className={`font-bold text-sm tracking-tight ${selected ? 'text-white' : 'text-slate-300'}`}>
+          {title}
+        </h3>
+        {badge && (
+          <span className={`inline-flex px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide ${
+            selected ? 'bg-indigo-500/25 text-indigo-200' : 'bg-slate-800 text-slate-500'
+          }`}>
+            {badge}
+          </span>
+        )}
+      </div>
+      <p className={`text-[11px] font-medium mt-0.5 leading-snug truncate ${selected ? 'text-indigo-200/80' : 'text-slate-500'}`}>
         {subtitle}
       </p>
-      {badge && (
-        <span className={`inline-flex mt-2.5 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wide ${
-          selected ? 'bg-indigo-500/25 text-indigo-200' : 'bg-slate-800 text-slate-500'
-        }`}>
-          {badge}
-        </span>
-      )}
     </div>
+    {selected ? (
+      <div className="w-4 h-4 rounded-full bg-indigo-500 flex items-center justify-center shrink-0">
+        <div className="w-1.5 h-1.5 rounded-full bg-white" />
+      </div>
+    ) : (
+      <div className="w-4 h-4 rounded-full border-2 border-slate-600 bg-transparent shrink-0" />
+    )}
   </button>
 );
 
@@ -793,53 +798,53 @@ const StudentAdd: React.FC<{
 
   return (
     <>
-      <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
+      <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-16">
 
-        <div className="sticky top-0 z-40 -mx-1 sm:-mx-2 mb-2 pt-1 px-1 sm:px-2 pb-2">
-          <div className="rounded-2xl border border-white/[0.08] bg-slate-900/90 backdrop-blur-xl px-4 sm:px-5 py-4 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 shadow-xl shadow-black/20">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-11 h-11 rounded-xl bg-indigo-500/20 flex items-center justify-center border border-indigo-500/30 text-indigo-400 shrink-0">
-                <UserPlus className="w-5 h-5" strokeWidth={2} />
+        <div className="sticky top-0 z-40 -mx-1 sm:-mx-2 pt-1 px-1 sm:px-2 pb-1.5">
+          <div className="rounded-xl border border-white/[0.08] bg-slate-900/92 backdrop-blur-xl px-3 sm:px-4 py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 shadow-lg shadow-black/20">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-lg bg-indigo-500/20 flex items-center justify-center border border-indigo-500/30 text-indigo-400 shrink-0">
+                <UserPlus className="w-4 h-4" strokeWidth={2} />
               </div>
               <div className="min-w-0">
-                <h1 className="text-lg sm:text-xl font-black tracking-tight text-white">Öğrenci Ekle</h1>
-                <p className="text-[11px] text-slate-400 mt-0.5">Yeni kayıt formu — zorunlu alanları doldurun</p>
+                <h1 className="text-base sm:text-lg font-black tracking-tight text-white">Öğrenci Ekle</h1>
+                <p className="text-[10px] text-slate-500 truncate">Zorunlu alanları doldurun</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0 flex-wrap w-full lg:w-auto justify-end">
+            <div className="flex items-center gap-1.5 shrink-0 flex-wrap w-full sm:w-auto justify-end">
               <button
                 type="button"
                 onClick={handleAddDemoStudent}
-                className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/25 text-amber-200 font-bold text-xs transition-all active:scale-95"
+                className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/25 text-amber-200 font-bold text-xs transition-all active:scale-95"
               >
-                <Zap className="w-4 h-4" />
-                Hızlı Demo
+                <Zap className="w-3.5 h-3.5" />
+                Demo
               </button>
-              <button type="button" onClick={onCancel} className="px-3.5 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 font-bold text-xs transition-all active:scale-95">
+              <button type="button" onClick={onCancel} className="px-2.5 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 font-bold text-xs transition-all active:scale-95">
                 İptal
               </button>
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={!isValid || isSaving}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/25"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/25"
               >
                 {isSaving ? (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 ) : (
-                  <Save className="w-4 h-4" />
+                  <Save className="w-3.5 h-3.5" />
                 )}
-                Öğrenci Ekle
+                Kaydet
               </button>
             </div>
           </div>
         </div>
 
-        <div className="max-w-4xl mx-auto space-y-5">
+        <div className="max-w-5xl mx-auto space-y-3">
 
-          <Section title="Kayıt türü" subtitle="Aylık aidat veya ders paketi seçin" icon={<BookOpen />} accent="indigo" noGrid>
-            <div className="flex flex-col sm:flex-row gap-4">
+          <Section title="Kayıt türü" subtitle="Aidat veya paket" icon={<BookOpen />} accent="indigo" noGrid>
+            <div className="flex flex-col sm:flex-row gap-2">
               <TypeCard
                 selected={form.registrationType === 'monthly'}
                 onClick={() => {
@@ -849,7 +854,7 @@ const StudentAdd: React.FC<{
                 }}
                 icon={<Calendar />}
                 title="Aylık Aidat"
-                subtitle="Düzenli aylık ödeme sistemi"
+                subtitle="Düzenli aylık ödeme"
                 badge="Önerilen"
               />
               <TypeCard
@@ -865,12 +870,12 @@ const StudentAdd: React.FC<{
                 }}
                 icon={<GraduationCap />}
                 title="Ders Paketi"
-                subtitle="Belirli sayıda ders için ödeme"
+                subtitle="Belirli ders sayısı"
               />
             </div>
           </Section>
 
-          <Section title="Şube bilgileri" subtitle="Şube, branş, grup ve antrenör" icon={<Building2 />} accent="sky">
+          <Section title="Şube bilgileri" subtitle="Şube · branş · grup · antrenör" icon={<Building2 />} accent="sky">
             <Field label="Şube" required error={errors.branchOffice}>
               <select
                 value={form.branchOffice}
@@ -894,7 +899,7 @@ const StudentAdd: React.FC<{
                 ))}
               </select>
               {lockBranchOffice && defaultBranchOffice ? (
-                <p className="text-[10px] text-slate-500 mt-1">Öğrenci yalnızca sizin kulübünüze kaydedilir.</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Yalnızca sizin kulübünüze kaydedilir.</p>
               ) : null}
             </Field>
             <Field label="Branş" required error={errors.branch}>
@@ -920,12 +925,12 @@ const StudentAdd: React.FC<{
               {form.registrationType === 'package' &&
               form.branchOffice !== PLACEHOLDER_OFFICE &&
               disciplineOptions.filter((x) => x !== PLACEHOLDER_DISCIPLINE).length === 0 ? (
-                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
-                  Bu şubede tanımlı ders paketi yok. Branş & Grup bölümünden özel ders paketi ekleyin.
+                <p className="text-[10px] text-amber-400/90 mt-0.5 font-medium">
+                  Bu şubede ders paketi yok.
                 </p>
               ) : null}
             </Field>
-            <Field label={form.registrationType === 'package' ? 'Ders Paketi' : 'Grup'} required error={errors.group} className="md:col-span-2">
+            <Field label={form.registrationType === 'package' ? 'Ders Paketi' : 'Grup'} required error={errors.group}>
               <select
                 value={groupOptions.includes(form.group) ? form.group : groupPlaceholder}
                 onChange={(e) => handleGroupChange(e.target.value)}
@@ -941,19 +946,19 @@ const StudentAdd: React.FC<{
               {form.registrationType === 'monthly' &&
               form.branch !== PLACEHOLDER_DISCIPLINE &&
               groupOptions.length === 0 ? (
-                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
-                  Bu branşta tanımlı grup yok. Branş & Grup bölümünden eğitim grubu ekleyin.
+                <p className="text-[10px] text-amber-400/90 mt-0.5 font-medium">
+                  Bu branşta grup yok.
                 </p>
               ) : null}
               {form.registrationType === 'package' &&
               form.branch !== PLACEHOLDER_DISCIPLINE &&
               groupOptions.length === 0 ? (
-                <p className="text-[10px] text-amber-400/90 mt-1 font-medium">
-                  Bu branşta tanımlı ders paketi yok.
+                <p className="text-[10px] text-amber-400/90 mt-0.5 font-medium">
+                  Bu branşta ders paketi yok.
                 </p>
               ) : null}
             </Field>
-            <Field label="Antrenör" className="md:col-span-2">
+            <Field label="Antrenör">
               <select
                 value={form.coachId}
                 onChange={(e) => set('coachId')(e.target.value)}
@@ -967,19 +972,19 @@ const StudentAdd: React.FC<{
                 ))}
               </select>
               {lockCoachId ? (
-                <p className="text-[10px] text-slate-500 mt-1">Öğrenci size atanır; kulübünüz de bu öğrenciyi görür.</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Öğrenci size atanır.</p>
               ) : null}
             </Field>
             {lessonSchedule.length > 0 && (
-              <Field label="Ders programı (gruptan)" className="md:col-span-2">
-                <div className="px-4 py-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-100 text-sm font-medium">
+              <Field label="Ders programı" className="md:col-span-2">
+                <div className="px-3 py-2 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-100 text-xs font-medium">
                   {formatLessonSchedule(lessonSchedule)}
                 </div>
               </Field>
             )}
           </Section>
 
-          <Section title="Öğrenci bilgileri" subtitle="Kimlik, platform hesapları ve okul" icon={<User />} accent="violet">
+          <Section title="Öğrenci bilgileri" subtitle="Kimlik · platform · okul · sağlık" icon={<User />} accent="violet">
             <CompactPhotoField
               preview={photoPreviewUrl}
               onPick={handlePickPhoto}
@@ -991,35 +996,20 @@ const StudentAdd: React.FC<{
               }}
               error={photoError}
             />
-            <Field label="T.C. Kimlik No" error={errors.tcNo} hint="UKD ve FIDE işlemleri için">
-              <input
-                value={form.tcNo}
-                onChange={(e) => set('tcNo')(onlyDigits(e.target.value).slice(0, 11))}
-                inputMode="numeric"
-                placeholder="11 haneli kimlik numarası"
-                className={inputCls}
-              />
-            </Field>
-            {form.tcNo.length === 11 ? (
-              <div className="md:col-span-2 rounded-xl border border-indigo-500/25 bg-indigo-500/5 px-4 py-3 text-xs text-slate-400 leading-relaxed">
-                <span className="font-bold text-indigo-300">UKD:</span>{' '}
-                Kayıt tamamlandığında TC ile TSF UKD otomatik sorgulanır ve öğrenci profiline yazılır.
-                {' '}
-                <a
-                  href="https://ukd.tsf.org.tr/ukdsorgulama.php"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-indigo-400 hover:text-indigo-300 underline font-semibold"
-                >
-                  TSF UKD Sorgula
-                </a>
-              </div>
-            ) : null}
             <Field label="Ad Soyad" required error={errors.name}>
               <input
                 value={form.name}
                 onChange={(e) => set('name')(e.target.value)}
                 placeholder="Öğrenci adı ve soyadı"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="T.C. Kimlik No" error={errors.tcNo} hint={form.tcNo.length === 11 ? 'Kayıtta UKD otomatik sorgulanır' : 'UKD / FIDE için'}>
+              <input
+                value={form.tcNo}
+                onChange={(e) => set('tcNo')(onlyDigits(e.target.value).slice(0, 11))}
+                inputMode="numeric"
+                placeholder="11 haneli"
                 className={inputCls}
               />
             </Field>
@@ -1039,17 +1029,17 @@ const StudentAdd: React.FC<{
                 className={inputCls}
               />
             </Field>
-            <Field label="Kullanıcı adı" hint="Ad soyaddan otomatik oluşturulur">
+            <Field label="Kullanıcı adı" hint="Otomatik">
               <div className={`${inputCls} text-slate-300 font-mono text-sm`}>
                 {form.name.trim() ? generatedUsername : '—'}
               </div>
             </Field>
-            <Field label="Giriş şifresi" hint="Kayıt sırasında otomatik karma şifre üretilir">
+            <Field label="Giriş şifresi" hint="Kayıtta üretilir">
               <div className={`${inputCls} text-slate-500 text-sm italic`}>
-                Kayıt anında otomatik oluşturulacak
+                Otomatik
               </div>
             </Field>
-            <Field label="Lichess kullanıcı adı" hint="Opsiyonel, küçük harf">
+            <Field label="Lichess">
               <input
                 value={form.lichessUsername}
                 onChange={(e) => set('lichessUsername')(e.target.value)}
@@ -1057,7 +1047,7 @@ const StudentAdd: React.FC<{
                 className={inputCls}
               />
             </Field>
-            <Field label="Chess.com kullanıcı adı" hint="Opsiyonel, küçük harf">
+            <Field label="Chess.com">
               <input
                 value={form.chessComUsername}
                 onChange={(e) => set('chessComUsername')(e.target.value)}
@@ -1065,7 +1055,7 @@ const StudentAdd: React.FC<{
                 className={inputCls}
               />
             </Field>
-            <Field label="Devam ettiği okul">
+            <Field label="Okul">
               <input
                 value={form.school}
                 onChange={(e) => set('school')(e.target.value)}
@@ -1073,7 +1063,7 @@ const StudentAdd: React.FC<{
                 className={inputCls}
               />
             </Field>
-            <Field label="Öğretmeni">
+            <Field label="Öğretmen">
               <input
                 value={form.teacher}
                 onChange={(e) => set('teacher')(e.target.value)}
@@ -1081,31 +1071,28 @@ const StudentAdd: React.FC<{
                 className={inputCls}
               />
             </Field>
-            <Field label="Açıklama" className="md:col-span-2">
+            <Field label="Açıklama">
               <textarea
                 value={form.notes}
                 onChange={(e) => set('notes')(e.target.value)}
                 rows={2}
-                placeholder="Öğrenci hakkında ek bilgiler..."
-                className={inputCls + ' resize-y min-h-[4rem]'}
+                placeholder="Ek notlar..."
+                className={inputCls + ' resize-y min-h-[3rem]'}
               />
             </Field>
-          </Section>
-
-          <Section title="Sağlık bilgileri" subtitle="Alerji ve önemli notlar" icon={<Heart />} accent="rose">
-            <Field label="Sağlık durumu" className="md:col-span-2">
+            <Field label="Sağlık" hint="Alerji, kronik hastalık vb.">
               <textarea
                 value={form.healthInfo}
                 onChange={(e) => set('healthInfo')(e.target.value)}
-                rows={3}
-                placeholder="Alerji, kronik hastalık vb."
-                className={inputCls + ' resize-y min-h-[5rem]'}
+                rows={2}
+                placeholder="Opsiyonel"
+                className={inputCls + ' resize-y min-h-[3rem]'}
               />
             </Field>
           </Section>
 
           {form.registrationType === 'monthly' ? (
-            <Section title="Aidat bilgileri" subtitle="Ücret, hatırlatma ve indirimler" icon={<CreditCard />} accent="amber">
+            <Section title="Aidat bilgileri" subtitle="Ücret · hatırlatma · indirim" icon={<CreditCard />} accent="amber">
               <Field label="Aidat ücreti (₺)" required={!form.isScholarshipStudent} error={errors.monthlyFee}>
                 {form.isScholarshipStudent ? (
                   <div className={inputCls + ' flex items-center justify-center font-black text-emerald-400 bg-emerald-500/10 border-emerald-500/30'}>
@@ -1113,18 +1100,18 @@ const StudentAdd: React.FC<{
                   </div>
                 ) : (
                   <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-black text-sm">₺</span>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-black text-sm">₺</span>
                     <input
                       value={form.monthlyFee}
                       onChange={(e) => set('monthlyFee')(e.target.value.replace(/[^\d.]/g, ''))}
                       inputMode="decimal"
                       placeholder="0.00"
-                      className={inputCls + ' pl-9'}
+                      className={inputCls + ' pl-8'}
                     />
                   </div>
                 )}
               </Field>
-              <Field label="Aidat hatırlatma günü" required>
+              <Field label="Hatırlatma günü" required>
                 <select
                   value={form.paymentReminderDay}
                   onChange={(e) => set('paymentReminderDay')(e.target.value)}
@@ -1133,7 +1120,7 @@ const StudentAdd: React.FC<{
                   {REMINDER_DAY_OPTIONS.map((x) => <option key={x} value={x}>{x}</option>)}
                 </select>
               </Field>
-              <Field label="Gecikmiş hatırlatma günü" required>
+              <Field label="Gecikmiş hatırlatma" required>
                 <select
                   value={form.latePaymentReminderDay}
                   onChange={(e) => set('latePaymentReminderDay')(e.target.value)}
@@ -1142,55 +1129,55 @@ const StudentAdd: React.FC<{
                   {REMINDER_DAY_OPTIONS.map((x) => <option key={x} value={x}>{x}</option>)}
                 </select>
               </Field>
-              <Field label="Burslu öğrenci" className="md:col-span-2">
-                <label className="flex items-center gap-3 cursor-pointer w-fit">
-                  <div
-                    onClick={() => {
-                      const next = !form.isScholarshipStudent;
-                      setForm((prev) => ({
-                        ...prev,
-                        isScholarshipStudent: next,
-                        hasSiblingDiscount: next ? false : prev.hasSiblingDiscount,
-                      }));
-                    }}
-                    className={`w-11 h-6 rounded-full transition-all relative ${form.isScholarshipStudent ? 'bg-emerald-500' : 'bg-slate-700'}`}
-                  >
-                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${form.isScholarshipStudent ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </div>
-                  <span className="text-sm text-slate-300">Burs kapsamında kayıt — aidat tahsil edilmez</span>
-                </label>
-              </Field>
-              <Field label="Kardeş indirimi" className="md:col-span-2">
-                <label className={`flex items-center gap-3 w-fit ${form.isScholarshipStudent ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
-                  <div
-                    onClick={() => {
-                      if (form.isScholarshipStudent) return;
-                      set('hasSiblingDiscount')(!form.hasSiblingDiscount);
-                    }}
-                    className={`w-11 h-6 rounded-full transition-all relative ${form.hasSiblingDiscount ? 'bg-indigo-500' : 'bg-slate-700'}`}
-                  >
-                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${form.hasSiblingDiscount ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </div>
-                  <span className="text-sm text-slate-300">Kardeş indirimi uygula</span>
-                </label>
+              <Field label="Seçenekler">
+                <div className="flex flex-col gap-2 pt-0.5">
+                  <label className="flex items-center gap-2.5 cursor-pointer w-fit">
+                    <div
+                      onClick={() => {
+                        const next = !form.isScholarshipStudent;
+                        setForm((prev) => ({
+                          ...prev,
+                          isScholarshipStudent: next,
+                          hasSiblingDiscount: next ? false : prev.hasSiblingDiscount,
+                        }));
+                      }}
+                      className={`w-10 h-5 rounded-full transition-all relative ${form.isScholarshipStudent ? 'bg-emerald-500' : 'bg-slate-700'}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${form.isScholarshipStudent ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </div>
+                    <span className="text-xs text-slate-300">Burslu öğrenci</span>
+                  </label>
+                  <label className={`flex items-center gap-2.5 w-fit ${form.isScholarshipStudent ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                    <div
+                      onClick={() => {
+                        if (form.isScholarshipStudent) return;
+                        set('hasSiblingDiscount')(!form.hasSiblingDiscount);
+                      }}
+                      className={`w-10 h-5 rounded-full transition-all relative ${form.hasSiblingDiscount ? 'bg-indigo-500' : 'bg-slate-700'}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${form.hasSiblingDiscount ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </div>
+                    <span className="text-xs text-slate-300">Kardeş indirimi</span>
+                  </label>
+                </div>
               </Field>
               {form.hasSiblingDiscount && !form.isScholarshipStudent ? (
                 <>
-                  <Field label="İndirim türü" className="md:col-span-2">
-                    <div className="flex flex-wrap gap-2">
+                  <Field label="İndirim türü">
+                    <div className="flex flex-wrap gap-1.5">
                       <button
                         type="button"
                         onClick={() => set('siblingDiscountType')('percent')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${form.siblingDiscountType === 'percent' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${form.siblingDiscountType === 'percent' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
                       >
                         % İndirim
                       </button>
                       <button
                         type="button"
                         onClick={() => set('siblingDiscountType')('amount')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${form.siblingDiscountType === 'amount' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${form.siblingDiscountType === 'amount' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
                       >
-                        Tutar İndirim (₺)
+                        Tutar (₺)
                       </button>
                     </div>
                   </Field>
@@ -1246,7 +1233,7 @@ const StudentAdd: React.FC<{
             </Section>
           ) : null}
 
-          <Section title="Veli bilgileri" subtitle="Anne ve baba iletişim bilgileri" icon={<Users />} columns={3} accent="violet">
+          <Section title="Veli bilgileri" subtitle="En az bir telefon zorunlu" icon={<Users />} columns={3} accent="violet">
             <Field label="Baba ad soyad">
               <input
                 value={form.fatherName}
@@ -1255,7 +1242,7 @@ const StudentAdd: React.FC<{
                 className={inputCls}
               />
             </Field>
-            <Field label="Baba telefon" required error={errors.fatherPhone} hint="Anne veya baba — en az biri zorunlu">
+            <Field label="Baba telefon" required error={errors.fatherPhone}>
               <input
                 value={form.fatherPhone}
                 onChange={(e) => set('fatherPhone')(formatTrPhone(e.target.value))}
@@ -1280,7 +1267,7 @@ const StudentAdd: React.FC<{
                 className={inputCls}
               />
             </Field>
-            <Field label="Anne telefon" required error={errors.motherPhone} hint="Anne veya baba — en az biri zorunlu">
+            <Field label="Anne telefon" required error={errors.motherPhone}>
               <input
                 value={form.motherPhone}
                 onChange={(e) => set('motherPhone')(formatTrPhone(e.target.value))}
@@ -1299,25 +1286,25 @@ const StudentAdd: React.FC<{
             </Field>
           </Section>
 
-          <Section title="İletişim" subtitle="Adres ve WhatsApp bildirimleri" icon={<Phone />} accent="emerald">
+          <Section title="İletişim" subtitle="Adres · WhatsApp" icon={<Phone />} accent="emerald">
             <Field label="Adres" className="md:col-span-2">
               <textarea
                 value={form.address}
                 onChange={(e) => set('address')(e.target.value)}
                 rows={2}
                 placeholder="Ev adresi..."
-                className={inputCls + ' resize-y min-h-[4rem]'}
+                className={inputCls + ' resize-y min-h-[3rem]'}
               />
             </Field>
-            <div className="md:col-span-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+            <div className="md:col-span-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5 space-y-2">
               <div className="flex items-start gap-2">
-                <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Kayıt sonrası veli form linki <span className="text-emerald-300 font-semibold">kayıtlı veli telefonlarına</span> otomatik WhatsApp ile gönderilir. Ayrı numara seçimi gerekmez.
+                <MessageCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  Kayıt sonrası veli form linki WhatsApp ile otomatik gönderilir. İmza bu formda değil, gönderilen linkte alınır.
                 </p>
               </div>
               {showExtraContact ? (
-                <Field label="Ek iletişim numarası (isteğe bağlı)" hint="Bakıcı vb.">
+                <Field label="Ek numara (isteğe bağlı)" hint="Bakıcı vb.">
                   <div className="flex gap-2">
                     <input
                       value={extraContactPhone}
@@ -1329,7 +1316,7 @@ const StudentAdd: React.FC<{
                     <button
                       type="button"
                       onClick={() => { setShowExtraContact(false); setExtraContactPhone(''); }}
-                      className="shrink-0 px-3 rounded-lg bg-slate-800 text-slate-400 hover:text-rose-300 border border-slate-700"
+                      className="shrink-0 px-2.5 rounded-lg bg-slate-800 text-slate-400 hover:text-rose-300 border border-slate-700"
                       title="Kaldır"
                     >
                       <X className="w-4 h-4" />
@@ -1340,25 +1327,21 @@ const StudentAdd: React.FC<{
                 <button
                   type="button"
                   onClick={() => setShowExtraContact(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-300 hover:text-white text-[10px] font-bold uppercase tracking-wide transition-all"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-300 hover:text-white text-[10px] font-bold uppercase tracking-wide transition-all"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Üçüncü numara ekle
+                  <Plus className="w-3 h-3" /> Üçüncü numara
                 </button>
               )}
             </div>
           </Section>
 
-          <div className="rounded-xl border border-indigo-500/15 bg-indigo-500/5 px-4 py-3.5 text-xs text-slate-400 leading-relaxed">
-            Veli dijital imzası kayıt sonrası gönderilen başvuru linkinde alınır; antrenör bu formda imza atmaz.
-          </div>
-
-          <div className="sticky bottom-4 z-40 max-w-4xl mx-auto px-1 sm:px-2 w-full">
-            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/95 backdrop-blur-xl px-4 py-3 flex items-center justify-between gap-4 shadow-xl shadow-black/25">
-              <div className="flex items-center gap-2.5">
+          <div className="sticky bottom-3 z-40 max-w-5xl mx-auto px-1 sm:px-2 w-full">
+            <div className="rounded-xl border border-white/[0.08] bg-slate-900/95 backdrop-blur-xl px-3 py-2.5 flex items-center justify-between gap-3 shadow-xl shadow-black/25">
+              <div className="flex items-center gap-2">
                 {!isValid ? (
                   <>
-                    <div className="w-8 h-8 rounded-lg bg-amber-500/15 flex items-center justify-center text-amber-400">
-                      <AlertCircle className="w-4 h-4" strokeWidth={2.5} />
+                    <div className="w-7 h-7 rounded-lg bg-amber-500/15 flex items-center justify-center text-amber-400">
+                      <AlertCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
                     </div>
                     <div>
                       <div className="text-[10px] font-bold text-amber-400 uppercase">Eksik alanlar</div>
@@ -1367,8 +1350,8 @@ const StudentAdd: React.FC<{
                   </>
                 ) : (
                   <>
-                    <div className="w-8 h-8 rounded-lg bg-emerald-500/15 flex items-center justify-center text-emerald-400">
-                      <Save className="w-4 h-4" strokeWidth={2.5} />
+                    <div className="w-7 h-7 rounded-lg bg-emerald-500/15 flex items-center justify-center text-emerald-400">
+                      <Save className="w-3.5 h-3.5" strokeWidth={2.5} />
                     </div>
                     <div>
                       <div className="text-[10px] font-bold text-emerald-400 uppercase">Hazır</div>

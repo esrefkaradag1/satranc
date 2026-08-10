@@ -717,7 +717,10 @@ const StudyPage: React.FC = () => {
   const puzzlePlayNorm = useMemo(() => {
     if (!isInteractivePuzzleChapter || !selectedChapter) return null;
     return normalizeStudyChapterPuzzle(selectedChapter);
-  }, [isInteractivePuzzleChapter, selectedChapter?.fen, selectedChapter?.moves, selectedChapter?.id]);
+  }, [isInteractivePuzzleChapter, selectedChapter?.fen, selectedChapter?.moves, selectedChapter?.orientation, selectedChapter?.id]);
+
+  /** Antrenör düzenlerken tüm hamleler görünsün; öğrenci önizlemesi (practice) normalize edilmiş hat kullanır. */
+  const usePuzzleStudentLine = isInteractivePuzzleChapter && !!puzzlePlayNorm && practiceMode;
 
   /** Bulmaca bölümünde sync ağacındaki deneme varyasyonlarını gösterme — yalnızca seed. */
   const puzzleAdminTree = useMemo(() => {
@@ -728,7 +731,7 @@ const StudyPage: React.FC = () => {
   }, [isInteractivePuzzleChapter, effectiveStudyTree, selectedChapterRaw?.seedTree]);
 
   const chapterMovesForUi = useMemo(() => {
-    if (isInteractivePuzzleChapter && puzzlePlayNorm) return puzzlePlayNorm.studentMoves;
+    if (usePuzzleStudentLine && puzzlePlayNorm) return puzzlePlayNorm.studentMoves;
     if (practiceMode && !recording) return selectedChapter?.moves ?? [];
     const legacy = selectedChapterRaw?.moves ?? [];
     const tree =
@@ -743,11 +746,11 @@ const StudyPage: React.FC = () => {
     const rootFen = tree.nodes[tree.rootId]?.fen ?? selectedChapterRaw?.fen ?? DEFAULT_FEN;
     const fromTree = mainlineSansFromTree(tree, rootFen);
     return mergeMainlineMoves(legacy, fromTree);
-  }, [isInteractivePuzzleChapter, puzzlePlayNorm, practiceMode, recording, syncState, effectiveStudyTree, selectedChapter?.moves, selectedChapterRaw?.moves, selectedChapterRaw?.id, selectedChapterRaw?.fen]);
+  }, [usePuzzleStudentLine, puzzlePlayNorm, practiceMode, recording, syncState, effectiveStudyTree, selectedChapter?.moves, selectedChapterRaw?.moves, selectedChapterRaw?.id, selectedChapterRaw?.fen]);
 
   const moveListChapter = useMemo(() => {
     if (!selectedChapter) return null;
-    const fen = isInteractivePuzzleChapter && puzzlePlayNorm
+    const fen = usePuzzleStudentLine && puzzlePlayNorm
       ? puzzlePlayNorm.startFen
       : selectedChapter.fen;
     let moves = chapterMovesForUi;
@@ -759,7 +762,7 @@ const StudyPage: React.FC = () => {
     }
     const vars = sanitizeChapterVariations({ ...selectedChapter, fen, moves }, moves);
     return { ...selectedChapter, fen, moves, variations: vars };
-  }, [selectedChapter, chapterMovesForUi, isInteractivePuzzleChapter, puzzlePlayNorm, effectiveStudyTree]);
+  }, [selectedChapter, chapterMovesForUi, usePuzzleStudentLine, puzzlePlayNorm, effectiveStudyTree]);
 
   useEffect(() => {
     setWrite(recording);
@@ -794,14 +797,14 @@ const StudyPage: React.FC = () => {
     if (!selectedChapter || initialMoveRestoreDoneRef.current) return;
     const maxMoves = chapterMovesForUi.length;
     const savedMove = initialSelection.moveIndex ?? 0;
-    const targetMove = isInteractivePuzzleChapter
+    const targetMove = usePuzzleStudentLine
       ? 0
       : savedMove > 0
         ? Math.min(savedMove, maxMoves)
         : maxMoves;
     setCurrentMoveIndex(targetMove);
     initialMoveRestoreDoneRef.current = true;
-  }, [selectedChapter, initialSelection.moveIndex, chapterMovesForUi.length, isInteractivePuzzleChapter]);
+  }, [selectedChapter, initialSelection.moveIndex, chapterMovesForUi.length, usePuzzleStudentLine]);
 
   // Live analizde hamleler append edildikçe otomatik en sona git
   const prevLiveMovesLenRef = useRef<number>(0);

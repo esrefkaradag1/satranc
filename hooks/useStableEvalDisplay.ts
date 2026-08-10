@@ -23,6 +23,15 @@ const OFF: EvalBarDisplay = {
 
 const MIN_DEPTH_TO_SHOW = 6;
 
+export function evalBarEqual(a: EvalBarDisplay, b: EvalBarDisplay): boolean {
+  return (
+    a.whitePercent === b.whitePercent
+    && a.label === b.label
+    && a.winningChances === b.winningChances
+    && a.pending === b.pending
+  );
+}
+
 /** Beyaz perspektifinde mat mesafesi (+ = beyaz mat eder) */
 function whitePovMate(line: EngineScoreLine, turn: 'w' | 'b'): number | null {
   if (line.mate === null) return null;
@@ -57,6 +66,14 @@ export function useStableEvalDisplay(
   labelOverride?: string,
 ): EvalBarDisplay {
   const [display, setDisplay] = useState<EvalBarDisplay>(enabled ? { ...OFF, pending: true, label: '…' } : OFF);
+  const displayRef = useRef(display);
+  displayRef.current = display;
+
+  const commitDisplay = (next: EvalBarDisplay) => {
+    if (evalBarEqual(displayRef.current, next)) return;
+    displayRef.current = next;
+    setDisplay(next);
+  };
 
   const fenRef = useRef(fen);
   const committedDepthRef = useRef(0);
@@ -64,9 +81,11 @@ export function useStableEvalDisplay(
 
   useEffect(() => {
     if (!enabled) {
-      setDisplay(OFF);
-      committedDepthRef.current = 0;
-      lockedMateRef.current = null;
+      if (!evalBarEqual(displayRef.current, OFF)) {
+        committedDepthRef.current = 0;
+        lockedMateRef.current = null;
+        commitDisplay(OFF);
+      }
       return;
     }
 
@@ -74,12 +93,13 @@ export function useStableEvalDisplay(
       fenRef.current = fen;
       committedDepthRef.current = 0;
       lockedMateRef.current = null;
-      setDisplay({
+      commitDisplay({
         whitePercent: 50,
         label: '…',
         winningChances: 0,
         pending: true,
       });
+      return;
     }
 
     if (!line) return;
@@ -114,7 +134,7 @@ export function useStableEvalDisplay(
         ? { ...line, mate: turn === 'b' ? -lockedMateRef.current : lockedMateRef.current }
         : line;
 
-    setDisplay({
+    commitDisplay({
       whitePercent: rawPercent,
       label: labelOverride ?? formatEngineEvalLabel(labelLine, turn),
       winningChances: chances,

@@ -11,6 +11,31 @@ import {
 
 export type PvLine = ServicePvLine;
 
+function pvLinesEqual(a: (PvLine | null)[], b: (PvLine | null)[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x === y) continue;
+    if (!x || !y) return false;
+    if (
+      x.multipv !== y.multipv
+      || x.depth !== y.depth
+      || x.score !== y.score
+      || x.mate !== y.mate
+      || x.nodes !== y.nodes
+      || x.nps !== y.nps
+      || x.pv.length !== y.pv.length
+    ) {
+      return false;
+    }
+    for (let j = 0; j < x.pv.length; j++) {
+      if (x.pv[j] !== y.pv[j]) return false;
+    }
+  }
+  return true;
+}
+
 interface UseStockfishOptions {
   numPv?: number;
   enabled?: boolean;
@@ -44,6 +69,8 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
   const [depth, setDepth] = useState<number>(0);
   const [analysisFen, setAnalysisFen] = useState<string | null>(null);
   const pendingFenRef = useRef<string | null>(null);
+  const pvLinesRef = useRef<(PvLine | null)[]>([]);
+  const depthRef = useRef(0);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
@@ -60,14 +87,25 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
     const unsub = subscribeAnalysis({
       onLines: (lines) => {
         // Diziyi multipv indeksine göre koru (sıkıştırma yapma); EngineAnalysis pvLines[i] = multipv i+1
-        setPvLines(lines.map((l) => l));
-        const visible = lines.filter((l): l is PvLine => l !== null);
+        const next = lines.map((l) => l);
+        if (!pvLinesEqual(pvLinesRef.current, next)) {
+          pvLinesRef.current = next;
+          setPvLines(next);
+        }
+        const visible = next.filter((l): l is PvLine => l !== null);
         if (visible.length > 0) {
           const maxD = visible.reduce((m, l) => Math.max(m, l.depth), 0);
-          if (maxD > 0) setDepth(maxD);
+          if (maxD > 0 && maxD !== depthRef.current) {
+            depthRef.current = maxD;
+            setDepth(maxD);
+          }
         }
       },
-      onDepth: (d) => setDepth(d),
+      onDepth: (d) => {
+        if (d === depthRef.current) return;
+        depthRef.current = d;
+        setDepth(d);
+      },
       onReady: () => {
         setReady(true);
         setLoading(false);
@@ -106,7 +144,12 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
     const trimmed = fen.trim();
     if (!trimmed) return;
     setAnalysisFen(trimmed);
-    setPvLines((prev) => (prev.length ? prev.map(() => null) : prev));
+    const cleared = pvLinesRef.current.length ? pvLinesRef.current.map(() => null) : pvLinesRef.current;
+    if (cleared.length > 0) {
+      pvLinesRef.current = cleared;
+      setPvLines(cleared);
+    }
+    depthRef.current = 0;
     setDepth(0);
     if (!isAnalysisReady()) {
       pendingFenRef.current = trimmed;

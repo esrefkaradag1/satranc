@@ -1137,15 +1137,31 @@ export function applyPuzzleAutoReplies(
 
 export type NormalizedStudyChapterPuzzle = {
   startFen: string;
+  /** Öğrencinin sırayla bulması gereken hamleler (her iki renk dahil). */
   studentMoves: string[];
+  /** Tahta yönü / varsayılan perspektif (orientation). */
   studentColor: 'w' | 'b';
   setupMoveSan?: string;
+  /** true: öğrenci çözüm hattında sıradaki tarafın hamlesini bulur (Lichess study tarzı). */
+  playSideToMove?: boolean;
 };
 
 function studentColorFromOrientation(orientation?: 'white' | 'black'): 'w' | 'b' | null {
   if (orientation === 'black') return 'b';
   if (orientation === 'white') return 'w';
   return null;
+}
+
+/**
+ * FEN'den itibaren oynanabilir ilk hamle indeksini bul.
+ * Yalnızca pozisyona göre geçmişte kalmış kayıtları atlar; sıradaki rakip hamlesini silmez.
+ */
+function findFirstPlayableMoveIndex(fen: string, moves: string[]): number {
+  for (let start = 0; start < moves.length; start++) {
+    if (!isMoveLegalForSideToMove(fen, moves[start]!)) continue;
+    if (canReplayMovesFrom(fen, moves.slice(start))) return start;
+  }
+  return 0;
 }
 
 /** Lichess gamebook: rakip kurulum hamlelerini atlayıp öğrenci sırasına gel. */
@@ -1181,13 +1197,41 @@ export function normalizeStudyChapterPuzzle(chapter: {
   const fromOrientation = studentColorFromOrientation(chapter.orientation);
 
   if (fromOrientation && rawSolution.length > 0) {
-    const stripped = stripLeadingOpponentSetup(rawFen, rawSolution, fromOrientation);
-    if (stripped.remainingMoves.length > 0) {
+    let fen = rawFen;
+    let moves = rawSolution;
+    let setupMoveSan: string | undefined;
+
+    let turnAtFen: 'w' | 'b';
+    try {
+      turnAtFen = new Chess(fen).turn();
+    } catch {
+      turnAtFen = 'w';
+    }
+
+    if (turnAtFen !== fromOrientation) {
+      const stripped = stripLeadingOpponentSetup(fen, moves, fromOrientation);
+      if (stripped.remainingMoves.length > 0 && stripped.startFen !== fen) {
+        fen = stripped.startFen;
+        moves = stripped.remainingMoves;
+        setupMoveSan = stripped.setupMoveSan;
+        try {
+          turnAtFen = new Chess(fen).turn();
+        } catch {
+          turnAtFen = fromOrientation;
+        }
+      }
+    }
+
+    const startIdx = findFirstPlayableMoveIndex(fen, moves);
+    moves = moves.slice(startIdx);
+
+    if (moves.length > 0 && isMoveLegalForSideToMove(fen, moves[0]!)) {
       return {
-        startFen: stripped.startFen,
-        studentMoves: stripped.remainingMoves,
+        startFen: fen,
+        studentMoves: moves,
         studentColor: fromOrientation,
-        setupMoveSan: stripped.setupMoveSan,
+        setupMoveSan,
+        playSideToMove: true,
       };
     }
   }
@@ -1201,7 +1245,8 @@ export function normalizeStudyChapterPuzzle(chapter: {
     };
   }
 
-  const lichessStyle = looksLikeLichessStudyPuzzle(chapter);
+  // Antrenörün SAN ile girdiği çalışmalar Lichess import değildir; renk uyuşmazlığı kurulum sanılmasın.
+  const lichessStyle = rawSolution.every(looksLikeUciMove);
   const puzzleLike = {
     fen: rawFen,
     solution: rawSolution,

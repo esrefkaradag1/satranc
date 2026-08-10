@@ -5,7 +5,7 @@ import { Settings2, ChevronDown, Plus, FlipHorizontal, BarChart2, Info, Menu, Sh
 import { Chess } from 'chess.js';
 import { useStockfish, type PvLine } from '../../hooks/useStockfish';
 import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
-import { useStableEvalDisplay, type EvalBarDisplay } from '../../hooks/useStableEvalDisplay';
+import { useStableEvalDisplay, evalBarEqual, type EvalBarDisplay } from '../../hooks/useStableEvalDisplay';
 import { evalWinningChances } from '../../lib/winningChances';
 import { getTerminalEval, terminalEvalToBarPercent } from '../../lib/analysisTerminal';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
@@ -482,6 +482,7 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
   const boardSettingsBtnRef = useRef<HTMLButtonElement>(null);
   const prevFenRef = useRef('');
   const readyOnceRef = useRef(false);
+  const lastEvalBarSentRef = useRef<EvalBarDisplay | null>(null);
   const [evalHistory, setEvalHistory] = useState<number[]>([]);
 
   const { ready, loading, error, pvLines, depth, analyseFen } = useStockfish({
@@ -641,13 +642,21 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
     if (!onEvalBarChange) return;
     if (!enabled) {
       setEvalHistory([]);
-      onEvalBarChange({ whitePercent: 50, label: '—', winningChances: 0, pending: false });
+      const off: EvalBarDisplay = { whitePercent: 50, label: '—', winningChances: 0, pending: false };
+      if (!lastEvalBarSentRef.current || !evalBarEqual(lastEvalBarSentRef.current, off)) {
+        lastEvalBarSentRef.current = off;
+        onEvalBarChange(off);
+      }
       return;
     }
     const display = terminalEvalBarDisplay ?? evalBarDisplay;
+    if (lastEvalBarSentRef.current && evalBarEqual(lastEvalBarSentRef.current, display)) return;
+    lastEvalBarSentRef.current = display;
     onEvalBarChange(display);
     if (!display.pending) {
       setEvalHistory((prev) => {
+        const last = prev[prev.length - 1];
+        if (last === display.winningChances) return prev;
         const next = [...prev, display.winningChances];
         return next.length > 48 ? next.slice(-48) : next;
       });

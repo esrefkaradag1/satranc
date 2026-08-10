@@ -64,7 +64,7 @@ import {
   resolveProgramDailyTarget,
   type PlatformStudentStat,
 } from '../lib/homeworkStatsBuilders';
-import { isToday, homeworkDayKey, weekdayKeyFromIso, mondayOfWeek, isoDateForWeekday, resolveDayCompletionStatus, type DayCompletionStatus } from '../lib/homeworkDayUtils';
+import { isToday, homeworkDayKey, weekdayKeyFromIso, mondayOfWeek, isoDateForWeekday, resolveDayCompletionStatus, isDailyHomeworkDayClosed, type DayCompletionStatus } from '../lib/homeworkDayUtils';
 import { syncStudentsPlatformDays } from '../lib/platformStatsClientSync';
 import { puzzleBoardOrientationForFen, puzzleBoardOrientationForStudent, formatPuzzleHintText, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
 
@@ -552,44 +552,54 @@ const Homework: React.FC = () => {
     setLoadingDailyPlatformStats(true);
     dailyPlatformPollEnabledRef.current = true;
     const dateKey = viewDate;
+    const today = homeworkDayKey();
     const pause = (ms: number) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
     try {
-      const platformPatch: Record<string, Record<string, PlatformDayStats>> = {};
-      let hadFreshData = false;
-      const batchStats = await fetchStudentsPlatformWeekStats(scopeAssignees, [dateKey]);
+      const hasMemoryCache = (studentId: string) =>
+        studentPlatformWeekStatsRef.current[studentId]?.[dateKey] != null;
 
-      if (batchStats) {
+      if (isDailyHomeworkDayClosed(dateKey) && scopeAssignees.every((s) => hasMemoryCache(s.id))) {
+        if (!opts?.silent) {
+          showToast('Geçmiş gün verisi önbellekten gösteriliyor.', 'info');
+        }
+        return;
+      }
+
+      if (isDailyHomeworkDayClosed(dateKey)) {
+        const db = await loadPlatformDayStatsFromDb(
+          scopeAssignees.map((s) => s.id),
+          [dateKey],
+        );
+        if (db) {
+          if (Object.keys(db.stats).length > 0) {
+            applyPlatformStatsPatch(db.stats, { persistDb: false });
+          }
+          if (Object.keys(db.timeSeconds).length > 0) {
+            applyPlatformTimePatch(db.timeSeconds, { persistDb: false });
+          }
+          if (scopeAssignees.every((s) => hasMemoryCache(s.id))) {
+            if (!opts?.silent) {
+              showToast('Geçmiş gün verisi veritabanından yüklendi.', 'info');
+            }
+            return;
+          }
+        }
+      }
+
+      const platformPatch = await syncStudentsPlatformDays(scopeAssignees, [dateKey], [dateKey]);
+      let hadFreshData = false;
+      if (Object.keys(platformPatch).length > 0) {
         for (const s of scopeAssignees) {
-          const fresh = batchStats[s.id]?.[dateKey];
-          if (!fresh) continue;
+          const merged = platformPatch[s.id]?.[dateKey];
           const prevStats = studentPlatformWeekStatsRef.current[s.id]?.[dateKey];
-          const merged = mergePlatformDayStats(prevStats, fresh);
-          platformPatch[s.id] = { [dateKey]: merged };
-          if (!prevStats || merged.games > prevStats.games || merged.puzzleSolved > prevStats.puzzleSolved) {
+          if (merged && (!prevStats || merged.games > prevStats.games || merged.puzzleSolved > prevStats.puzzleSolved)) {
             hadFreshData = true;
           }
         }
-      } else {
-        let requestIndex = 0;
-        for (const s of scopeAssignees) {
-          if (requestIndex++ > 0) await pause(STUDENT_PLATFORM_GAP_MS);
-          const prevStats = studentPlatformWeekStatsRef.current[s.id]?.[dateKey];
-          try {
-            const fresh = await fetchStudentPlatformDayStats(s, dateKey);
-            const merged = mergePlatformDayStats(prevStats, fresh);
-            platformPatch[s.id] = { [dateKey]: merged };
-            if (!prevStats || merged.games > prevStats.games || merged.puzzleSolved > prevStats.puzzleSolved) {
-              hadFreshData = true;
-            }
-          } catch {
-            if (prevStats) platformPatch[s.id] = { [dateKey]: prevStats };
-          }
-        }
-      }
-
-      if (Object.keys(platformPatch).length > 0) {
         applyPlatformStatsPatch(platformPatch);
       }
+
+      const batchStats = dateKey === today ? platformPatch : null;
 
       const timePatch: Record<string, Record<string, number>> = {};
       if (batchStats) {
@@ -604,10 +614,10 @@ const Homework: React.FC = () => {
         }
       }
 
-      const needsSlowTimeFetch = !batchStats || scopeAssignees.some((s) => {
+      const needsSlowTimeFetch = dateKey === today && scopeAssignees.some((s) => {
         const merged = platformPatch[s.id]?.[dateKey];
         const hasActivity = (merged?.puzzleSolved ?? 0) > 0 || (merged?.games ?? 0) > 0;
-        const sec = merged?.activityTimeSeconds ?? batchStats?.[s.id]?.[dateKey]?.activityTimeSeconds ?? 0;
+        const sec = merged?.activityTimeSeconds ?? 0;
         return hasActivity && sec <= 0;
       });
 
@@ -770,11 +780,19 @@ const Homework: React.FC = () => {
     applyPlatformTimePatch,
   ]);
 
-  /** Detay ekranı açılınca seçili gün için platform verisini sessizce çek */
+  /** Detay ekranı açılınca seçili gün için platform verisini sessizce çek (geçmiş günlerde önbellek varsa API yok) */
   useEffect(() => {
     if (panelTab !== 'program' || programAnalysisView !== 'detail' || !programSelectedHw) return;
+    const scopeAssignees = getAssignees(programSelectedHw).filter((s) => targetStudentIds.has(s.id));
+    if (
+      isDailyHomeworkDayClosed(viewDate)
+      && scopeAssignees.length > 0
+      && scopeAssignees.every((s) => studentPlatformWeekStatsRef.current[s.id]?.[viewDate])
+    ) {
+      return;
+    }
     void refreshDailyPlatformStats({ silent: true });
-  }, [panelTab, programAnalysisView, programSelectedHw?.id, viewDate, refreshDailyPlatformStats]);
+  }, [panelTab, programAnalysisView, programSelectedHw?.id, viewDate, refreshDailyPlatformStats, getAssignees, targetStudentIds]);
 
   useEffect(() => {
     studentPlatformWeekStatsRef.current = studentPlatformWeekStats;

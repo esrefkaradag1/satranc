@@ -3,7 +3,7 @@
  * Öğrenci ve antrenör ekranları aynı kaynağı kullanır.
  */
 import type { Student } from '../types';
-import { homeworkDayKey, isoDateForWeekday, mondayOfWeek } from './homeworkDayUtils';
+import { homeworkDayKey, isoDateForWeekday, mondayOfWeek, isDailyHomeworkDayClosed } from './homeworkDayUtils';
 import {
   fetchStudentPlatformDayStats,
   mergePlatformDayStats,
@@ -18,6 +18,26 @@ import { fetchStudentsPlatformWeekStats } from '../services/platformWeekStatsSer
 
 function normalizeDays(days: string[]): string[] {
   return [...new Set(days.map((d) => d.slice(0, 10)).filter(Boolean))];
+}
+
+function hasPlatformDayCache(stats: PlatformDayStats | undefined): boolean {
+  return stats != null && typeof stats === 'object';
+}
+
+/**
+ * Geçmiş günler DB'de kayıtlıysa platform API'sine tekrar gitme.
+ * Yalnızca bugün (canlı) ve henüz önbelleği olmayan günler yenilenir.
+ */
+export function filterPlatformApiRefreshDays(
+  requestedDays: string[],
+  hasCachedDay: (day: string) => boolean,
+  today = homeworkDayKey(),
+): string[] {
+  return normalizeDays(requestedDays).filter((day) => {
+    if (day === today) return true;
+    if (isDailyHomeworkDayClosed(day) && hasCachedDay(day)) return false;
+    return !hasCachedDay(day);
+  });
 }
 
 export function homeworkWeekDaysUpToToday(today = homeworkDayKey()): string[] {
@@ -59,9 +79,14 @@ export async function syncStudentPlatformDays(
     if (fromDb) out[day] = fromDb;
   }
 
+  const effectiveRefreshDays = filterPlatformApiRefreshDays(
+    refreshDays,
+    (day) => hasPlatformDayCache(out[day]),
+  );
+
   let batchStats: Record<string, Record<string, PlatformDayStats>> | null = null;
-  if (refreshDays.length > 0) {
-    batchStats = await fetchStudentsPlatformWeekStats([student], refreshDays);
+  if (effectiveRefreshDays.length > 0) {
+    batchStats = await fetchStudentsPlatformWeekStats([student], effectiveRefreshDays);
   }
 
   const rowsToSave: PlatformDayCacheRow[] = [];
@@ -70,7 +95,7 @@ export async function syncStudentPlatformDays(
     const fresh = batchStats?.[sid]?.[day];
     if (fresh) {
       merged = mergePlatformDayStats(merged, fresh);
-    } else if (refreshDays.includes(day)) {
+    } else if (effectiveRefreshDays.includes(day)) {
       try {
         const clientFresh = await fetchStudentPlatformDayStats(student, day);
         merged = mergePlatformDayStats(merged, clientFresh);
@@ -112,9 +137,14 @@ export async function syncStudentsPlatformDays(
     }
   }
 
+  const effectiveRefreshDays = filterPlatformApiRefreshDays(
+    refreshDays,
+    (day) => ids.every((sid) => hasPlatformDayCache(out[sid]?.[day])),
+  );
+
   let batchStats: Record<string, Record<string, PlatformDayStats>> | null = null;
-  if (refreshDays.length > 0 && students.length > 0) {
-    batchStats = await fetchStudentsPlatformWeekStats(students, refreshDays);
+  if (effectiveRefreshDays.length > 0 && students.length > 0) {
+    batchStats = await fetchStudentsPlatformWeekStats(students, effectiveRefreshDays);
   }
 
   const rowsToSave: PlatformDayCacheRow[] = [];
@@ -126,7 +156,7 @@ export async function syncStudentsPlatformDays(
       const fresh = batchStats?.[sid]?.[day];
       if (fresh) {
         merged = mergePlatformDayStats(merged, fresh);
-      } else if (refreshDays.includes(day)) {
+      } else if (effectiveRefreshDays.includes(day)) {
         try {
           const clientFresh = await fetchStudentPlatformDayStats(student, day);
           merged = mergePlatformDayStats(merged, clientFresh);

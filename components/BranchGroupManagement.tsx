@@ -86,11 +86,31 @@ const BranchGroupManagement: React.FC = () => {
   const [studentModalGroup, setStudentModalGroup] = useState<TrainingGroup | null>(null);
   const [studentSearch, setStudentSearch] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [listSearch, setListSearch] = useState('');
 
   const sortedBranches = useMemo(
     () => [...disciplineBranches].sort((a, b) => a.branchOffice.localeCompare(b.branchOffice) || a.name.localeCompare(b.name)),
     [disciplineBranches]
   );
+
+  const filteredBranches = useMemo(() => {
+    const q = listSearch.trim();
+    if (!q) return sortedBranches;
+    return sortedBranches.filter((branch) => {
+      if (searchIncludesText(branch.name, q) || searchIncludesText(branch.branchOffice, q)) return true;
+      return trainingGroups.some(
+        (g) =>
+          g.discipline === branch.name &&
+          normalizeClubKey(g.branchOffice) === normalizeClubKey(branch.branchOffice) &&
+          searchIncludesText(g.name, q),
+      ) || lessonPackages.some(
+        (p) =>
+          p.discipline === branch.name &&
+          normalizeClubKey(p.branchOffice) === normalizeClubKey(branch.branchOffice) &&
+          searchIncludesText(p.name, q),
+      );
+    });
+  }, [sortedBranches, listSearch, trainingGroups, lessonPackages]);
 
   const officeOptions = useMemo(() => {
     const filtered = isClubUser
@@ -102,6 +122,16 @@ const BranchGroupManagement: React.FC = () => {
       : branchOfficeRecords;
     return resolveBranchOfficeNames(filtered, [], auth, clubs);
   }, [branchOfficeRecords, isClubUser, auth, clubs]);
+
+  const pageStats = useMemo(
+    () => ({
+      offices: officeOptions.length,
+      branches: sortedBranches.length,
+      groups: trainingGroups.length,
+      packages: lessonPackages.length,
+    }),
+    [officeOptions.length, sortedBranches.length, trainingGroups.length, lessonPackages.length],
+  );
 
   /** Kurumsal Yapı'daki kulüpler — henüz branch_offices tablosunda şube olarak tanımlı değil */
   const clubsPendingAsOffice = useMemo(() => {
@@ -469,197 +499,238 @@ const BranchGroupManagement: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
-            Branş & Grup
-          </h2>
-          <p className="text-slate-400 text-sm mt-1 max-w-2xl">
-            Önce şube ekleyin, sonra branş tanımlayın, ardından branşın altına grup oluşturun. Başvuru formu ve öğrenci kaydı bu tanımlardan beslenir.
-            <span className="block mt-1 text-indigo-300/90">
-              {isClubUser
-                ? 'Bu kulübe ait şube, branş ve gruplar yalnızca sizin panelinizde görünür.'
-                : 'Veriler Supabase tablolarında saklanır: branch_offices, discipline_branches, training_groups.'}
-            </span>
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {officeOptions.length === 0 && sortedBranches.length === 0 && trainingGroups.length === 0 ? (
+    <div className="space-y-3 sm:space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-4">
+      {/* Header */}
+      <div className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/80 backdrop-blur-xl px-4 sm:px-5 py-3 sm:py-3.5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-violet-500/15 border border-violet-400/20 flex items-center justify-center shrink-0">
+              <BookOpen className="w-4 h-4 text-violet-300" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-xl font-black tracking-tight text-white">Branş & Grup</h2>
+              <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate">
+                {isClubUser
+                  ? 'Şube → branş → grup / paket tanımları'
+                  : 'Şube, branş, grup ve ders paketlerini yönetin'}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {officeOptions.length === 0 && sortedBranches.length === 0 && trainingGroups.length === 0 ? (
+              <button
+                type="button"
+                onClick={importApplicationDefaults}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-xs font-bold"
+              >
+                <Plus className="w-3.5 h-3.5" /> {isClubUser ? 'Hızlı başlangıç' : 'Varsayılanları yükle'}
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={importApplicationDefaults}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-sm font-bold"
+              onClick={openAddBranch}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold"
             >
-              <Plus className="w-4 h-4" /> {isClubUser ? 'Hızlı başlangıç (isteğe bağlı)' : 'Varsayılanları yükle (isteğe bağlı)'}
+              <Plus className="w-3.5 h-3.5" /> Branş
             </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={openAddBranch}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold"
-          >
-            <Plus className="w-4 h-4" /> Yeni Branş
-          </button>
-          <button
-            type="button"
-            onClick={openAddGroupFromTop}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold"
-          >
-            <Plus className="w-4 h-4" /> Yeni Grup
-          </button>
-          <button
-            type="button"
-            onClick={() => openAddPackage()}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-sm font-bold"
-          >
-            <Plus className="w-4 h-4" /> Yeni Ders Paketi
-          </button>
+            <button
+              type="button"
+              onClick={openAddGroupFromTop}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+            >
+              <Plus className="w-3.5 h-3.5" /> Grup
+            </button>
+            <button
+              type="button"
+              onClick={() => openAddPackage()}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold"
+            >
+              <Plus className="w-3.5 h-3.5" /> Paket
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-violet-400" /> Şubeler
-            </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              {isClubUser
-                ? 'Kulübünüze bağlı şubeler. Ana şube otomatik oluşturulur; alt şubeler ekleyebilirsiniz.'
-                : 'Branş tanımında kullanılacak şubeler. Kulübü + ile şube olarak ekleyin veya yeni şube adı yazın.'}
+      {/* Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          { label: 'Şube', value: pageStats.offices, icon: <Building2 className="w-3.5 h-3.5" />, tone: 'text-violet-300 bg-violet-500/10 border-violet-500/20' },
+          { label: 'Branş', value: pageStats.branches, icon: <BookOpen className="w-3.5 h-3.5" />, tone: 'text-indigo-300 bg-indigo-500/10 border-indigo-500/20' },
+          { label: 'Grup', value: pageStats.groups, icon: <UserPlus className="w-3.5 h-3.5" />, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
+          { label: 'Paket', value: pageStats.packages, icon: <Package className="w-3.5 h-3.5" />, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
+        ].map((s) => (
+          <div key={s.label} className="rounded-xl border border-white/[0.06] bg-[#1e293b]/70 px-3 py-2.5 flex items-center justify-between gap-2">
+            <div>
+              <p className="text-lg font-black text-white tabular-nums leading-none">{s.value}</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-1">{s.label}</p>
+            </div>
+            <span className={`w-8 h-8 rounded-lg border flex items-center justify-center ${s.tone}`}>{s.icon}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Offices */}
+      <div className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/75 overflow-hidden">
+        <div className="px-3.5 sm:px-4 py-2.5 border-b border-white/[0.06] flex items-center gap-2.5 bg-slate-950/30">
+          <div className="w-8 h-8 rounded-lg bg-violet-500/15 border border-violet-400/20 flex items-center justify-center text-violet-300 shrink-0">
+            <Building2 className="w-4 h-4" />
+          </div>
+          <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
+            <h3 className="text-sm font-black text-white">Şubeler</h3>
+            <p className="text-[11px] text-slate-500">
+              {isClubUser ? 'Ana şube otomatik; alt şube ekleyebilirsiniz' : 'Kulübü + ile şube yapın veya yeni ad yazın'}
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {officeOptions.map((office) => {
-            const inUse =
-              disciplineBranches.some(
-                (b) => normalizeClubKey(b.branchOffice) === normalizeClubKey(office),
-              ) ||
-              trainingGroups.some(
-                (g) => normalizeClubKey(g.branchOffice) === normalizeClubKey(office),
+        <div className="p-3 sm:p-3.5 space-y-2.5">
+          <div className="flex flex-wrap gap-1.5">
+            {officeOptions.map((office) => {
+              const inUse =
+                disciplineBranches.some(
+                  (b) => normalizeClubKey(b.branchOffice) === normalizeClubKey(office),
+                ) ||
+                trainingGroups.some(
+                  (g) => normalizeClubKey(g.branchOffice) === normalizeClubKey(office),
+                );
+              const isMainClubOffice = isClubUser && normalizeClubKey(office) === normalizeClubKey(clubBranch);
+              return (
+                <span
+                  key={office}
+                  className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-200 text-xs font-semibold"
+                >
+                  {office}
+                  <button
+                    type="button"
+                    title={
+                      isMainClubOffice
+                        ? 'Ana kulüp şubesi silinemez'
+                        : inUse
+                          ? 'Bu şubede branş veya grup var'
+                          : 'Şubeyi sil'
+                    }
+                    disabled={isMainClubOffice}
+                    onClick={async () => {
+                      if (isMainClubOffice) return;
+                      const ok = await confirmDialog({
+                        title: 'Şubeyi sil',
+                        message: `"${office}" şubesini silmek istiyor musunuz?`,
+                        confirmLabel: 'Sil',
+                        variant: 'danger',
+                      });
+                      if (ok) removeBranchOffice(office);
+                    }}
+                    className="p-1 rounded-md hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </span>
               );
-            const isMainClubOffice = isClubUser && normalizeClubKey(office) === normalizeClubKey(clubBranch);
-            return (
+            })}
+            {clubsPendingAsOffice.map((club) => (
               <span
-                key={office}
-                className="inline-flex items-center gap-1.5 pl-2.5 pr-1 py-1 rounded-lg bg-violet-500/10 border border-violet-500/25 text-violet-200 text-xs font-semibold"
+                key={`club-${club.id}`}
+                title="Kulüp kaydı — + ile şube olarak ekleyin"
+                className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-lg bg-slate-950/50 border border-dashed border-slate-500/40 text-slate-400 text-xs font-semibold"
               >
-                {office}
+                {club.name}
                 <button
                   type="button"
-                  title={
-                    isMainClubOffice
-                      ? 'Ana kulüp şubesi silinemez'
-                      : inUse
-                        ? 'Bu şubede branş veya grup tanımı var — önce silin'
-                        : 'Şubeyi sil'
-                  }
-                  disabled={isMainClubOffice}
-                  onClick={async () => {
-                    if (isMainClubOffice) return;
-                    const ok = await confirmDialog({
-                      title: 'Şubeyi sil',
-                      message: `"${office}" şubesini silmek istiyor musunuz?`,
-                      confirmLabel: 'Sil',
-                      variant: 'danger',
-                    });
-                    if (ok) removeBranchOffice(office);
-                  }}
-                  className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Bu kulübü şube olarak ekle"
+                  onClick={() => addBranchOffice(club.name, { clubId: club.id })}
+                  className="p-1 rounded-md hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-300"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Plus className="w-3 h-3" />
                 </button>
               </span>
-            );
-          })}
-          {clubsPendingAsOffice.map((club) => (
-            <span
-              key={`club-${club.id}`}
-              title="Kulüp kaydı — şube olarak ekleyince branş/grup tanımında kullanılabilir"
-              className="inline-flex items-center gap-1.5 pl-2.5 pr-1 py-1 rounded-lg bg-slate-800/80 border border-dashed border-slate-500/50 text-slate-400 text-xs font-semibold"
-            >
-              {club.name}
-              <button
-                type="button"
-                title="Bu kulübü şube olarak ekle"
-                onClick={() => addBranchOffice(club.name, { clubId: club.id })}
-                className="p-1 rounded hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-300"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
-            </span>
-          ))}
-        </div>
-        {clubsPendingAsOffice.length > 0 ? (
-          <p className="text-[10px] text-slate-500">
-            Kesik çerçeveli kutular <strong className="text-slate-400">Kurumsal Yapı</strong> kulüpleridir; henüz şube değiller.
-            Yanındaki + ile şube olarak ekleyin veya alttan yeni şube adı yazın.
-            Kulübü silmek için Kurumsal Yapı sayfasını kullanın.
-          </p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          <input
-            type="text"
-            value={newOfficeName}
-            onChange={(e) => setNewOfficeName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                const v = newOfficeName.trim();
-                if (v) {
-                  addBranchOffice(v);
-                  setNewOfficeName('');
+            ))}
+          </div>
+          {clubsPendingAsOffice.length > 0 ? (
+            <p className="text-[10px] text-slate-500">
+              Kesik çerçeve = Kurumsal Yapı kulübü (henüz şube değil). + ile ekleyin.
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <input
+              type="text"
+              value={newOfficeName}
+              onChange={(e) => setNewOfficeName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const v = newOfficeName.trim();
+                  if (v) {
+                    addBranchOffice(v);
+                    setNewOfficeName('');
+                  }
                 }
-              }
-            }}
-            placeholder="Yeni şube adı (ör. Bahçelievler)"
-            className="flex-1 min-w-[12rem] px-3 py-2 rounded-lg bg-slate-800 border border-white/10 text-sm text-white placeholder:text-slate-500 outline-none focus:border-indigo-500/50"
-          />
-          <button
-            type="button"
-            disabled={!newOfficeName.trim()}
-            onClick={() => {
-              addBranchOffice(newOfficeName.trim());
-              setNewOfficeName('');
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold"
-          >
-            <Plus className="w-3.5 h-3.5" /> Şube ekle
-          </button>
+              }}
+              placeholder="Yeni şube adı..."
+              className="flex-1 min-w-[12rem] px-3 py-2 rounded-lg bg-slate-950/50 border border-white/[0.08] text-sm text-white placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/30"
+            />
+            <button
+              type="button"
+              disabled={!newOfficeName.trim()}
+              onClick={() => {
+                addBranchOffice(newOfficeName.trim());
+                setNewOfficeName('');
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold"
+            >
+              <Plus className="w-3.5 h-3.5" /> Ekle
+            </button>
+          </div>
         </div>
       </div>
 
       {sortedBranches.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-white/10 bg-slate-900/40 p-10 text-center space-y-4">
-          <BookOpen className="w-10 h-10 mx-auto text-slate-500 mb-3" />
-          <p className="text-slate-300 text-sm font-semibold">Henüz branş tanımı yok</p>
-          <ol className="text-xs text-slate-500 max-w-md mx-auto text-left space-y-1.5 list-decimal list-inside">
-            <li>Üstte <strong className="text-slate-400">Şube ekle</strong> ile en az bir şube tanımlayın</li>
-            <li><strong className="text-slate-400">Yeni Branş</strong> ile branş oluşturun (ör. Satranç)</li>
-            <li>Branş kartını açıp <strong className="text-slate-400">Yeni Grup Ekle</strong> ile eğitim gruplarını tanımlayın</li>
+        <div className="rounded-2xl border border-dashed border-white/10 bg-[#1e293b]/40 px-4 py-10 text-center space-y-3">
+          <BookOpen className="w-9 h-9 mx-auto text-slate-500" />
+          <p className="text-slate-300 text-sm font-semibold">Henüz branş yok</p>
+          <ol className="text-[11px] text-slate-500 max-w-sm mx-auto text-left space-y-1 list-decimal list-inside">
+            <li>Şube ekleyin</li>
+            <li>Branş oluşturun</li>
+            <li>Branş altına grup / paket ekleyin</li>
           </ol>
           <button
             type="button"
             onClick={openAddBranch}
             disabled={officeOptions.length === 0}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold"
           >
-            <Plus className="w-4 h-4" /> İlk branşı oluştur
+            <Plus className="w-3.5 h-3.5" /> İlk branşı oluştur
           </button>
           {officeOptions.length === 0 ? (
-            <p className="text-[11px] text-amber-400/90">Branş eklemek için önce yukarıdan bir şube ekleyin.</p>
+            <p className="text-[11px] text-amber-400/90">Önce bir şube ekleyin.</p>
           ) : null}
         </div>
       ) : (
-        <div className="space-y-4">
-          <div>
-            <h3 className="text-sm font-bold text-white">Branşlar ve Gruplar</h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Her branş kartının içinde o branşa ait eğitim gruplarını tanımlayın (ücret, ders günleri, kontenjan).
-            </p>
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/70 px-3 sm:px-4 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2.5">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-black text-white">Branşlar ve gruplar</h3>
+              <p className="text-[11px] text-slate-500">
+                {filteredBranches.length}/{sortedBranches.length} branş
+                {listSearch.trim() ? ' · filtreli' : ''}
+              </p>
+            </div>
+            <div className="relative w-full sm:w-64 shrink-0">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                value={listSearch}
+                onChange={(e) => setListSearch(e.target.value)}
+                placeholder="Branş, şube veya grup ara..."
+                className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-950/50 border border-white/[0.08] text-sm text-white placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/30"
+              />
+            </div>
           </div>
-          {sortedBranches.map((branch, idx) => {
+
+          {filteredBranches.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-white/10 py-8 text-center text-sm text-slate-500">
+              Aramayla eşleşen branş yok.
+            </div>
+          ) : null}
+
+          {filteredBranches.map((branch, idx) => {
             const branchGroups = trainingGroups.filter(
               (g) =>
                 g.discipline === branch.name &&
@@ -672,31 +743,34 @@ const BranchGroupManagement: React.FC = () => {
             );
             const isOpen = expanded[branch.id] !== false;
             return (
-              <div key={branch.id} className="rounded-xl border border-white/5 bg-slate-900/60 overflow-hidden">
-                <div className="grid grid-cols-[auto_1fr_auto] sm:grid-cols-[48px_80px_1fr_120px_80px_80px_auto] gap-3 items-center px-4 py-3 border-b border-white/5 bg-slate-800/30">
+              <div key={branch.id} className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/75 overflow-hidden">
+                <div className="flex flex-wrap items-center gap-2 px-3 sm:px-3.5 py-2.5 border-b border-white/[0.06] bg-slate-950/25">
                   <button
                     type="button"
                     onClick={() => toggleExpand(branch.id)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:bg-white/5"
+                    className="p-1.5 rounded-lg text-slate-400 hover:bg-white/5 hover:text-slate-200"
                   >
                     {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                   </button>
-                  <span className="text-xs font-bold text-slate-500">{idx + 1}</span>
-                  <div className="min-w-0">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-violet-500/15 text-violet-300 text-[10px] font-bold border border-violet-500/25">
-                      <Building2 className="w-3 h-3" /> {branch.branchOffice}
-                    </span>
-                    <div className="mt-1 text-sm font-black text-white truncate">{branch.name}</div>
+                  <span className="text-[10px] font-bold text-slate-500 tabular-nums w-5">{idx + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-black text-white truncate">{branch.name}</span>
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-violet-500/15 text-violet-300 text-[10px] font-bold">
+                        <Building2 className="w-3 h-3" /> {branch.branchOffice}
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-500">{branchGroups.length} grup · {branchPackages.length} paket</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5 justify-end">
-                    <button type="button" onClick={() => openAddGroup(branch)} className="p-2 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25" title="Grup ekle">
-                      <UserPlus className="w-4 h-4" />
+                  <div className="flex items-center gap-1 ml-auto">
+                    <button type="button" onClick={() => openAddGroup(branch)} className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20" title="Grup ekle">
+                      <UserPlus className="w-3.5 h-3.5" />
                     </button>
-                    <button type="button" onClick={() => openAddPackage(branch)} className="p-2 rounded-lg bg-sky-500/15 text-sky-400 hover:bg-sky-500/25" title="Ders paketi ekle">
-                      <Package className="w-4 h-4" />
+                    <button type="button" onClick={() => openAddPackage(branch)} className="p-2 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20" title="Ders paketi ekle">
+                      <Package className="w-3.5 h-3.5" />
                     </button>
-                    <button type="button" onClick={() => openEditBranch(branch)} className="p-2 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25" title="Düzenle">
-                      <Pencil className="w-4 h-4" />
+                    <button type="button" onClick={() => openEditBranch(branch)} className="p-2 rounded-lg bg-white/[0.04] text-slate-300 hover:bg-amber-500/15 hover:text-amber-300" title="Düzenle">
+                      <Pencil className="w-3.5 h-3.5" />
                     </button>
                     <button
                       type="button"
@@ -713,101 +787,97 @@ const BranchGroupManagement: React.FC = () => {
                         });
                         if (ok) removeDisciplineBranch(branch.id);
                       }}
-                      className="p-2 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
+                      className="p-2 rounded-lg bg-white/[0.04] text-slate-400 hover:bg-rose-500/15 hover:text-rose-300"
                       title="Sil"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
 
                 {isOpen && (
-                  <div className="p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                        {branch.name} — Gruplar
+                  <div className="p-3 sm:p-3.5 space-y-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Gruplar
                       </div>
                       <button
                         type="button"
                         onClick={() => openAddGroup(branch)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold"
                       >
-                        <Plus className="w-3.5 h-3.5" /> Yeni Grup Ekle
+                        <Plus className="w-3 h-3" /> Grup
                       </button>
                     </div>
 
                     {branchGroups.length === 0 ? (
-                      <p className="text-slate-500 text-sm py-4 text-center">Bu branşta henüz grup yok.</p>
+                      <p className="text-slate-500 text-xs py-3 text-center rounded-lg border border-dashed border-white/10">Bu branşta grup yok.</p>
                     ) : (
                       <ResponsiveTable minWidth={720}>
                         <table className="w-full text-sm">
                           <thead>
-                            <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500 border-b border-white/5">
-                              <th className="text-left py-2 pr-3">No</th>
-                              <th className="text-left py-2 pr-3">Grup Adı</th>
-                              <th className="text-left py-2 pr-3">Ücret</th>
-                              <th className="text-left py-2 pr-3">Ders Günleri</th>
-                              <th className="text-left py-2 pr-3">Kontenjan</th>
-                              <th className="text-left py-2 pr-3">Öğrenci</th>
-                              <th className="text-left py-2 pr-3">Antrenör</th>
-                              <th className="text-right py-2">İşlemler</th>
+                            <tr className="text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-white/[0.06]">
+                              <th className="text-left py-2 pr-2">#</th>
+                              <th className="text-left py-2 pr-2">Grup</th>
+                              <th className="text-left py-2 pr-2">Ücret</th>
+                              <th className="text-left py-2 pr-2">Program</th>
+                              <th className="text-left py-2 pr-2">Kont.</th>
+                              <th className="text-left py-2 pr-2">Öğr.</th>
+                              <th className="text-left py-2 pr-2">Antrenör</th>
+                              <th className="text-right py-2">İşlem</th>
                             </tr>
                           </thead>
-                          <tbody>
+                          <tbody className="divide-y divide-white/[0.04]">
                             {branchGroups.map((group, gIdx) => {
                               const enrolled = countStudentsInGroup(group);
                               const fee = getGroupMonthlyFee(group, disciplineBranches);
                               return (
-                                <tr key={group.id} className="border-b border-white/5 hover:bg-white/[0.02]">
-                                  <td data-label="No" className="py-3 pr-3 text-slate-500 font-bold">{gIdx + 1}</td>
-                                  <td data-label="Grup Adı" className="py-3 pr-3 font-semibold text-white">{group.name}</td>
-                                  <td data-label="Ücret" className="py-3 pr-3">
-                                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-bold">
+                                <tr key={group.id} className="hover:bg-white/[0.02]">
+                                  <td data-label="#" className="py-2.5 pr-2 text-slate-500 text-xs tabular-nums">{gIdx + 1}</td>
+                                  <td data-label="Grup" className="py-2.5 pr-2 font-semibold text-white text-sm">{group.name}</td>
+                                  <td data-label="Ücret" className="py-2.5 pr-2">
+                                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 text-[11px] font-bold tabular-nums">
                                       ₺{Number(fee).toLocaleString('tr-TR')}
                                     </span>
                                   </td>
-                                  <td data-label="Ders Günleri" className="py-3 pr-3 text-slate-300 text-xs max-w-[200px]">
-                                    <span className="inline-flex items-center gap-1">
+                                  <td data-label="Program" className="py-2.5 pr-2 text-slate-400 text-[11px] max-w-[180px]">
+                                    <span className="inline-flex items-center gap-1 truncate" title={formatLessonSchedule(group.lessonSlots)}>
                                       <Clock className="w-3 h-3 text-slate-500 shrink-0" />
-                                      {formatLessonSchedule(group.lessonSlots)}
+                                      <span className="truncate">{formatLessonSchedule(group.lessonSlots)}</span>
                                     </span>
                                   </td>
-                                  <td data-label="Kontenjan" className="py-3 pr-3">
-                                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-bold">
-                                      {group.capacity} Kişi
-                                    </span>
-                                  </td>
-                                  <td data-label="Öğrenci" className="py-3 pr-3">
+                                  <td data-label="Kont." className="py-2.5 pr-2 text-[11px] font-bold text-slate-300 tabular-nums">{group.capacity}</td>
+                                  <td data-label="Öğr." className="py-2.5 pr-2">
                                     <button
                                       type="button"
                                       onClick={() => openAddStudents(group)}
                                       title="Gruba öğrenci ekle"
-                                      className="px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300 text-xs font-bold hover:bg-teal-500/25 transition-colors"
+                                      className="px-1.5 py-0.5 rounded-md bg-teal-500/10 text-teal-300 text-[11px] font-bold hover:bg-teal-500/20 tabular-nums"
                                     >
                                       {enrolled}/{group.capacity}
                                     </button>
                                   </td>
-                                  <td data-label="Antrenör" className="py-3 pr-3 text-slate-400 text-xs">
+                                  <td data-label="Antrenör" className="py-2.5 pr-2 text-slate-400 text-[11px] max-w-[120px] truncate">
                                     {group.coachIds?.length
                                       ? group.coachIds.map((id) => coachName(id)).join(', ')
                                       : (
-                                        <span className="inline-flex items-center gap-1">
-                                          <UserCircle className="w-3.5 h-3.5" /> Atanmamış
+                                        <span className="inline-flex items-center gap-1 text-slate-500">
+                                          <UserCircle className="w-3.5 h-3.5" /> —
                                         </span>
                                       )}
                                   </td>
-                                  <td data-label="İşlemler" className="py-3 text-right">
-                                    <div className="inline-flex gap-1">
+                                  <td data-label="İşlem" className="py-2.5 text-right">
+                                    <div className="inline-flex gap-0.5">
                                       <button
                                         type="button"
                                         onClick={() => openAddStudents(group)}
-                                        className="p-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
+                                        className="p-1.5 rounded-lg text-slate-400 hover:bg-emerald-500/15 hover:text-emerald-300"
                                         title="Öğrenci ekle"
                                       >
-                                        <UserPlus className="w-4 h-4" />
+                                        <UserPlus className="w-3.5 h-3.5" />
                                       </button>
-                                      <button type="button" onClick={() => openEditGroup(group, branch)} className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25">
-                                        <Pencil className="w-4 h-4" />
+                                      <button type="button" onClick={() => openEditGroup(group, branch)} className="p-1.5 rounded-lg text-slate-400 hover:bg-amber-500/15 hover:text-amber-300" title="Düzenle">
+                                        <Pencil className="w-3.5 h-3.5" />
                                       </button>
                                       <button
                                         type="button"
@@ -825,9 +895,10 @@ const BranchGroupManagement: React.FC = () => {
                                           });
                                           if (ok) removeTrainingGroup(group.id);
                                         }}
-                                        className="p-1.5 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
+                                        className="p-1.5 rounded-lg text-slate-400 hover:bg-rose-500/15 hover:text-rose-300"
+                                        title="Sil"
                                       >
-                                        <Trash2 className="w-4 h-4" />
+                                        <Trash2 className="w-3.5 h-3.5" />
                                       </button>
                                     </div>
                                   </td>
@@ -839,60 +910,60 @@ const BranchGroupManagement: React.FC = () => {
                       </ResponsiveTable>
                     )}
 
-                    <div className="flex items-center justify-between mt-6 mb-3">
-                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                        {branch.name} — Ders Paketleri
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/[0.04]">
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Ders paketleri
                       </div>
                       <button
                         type="button"
                         onClick={() => openAddPackage(branch)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-[11px] font-bold"
                       >
-                        <Plus className="w-3.5 h-3.5" /> Yeni Paket Ekle
+                        <Plus className="w-3 h-3" /> Paket
                       </button>
                     </div>
 
                     {branchPackages.length === 0 ? (
-                      <p className="text-slate-500 text-sm py-4 text-center border border-dashed border-white/10 rounded-lg">
-                        Bu branşta henüz ders paketi yok. Özel ders için &quot;Yeni Paket Ekle&quot; kullanın.
+                      <p className="text-slate-500 text-xs py-3 text-center border border-dashed border-white/10 rounded-lg">
+                        Ders paketi yok — özel ders için paket ekleyin.
                       </p>
                     ) : (
                       <ResponsiveTable minWidth={640}>
                         <table className="w-full text-sm">
                           <thead>
-                            <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500 border-b border-white/5">
-                              <th className="text-left py-2 pr-3">No</th>
-                              <th className="text-left py-2 pr-3">Paket Adı</th>
-                              <th className="text-left py-2 pr-3">Ders</th>
-                              <th className="text-left py-2 pr-3">Geçerlilik</th>
-                              <th className="text-left py-2 pr-3">Ücret</th>
-                              <th className="text-left py-2 pr-3">Kontenjan</th>
-                              <th className="text-left py-2 pr-3">Antrenör</th>
-                              <th className="text-right py-2">İşlemler</th>
+                            <tr className="text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-white/[0.06]">
+                              <th className="text-left py-2 pr-2">#</th>
+                              <th className="text-left py-2 pr-2">Paket</th>
+                              <th className="text-left py-2 pr-2">Ders</th>
+                              <th className="text-left py-2 pr-2">Süre</th>
+                              <th className="text-left py-2 pr-2">Ücret</th>
+                              <th className="text-left py-2 pr-2">Kont.</th>
+                              <th className="text-left py-2 pr-2">Antrenör</th>
+                              <th className="text-right py-2">İşlem</th>
                             </tr>
                           </thead>
-                          <tbody>
+                          <tbody className="divide-y divide-white/[0.04]">
                             {branchPackages.map((pkg, pIdx) => (
-                              <tr key={pkg.id} className="border-b border-white/5 hover:bg-white/[0.02]">
-                                <td data-label="No" className="py-3 pr-3 text-slate-500 font-bold">{pIdx + 1}</td>
-                                <td data-label="Paket Adı" className="py-3 pr-3 font-semibold text-white">{pkg.name}</td>
-                                <td data-label="Ders" className="py-3 pr-3 text-slate-300 text-xs">{pkg.lessonCount} ders</td>
-                                <td data-label="Geçerlilik" className="py-3 pr-3 text-slate-300 text-xs">{pkg.validityDays} gün</td>
-                                <td data-label="Ücret" className="py-3 pr-3">
-                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-bold">
+                              <tr key={pkg.id} className="hover:bg-white/[0.02]">
+                                <td data-label="#" className="py-2.5 pr-2 text-slate-500 text-xs tabular-nums">{pIdx + 1}</td>
+                                <td data-label="Paket" className="py-2.5 pr-2 font-semibold text-white text-sm">{pkg.name}</td>
+                                <td data-label="Ders" className="py-2.5 pr-2 text-slate-300 text-[11px] tabular-nums">{pkg.lessonCount}</td>
+                                <td data-label="Süre" className="py-2.5 pr-2 text-slate-300 text-[11px] tabular-nums">{pkg.validityDays}g</td>
+                                <td data-label="Ücret" className="py-2.5 pr-2">
+                                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 text-[11px] font-bold tabular-nums">
                                     ₺{Number(pkg.packageFee).toLocaleString('tr-TR')}
                                   </span>
                                 </td>
-                                <td data-label="Kontenjan" className="py-3 pr-3 text-slate-300 text-xs">{pkg.capacity} kişi</td>
-                                <td data-label="Antrenör" className="py-3 pr-3 text-slate-400 text-xs">
+                                <td data-label="Kont." className="py-2.5 pr-2 text-slate-300 text-[11px] tabular-nums">{pkg.capacity}</td>
+                                <td data-label="Antrenör" className="py-2.5 pr-2 text-slate-400 text-[11px] max-w-[120px] truncate">
                                   {pkg.coachIds?.length
                                     ? pkg.coachIds.map((id) => coachName(id)).join(', ')
-                                    : 'Atanmamış'}
+                                    : '—'}
                                 </td>
-                                <td data-label="İşlemler" className="py-3 text-right">
-                                  <div className="inline-flex gap-1">
-                                    <button type="button" onClick={() => openEditPackage(pkg, branch)} className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25">
-                                      <Pencil className="w-4 h-4" />
+                                <td data-label="İşlem" className="py-2.5 text-right">
+                                  <div className="inline-flex gap-0.5">
+                                    <button type="button" onClick={() => openEditPackage(pkg, branch)} className="p-1.5 rounded-lg text-slate-400 hover:bg-amber-500/15 hover:text-amber-300" title="Düzenle">
+                                      <Pencil className="w-3.5 h-3.5" />
                                     </button>
                                     <button
                                       type="button"
@@ -905,9 +976,10 @@ const BranchGroupManagement: React.FC = () => {
                                         });
                                         if (ok) removeLessonPackage(pkg.id);
                                       }}
-                                      className="p-1.5 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
+                                      className="p-1.5 rounded-lg text-slate-400 hover:bg-rose-500/15 hover:text-rose-300"
+                                      title="Sil"
                                     >
-                                      <Trash2 className="w-4 h-4" />
+                                      <Trash2 className="w-3.5 h-3.5" />
                                     </button>
                                   </div>
                                 </td>

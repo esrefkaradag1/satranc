@@ -118,6 +118,7 @@ import {
   type PlatformDayStats,
 } from '../lib/homeworkPlatformUtils';
 import { homeworkWeekDaysUpToToday, syncStudentPlatformDays } from '../lib/platformStatsClientSync';
+import { loadPlatformDayStatsFromDb } from '../services/platformStatsCacheService';
 import { nextHomeworkPuzzle } from '../lib/puzzlePlayUtils';
 import { attendanceRecordGroupName, attendanceRecordSessionScopeKey, attendanceRecordTime } from '../lib/attendanceSession';
 import { buildPrivateLessonUsageById } from '../lib/privateLessonUsage';
@@ -471,6 +472,19 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     const apiDays = todayOnly ? [todayKey] : weekDays;
     platformInitialSyncDoneRef.current = true;
     try {
+      const sid = String(student.id ?? '').trim();
+      const cached = await loadPlatformDayStatsFromDb([sid], weekDays);
+      if (cached?.stats[sid]) {
+        weekPlatformStatsRef.current = { ...cached.stats[sid] };
+        setWeekPlatformStatsByDate({ ...cached.stats[sid] });
+        const cachedToday = cached.stats[sid][todayKey];
+        if (cachedToday) {
+          setTodayExternalGameCount(cachedToday.games);
+          setTodayExternalPuzzleCount(cachedToday.puzzleSolved);
+          setTodayExternalPuzzlePassed(cachedToday.puzzlePassed);
+        }
+      }
+
       const nextWeek = await withTimeout(
         syncStudentPlatformDays(student, weekDays, apiDays),
         55_000,

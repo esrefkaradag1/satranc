@@ -65,6 +65,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const [filterGroup, setFilterGroup] = useState(FILTER_ALL_GROUPS);
  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
  const [filterScholarship, setFilterScholarship] = useState<'all' | 'yes' | 'no'>('all');
+ const [filterPackage, setFilterPackage] = useState<'all' | 'yes'>('all');
  const [filterCoach, setFilterCoach] = useState('Tüm Antrenörler');
  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(true);
 
@@ -237,10 +238,13 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  filterScholarship === 'all' ||
  (filterScholarship === 'yes' && s.isScholarshipStudent) ||
  (filterScholarship === 'no' && !s.isScholarshipStudent);
+ const isPrivateOrPackage =
+  s.registrationType === 'package' || (s.group?.toLowerCase().includes('özel') ?? false);
+ const matchPackage = filterPackage === 'all' || (filterPackage === 'yes' && isPrivateOrPackage);
  const matchCoach =
  filterCoach === 'Tüm Antrenörler' ||
  getCoachNamesForStudent(s, scopedCoaches, scopedTrainingGroups).includes(filterCoach);
- return matchSearch && matchBranchOffice && matchBranch && matchGroup && matchStatus && matchScholarship && matchCoach;
+ return matchSearch && matchBranchOffice && matchBranch && matchGroup && matchStatus && matchScholarship && matchPackage && matchCoach;
  })
   .sort((a, b) => a.name.localeCompare(b.name, 'tr', { sensitivity: 'base' }));
  }, [
@@ -253,6 +257,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  filterGroup,
  filterStatus,
  filterScholarship,
+ filterPackage,
  filterCoach,
  ]);
 
@@ -272,7 +277,44 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setFilterGroup(FILTER_ALL_GROUPS);
  setFilterStatus('all');
  setFilterScholarship('all');
+ setFilterPackage('all');
  setFilterCoach('Tüm Antrenörler');
+ };
+
+ const hasActiveFilters =
+  Boolean(searchTerm.trim()) ||
+  filterBranchOffice !== FILTER_ALL_OFFICES ||
+  filterBranch !== FILTER_ALL_BRANCHES ||
+  filterGroup !== FILTER_ALL_GROUPS ||
+  filterStatus !== 'all' ||
+  filterScholarship !== 'all' ||
+  filterPackage !== 'all' ||
+  filterCoach !== 'Tüm Antrenörler';
+
+ const applyStatFilter = (key: 'total' | 'active' | 'inactive' | 'scholarship' | 'private') => {
+  if (key === 'total') {
+   setFilterStatus('all');
+   setFilterScholarship('all');
+   setFilterPackage('all');
+   return;
+  }
+  if (key === 'active') {
+   setFilterStatus((v) => (v === 'active' ? 'all' : 'active'));
+   setFilterPackage('all');
+   return;
+  }
+  if (key === 'inactive') {
+   setFilterStatus((v) => (v === 'inactive' ? 'all' : 'inactive'));
+   setFilterPackage('all');
+   return;
+  }
+  if (key === 'scholarship') {
+   setFilterScholarship((v) => (v === 'yes' ? 'all' : 'yes'));
+   setFilterPackage('all');
+   return;
+  }
+  setFilterPackage((v) => (v === 'yes' ? 'all' : 'yes'));
+  setFilterScholarship('all');
  };
 
  const toggleSelectAll = () => {
@@ -433,16 +475,30 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  };
 
   const formatDues = (s: Student) => {
-    if (s.registrationType === 'package') return 'Ders paketi';
-    if (s.isScholarshipStudent) return <span className="text-emerald-400 font-semibold">Burslu</span>;
-    if (s.status === 'inactive') {
-      return <span className="text-slate-500 font-semibold">Dondu</span>;
-    }
+    const pill = (amount: string, label: string, tone: 'debt' | 'paid' | 'muted' | 'ok') => {
+      const tones = {
+        debt: 'text-rose-300 bg-rose-500/10 border-rose-500/20',
+        paid: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20',
+        muted: 'text-slate-400 bg-slate-500/10 border-slate-500/20',
+        ok: 'text-sky-300 bg-sky-500/10 border-sky-500/20',
+      } as const;
+      return (
+        <div className="flex flex-col gap-1 min-w-0">
+          {amount ? <span className="text-sm font-semibold text-slate-100 tabular-nums">{amount}</span> : null}
+          <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${tones[tone]}`}>
+            {label}
+          </span>
+        </div>
+      );
+    };
 
-    // Calculate dynamic dues debt matching the calendar up to current month (excluding future months)
+    if (s.registrationType === 'package') return pill('', 'Ders paketi', 'ok');
+    if (s.isScholarshipStudent) return pill('', 'Burslu', 'paid');
+    if (s.status === 'inactive') return pill('', 'Dondu', 'muted');
+
     const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().getMonth() + 1; // 1-indexed (July is 7)
-    
+    const currentMonth = new Date().getMonth() + 1;
+
     const studentTransactions = filterDuesTransactions(
       transactions.filter((t) => t.studentId === s.id),
     );
@@ -456,9 +512,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
 
     let expectedUpToNow = 0;
     for (let m = 1; m <= 12; m++) {
-      if (m > currentMonth) continue; // Exclude future months
+      if (m > currentMonth) continue;
       if (isMonthBeforeRegistration(s, currentYear, m)) continue;
-
       const dueInfo = getExpectedDueForMonth(s, currentYear, m, scopedTrainingGroups, scopedDisciplineBranches);
       expectedUpToNow += dueInfo.expected;
     }
@@ -466,244 +521,239 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
     const duesDebt = expectedUpToNow > 0 ? Math.max(0, expectedUpToNow - totalPaidThisYear) : 0;
 
     if (duesDebt > 0) {
-      return (
-        <span>
-          ₺{Number(duesDebt).toLocaleString('tr-TR')}{' '}
-          <span className="text-rose-400 font-semibold">Borç</span>
-        </span>
-      );
+      return pill(`₺${Number(duesDebt).toLocaleString('tr-TR')}`, 'Borç', 'debt');
     }
-
-    // Borç yoksa: aylık ücreti değil, gerçekte tahsil edilen tutarı göster (finans kayıtlarıyla tutarlı)
     if (totalPaidThisYear > 0) {
-      return (
-        <span className="text-emerald-400">
-          ₺{Number(totalPaidThisYear).toLocaleString('tr-TR')} Ödendi
-        </span>
-      );
+      return pill(`₺${Number(totalPaidThisYear).toLocaleString('tr-TR')}`, 'Ödendi', 'paid');
     }
-
-    // Bu ana kadar beklenen aidat yok (ücret tanımsız / kayıt öncesi) ve ödeme de yok
     return <span className="text-slate-500">—</span>;
   };
 
+ const selectClass =
+  'w-full lg:w-auto lg:min-w-[8.5rem] px-3 py-2.5 rounded-xl bg-slate-950/50 border border-white/[0.08] text-xs sm:text-sm font-medium text-slate-200 focus:ring-2 focus:ring-indigo-500/35 outline-none truncate';
+
+ const statCards: {
+  key: 'total' | 'active' | 'inactive' | 'scholarship' | 'private';
+  value: number;
+  label: string;
+  icon: React.ReactNode;
+  active: boolean;
+  accent: string;
+ }[] = [
+  {
+   key: 'total',
+   value: stats.total,
+   label: 'Toplam',
+   icon: <Users className="w-4 h-4" />,
+   active: filterStatus === 'all' && filterScholarship === 'all' && filterPackage === 'all',
+   accent: 'hover:border-indigo-400/30 data-[on=true]:border-indigo-400/40 data-[on=true]:bg-indigo-500/10 data-[on=true]:text-indigo-200',
+  },
+  {
+   key: 'active',
+   value: stats.active,
+   label: 'Aktif',
+   icon: <UserCheck className="w-4 h-4" />,
+   active: filterStatus === 'active',
+   accent: 'hover:border-emerald-400/30 data-[on=true]:border-emerald-400/40 data-[on=true]:bg-emerald-500/10 data-[on=true]:text-emerald-200',
+  },
+  {
+   key: 'private',
+   value: stats.privateLesson,
+   label: 'Özel / Paket',
+   icon: <FileText className="w-4 h-4" />,
+   active: filterPackage === 'yes',
+   accent: 'hover:border-sky-400/30 data-[on=true]:border-sky-400/40 data-[on=true]:bg-sky-500/10 data-[on=true]:text-sky-200',
+  },
+  {
+   key: 'scholarship',
+   value: stats.scholarship,
+   label: 'Burslu',
+   icon: <GraduationCap className="w-4 h-4" />,
+   active: filterScholarship === 'yes',
+   accent: 'hover:border-amber-400/30 data-[on=true]:border-amber-400/40 data-[on=true]:bg-amber-500/10 data-[on=true]:text-amber-200',
+  },
+  {
+   key: 'inactive',
+   value: stats.inactive,
+   label: 'Pasif',
+   icon: <UserX className="w-4 h-4" />,
+   active: filterStatus === 'inactive',
+   accent: 'hover:border-rose-400/30 data-[on=true]:border-rose-400/40 data-[on=true]:bg-rose-500/10 data-[on=true]:text-rose-200',
+  },
+ ];
+
  return (
- <div className="space-y-4 sm:space-y-6 min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20 lg:pb-0">
- {/* Header */}
- <div className="premium-gradient rounded-lg px-4 sm:px-6 lg:px-8 py-4 sm:py-6 shadow-xl shadow-indigo-500/10">
- <div className="flex items-center gap-3 sm:gap-4 min-w-0">
- <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-white/20 flex items-center justify-center shrink-0">
- <Users className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
- </div>
- <div className="min-w-0">
- <h1 className="text-lg sm:text-2xl font-black tracking-tight text-white">Öğrenci Listesi</h1>
- <p className="text-white/80 text-xs sm:text-sm mt-0.5">
-  {isCoach ? 'Size atanmış öğrenciler' : isAdmin ? 'Tüm kurumlar — şube ve antrenör bilgisiyle' : 'Öğrencileri görüntüleyin ve yönetin'}
- </p>
- </div>
- </div>
- </div>
-
- {/* Stat cards */}
- <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4">
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg p-3 sm:p-5 border border-slate-700/60 hover:border-indigo-500/20 transition-colors">
- <div className="flex items-center justify-between">
- <div>
- <p className="text-xl sm:text-3xl font-black text-white tracking-tight">{stats.total}</p>
- <p className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">Toplam Öğrenci</p>
- </div>
- <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center">
- <Users className="w-5 h-5 text-indigo-600" />
- </div>
- </div>
- </div>
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg p-3 sm:p-5 border border-slate-700/60 hover:border-emerald-500/20 transition-colors">
- <div className="flex items-center justify-between">
- <div>
- <p className="text-xl sm:text-3xl font-black text-white tracking-tight">{stats.active}</p>
- <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">Aktif Öğrenci</p>
- </div>
- <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center">
- <UserCheck className="w-5 h-5 text-emerald-600" />
- </div>
- </div>
- </div>
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg p-3 sm:p-5 border border-slate-700/60 hover:border-sky-500/20 transition-colors col-span-2 sm:col-span-1">
- <div className="flex items-center justify-between">
- <div>
- <p className="text-3xl font-black text-white tracking-tight">{stats.privateLesson}</p>
- <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">Özel / Paket</p>
- </div>
- <div className="w-10 h-10 rounded-lg bg-sky-500/10 flex items-center justify-center">
- <FileText className="w-5 h-5 text-sky-600" />
- </div>
- </div>
- </div>
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg p-3 sm:p-5 border border-slate-700/60 hover:border-amber-500/20 transition-colors">
- <div className="flex items-center justify-between">
- <div>
- <p className="text-3xl font-black text-white tracking-tight">{stats.scholarship}</p>
- <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">Burslu Öğrenci</p>
- </div>
- <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
- <GraduationCap className="w-5 h-5 text-amber-600" />
- </div>
- </div>
- </div>
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg p-3 sm:p-5 border border-slate-700/60 hover:border-rose-500/20 transition-colors">
- <div className="flex items-center justify-between">
- <div>
- <p className="text-3xl font-black text-white tracking-tight">{stats.inactive}</p>
- <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">Pasif Öğrenci</p>
- </div>
- <div className="w-10 h-10 rounded-lg bg-rose-500/10 flex items-center justify-center">
- <UserX className="w-5 h-5 text-rose-600" />
- </div>
- </div>
- </div>
+ <div className="space-y-3 sm:space-y-4 min-w-0 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-20 lg:pb-0">
+ {/* Compact header + actions */}
+ <div className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/80 backdrop-blur-xl px-4 sm:px-5 py-3.5 sm:py-4">
+  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+   <div className="min-w-0">
+    <div className="flex items-center gap-2.5">
+     <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-400/20 flex items-center justify-center shrink-0">
+      <Users className="w-4 h-4 text-indigo-300" />
+     </div>
+     <div className="min-w-0">
+      <h1 className="text-base sm:text-xl font-black tracking-tight text-white">Öğrenci Listesi</h1>
+      <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate">
+       {isCoach
+        ? 'Size atanmış öğrenciler'
+        : isAdmin
+          ? 'Tüm kurumlar — şube ve antrenör bilgisiyle'
+          : 'Ara, filtrele ve yönet'}
+       {' · '}
+       <span className="text-slate-300 font-semibold">{filteredStudents.length}</span> kayıt
+      </p>
+     </div>
+    </div>
+   </div>
+   <div className="flex flex-wrap items-center gap-2">
+    <button
+     type="button"
+     className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.08] text-slate-200 text-xs sm:text-sm font-bold transition-colors"
+    >
+     <FileText className="w-4 h-4 text-indigo-300" /> Aidat Takip
+    </button>
+    <button
+     type="button"
+     className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.08] text-slate-200 text-xs sm:text-sm font-bold transition-colors"
+    >
+     <QrCode className="w-4 h-4 text-amber-300" />
+     <span className="hidden sm:inline">QR Kodlar</span>
+     <span className="sm:hidden">QR</span>
+    </button>
+    {onAddNew && (
+     <button
+      type="button"
+      onClick={onAddNew}
+      className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold transition-colors shadow-lg shadow-emerald-900/30"
+     >
+      <Plus className="w-4 h-4" /> Yeni Öğrenci
+     </button>
+    )}
+   </div>
+  </div>
  </div>
 
- {/* Filters + Actions */}
- <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-slate-700/60 overflow-hidden">
- <div className="px-4 sm:px-6 py-2.5 sm:py-3 border-b border-slate-700/60 bg-slate-900/50 flex items-center justify-between gap-3">
- <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-widest">Filtrele ve Ara</h3>
- <button
-   type="button"
-   onClick={() => setIsFiltersCollapsed((v) => !v)}
-   className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-300/90 hover:text-slate-200 transition-colors"
-   aria-expanded={!isFiltersCollapsed}
- >
-   {isFiltersCollapsed ? (
-     <>
-       <ChevronDown className="w-4 h-4" /> Detaylı Aramayı Aç
-     </>
-   ) : (
-     <>
-       <ChevronUp className="w-4 h-4" /> Kapat
-     </>
+ {/* Clickable stats */}
+ <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+  {statCards.map((card) => (
+   <button
+    key={card.key}
+    type="button"
+    data-on={card.active}
+    onClick={() => applyStatFilter(card.key)}
+    className={`group text-left rounded-2xl border border-white/[0.06] bg-[#1e293b]/70 px-3.5 py-3 transition-all ${card.accent}`}
+    title={`${card.label} filtresini uygula`}
+   >
+    <div className="flex items-start justify-between gap-2">
+     <div className="min-w-0">
+      <p className="text-xl sm:text-2xl font-black text-white tracking-tight tabular-nums">{card.value}</p>
+      <p className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase tracking-wider mt-1">{card.label}</p>
+     </div>
+     <span className="w-8 h-8 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center text-slate-400 group-hover:text-inherit shrink-0">
+      {card.icon}
+     </span>
+    </div>
+   </button>
+  ))}
+ </div>
+
+ {/* Search + filters */}
+ <div className="rounded-2xl border border-white/[0.06] bg-[#1e293b]/70 overflow-hidden">
+  <div className="p-3 sm:p-4 space-y-3">
+   <div className="flex flex-col lg:flex-row gap-2 lg:items-center">
+    <div className="relative flex-1 min-w-0">
+     <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+     <input
+      type="text"
+      placeholder="Ad, TC, telefon veya grup ara..."
+      className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-slate-950/50 border border-white/[0.08] text-sm text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/35 outline-none transition-all"
+      value={searchTerm}
+      onChange={(e) => setSearchTerm(e.target.value)}
+     />
+    </div>
+    <div className="flex items-center gap-2 shrink-0">
+     <button
+      type="button"
+      onClick={() => setIsFiltersCollapsed((v) => !v)}
+      className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-xs font-bold text-slate-300 transition-colors"
+      aria-expanded={!isFiltersCollapsed}
+     >
+      {isFiltersCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+      {isFiltersCollapsed ? 'Detaylı filtre' : 'Filtreleri gizle'}
+     </button>
+     {hasActiveFilters && (
+      <button
+       type="button"
+       onClick={clearFilters}
+       className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-rose-500/10 hover:border-rose-400/30 text-xs font-bold text-slate-300 hover:text-rose-200 transition-colors"
+      >
+       <RotateCcw className="w-3.5 h-3.5" /> Temizle
+      </button>
+     )}
+    </div>
+   </div>
+
+   {!isFiltersCollapsed && (
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:flex 2xl:flex-wrap gap-2 pt-1 border-t border-white/[0.05]">
+     <select
+      value={filterBranchOffice}
+      onChange={(e) => {
+       setFilterBranchOffice(e.target.value);
+       setFilterBranch(FILTER_ALL_BRANCHES);
+       setFilterGroup(FILTER_ALL_GROUPS);
+      }}
+      className={selectClass}
+     >
+      {filterOfficeOptions.map((o) => (
+       <option key={o} value={o}>{o}</option>
+      ))}
+     </select>
+     <select
+      value={filterBranch}
+      onChange={(e) => {
+       setFilterBranch(e.target.value);
+       setFilterGroup(FILTER_ALL_GROUPS);
+      }}
+      className={selectClass}
+     >
+      {filterBranchOptions.map((b) => (
+       <option key={b} value={b}>{b}</option>
+      ))}
+     </select>
+     <select value={filterGroup} onChange={(e) => setFilterGroup(e.target.value)} className={selectClass}>
+      {filterGroupOptions.map((g) => (
+       <option key={g} value={g}>{g}</option>
+      ))}
+     </select>
+     <select
+      value={filterStatus}
+      onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}
+      className={selectClass}
+     >
+      <option value="all">Durum: Tümü</option>
+      <option value="active">Aktif</option>
+      <option value="inactive">Pasif</option>
+     </select>
+     <select
+      value={filterScholarship}
+      onChange={(e) => setFilterScholarship(e.target.value as typeof filterScholarship)}
+      className={selectClass}
+     >
+      <option value="all">Burs: Tümü</option>
+      <option value="yes">Burslu</option>
+      <option value="no">Burslu değil</option>
+     </select>
+     {isAdmin && (
+      <select value={filterCoach} onChange={(e) => setFilterCoach(e.target.value)} className={selectClass}>
+       {coachFilterOptions.map((c) => (
+        <option key={c} value={c}>{c}</option>
+       ))}
+      </select>
+     )}
+    </div>
    )}
- </button>
- </div>
- <div className="p-3 sm:p-4 space-y-2.5 sm:space-y-3">
- <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end gap-2 sm:gap-2.5 lg:gap-3">
- <div className="relative sm:col-span-2 lg:flex-1 lg:min-w-[200px] lg:max-w-md">
- <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
- <input
- type="text"
- placeholder="Ad, TC, Tel..."
- className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
- value={searchTerm}
- onChange={(e) => setSearchTerm(e.target.value)}
- />
- </div>
- {!isFiltersCollapsed && (
-   <>
- <select
- value={filterBranchOffice}
- onChange={(e) => {
-  setFilterBranchOffice(e.target.value);
-  setFilterBranch(FILTER_ALL_BRANCHES);
-  setFilterGroup(FILTER_ALL_GROUPS);
- }}
- className="w-full lg:w-auto lg:flex-1 lg:min-w-[120px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
- >
- {filterOfficeOptions.map((o) => (
- <option key={o} value={o}>{o}</option>
- ))}
- </select>
- <select
- value={filterBranch}
- onChange={(e) => {
-  setFilterBranch(e.target.value);
-  setFilterGroup(FILTER_ALL_GROUPS);
- }}
- className="w-full lg:w-auto lg:flex-1 lg:min-w-[110px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
- >
- {filterBranchOptions.map((b) => (
- <option key={b} value={b}>{b}</option>
- ))}
- </select>
- <select
- value={filterGroup}
- onChange={(e) => setFilterGroup(e.target.value)}
- className="w-full lg:w-auto lg:flex-1 lg:min-w-[110px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
- >
- {filterGroupOptions.map((g) => (
- <option key={g} value={g}>{g}</option>
- ))}
- </select>
- <select
- value={filterStatus}
- onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}
- className="w-full lg:w-auto lg:flex-1 lg:min-w-[90px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
- >
- <option value="all">Tümü</option>
- <option value="active">Aktif</option>
- <option value="inactive">Pasif</option>
- </select>
- <select
- value={filterScholarship}
- onChange={(e) => setFilterScholarship(e.target.value as typeof filterScholarship)}
- className="w-full lg:w-auto lg:flex-1 lg:min-w-[100px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
- >
- <option value="all">Tümü</option>
- <option value="yes">Burslu</option>
- <option value="no">Burslu Değil</option>
- </select>
- {isAdmin && (
- <select
- value={filterCoach}
- onChange={(e) => setFilterCoach(e.target.value)}
- className="w-full lg:w-auto lg:flex-1 lg:min-w-[130px] px-3 py-2 rounded-lg bg-slate-900/50 border border-slate-700/60 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500/40 outline-none truncate"
- >
- {coachFilterOptions.map((c) => (
- <option key={c} value={c}>{c}</option>
- ))}
- </select>
- )}
-   </>
- )}
- <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-1">
- <button
- type="button"
- onClick={clearFilters}
- className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-bold transition-all"
- >
- <RotateCcw className="w-3.5 h-3.5" /> Temizle
- </button>
- </div>
- </div>
- </div>
- </div>
-
- {/* Action buttons + Table header */}
- <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
- <div className="flex flex-wrap items-center gap-2">
- <button
- type="button"
- className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-3 sm:px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-bold transition-all shadow-lg shadow-indigo-500/20"
- >
- <FileText className="w-4 h-4" /> Aidat Takip
- </button>
- <button
- type="button"
- className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-3 sm:px-4 py-2.5 rounded-lg bg-amber-500/90 hover:bg-amber-500 text-white text-xs sm:text-sm font-bold transition-all"
- >
- <QrCode className="w-4 h-4" /> <span className="hidden sm:inline">QR Code'lar</span><span className="sm:hidden">QR</span>
- </button>
- {onAddNew && (
- <button
- type="button"
- onClick={onAddNew}
- className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-3 sm:px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold transition-all shadow-lg shadow-emerald-500/20"
- >
- <Plus className="w-4 h-4" /> Yeni Öğrenci Ekle
- </button>
- )}
- </div>
- <p className="text-sm font-medium text-slate-400">
- Toplam <span className="font-bold text-slate-200">{filteredStudents.length}</span> kayıt
- </p>
+  </div>
  </div>
 
  {/* Bulk bar */}
@@ -742,38 +792,45 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  )}
 
  {/* Mobil: kart listesi */}
- <div className="lg:hidden space-y-3">
- {filteredStudents.map((student, index) => (
+ <div className="lg:hidden space-y-2.5">
+ {filteredStudents.map((student) => (
  <div
  key={student.id}
- className={`rounded-xl border border-slate-700/60 bg-[#1e293b]/90 p-4 transition-colors ${selectedIds.includes(student.id) ? 'border-indigo-500/40 bg-indigo-500/5' : ''}`}
+ className={`rounded-2xl border bg-[#1e293b]/80 p-3.5 transition-colors ${
+  selectedIds.includes(student.id)
+   ? 'border-indigo-400/40 bg-indigo-500/[0.07]'
+   : 'border-white/[0.06]'
+ }`}
  >
  <div className="flex items-start gap-3">
  <input
  type="checkbox"
- className="mt-1 w-4 h-4 rounded border-slate-600 bg-[#1e293b] text-indigo-600 focus:ring-indigo-500/50 cursor-pointer shrink-0"
+ className="mt-1.5 w-4 h-4 rounded border-slate-600 bg-[#1e293b] text-indigo-600 focus:ring-indigo-500/50 cursor-pointer shrink-0"
  checked={selectedIds.includes(student.id)}
  onChange={() => toggleSelect(student.id)}
  />
- <StudentAvatar student={student} applicationPhotos={applicationPhotos} />
+ <button type="button" onClick={() => onViewDetail?.(student.id)} className="shrink-0">
+  <StudentAvatar student={student} applicationPhotos={applicationPhotos} />
+ </button>
  <div className="flex-1 min-w-0">
  <div className="flex items-start justify-between gap-2">
- <div className="min-w-0">
+ <button type="button" onClick={() => onViewDetail?.(student.id)} className="min-w-0 text-left">
  <p className="font-bold text-white text-sm truncate">{student.name}</p>
  <p className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">{student.tcNo || `ID: ${student.id.slice(0, 8)}`}</p>
- </div>
- <span className={`shrink-0 inline-flex px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase ${
- student.status === 'inactive' ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'
+ </button>
+ <span className={`shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+ student.status === 'inactive' ? 'bg-rose-500/10 text-rose-300' : 'bg-emerald-500/10 text-emerald-300'
  }`}>
+ <span className={`w-1.5 h-1.5 rounded-full ${student.status === 'inactive' ? 'bg-rose-400' : 'bg-emerald-400'}`} />
  {student.status === 'inactive' ? 'Pasif' : 'Aktif'}
  </span>
  </div>
- <div className="mt-2 space-y-1 text-xs text-slate-400">
- <p><span className="text-slate-500">Grup:</span> {student.group}</p>
- <p><span className="text-slate-500">Şube:</span> {student.branchOffice || '—'}{student.branch ? ` / ${student.branch}` : ''}</p>
- <p><span className="text-slate-500">Aidat:</span> {formatDues(student)}</p>
+ <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-slate-400">
+ <p className="truncate"><span className="text-slate-500">Grup</span><br /><span className="text-slate-200 font-medium">{student.group || '—'}</span></p>
+ <div><span className="text-slate-500">Aidat</span><div className="mt-0.5">{formatDues(student)}</div></div>
+ <p className="col-span-2 truncate text-[11px]">{student.branchOffice || '—'}{student.branch ? ` · ${student.branch}` : ''}</p>
  </div>
- <div className="mt-2">
+ <div className="mt-2.5">
  <StudentLoginQuickInfoInline
    student={student}
    onCopied={() => showToast('Giriş bilgileri kopyalandı.', 'success')}
@@ -781,31 +838,36 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
  </div>
  </div>
- <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t border-white/5">
- <button type="button" title="Detay" onClick={() => onViewDetail?.(student.id)} className="p-2.5 rounded-lg text-slate-400 hover:bg-indigo-500/10 hover:text-indigo-400"><Eye className="w-4 h-4" /></button>
- <button type="button" onClick={() => setSignedFormsStudent(student)} title="Başvuru formu" className="p-2.5 rounded-lg text-slate-400 hover:bg-violet-500/10 hover:text-violet-400"><PenLine className="w-4 h-4" /></button>
- <button type="button" onClick={() => handleOpenModal(student)} title="Düzenle" className="p-2.5 rounded-lg text-slate-400 hover:bg-amber-500/10 hover:text-amber-400"><Edit2 className="w-4 h-4" /></button>
+ <div className="flex items-center justify-end gap-1 mt-3 pt-2.5 border-t border-white/[0.05]">
+ <button type="button" title="Detay" onClick={() => onViewDetail?.(student.id)} className="p-2.5 rounded-xl text-slate-400 hover:bg-indigo-500/10 hover:text-indigo-300"><Eye className="w-4 h-4" /></button>
+ <button type="button" onClick={() => setSignedFormsStudent(student)} title="Başvuru formu" className="p-2.5 rounded-xl text-slate-400 hover:bg-violet-500/10 hover:text-violet-300"><PenLine className="w-4 h-4" /></button>
+ <button type="button" onClick={() => handleOpenModal(student)} title="Düzenle" className="p-2.5 rounded-xl text-slate-400 hover:bg-amber-500/10 hover:text-amber-300"><Edit2 className="w-4 h-4" /></button>
  {!isCoach && (
- <button type="button" onClick={() => handleDeleteStudent(student)} title="Sil" className="p-2.5 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-400"><Trash2 className="w-4 h-4" /></button>
+ <button type="button" onClick={() => handleDeleteStudent(student)} title="Sil" className="p-2.5 rounded-xl text-slate-400 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 className="w-4 h-4" /></button>
  )}
  </div>
  </div>
  ))}
  {filteredStudents.length === 0 && (
- <div className="py-12 text-center rounded-xl border border-dashed border-slate-700/60 bg-[#1e293b]/50">
+ <div className="py-12 text-center rounded-2xl border border-dashed border-white/10 bg-[#1e293b]/40">
  <Users className="w-10 h-10 text-slate-500 mx-auto mb-3 opacity-50" />
  <p className="text-slate-400 text-sm font-medium">Kayıt bulunamadı</p>
+ {hasActiveFilters && (
+  <button type="button" onClick={clearFilters} className="mt-3 text-xs font-bold text-indigo-300 hover:text-indigo-200">
+   Filtreleri temizle
+  </button>
+ )}
  </div>
  )}
  </div>
 
  {/* Masaüstü: tablo */}
- <div className="hidden lg:block bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-slate-700/60 overflow-hidden">
- <ResponsiveTable minWidth={1040} className="table-scroll">
+ <div className="hidden lg:block rounded-2xl border border-white/[0.06] bg-[#1e293b]/75 overflow-hidden">
+ <ResponsiveTable minWidth={980} className="table-scroll">
  <table className="w-full text-left border-collapse">
  <thead>
- <tr className="border-b border-slate-700/60 bg-slate-900/50">
- <th className="px-6 py-4 w-10">
+ <tr className="border-b border-white/[0.06] bg-slate-950/40">
+ <th className="px-4 py-3 w-10">
  <input
  type="checkbox"
  className="w-4 h-4 rounded border-slate-600 bg-[#1e293b] text-indigo-600 focus:ring-indigo-500/50 cursor-pointer"
@@ -813,27 +875,27 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  onChange={toggleSelectAll}
  />
  </th>
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">#</th>
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Öğrenci</th>
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Şube / Branş</th>
+ <th className="px-2 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest w-10">#</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Öğrenci</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Şube / Branş</th>
  {isAdmin && (
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Kurum / Antrenör</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Antrenör</th>
  )}
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Grup / Paket</th>
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Aidat / Ders</th>
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Kayıt Tarihi</th>
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Giriş Bilgisi</th>
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Durum</th>
- <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">İşlemler</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Grup</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Aidat</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Kayıt</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Giriş</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Durum</th>
+ <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">İşlem</th>
  </tr>
  </thead>
- <tbody className="divide-y divide-white/5">
+ <tbody className="divide-y divide-white/[0.04]">
  {filteredStudents.map((student, index) => (
  <tr
  key={student.id}
- className={`group hover:bg-white/[0.02] transition-colors ${selectedIds.includes(student.id) ? 'bg-indigo-500/5' : ''}`}
+ className={`group hover:bg-white/[0.025] transition-colors ${selectedIds.includes(student.id) ? 'bg-indigo-500/[0.06]' : ''}`}
  >
- <td data-label="" className="px-6 py-4">
+ <td data-label="" className="px-4 py-3">
  <input
  type="checkbox"
  className="w-4 h-4 rounded border-slate-600 bg-[#1e293b] text-indigo-600 focus:ring-indigo-500/50 cursor-pointer"
@@ -841,67 +903,73 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  onChange={() => toggleSelect(student.id)}
  />
  </td>
- <td data-label="#" className="px-6 py-4 text-sm font-medium text-slate-400">{index + 1}</td>
- <td data-label="Öğrenci" className="px-6 py-4">
- <div className="flex items-center gap-3">
- <StudentAvatar student={student} applicationPhotos={applicationPhotos} className="w-10 h-10" />
- <div>
- <p className="font-bold text-white text-sm tracking-tight">{student.name}</p>
- <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+ <td data-label="#" className="px-2 py-3 text-xs font-medium text-slate-500 tabular-nums">{index + 1}</td>
+ <td data-label="Öğrenci" className="px-3 py-3">
+ <button
+  type="button"
+  onClick={() => onViewDetail?.(student.id)}
+  className="flex items-center gap-3 text-left min-w-0 group/name"
+ >
+ <StudentAvatar student={student} applicationPhotos={applicationPhotos} className="w-9 h-9" />
+ <div className="min-w-0">
+ <p className="font-bold text-white text-sm tracking-tight truncate group-hover/name:text-indigo-200 transition-colors">{student.name}</p>
+ <p className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
  {student.tcNo || `ID: ${student.id.slice(0, 8)}`}
  </p>
  </div>
- </div>
+ </button>
  </td>
- <td data-label="Şube / Branş" className="px-6 py-4">
- <p className="text-sm text-slate-300">
- {student.branchOffice || '—'} {student.branch ? ` / ${student.branch}` : ''}
+ <td data-label="Şube / Branş" className="px-3 py-3">
+ <p className="text-sm text-slate-300 max-w-[12rem] truncate" title={[student.branchOffice, student.branch].filter(Boolean).join(' / ')}>
+ {student.branchOffice || '—'}
  </p>
+ {student.branch ? <p className="text-[11px] text-slate-500 mt-0.5 truncate">{student.branch}</p> : null}
  </td>
  {isAdmin && (
- <td data-label="Kurum / Antrenör" className="px-6 py-4">
- <p className="text-sm text-slate-300">{student.branchOffice || '—'}</p>
- <p className="text-[11px] text-teal-400/90 font-medium mt-0.5">
+ <td data-label="Antrenör" className="px-3 py-3">
+ <p className="text-[11px] text-teal-300/90 font-medium max-w-[9rem] truncate" title={getCoachNamesForStudent(student, scopedCoaches, scopedTrainingGroups).join(', ')}>
  {getCoachNamesForStudent(student, scopedCoaches, scopedTrainingGroups).join(', ') || 'Atanmamış'}
  </p>
  </td>
  )}
- <td data-label="Grup / Paket" className="px-6 py-4">
- <p className="text-sm font-medium text-slate-200">{student.group}</p>
+ <td data-label="Grup" className="px-3 py-3">
+ <p className="text-sm font-medium text-slate-200 max-w-[10rem] truncate" title={student.group}>{student.group || '—'}</p>
  {student.registrationType && (
- <p className="text-[10px] text-slate-400">
- {student.registrationType === 'monthly' ? 'Aylık' : 'Ders paketi'}
+ <p className="text-[10px] text-slate-500 mt-0.5">
+ {student.registrationType === 'monthly' ? 'Aylık' : 'Paket'}
  </p>
  )}
  </td>
- <td data-label="Aidat / Ders" className="px-6 py-4 text-sm">{formatDues(student)}</td>
- <td data-label="Kayıt Tarihi" className="px-6 py-4 text-sm text-slate-300">
+ <td data-label="Aidat" className="px-3 py-3">{formatDues(student)}</td>
+ <td data-label="Kayıt" className="px-3 py-3 text-xs text-slate-400 tabular-nums whitespace-nowrap">
  {student.registrationDate ? new Date(student.registrationDate).toLocaleDateString('tr-TR') : '—'}
  </td>
- <td data-label="Giriş Bilgisi" className="px-6 py-4">
+ <td data-label="Giriş" className="px-3 py-3">
  <StudentLoginQuickInfo
    student={student}
+   compact
    onCopied={() => showToast('Giriş bilgileri kopyalandı.', 'success')}
  />
  </td>
- <td data-label="Durum" className="px-6 py-4">
+ <td data-label="Durum" className="px-3 py-3">
  <span
- className={`inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${
+ className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold ${
  student.status === 'inactive'
- ? 'bg-rose-500/10 text-rose-600 border border-rose-500/20'
- : 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+ ? 'bg-rose-500/10 text-rose-300'
+ : 'bg-emerald-500/10 text-emerald-300'
  }`}
  >
+ <span className={`w-1.5 h-1.5 rounded-full ${student.status === 'inactive' ? 'bg-rose-400' : 'bg-emerald-400'}`} />
  {student.status === 'inactive' ? 'Pasif' : 'Aktif'}
  </span>
  </td>
- <td data-label="İşlemler" className="px-6 py-4">
- <div className="flex justify-end gap-1.5">
+ <td data-label="İşlem" className="px-3 py-3">
+ <div className="flex justify-end items-center gap-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
  <button
  type="button"
  title="Detay"
  onClick={() => onViewDetail?.(student.id)}
- className="p-2 rounded-lg text-slate-400 hover:bg-indigo-500/10 hover:text-indigo-600 transition-all"
+ className="p-2 rounded-lg text-slate-400 hover:bg-indigo-500/10 hover:text-indigo-300 transition-colors"
  >
  <Eye className="w-4 h-4" />
  </button>
@@ -913,22 +981,22 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    ? `Başvuru formu — imzalı (${formCountByStudentId.signed.get(student.id)})`
    : 'Başvuru formu'
  }
- className={`relative p-2 rounded-lg transition-all ${
+ className={`relative p-2 rounded-lg transition-colors ${
   (formCountByStudentId.signed.get(student.id) ?? 0) > 0
-   ? 'text-violet-400 hover:bg-violet-500/10 hover:text-violet-300'
+   ? 'text-violet-400 hover:bg-violet-500/10'
    : 'text-slate-400 hover:bg-violet-500/10 hover:text-violet-300'
  }`}
  >
  <PenLine className="w-4 h-4" />
  {(formCountByStudentId.signed.get(student.id) ?? 0) > 0 ? (
-  <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-violet-400" />
+  <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-violet-400" />
  ) : null}
  </button>
  <button
  type="button"
  onClick={() => handleOpenModal(student)}
  title="Düzenle"
- className="p-2 rounded-lg text-slate-400 hover:bg-amber-500/10 hover:text-amber-600 transition-all"
+ className="p-2 rounded-lg text-slate-400 hover:bg-amber-500/10 hover:text-amber-300 transition-colors"
  >
  <Edit2 className="w-4 h-4" />
  </button>
@@ -937,7 +1005,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  type="button"
  onClick={() => handleDeleteStudent(student)}
  title="Sil"
- className="p-2 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-600 transition-all"
+ className="p-2 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-300 transition-colors"
  >
  <Trash2 className="w-4 h-4" />
  </button>
@@ -950,9 +1018,14 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </table>
  {filteredStudents.length === 0 && (
  <div className="py-16 text-center">
- <Users className="w-12 h-12 text-slate-300 mx-auto mb-4 opacity-50" />
- <p className="text-slate-400 font-medium">Kayıt bulunamadı</p>
- <p className="text-sm text-slate-400 mt-1">Filtreleri değiştirin veya yeni öğrenci ekleyin</p>
+ <Users className="w-12 h-12 text-slate-500 mx-auto mb-4 opacity-40" />
+ <p className="text-slate-300 font-medium">Kayıt bulunamadı</p>
+ <p className="text-sm text-slate-500 mt-1">Filtreleri değiştirin veya yeni öğrenci ekleyin</p>
+ {hasActiveFilters && (
+  <button type="button" onClick={clearFilters} className="mt-4 text-xs font-bold text-indigo-300 hover:text-indigo-200">
+   Filtreleri temizle
+  </button>
+ )}
  </div>
  )}
  </ResponsiveTable>

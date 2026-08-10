@@ -13,9 +13,11 @@ function buildLoginClipboardText(student: Student): string {
 type Props = {
   student: Student;
   onCopied?: () => void;
+  /** Tablo hücresi için tek satır, ikon odaklı görünüm */
+  compact?: boolean;
 };
 
-export const StudentLoginQuickInfo: React.FC<Props> = ({ student, onCopied }) => {
+export const StudentLoginQuickInfo: React.FC<Props> = ({ student, onCopied, compact = false }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -34,7 +36,41 @@ export const StudentLoginQuickInfo: React.FC<Props> = ({ student, onCopied }) =>
   }, [hasAny, onCopied, student]);
 
   if (!hasAny) {
-    return <span className="text-xs text-slate-500">Giriş bilgisi yok</span>;
+    return <span className="text-xs text-slate-500">—</span>;
+  }
+
+  if (compact) {
+    return (
+      <div className="inline-flex items-center gap-1.5 max-w-[10.5rem]">
+        <span className="text-[11px] font-mono text-slate-200 truncate" title={username || undefined}>
+          {username || '—'}
+        </span>
+        <div className="inline-flex items-center gap-0.5 shrink-0">
+          {password ? (
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="p-1.5 rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors"
+              title={showPassword ? password : 'Şifreyi göster'}
+            >
+              {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={copyAll}
+            className={`p-1.5 rounded-md transition-colors ${
+              copied
+                ? 'text-emerald-400 bg-emerald-500/10'
+                : 'text-slate-500 hover:text-indigo-300 hover:bg-indigo-500/10'
+            }`}
+            title={copied ? 'Kopyalandı' : 'Giriş bilgilerini kopyala'}
+          >
+            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -110,46 +146,37 @@ export const StudentLoginQuickInfoInline: React.FC<InlineProps> = ({ student, on
   if (!hasAny) return null;
 
   return (
-    <div className="rounded-lg border border-slate-700/50 bg-slate-900/40 px-3 py-2 space-y-1.5">
-      <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-slate-500">
+    <div className="rounded-xl border border-white/[0.06] bg-slate-950/40 px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
         <KeyRound className="w-3 h-3" />
-        Giriş bilgisi
-      </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-        {username ? (
-          <span>
-            <span className="text-slate-500">K.adı:</span>{' '}
-            <span className="font-mono text-slate-200">{username}</span>
-          </span>
-        ) : null}
-        {password ? (
-          <span className="inline-flex items-center gap-1">
-            <span className="text-slate-500">Şifre:</span>{' '}
-            <span className="font-mono text-slate-200">{showPassword ? password : '••••••••'}</span>
-            <button
-              type="button"
-              onClick={() => setShowPassword((v) => !v)}
-              className="p-0.5 text-slate-500 hover:text-slate-300"
-            >
-              {showPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-            </button>
-          </span>
-        ) : null}
-        {student.parentPin?.trim() ? (
-          <span>
-            <span className="text-slate-500">Veli PIN:</span>{' '}
-            <span className="font-mono text-violet-300">{student.parentPin.trim()}</span>
-          </span>
-        ) : null}
-        <button
-          type="button"
-          onClick={copyAll}
-          className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-400 hover:text-indigo-300"
-        >
-          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copied ? 'Kopyalandı' : 'Kopyala'}
-        </button>
-      </div>
+        Giriş
+      </span>
+      {username ? (
+        <span className="text-xs font-mono text-slate-200">{username}</span>
+      ) : null}
+      {password ? (
+        <span className="inline-flex items-center gap-1 text-xs">
+          <span className="font-mono text-slate-300">{showPassword ? password : '••••••••'}</span>
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            className="p-1 rounded-md text-slate-500 hover:text-slate-300 hover:bg-white/5"
+          >
+            {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          </button>
+        </span>
+      ) : null}
+      {student.parentPin?.trim() ? (
+        <span className="text-xs font-mono text-violet-300">{student.parentPin.trim()}</span>
+      ) : null}
+      <button
+        type="button"
+        onClick={copyAll}
+        className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold text-indigo-300 hover:bg-indigo-500/10 transition-colors"
+      >
+        {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+        {copied ? 'Kopyalandı' : 'Kopyala'}
+      </button>
     </div>
   );
 };
