@@ -25,6 +25,7 @@ import StudyPage from './components/StudyPage';
 import Tournaments from './components/Tournaments';
 import { Menu, Search, Bell, LayoutDashboard, User } from 'lucide-react';
 import { AppProvider, useApp } from './AppContext';
+import AdminClubSwitcher from './components/admin/AdminClubSwitcher';
 import { COACH_NAV_CATEGORIES, NAV_CATEGORIES, type NavCategory } from './constants';
 import ClubPanel from './components/ClubPanel';
 import ApplicationForm from './components/ApplicationForm';
@@ -38,7 +39,9 @@ import AccountDropdown, { type AccountDropdownItem } from './components/ui/Accou
 import { getSessionDisplay } from './lib/sessionDisplayName';
 import { loadAdminProfile } from './lib/adminProfile';
 import { filterNavByPermissions, coachNavForPermissions, isCoachPanelTabAllowed, coachSidebarTabFor } from './lib/rolePermissions';
-import { readPanelHash, writePanelHash, isAdminLoginRoute } from './lib/panelRouting';
+import { readPanelHash, writePanelHash, isAdminLoginRoute, getPublicLoginRoute, type PublicLoginTab } from './lib/panelRouting';
+import MainSiteEditor from './components/admin/MainSiteEditor';
+import MainPublicSite from './components/public/MainPublicSite';
 import { getClubApplicationSlug } from './lib/applicationClub';
 
 // ─── Türkçe slug haritası (lib/panelRouting.ts) ───────────────────────────────
@@ -47,7 +50,10 @@ import { readPanelHash as readHash, writePanelHash as writeHash } from './lib/pa
 /** Tahta / çalışma gibi tam genişlik modüller — mobilde yan padding taşmayı önler */
 const FULL_BLEED_TABS = new Set(['study', 'lessons']);
 
-function getPublicFormRoute(): { route: 'basvuru'; clubSlug?: string } | { route: 'veli-imza' } | null {
+function getPublicFormRoute():
+  | { route: 'basvuru'; clubSlug?: string }
+  | { route: 'veli-imza' }
+  | null {
   if (getVeliImzaToken()) return { route: 'veli-imza' };
   const parts = window.location.hash.replace(/^#\/?/, '').split('/');
   const head = parts[0];
@@ -99,6 +105,7 @@ const AppRoot: React.FC = () => {
   const { auth, logout, students, apiStudent } = useApp();
   const [publicForm, setPublicForm] = useState(() => getPublicFormRoute());
   const [adminLoginRoute, setAdminLoginRoute] = useState(() => isAdminLoginRoute());
+  const [publicLogin, setPublicLogin] = useState(() => getPublicLoginRoute());
   const [passiveBlocked, setPassiveBlocked] = useState(false);
 
   useEffect(() => {
@@ -109,6 +116,7 @@ const AppRoot: React.FC = () => {
     const onHash = () => {
       setPublicForm(getPublicFormRoute());
       setAdminLoginRoute(isAdminLoginRoute());
+      setPublicLogin(getPublicLoginRoute());
     };
     window.addEventListener('hashchange', onHash);
     window.addEventListener('popstate', onHash);
@@ -138,6 +146,20 @@ const AppRoot: React.FC = () => {
     if (token) return <ParentConsentForm token={token} />;
   }
   if (!auth) {
+    const wantsLogin = adminLoginRoute || publicLogin !== null;
+    if (!wantsLogin) {
+      return (
+        <>
+          {passiveBlocked ? (
+            <div className="fixed top-4 left-1/2 z-[200] -translate-x-1/2 max-w-md w-[calc(100%-2rem)] rounded-xl border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-center text-sm font-bold text-amber-100 shadow-xl">
+              Hesabınız pasiftir. Sisteme giriş yapamazsınız.
+            </div>
+          ) : null}
+          <MainPublicSite />
+        </>
+      );
+    }
+    const loginTab = (publicLogin?.tab ?? undefined) as PublicLoginTab | undefined;
     return (
       <>
         {passiveBlocked ? (
@@ -145,7 +167,7 @@ const AppRoot: React.FC = () => {
             Hesabınız pasiftir. Sisteme giriş yapamazsınız.
           </div>
         ) : null}
-        <Login adminOnly={adminLoginRoute} />
+        <Login adminOnly={adminLoginRoute} initialTab={loginTab} />
       </>
     );
   }
@@ -273,6 +295,8 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Inventory />;
       case 'gallery':
         return <Gallery />;
+      case 'main-site':
+        return <MainSiteEditor />;
       case 'messages':
         return <Messages />;
       case 'whatsapp':
@@ -335,27 +359,29 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
           <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
 
-          <header className="h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 transition-all duration-500 bg-[#020617]/40 backdrop-blur-xl border-b border-white/5 shrink-0">
+          <header className="h-14 sm:h-16 lg:h-18 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 transition-all duration-300 bg-[#070b14]/75 backdrop-blur-2xl border-b border-white/[0.08] shrink-0">
             <div className="flex items-center gap-3 sm:gap-6 min-w-0">
-              <button type="button" onClick={() => setSidebarOpen(true)} className="p-2 rounded-lg lg:hidden hover:bg-slate-800 text-slate-300" aria-label="Menüyü aç">
+              <button type="button" onClick={() => setSidebarOpen(true)} className="p-2.5 rounded-xl lg:hidden hover:bg-white/10 text-slate-300 transition-colors" aria-label="Menüyü aç">
                 <Menu className="w-5 h-5" />
               </button>
-              <div className="hidden md:flex items-center rounded-lg px-4 py-2.5 border transition-all bg-slate-900/50 border-white/5 focus-within:border-indigo-500/50 flex-1 max-w-xs">
-                <Search className="w-4 h-4 text-slate-500 mr-3 shrink-0" />
+              <div className="hidden md:flex items-center rounded-xl px-3.5 py-2 border transition-all bg-slate-900/60 border-white/10 focus-within:border-indigo-500/60 focus-within:shadow-[0_0_15px_rgba(99,102,241,0.2)] flex-1 max-w-sm">
+                <Search className="w-4 h-4 text-slate-400 mr-2.5 shrink-0" />
                 <input
                   type="text"
-                  placeholder="Hızlı arama..."
-                  className="bg-transparent border-none outline-none text-sm w-full min-w-0 text-slate-400 focus:text-slate-200 placeholder:text-slate-600"
+                  placeholder="Hızlı arama yapın..."
+                  className="bg-transparent border-none outline-none text-xs font-medium w-full min-w-0 text-slate-200 placeholder:text-slate-500"
                 />
+                <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-slate-400 bg-white/[0.06] border border-white/10 rounded-md shrink-0">⌘K</kbd>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-6 shrink-0">
-              <button type="button" className="relative p-2 sm:p-2.5 rounded-lg transition-all text-slate-400 hover:text-indigo-400 hover:bg-slate-800/50">
-                <Bell className="w-5 h-5" />
-                <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-500 rounded-full border-2 border-[#020617]" />
+            <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
+              <AdminClubSwitcher />
+              <button type="button" className="relative p-2.5 rounded-xl transition-all text-slate-400 hover:text-white hover:bg-white/[0.06] active:scale-95">
+                <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
+                <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-500 rounded-full shadow-[0_0_8px_#6366f1]" />
               </button>
-              <div className="h-6 sm:h-8 w-px bg-white/5 hidden sm:block" />
+              <div className="h-6 w-px bg-white/10 hidden sm:block" />
               <AccountDropdown
                 name={session.fullName}
                 subtitle={session.roleLabel}
@@ -631,15 +657,16 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       />
       <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
-        <header className="h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/40 backdrop-blur-xl border-b border-white/5 shrink-0">
+        <header className="h-14 sm:h-16 lg:h-18 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 transition-all duration-300 bg-[#070b14]/75 backdrop-blur-2xl border-b border-white/[0.08] shrink-0">
           <div className="flex items-center gap-3 sm:gap-6 min-w-0">
-            <button type="button" onClick={() => setSidebarOpen(true)} className="p-2 rounded-lg lg:hidden hover:bg-slate-800 text-slate-300" aria-label="Menüyü aç"><Menu className="w-5 h-5" /></button>
-            <div className="hidden md:flex items-center rounded-lg px-4 py-2.5 border bg-slate-900/50 border-white/5 max-w-xs">
-              <Search className="w-4 h-4 text-slate-500 mr-3 shrink-0" />
-              <input type="text" placeholder="Hızlı arama..." className="bg-transparent border-none outline-none text-sm w-full min-w-0 text-slate-400 placeholder:text-slate-600" />
+            <button type="button" onClick={() => setSidebarOpen(true)} className="p-2.5 rounded-xl lg:hidden hover:bg-white/10 text-slate-300 transition-colors" aria-label="Menüyü aç"><Menu className="w-5 h-5" /></button>
+            <div className="hidden md:flex items-center rounded-xl px-3.5 py-2 border transition-all bg-slate-900/60 border-white/10 focus-within:border-indigo-500/60 focus-within:shadow-[0_0_15px_rgba(99,102,241,0.2)] flex-1 max-w-sm">
+              <Search className="w-4 h-4 text-slate-400 mr-2.5 shrink-0" />
+              <input type="text" placeholder="Hızlı arama yapın..." className="bg-transparent border-none outline-none text-xs font-medium w-full min-w-0 text-slate-200 placeholder:text-slate-500" />
+              <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-slate-400 bg-white/[0.06] border border-white/10 rounded-md shrink-0">⌘K</kbd>
             </div>
           </div>
-          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
             <AccountDropdown
               name={session.fullName}
               subtitle={coachProfile?.title || session.roleLabel}

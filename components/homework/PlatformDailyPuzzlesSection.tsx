@@ -1340,14 +1340,40 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
             O gün yapılan tüm bulmaca ve maçlar gösterilir; her açılışta yalnızca yeni kayıtlar eklenir.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => { void load(true); void loadLichess(); }}
-          disabled={loading || lichessLoading}
-          className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
-        >
-          Yenile
-        </button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {lichessUsername ? (
+            <a
+              href={`https://lichess.org/@/${encodeURIComponent(lichessUsername)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-md border border-[#81b64c]/40 bg-[#81b64c]/10 px-2.5 py-1 text-[11px] font-bold text-[#81b64c] hover:bg-[#81b64c]/20 transition-colors"
+              title={`Lichess profili: ${lichessUsername}`}
+            >
+              <ExternalLink className="w-3 h-3" />
+              Lichess
+            </a>
+          ) : null}
+          {chessComUsername ? (
+            <a
+              href={`https://www.chess.com/member/${encodeURIComponent(chessComUsername)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-bold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+              title={`Chess.com profili: ${chessComUsername}`}
+            >
+              <ExternalLink className="w-3 h-3" />
+              Chess.com
+            </a>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => { void load(true); void loadLichess(); }}
+            disabled={loading || lichessLoading}
+            className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
+          >
+            Yenile
+          </button>
+        </div>
       </div>
 
       {canFilterPlatforms ? (

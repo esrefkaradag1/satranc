@@ -169,6 +169,7 @@ const Homework: React.FC = () => {
   const [loadingDailyPlatformStats, setLoadingDailyPlatformStats] = useState(false);
   const dailyPlatformPollEnabledRef = useRef(false);
   const dailyPlatformRefreshInFlightRef = useRef(false);
+  const dailyPlatformPendingForceRef = useRef(false);
   const studentPlatformWeekStatsRef = useRef<Record<string, Record<string, PlatformDayStats>>>(
     initialPlatformCache?.stats ?? {},
   );
@@ -538,7 +539,7 @@ const Homework: React.FC = () => {
     if (persistDb) persistPlatformPatchToDb(undefined, patch);
   }, [persistPlatformPatchToDb]);
 
-  const refreshDailyPlatformStats = useCallback(async (opts?: { silent?: boolean }) => {
+  const refreshDailyPlatformStats = useCallback(async (opts?: { silent?: boolean; force?: boolean }) => {
     const hw = programSelectedHw ?? programHomework;
     if (!hw || !homeworkHasPlatformGoals(hw)) {
       return;
@@ -547,7 +548,14 @@ const Homework: React.FC = () => {
     if (scopeAssignees.length === 0) {
       return;
     }
-    if (dailyPlatformRefreshInFlightRef.current) return;
+    const force = Boolean(opts?.force) || !opts?.silent;
+    if (dailyPlatformRefreshInFlightRef.current) {
+      if (opts?.silent) return;
+      dailyPlatformPendingForceRef.current = true;
+      setLoadingDailyPlatformStats(true);
+      showToast('Devam eden çekim bitince yeniden yenilenecek…', 'info');
+      return;
+    }
     dailyPlatformRefreshInFlightRef.current = true;
     setLoadingDailyPlatformStats(true);
     dailyPlatformPollEnabledRef.current = true;
@@ -558,14 +566,18 @@ const Homework: React.FC = () => {
       const hasMemoryCache = (studentId: string) =>
         studentPlatformWeekStatsRef.current[studentId]?.[dateKey] != null;
 
-      if (isDailyHomeworkDayClosed(dateKey) && scopeAssignees.every((s) => hasMemoryCache(s.id))) {
+      if (
+        !force
+        && isDailyHomeworkDayClosed(dateKey)
+        && scopeAssignees.every((s) => hasMemoryCache(s.id))
+      ) {
         if (!opts?.silent) {
           showToast('Geçmiş gün verisi önbellekten gösteriliyor.', 'info');
         }
         return;
       }
 
-      if (isDailyHomeworkDayClosed(dateKey)) {
+      if (!force && isDailyHomeworkDayClosed(dateKey)) {
         const db = await loadPlatformDayStatsFromDb(
           scopeAssignees.map((s) => s.id),
           [dateKey],
@@ -586,7 +598,12 @@ const Homework: React.FC = () => {
         }
       }
 
-      const { byStudent: platformPatch, batchFailed } = await syncStudentsPlatformDays(scopeAssignees, [dateKey], [dateKey]);
+      const { byStudent: platformPatch, batchFailed } = await syncStudentsPlatformDays(
+        scopeAssignees,
+        [dateKey],
+        [dateKey],
+        { force },
+      );
       let hadFreshData = false;
       if (Object.keys(platformPatch).length > 0) {
         for (const s of scopeAssignees) {
@@ -614,12 +631,15 @@ const Homework: React.FC = () => {
         }
       }
 
-      const needsSlowTimeFetch = dateKey === today && scopeAssignees.some((s) => {
-        const merged = platformPatch[s.id]?.[dateKey];
-        const hasActivity = (merged?.puzzleSolved ?? 0) > 0 || (merged?.games ?? 0) > 0;
-        const sec = merged?.activityTimeSeconds ?? 0;
-        return hasActivity && sec <= 0;
-      });
+      // Büyük gruplarda öğrenci başına süre çekimi tüm isteği kilitlemesin
+      const needsSlowTimeFetch = dateKey === today
+        && scopeAssignees.length <= 8
+        && scopeAssignees.some((s) => {
+          const merged = platformPatch[s.id]?.[dateKey];
+          const hasActivity = (merged?.puzzleSolved ?? 0) > 0 || (merged?.games ?? 0) > 0;
+          const sec = merged?.activityTimeSeconds ?? 0;
+          return hasActivity && sec <= 0;
+        });
 
       if (needsSlowTimeFetch) {
         for (const s of scopeAssignees) {
@@ -648,9 +668,16 @@ const Homework: React.FC = () => {
         if (batchFailed) {
           showToast('Sunucu platform verisini alamadı; önbellekteki kayıtlar gösteriliyor. Biraz sonra tekrar deneyin.', 'warning');
         } else {
+          const withUsernames = scopeAssignees.filter(
+            (s) => Boolean(s.lichessUsername?.trim() || s.chessComUsername?.trim()),
+          ).length;
           showToast(
-            hadFreshData ? 'Platform verileri güncellendi.' : 'Yeni aktivite yok; önceki veriler korundu.',
-            hadFreshData ? 'success' : 'info',
+            hadFreshData
+              ? `Platform verileri güncellendi (${withUsernames}/${scopeAssignees.length} hesaplı öğrenci).`
+              : withUsernames === 0
+                ? 'Öğrencilerde Lichess/Chess.com kullanıcı adı yok.'
+                : 'Yeni aktivite yok; önceki veriler korundu.',
+            hadFreshData ? 'success' : withUsernames === 0 ? 'warning' : 'info',
           );
         }
       }
@@ -659,6 +686,12 @@ const Homework: React.FC = () => {
     } finally {
       setLoadingDailyPlatformStats(false);
       dailyPlatformRefreshInFlightRef.current = false;
+      if (dailyPlatformPendingForceRef.current) {
+        dailyPlatformPendingForceRef.current = false;
+        window.setTimeout(() => {
+          void refreshDailyPlatformStats({ force: true });
+        }, 50);
+      }
     }
   }, [
     programSelectedHw,
@@ -681,6 +714,7 @@ const Homework: React.FC = () => {
   useEffect(() => {
     if (!PLATFORM_TODAY_AUTO_REFRESH_ENABLED) return;
     if (panelTab !== 'program' || programPlatformSyncAssignees.length === 0) return;
+    if (loadingDailyPlatformStats || dailyPlatformRefreshInFlightRef.current) return;
     let cancelled = false;
     const today = homeworkDayKey();
     void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then(({ byStudent: patch }) => {
@@ -688,7 +722,7 @@ const Homework: React.FC = () => {
       applyPlatformStatsPatch(patch);
     });
     return () => { cancelled = true; };
-  }, [panelTab, programPlatformSyncAssigneeIdsKey, programPlatformSyncAssignees, applyPlatformStatsPatch]);
+  }, [panelTab, programPlatformSyncAssigneeIdsKey, programPlatformSyncAssignees, applyPlatformStatsPatch, loadingDailyPlatformStats]);
 
   useEffect(() => {
     if (!PLATFORM_TODAY_AUTO_REFRESH_ENABLED) return;
@@ -701,6 +735,7 @@ const Homework: React.FC = () => {
     const pollMs = hasLiveActivity ? PLATFORM_ACTIVE_POLL_MS : PLATFORM_IDLE_POLL_MS;
     const id = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
+      if (loadingDailyPlatformStats || dailyPlatformRefreshInFlightRef.current) return;
       void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then(({ byStudent: patch }) => {
         if (Object.keys(patch).length > 0) applyPlatformStatsPatch(patch);
       });
@@ -712,6 +747,7 @@ const Homework: React.FC = () => {
     programPlatformSyncAssignees,
     applyPlatformStatsPatch,
     studentPlatformWeekStats,
+    loadingDailyPlatformStats,
   ]);
 
   useEffect(() => {
@@ -720,6 +756,7 @@ const Homework: React.FC = () => {
     const today = homeworkDayKey();
     const triggerRefresh = () => {
       if (document.visibilityState !== 'visible') return;
+      if (loadingDailyPlatformStats || dailyPlatformRefreshInFlightRef.current) return;
       void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today]).then(({ byStudent: patch }) => {
         if (Object.keys(patch).length > 0) applyPlatformStatsPatch(patch);
       });
@@ -733,7 +770,7 @@ const Homework: React.FC = () => {
       window.removeEventListener('online', triggerRefresh);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [panelTab, programPlatformSyncAssigneeIdsKey, programPlatformSyncAssignees, applyPlatformStatsPatch]);
+  }, [panelTab, programPlatformSyncAssigneeIdsKey, programPlatformSyncAssignees, applyPlatformStatsPatch, loadingDailyPlatformStats]);
 
   useEffect(() => {
     if (!PLATFORM_TODAY_AUTO_REFRESH_ENABLED) return;
@@ -2377,7 +2414,7 @@ const Homework: React.FC = () => {
                   onViewDateChange={setViewDate}
                   onBack={backToProgramList}
                   onSelectStudent={setProgramDetailStat}
-                  onRefreshPlatform={() => void refreshDailyPlatformStats()}
+                  onRefreshPlatform={() => void refreshDailyPlatformStats({ force: true })}
                   loadingPlatform={loadingDailyPlatformStats}
                   scheduleStudents={programStudents}
                   drafts={dailyTargetDrafts}

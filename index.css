@@ -39,9 +39,44 @@
 
   /* ─── Dark mode surface ─── */
   .glass-card {
-    background: #1e293b;
-    border-color: rgba(51, 65, 85, 0.6);
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+    background: rgba(30, 41, 59, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  .glass-panel-elevated {
+    background: rgba(15, 23, 42, 0.65);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  }
+
+  .glow-card {
+    position: relative;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .glow-card::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.3), rgba(168, 85, 247, 0.05), transparent 70%);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+    opacity: 0.6;
+    transition: opacity 0.3s ease;
+  }
+
+  .glow-card:hover::after {
+    opacity: 1;
   }
 
   .premium-gradient {
@@ -50,52 +85,68 @@
 
   .atmospheric-bg {
     background:
-      radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
-      radial-gradient(circle at 100% 100%, rgba(168, 85, 247, 0.06) 0%, transparent 50%);
+      radial-gradient(ellipse 80% 80% at 50% -20%, rgba(99, 102, 241, 0.15) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 60% at 100% 100%, rgba(168, 85, 247, 0.1) 0%, transparent 50%),
+      radial-gradient(ellipse 50% 50% at 0% 50%, rgba(14, 165, 233, 0.08) 0%, transparent 50%);
   }
 
   /* ─── Input fields ─── */
   .input-base {
-    @apply w-full px-4 py-3 rounded-lg text-sm font-medium outline-none transition-all;
-    background: #0f172a;
-    border: 1px solid #334155;
+    @apply w-full px-4 py-3 rounded-xl text-sm font-medium outline-none transition-all duration-200;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     color: rgb(226, 232, 240);
   }
 
   .input-base::placeholder {
-    color: rgb(100, 116, 139);
+    color: rgb(148, 163, 184);
   }
 
   .input-base:focus {
-    border-color: #6366f1;
-    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+    border-color: rgba(99, 102, 241, 0.6);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15), 0 0 20px rgba(99, 102, 241, 0.1);
+    background: rgba(15, 23, 42, 0.9);
+  }
+
+  .btn-gradient-primary {
+    @apply relative overflow-hidden font-semibold text-white rounded-xl transition-all duration-200 active:scale-[0.98] shadow-lg shadow-indigo-600/25 hover:shadow-indigo-600/40;
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 50%, #7c3aed 100%);
+  }
+
+  .btn-gradient-primary:hover {
+    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 50%, #6d28d9 100%);
+  }
+
+  .badge-glowing {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold tracking-wide border;
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.2);
   }
 
   .dashboard-mesh {
     background-image:
-      linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
-    background-size: 32px 32px;
+      radial-gradient(rgba(99, 102, 241, 0.12) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
 
   .bento-card {
-    @apply rounded-2xl border border-white/[0.08] bg-[#0f172a]/45 backdrop-blur-2xl;
+    @apply rounded-2xl border border-white/[0.08] bg-[#0f172a]/60 backdrop-blur-2xl transition-all duration-300;
     box-shadow:
       0 0 0 1px rgba(255, 255, 255, 0.03) inset,
-      0 8px 32px rgba(0, 0, 0, 0.2);
-    transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+      0 10px 30px -5px rgba(0, 0, 0, 0.3);
   }
 
   .bento-card:hover {
-    border-color: rgba(99, 102, 241, 0.22);
-    background: rgba(15, 23, 42, 0.58);
+    border-color: rgba(99, 102, 241, 0.3);
+    background: rgba(15, 23, 42, 0.75);
+    transform: translateY(-2px);
     box-shadow:
-      0 0 0 1px rgba(99, 102, 241, 0.1) inset,
-      0 12px 40px rgba(99, 102, 241, 0.1);
+      0 0 0 1px rgba(99, 102, 241, 0.15) inset,
+      0 20px 40px -10px rgba(99, 102, 241, 0.15),
+      0 12px 32px rgba(0, 0, 0, 0.4);
   }
 
   .dashboard-glass {
-    @apply bg-[#0f172a]/40 backdrop-blur-xl border border-white/[0.08];
+    @apply bg-[#0f172a]/50 backdrop-blur-xl border border-white/[0.08];
   }
 
   .modal-overlay {
@@ -111,8 +162,8 @@
       max(env(safe-area-inset-right), 0.75rem)
       max(env(safe-area-inset-bottom), 0.75rem)
       max(env(safe-area-inset-left), 0.75rem);
-    background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(10px);
+    background: rgba(5, 8, 18, 0.75);
+    backdrop-filter: blur(12px);
     -webkit-overflow-scrolling: touch;
   }
 
@@ -142,9 +193,9 @@
 
   .hero-glow {
     background:
-      radial-gradient(ellipse 80% 60% at 20% 0%, rgba(99, 102, 241, 0.35), transparent 55%),
-      radial-gradient(ellipse 60% 50% at 90% 100%, rgba(168, 85, 247, 0.25), transparent 50%),
-      linear-gradient(135deg, #4338ca 0%, #4f46e5 35%, #6d28d9 100%);
+      radial-gradient(ellipse 80% 60% at 20% 0%, rgba(99, 102, 241, 0.4), transparent 55%),
+      radial-gradient(ellipse 60% 50% at 90% 100%, rgba(168, 85, 247, 0.3), transparent 50%),
+      linear-gradient(135deg, #3730a3 0%, #4f46e5 40%, #6d28d9 100%);
   }
 }
 

@@ -125,6 +125,7 @@ export async function syncStudentsPlatformDays(
   students: Student[],
   allDays: string[],
   apiDays?: string[],
+  opts?: { force?: boolean },
 ): Promise<StudentsPlatformSyncResult> {
   const days = normalizeDays(allDays);
   const refreshDays = normalizeDays(apiDays ?? days);
@@ -142,10 +143,12 @@ export async function syncStudentsPlatformDays(
     }
   }
 
-  const effectiveRefreshDays = filterPlatformApiRefreshDays(
-    refreshDays,
-    (day) => ids.every((sid) => hasPlatformDayCache(out[sid]?.[day])),
-  );
+  const effectiveRefreshDays = opts?.force
+    ? refreshDays
+    : filterPlatformApiRefreshDays(
+      refreshDays,
+      (day) => ids.every((sid) => hasPlatformDayCache(out[sid]?.[day])),
+    );
 
   let batchStats: Record<string, Record<string, PlatformDayStats>> | null = null;
   const batchRequested = effectiveRefreshDays.length > 0 && students.length > 0;
@@ -153,7 +156,6 @@ export async function syncStudentsPlatformDays(
     batchStats = await fetchStudentsPlatformWeekStats(students, effectiveRefreshDays);
   }
   const batchFailed = batchRequested && batchStats === null;
-  const allowClientFallback = students.length === 1 && !batchFailed;
 
   const rowsToSave: PlatformDayCacheRow[] = [];
   for (const student of students) {
@@ -164,12 +166,21 @@ export async function syncStudentsPlatformDays(
       const fresh = batchStats?.[sid]?.[day];
       if (fresh) {
         merged = mergePlatformDayStats(merged, fresh);
-      } else if (allowClientFallback && effectiveRefreshDays.includes(day)) {
-        try {
-          const clientFresh = await fetchStudentPlatformDayStats(student, day);
-          merged = mergePlatformDayStats(merged, clientFresh);
-        } catch {
-          /* DB korunur */
+      } else if (effectiveRefreshDays.includes(day)) {
+        // Batch tamamen düştü, öğrenci chunk'tan gelmedi veya önbellek yoksa tarayıcıdan yedek çek.
+        const missingFromBatch = batchRequested && batchStats != null && !fresh;
+        const shouldClientFallback =
+          students.length === 1
+          || batchFailed
+          || missingFromBatch
+          || !hasPlatformDayCache(merged);
+        if (shouldClientFallback) {
+          try {
+            const clientFresh = await fetchStudentPlatformDayStats(student, day);
+            merged = mergePlatformDayStats(merged, clientFresh);
+          } catch {
+            /* DB korunur */
+          }
         }
       }
       if (merged) {

@@ -6,36 +6,44 @@ import {
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { canShowStudentCounts } from '../lib/studentCountVisibility';
-import type { Student, WhatsAppContactGroup, WhatsAppProvider, WhatsAppTemplate } from '../types';
+import type { Student, WhatsAppContactGroup, WhatsAppMessageLog, WhatsAppProvider, WhatsAppTemplate } from '../types';
 import {
   loadWhatsAppConfig, saveWhatsAppConfig, loadWhatsAppTemplates, saveWhatsAppTemplates,
   loadWhatsAppAutoRules, saveWhatsAppAutoRules, loadWhatsAppLogs, loadWhatsAppContactGroups,
   saveWhatsAppContactGroups, whatsAppStats, DEFAULT_WHATSAPP_CONFIG,
 } from '../lib/whatsappStorage';
-import { renderWhatsAppTemplate, buildStudentTemplateVars } from '../lib/whatsappTemplates';
+import { renderWhatsAppTemplate, buildStudentTemplateVars, createCustomWhatsAppTemplate, isSystemWhatsAppTemplate } from '../lib/whatsappTemplates';
 import { primaryParentPhone } from '../lib/whatsappPhones';
 import { isValidWhatsAppPhone } from '../lib/whatsappUtils';
 import {
   fetchWhatsAppStatus, fetchWhatsAppQr, fetchWhatsAppDevices, fetchWhatsAppPairCode,
   waitWhatsAppDeviceLogin,
   sendWhatsAppBulk, sendParentLoginBulk,
+  fetchWhatsAppServerSettings, saveWhatsAppServerSettings, fetchWhatsAppServerLogs,
 } from '../services/whatsappClient';
 import { studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { normalizeClubKey } from '../lib/clubScope';
 
 type View =
   | 'home' | 'manual' | 'bulk' | 'groups' | 'templates' | 'api' | 'auto'
-  | 'parent-login' | 'contacts' | 'qr';
+  | 'parent-login' | 'contacts' | 'qr' | 'logs';
 
-const MODULE_TILES: { id: View; title: string; desc: string; icon: React.ReactNode; color: string }[] = [
-  { id: 'manual', title: 'Manuel Mesaj', desc: 'Özel numara listesine mesaj gönder', icon: <Send className="w-7 h-7" />, color: 'from-blue-500/20 to-indigo-500/10 border-blue-500/30' },
-  { id: 'bulk', title: 'Bireysel / Toplu Mesaj', desc: 'Öğrenci seçerek toplu mesaj', icon: <Users className="w-7 h-7" />, color: 'from-violet-500/20 to-purple-500/10 border-violet-500/30' },
-  { id: 'groups', title: 'Gruplara Mesaj', desc: 'Branş ve grup seçerek gönder', icon: <BookOpen className="w-7 h-7" />, color: 'from-emerald-500/20 to-teal-500/10 border-emerald-500/30' },
-  { id: 'templates', title: 'Mesaj Şablonları', desc: 'Kayıtlı mesaj formatları', icon: <FileText className="w-7 h-7" />, color: 'from-amber-500/20 to-orange-500/10 border-amber-500/30' },
-  { id: 'api', title: 'API Ayarları', desc: 'WaMessage API anahtarı ve cihaz', icon: <KeyRound className="w-7 h-7" />, color: 'from-slate-500/20 to-slate-600/10 border-slate-500/30' },
-  { id: 'parent-login', title: 'Veli Giriş Bilgileri', desc: 'Toplu veli giriş bilgisi gönder', icon: <UserCheck className="w-7 h-7" />, color: 'from-rose-500/20 to-pink-500/10 border-rose-500/30' },
-  { id: 'contacts', title: 'Telefon Rehberi', desc: 'İletişim grupları yönet', icon: <Contact className="w-7 h-7" />, color: 'from-cyan-500/20 to-sky-500/10 border-cyan-500/30' },
-  { id: 'auto', title: 'Otomatik Mesajlar', desc: 'Ders başlangıcı, kayıt vb.', icon: <MessageCircle className="w-7 h-7" />, color: 'from-green-500/20 to-emerald-500/10 border-green-500/30' },
+const MODULE_TILES: { id: View; title: string; desc: string; icon: React.ReactNode }[] = [
+  { id: 'manual', title: 'Manuel Mesaj', desc: 'Numara listesine özel mesaj', icon: <Send className="w-5 h-5" /> },
+  { id: 'bulk', title: 'Bireysel / Toplu', desc: 'Öğrenci seçerek toplu gönder', icon: <Users className="w-5 h-5" /> },
+  { id: 'groups', title: 'Gruplara Mesaj', desc: 'Branş ve gruba gönder', icon: <BookOpen className="w-5 h-5" /> },
+  { id: 'templates', title: 'Mesaj Şablonları', desc: 'Hazır metinleri yönet', icon: <FileText className="w-5 h-5" /> },
+  { id: 'logs', title: 'Gönderim Geçmişi', desc: 'Son mesajlar, hata ve durum', icon: <Phone className="w-5 h-5" /> },
+  { id: 'api', title: 'API Ayarları', desc: 'WaMessage anahtar ve cihaz', icon: <KeyRound className="w-5 h-5" /> },
+  { id: 'parent-login', title: 'Veli Giriş Bilgileri', desc: 'Toplu veli hesap bilgisi', icon: <UserCheck className="w-5 h-5" /> },
+  { id: 'contacts', title: 'Telefon Rehberi', desc: 'İletişim grupları', icon: <Contact className="w-5 h-5" /> },
+  { id: 'auto', title: 'Otomatik Mesajlar', desc: 'Antrenman ve ders bildirimleri', icon: <MessageCircle className="w-5 h-5" /> },
+];
+
+const TEMPLATE_VARS = [
+  'ogrenci_adi', 'veli_adi', 'kullanici_adi', 'sifre', 'veli_pin',
+  'ders_adi', 'ders_linki', 'form_linki', 'kulup_adi', 'grup', 'tarih', 'saat',
+  'bulmaca_hedef', 'mac_hedef', 'bulmaca_sayisi', 'mac_sayisi', 'antrenman_adi',
 ];
 
 const WhatsAppManagement: React.FC = () => {
@@ -56,6 +64,9 @@ const WhatsAppManagement: React.FC = () => {
   const [autoRules, setAutoRules] = useState(loadWhatsAppAutoRules);
   const [contactGroups, setContactGroups] = useState(loadWhatsAppContactGroups);
   const [logs, setLogs] = useState(loadWhatsAppLogs);
+  const [serverLogs, setServerLogs] = useState<WhatsAppMessageLog[]>([]);
+  const [serverLogsLoading, setServerLogsLoading] = useState(false);
+  const [serverSyncNote, setServerSyncNote] = useState('');
   const [apiStatus, setApiStatus] = useState<{
     connected: boolean;
     state: string;
@@ -85,7 +96,11 @@ const WhatsAppManagement: React.FC = () => {
   const [newContactName, setNewContactName] = useState('');
   const [newContactPhones, setNewContactPhones] = useState('');
 
-  const stats = useMemo(() => whatsAppStats(logs), [logs]);
+  const stats = useMemo(() => {
+    const merged = [...serverLogs, ...logs];
+    const byId = new Map(merged.map((l) => [l.id, l]));
+    return whatsAppStats([...byId.values()]);
+  }, [logs, serverLogs]);
   const officeStudents = useMemo(
     () => students.filter((s) => !branchOffice || normalizeClubKey(s.branchOffice ?? '') === normalizeClubKey(branchOffice)),
     [students, branchOffice],
@@ -94,7 +109,113 @@ const WhatsAppManagement: React.FC = () => {
   const persistConfig = useCallback((next: typeof config) => {
     setConfig(next);
     saveWhatsAppConfig(next);
+    void saveWhatsAppServerSettings({ config: next }).then((r) => {
+      if (!r.ok && r.error) setServerSyncNote(r.error);
+      else setServerSyncNote('Sunucu ayarları güncellendi');
+    });
   }, []);
+
+  const persistTemplates = useCallback((next: WhatsAppTemplate[]) => {
+    setTemplates(next);
+    saveWhatsAppTemplates(next);
+    void saveWhatsAppServerSettings({ templates: next }).then((r) => {
+      if (r.ok) showToast('Şablonlar sunucuya kaydedildi (otomatik mesajlar bunları kullanır).', 'success');
+      else if (r.error) showToast(`Yerel kaydedildi; sunucu: ${r.error}`, 'warning');
+    });
+  }, [showToast]);
+
+  const persistAutoRules = useCallback((next: typeof autoRules) => {
+    setAutoRules(next);
+    saveWhatsAppAutoRules(next);
+    void saveWhatsAppServerSettings({
+      rules: next.map((r) => ({ event: r.event, enabled: r.enabled, templateKey: r.templateKey })),
+    }).then((r) => {
+      if (r.ok) showToast('Otomatik kurallar sunucuya kaydedildi.', 'success');
+      else if (r.error) showToast(`Yerel kaydedildi; sunucu: ${r.error}`, 'warning');
+    });
+  }, [showToast]);
+
+  const refreshServerLogs = useCallback(async () => {
+    setServerLogsLoading(true);
+    try {
+      const rows = await fetchWhatsAppServerLogs(100);
+      setServerLogs(rows);
+    } finally {
+      setServerLogsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const remote = await fetchWhatsAppServerSettings();
+      if (cancelled || !remote) return;
+      setServerSyncNote(
+        remote.scheduler
+          ? `Otomatik antrenman: tamamlanınca anında · kısmi/yapılmadı her gün ${remote.scheduler.eveningHourTr}:00 TR`
+          : 'Sunucu ayarları yüklendi',
+      );
+      if (remote.templates.length > 0) {
+        setTemplates((prev) => {
+          const byKey = new Map(prev.map((t) => [t.key, t]));
+          for (const t of remote.templates) {
+            const existing = byKey.get(t.key as WhatsAppTemplate['key']);
+            if (existing) {
+              byKey.set(t.key, { ...existing, body: t.body || existing.body, enabled: t.enabled });
+            } else {
+              byKey.set(t.key, {
+                id: `tpl-server-${t.key}`,
+                key: t.key,
+                name: t.key,
+                body: t.body,
+                enabled: t.enabled,
+              });
+            }
+          }
+          const merged = [...byKey.values()];
+          saveWhatsAppTemplates(merged);
+          return merged;
+        });
+      }
+      if (remote.rules.length > 0) {
+        setAutoRules((prev) => {
+          const byEvent = new Map(prev.map((r) => [r.event, r]));
+          for (const r of remote.rules) {
+            const existing = byEvent.get(r.event as typeof prev[number]['event']);
+            if (existing) byEvent.set(r.event, { ...existing, enabled: r.enabled });
+            else {
+              byEvent.set(r.event as typeof prev[number]['event'], {
+                event: r.event as typeof prev[number]['event'],
+                enabled: r.enabled,
+                templateKey: r.event as typeof prev[number]['templateKey'],
+              });
+            }
+          }
+          const merged = [...byEvent.values()];
+          saveWhatsAppAutoRules(merged);
+          return merged;
+        });
+      }
+      if (remote.config) {
+        setConfig((prev) => {
+          const next = {
+            ...prev,
+            apiBaseUrl: remote.config.apiBaseUrl || prev.apiBaseUrl,
+            instanceName: remote.config.instanceName || prev.instanceName,
+            enabled: remote.config.enabled,
+            // Maskeli key'i ezme
+            apiKey: remote.config.apiKeySet && remote.config.apiKey.includes('…')
+              ? prev.apiKey
+              : (remote.config.apiKey || prev.apiKey),
+          };
+          saveWhatsAppConfig(next);
+          return next;
+        });
+      }
+      void refreshServerLogs();
+    })();
+    return () => { cancelled = true; };
+  }, [refreshServerLogs]);
 
   const refreshStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -112,7 +233,8 @@ const WhatsAppManagement: React.FC = () => {
       if (errKey && !s.connected && errKey !== lastStatusErrorRef.current) {
         // Sadece yeni hatalarda toast; QR beklerken spam olmasın
         if (!/cihaz_yok|api_key_yok|bağlı cihaz yok/i.test(errKey)) {
-          showToast(errKey, 'warning');
+          const short = errKey.length > 220 ? `${errKey.slice(0, 220)}…` : errKey;
+          showToast(short, 'warning');
         }
       }
       lastStatusErrorRef.current = errKey;
@@ -336,99 +458,139 @@ const WhatsAppManagement: React.FC = () => {
   const displayName = auth?.role === 'club' ? auth.branch : 'Yönetim';
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-8">
+    <div className="space-y-5 animate-in fade-in duration-300 pb-10">
       {/* Header */}
-      <div className="rounded-2xl overflow-hidden border border-emerald-500/20 bg-gradient-to-br from-emerald-600/30 via-green-600/20 to-teal-700/10">
-        <div className="p-6 sm:p-8">
+      <header className="relative overflow-hidden rounded-2xl border border-[#25D366]/25 bg-[#0b141a]">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.35]"
+          style={{
+            backgroundImage:
+              'radial-gradient(ellipse 80% 60% at 10% -10%, rgba(37,211,102,0.35), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 0%, rgba(18,140,126,0.25), transparent 50%)',
+          }}
+        />
+        <div className="relative p-5 sm:p-7">
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-black text-white flex items-center gap-3">
-                <MessageCircle className="w-8 h-8 text-emerald-300" />
+            <div className="min-w-0">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[#25D366]/30 bg-[#25D366]/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#25D366]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#25D366]" />
+                WhatsApp
+              </div>
+              <h1 className="mt-3 text-2xl sm:text-3xl font-black tracking-tight text-white">
                 WhatsApp Yönetimi
               </h1>
-              <p className="text-emerald-100/80 text-sm mt-1">Mesajlarınızı kolayca yönetin ve takip edin</p>
-              <p className="text-white/90 text-sm font-bold mt-2">{displayName} | {branchOffice || 'Tüm şubeler'}</p>
+              <p className="mt-1 text-sm text-slate-400">Mesaj, şablon ve cihaz bağlantısını buradan yönetin</p>
+              <p className="mt-2 text-sm font-semibold text-slate-200 truncate">{displayName}</p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => setView('home')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold">
-                <Home className="w-4 h-4" /> Anasayfa
-              </button>
-              <button type="button" onClick={loadQr} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold">
-                <QrCode className="w-4 h-4" /> QR Okut
-              </button>
-              <button type="button" onClick={() => setView('auto')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold">
-                <MessageCircle className="w-4 h-4" /> Otomatik Mesajlar
-              </button>
-              <button type="button" onClick={() => setView('api')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/30 hover:bg-amber-500/40 text-white text-xs font-bold">
-                <Settings className="w-4 h-4" /> API Ayarla
-              </button>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {([
+                { id: 'home' as View, label: 'Anasayfa', icon: <Home className="w-3.5 h-3.5" /> },
+                { id: 'qr' as View, label: 'QR Okut', icon: <QrCode className="w-3.5 h-3.5" />, onClick: () => void loadQr() },
+                { id: 'auto' as View, label: 'Otomatik', icon: <MessageCircle className="w-3.5 h-3.5" /> },
+                { id: 'api' as View, label: 'API', icon: <Settings className="w-3.5 h-3.5" />, accent: true },
+              ]).map((b) => (
+                <button
+                  key={b.label}
+                  type="button"
+                  onClick={() => (b.onClick ? b.onClick() : setView(b.id))}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition ${
+                    b.accent || view === b.id
+                      ? 'bg-[#25D366] text-[#0b141a] hover:bg-[#20bd5a]'
+                      : 'bg-white/5 text-slate-200 hover:bg-white/10 border border-white/10'
+                  }`}
+                >
+                  {b.icon}
+                  {b.label}
+                </button>
+              ))}
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <label className="text-xs font-bold text-emerald-200 uppercase">Şube</label>
-            <select
-              value={branchOffice}
-              onChange={(e) => setBranchOffice(e.target.value)}
-              className="px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-white text-sm min-w-[12rem]"
-            >
-              <option value="">Tüm şubeler</option>
-              {branchOffices.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold ${apiStatus.connected ? 'bg-emerald-500/20 text-emerald-200' : 'bg-rose-500/20 text-rose-200'}`}>
-              <span className={`w-2 h-2 rounded-full ${apiStatus.connected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-              {apiStatus.provider === 'evolution' ? 'Evolution' : 'WaMessage'}: {statusLoading ? '...' : apiStatus.connected ? 'Aktif' : 'Pasif'}
-              <button type="button" onClick={() => void refreshStatus()} className="ml-1 p-0.5 hover:bg-white/10 rounded">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Şube</span>
+              <select
+                value={branchOffice}
+                onChange={(e) => setBranchOffice(e.target.value)}
+                className="bg-transparent text-sm text-white outline-none min-w-[10rem]"
+              >
+                <option value="">Tüm şubeler</option>
+                {branchOffices.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            <div className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${
+              apiStatus.connected
+                ? 'border-[#25D366]/40 bg-[#25D366]/10 text-[#25D366]'
+                : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
+            }`}>
+              <span className={`h-2 w-2 rounded-full ${apiStatus.connected ? 'bg-[#25D366] animate-pulse' : 'bg-rose-400'}`} />
+              {apiStatus.provider === 'evolution' ? 'Evolution' : 'WaMessage'}: {statusLoading ? '…' : apiStatus.connected ? 'Aktif' : 'Pasif'}
+              <button type="button" onClick={() => void refreshStatus()} className="rounded p-0.5 hover:bg-white/10" aria-label="Durumu yenile">
                 <RefreshCw className={`w-3 h-3 ${statusLoading ? 'animate-spin' : ''}`} />
               </button>
             </div>
-            {apiStatus.error ? (
-              <span className="text-[11px] text-amber-200/90 max-w-md truncate" title={apiStatus.error}>{apiStatus.error}</span>
-            ) : null}
             {!config.enabled ? (
-              <span className="text-[11px] text-rose-200 font-bold">Otomatik gönderim KAPALI</span>
+              <span className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-200">
+                Otomatik gönderim kapalı
+              </span>
             ) : null}
           </div>
+          {apiStatus.error ? (
+            <p className="mt-3 text-[11px] text-amber-200/90 line-clamp-2" title={apiStatus.error}>{apiStatus.error}</p>
+          ) : null}
         </div>
-      </div>
+      </header>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
         {[
           { label: 'Bugün', value: stats.today },
-          { label: 'Bu Hafta', value: stats.week },
-          { label: 'Bu Ay', value: stats.month },
-          { label: 'Başarılı', value: stats.success, color: 'text-emerald-400' },
-          { label: 'Hatalı', value: stats.failed, color: 'text-rose-400' },
+          { label: 'Bu hafta', value: stats.week },
+          { label: 'Bu ay', value: stats.month },
+          { label: 'Başarılı', value: stats.success, tone: 'ok' as const },
+          { label: 'Hatalı', value: stats.failed, tone: 'bad' as const },
           { label: 'Toplam', value: stats.total },
         ].map((s) => (
-          <div key={s.label} className="rounded-xl border border-white/5 bg-slate-900/60 p-4 text-center">
-            <div className={`text-2xl font-black ${s.color ?? 'text-white'}`}>{s.value.toLocaleString('tr-TR')}</div>
-            <div className="text-[10px] font-bold text-slate-500 uppercase mt-1">{s.label}</div>
+          <div
+            key={s.label}
+            className="rounded-xl border border-white/[0.06] bg-slate-900/70 px-3 py-3 sm:px-4 sm:py-3.5 text-center"
+          >
+            <div className={`text-xl sm:text-2xl font-black tabular-nums ${
+              s.tone === 'ok' ? 'text-[#25D366]' : s.tone === 'bad' ? 'text-rose-400' : 'text-white'
+            }`}>
+              {s.value.toLocaleString('tr-TR')}
+            </div>
+            <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">{s.label}</div>
           </div>
         ))}
       </div>
 
       {view === 'home' && (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {MODULE_TILES.map((tile) => (
             <button
               key={tile.id}
               type="button"
               onClick={() => setView(tile.id)}
-              className={`text-left p-5 rounded-xl border bg-gradient-to-br ${tile.color} hover:brightness-110 transition-all active:scale-[0.98]`}
+              className="group text-left rounded-2xl border border-white/[0.07] bg-slate-900/60 p-4 hover:border-[#25D366]/40 hover:bg-slate-900 transition-all active:scale-[0.99]"
             >
-              <div className="text-emerald-300 mb-3">{tile.icon}</div>
-              <div className="font-black text-white text-sm">{tile.title}</div>
-              <div className="text-xs text-slate-400 mt-1">{tile.desc}</div>
+              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#25D366]/15 text-[#25D366] group-hover:bg-[#25D366]/25">
+                {tile.icon}
+              </div>
+              <div className="font-bold text-white text-sm">{tile.title}</div>
+              <div className="mt-1 text-xs text-slate-500 leading-snug">{tile.desc}</div>
             </button>
           ))}
         </div>
       )}
 
       {view !== 'home' && (
-        <button type="button" onClick={() => setView('home')} className="text-sm text-slate-400 hover:text-white font-bold">
-          ← Modül listesine dön
+        <button
+          type="button"
+          onClick={() => setView('home')}
+          className="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-[#25D366] font-semibold transition"
+        >
+          ← Modüllere dön
         </button>
       )}
 
@@ -436,6 +598,20 @@ const WhatsAppManagement: React.FC = () => {
       {view === 'manual' && (
         <Panel title="Manuel Mesaj">
           <textarea value={manualPhones} onChange={(e) => setManualPhones(e.target.value)} rows={3} placeholder="Telefon numaraları (her satıra bir numara)" className="input-field" />
+          <select
+            className="input-field"
+            defaultValue=""
+            onChange={(e) => {
+              const tpl = templates.find((t) => t.id === e.target.value);
+              if (tpl) setManualMessage(tpl.body);
+              e.target.value = '';
+            }}
+          >
+            <option value="">Şablondan yükle…</option>
+            {templates.filter((t) => t.enabled).map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
           <textarea value={manualMessage} onChange={(e) => setManualMessage(e.target.value)} rows={6} placeholder="Mesajınız..." className="input-field" />
           <SendBtn loading={sending} onClick={() => void handleManualSend()} />
         </Panel>
@@ -460,6 +636,20 @@ const WhatsAppManagement: React.FC = () => {
               </label>
             ))}
           </div>
+          <select
+            className="input-field"
+            defaultValue=""
+            onChange={(e) => {
+              const tpl = templates.find((t) => t.id === e.target.value);
+              if (tpl) setBulkMessage(tpl.body);
+              e.target.value = '';
+            }}
+          >
+            <option value="">Şablondan yükle…</option>
+            {templates.filter((t) => t.enabled).map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
           <textarea value={bulkMessage} onChange={(e) => setBulkMessage(e.target.value)} rows={5} placeholder="Mesaj..." className="input-field" />
           <SendBtn loading={sending} onClick={() => void handleBulkSend()} label={`${selectedStudentIds.length} veliye gönder`} />
         </Panel>
@@ -495,57 +685,166 @@ const WhatsAppManagement: React.FC = () => {
 
       {/* Templates */}
       {view === 'templates' && (
-        <Panel title="Mesaj Şablonları">
-          <p className="text-xs text-slate-500 mb-3">
-            Değişkenler: {'{{ogrenci_adi}}'}, {'{{veli_adi}}'}, {'{{kullanici_adi}}'}, {'{{sifre}}'}, {'{{veli_pin}}'}, {'{{ders_adi}}'}, {'{{ders_linki}}'}, {'{{form_linki}}'}, {'{{kulup_adi}}'}, {'{{grup}}'}, {'{{tarih}}'}, {'{{saat}}'}
-          </p>
-          <div className="space-y-3">
+        <Panel
+          title="Mesaj Şablonları"
+          subtitle="Metinleri kaydedin; manuel ve toplu gönderimde şablondan yükleyin."
+          wide
+          action={(
+            <button
+              type="button"
+              onClick={() => setEditingTemplate(createCustomWhatsAppTemplate({
+                name: 'Yeni şablon',
+                body: `Merhaba {{veli_adi}},
+
+{{ogrenci_adi}} için bilgilendirme:
+
+Mesajınızı buraya yazın.
+
+{{kulup_adi}}`,
+              }))}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#25D366] px-3.5 py-2 text-xs font-bold text-[#0b141a] hover:bg-[#20bd5a] transition"
+            >
+              <Plus className="w-4 h-4" />
+              Yeni şablon
+            </button>
+          )}
+        >
+          <div className="rounded-xl border border-white/[0.06] bg-black/20 p-3">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">Kullanılabilir değişkenler</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATE_VARS.map((v) => (
+                <code
+                  key={v}
+                  className="rounded-md border border-white/10 bg-slate-800/80 px-2 py-0.5 text-[11px] font-mono text-[#25D366]/90"
+                >
+                  {`{{${v}}}`}
+                </code>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
             {templates.map((t) => (
-              <div key={t.id} className="rounded-lg border border-white/5 bg-slate-800/40 p-4">
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="font-bold text-white">{t.name}</span>
-                  <div className="flex gap-1">
-                    <button type="button" onClick={() => setEditingTemplate(t)} className="p-1.5 rounded bg-amber-500/15 text-amber-400"><Pencil className="w-4 h-4" /></button>
+              <article
+                key={t.id}
+                className={`flex flex-col rounded-2xl border p-4 transition ${
+                  t.enabled
+                    ? 'border-white/[0.07] bg-slate-800/40 hover:border-[#25D366]/30'
+                    : 'border-white/[0.04] bg-slate-900/40 opacity-70'
+                }`}
+              >
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-bold text-white text-sm truncate">{t.name}</h3>
+                      {!isSystemWhatsAppTemplate(t.key) && (
+                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
+                          Özel
+                        </span>
+                      )}
+                      <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+                        t.enabled ? 'bg-[#25D366]/15 text-[#25D366]' : 'bg-slate-700 text-slate-400'
+                      }`}>
+                        {t.enabled ? 'Aktif' : 'Pasif'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button type="button" onClick={() => setEditingTemplate({ ...t })} className="rounded-lg bg-white/5 p-1.5 text-slate-300 hover:bg-white/10 hover:text-white" title="Düzenle">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
                         const next = templates.map((x) => x.id === t.id ? { ...x, enabled: !x.enabled } : x);
-                        setTemplates(next);
-                        saveWhatsAppTemplates(next);
+                        persistTemplates(next);
                       }}
-                      className={`p-1.5 rounded ${t.enabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-700 text-slate-500'}`}
+                      className={`rounded-lg p-1.5 ${t.enabled ? 'bg-[#25D366]/15 text-[#25D366]' : 'bg-slate-700 text-slate-400'}`}
+                      title={t.enabled ? 'Pasifleştir' : 'Aktifleştir'}
                     >
-                      {t.enabled ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
+                      {t.enabled ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
                     </button>
+                    {!isSystemWhatsAppTemplate(t.key) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!window.confirm(`“${t.name}” şablonunu silmek istiyor musunuz?`)) return;
+                          const next = templates.filter((x) => x.id !== t.id);
+                          persistTemplates(next);
+                        }}
+                        className="rounded-lg bg-rose-500/10 p-1.5 text-rose-400 hover:bg-rose-500/20"
+                        title="Sil"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
-                <pre className="text-xs text-slate-400 whitespace-pre-wrap font-sans">{t.body}</pre>
-              </div>
+                <pre className="flex-1 whitespace-pre-wrap font-sans text-xs leading-relaxed text-slate-400 line-clamp-6">
+                  {t.body}
+                </pre>
+              </article>
             ))}
           </div>
+
           {editingTemplate && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60" onClick={() => setEditingTemplate(null)}>
-              <div className="bg-slate-900 border border-white/10 rounded-xl w-full max-w-lg p-6 space-y-3" onClick={(e) => e.stopPropagation()}>
-                <h3 className="font-black text-white">{editingTemplate.name}</h3>
-                <textarea
-                  value={editingTemplate.body}
-                  onChange={(e) => setEditingTemplate({ ...editingTemplate, body: e.target.value })}
-                  rows={10}
-                  className="input-field font-mono text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = templates.map((x) => x.id === editingTemplate.id ? editingTemplate : x);
-                    setTemplates(next);
-                    saveWhatsAppTemplates(next);
-                    setEditingTemplate(null);
-                    showToast('Şablon kaydedildi.', 'success');
-                  }}
-                  className="w-full py-2.5 rounded-lg bg-emerald-600 text-white font-bold text-sm"
-                >
-                  Kaydet
-                </button>
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-[#0b141a]/80 backdrop-blur-sm" onClick={() => setEditingTemplate(null)}>
+              <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 shadow-2xl shadow-black/40 p-5 sm:p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-lg font-black text-white">
+                    {templates.some((x) => x.id === editingTemplate.id) ? 'Şablonu düzenle' : 'Yeni şablon'}
+                  </h3>
+                  <button type="button" onClick={() => setEditingTemplate(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Şablon adı</label>
+                  <input
+                    value={editingTemplate.name}
+                    onChange={(e) => setEditingTemplate({ ...editingTemplate, name: e.target.value })}
+                    className="input-field"
+                    placeholder="Örn. Turnuva daveti"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Mesaj</label>
+                  <textarea
+                    value={editingTemplate.body}
+                    onChange={(e) => setEditingTemplate({ ...editingTemplate, body: e.target.value })}
+                    rows={10}
+                    className="input-field font-mono text-xs leading-relaxed"
+                  />
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setEditingTemplate(null)}
+                    className="flex-1 rounded-xl border border-white/10 py-2.5 text-sm font-bold text-slate-300 hover:bg-white/5"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const name = editingTemplate.name.trim();
+                      const body = editingTemplate.body.trim();
+                      if (!name || !body) {
+                        showToast('Şablon adı ve mesaj zorunlu.', 'warning');
+                        return;
+                      }
+                      const exists = templates.some((x) => x.id === editingTemplate.id);
+                      const next = exists
+                        ? templates.map((x) => (x.id === editingTemplate.id ? { ...editingTemplate, name, body } : x))
+                        : [...templates, { ...editingTemplate, name, body }];
+                      persistTemplates(next);
+                      setEditingTemplate(null);
+                    }}
+                    className="flex-1 rounded-xl bg-[#25D366] py-2.5 text-sm font-bold text-[#0b141a] hover:bg-[#20bd5a]"
+                  >
+                    Kaydet
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -555,7 +854,13 @@ const WhatsAppManagement: React.FC = () => {
       {/* Auto rules */}
       {view === 'auto' && (
         <Panel title="Otomatik Mesajlar">
-          <p className="text-sm text-slate-400 mb-4">Bu olaylar gerçekleştiğinde velilere otomatik WhatsApp bildirimi gönderilir (API aktifse).</p>
+          <p className="text-sm text-slate-400 mb-2">
+            Bu olaylar gerçekleştiğinde velilere otomatik WhatsApp bildirimi gönderilir.
+            Antrenman bildirimleri sunucu zamanlayıcısı ile çalışır — şablon ve kurallar kaydedilince Supabase’e yazılır.
+          </p>
+          {serverSyncNote ? (
+            <p className="text-[11px] text-emerald-300/90 mb-4">{serverSyncNote}</p>
+          ) : null}
           {autoRules.map((rule) => (
             <label key={rule.event} className="flex items-center justify-between gap-4 p-4 rounded-lg border border-white/5 bg-slate-800/30 cursor-pointer">
               <div>
@@ -564,7 +869,8 @@ const WhatsAppManagement: React.FC = () => {
                   {rule.event === 'parent_consent' && 'Öğrenci kaydı — veli form daveti'}
                   {rule.event === 'lesson_start' && 'Canlı ders başlangıcı'}
                   {rule.event === 'training_completed' && 'Antrenman tamamlandı — anında veli bildirimi'}
-                  {rule.event === 'training_incomplete' && 'Antrenman eksik — her gün 21:00 veli bildirimi'}
+                  {rule.event === 'training_partial' && 'Antrenman kısmi — her gün 23:00 veli bildirimi'}
+                  {rule.event === 'training_incomplete' && 'Antrenman yapılmadı — her gün 23:00 veli bildirimi'}
                 </div>
                 <div className="text-xs text-slate-500">Şablon: {rule.templateKey}</div>
               </div>
@@ -573,8 +879,7 @@ const WhatsAppManagement: React.FC = () => {
                 checked={rule.enabled}
                 onChange={(e) => {
                   const next = autoRules.map((r) => r.event === rule.event ? { ...r, enabled: e.target.checked } : r);
-                  setAutoRules(next);
-                  saveWhatsAppAutoRules(next);
+                  persistAutoRules(next);
                 }}
                 className="w-5 h-5"
               />
@@ -583,20 +888,62 @@ const WhatsAppManagement: React.FC = () => {
         </Panel>
       )}
 
+      {view === 'logs' && (
+        <Panel title="Gönderim Geçmişi">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <p className="text-sm text-slate-400">
+              Sunucuya yazılan otomatik ve API gönderimleri (son 100).
+            </p>
+            <button
+              type="button"
+              onClick={() => void refreshServerLogs()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-white/5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${serverLogsLoading ? 'animate-spin' : ''}`} />
+              Yenile
+            </button>
+          </div>
+          {serverLogs.length === 0 ? (
+            <p className="text-sm text-slate-500 py-8 text-center">
+              {serverLogsLoading ? 'Yükleniyor…' : 'Henüz sunucu kaydı yok. Tablolar (supabase_whatsapp.sql) ve service role gerekir.'}
+            </p>
+          ) : (
+            <div className="max-h-[28rem] overflow-y-auto divide-y divide-white/5 rounded-xl border border-white/5">
+              {serverLogs.map((log) => (
+                <div key={log.id} className="px-3 py-2.5 text-xs space-y-1">
+                  <div className="flex flex-wrap items-center gap-2 justify-between">
+                    <span className="font-bold text-white">{log.studentName || log.phone || '—'}</span>
+                    <span className={`font-black uppercase tracking-wide ${
+                      log.status === 'sent' ? 'text-[#25D366]'
+                        : log.status === 'failed' ? 'text-rose-400'
+                          : 'text-amber-300'
+                    }`}>{log.status}</span>
+                  </div>
+                  <div className="text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
+                    <span>{log.createdAt ? new Date(log.createdAt).toLocaleString('tr-TR') : '—'}</span>
+                    <span>{log.templateKey || '—'}</span>
+                    <span>{log.phone}</span>
+                  </div>
+                  <p className="text-slate-400 line-clamp-2 whitespace-pre-wrap">{log.message}</p>
+                  {log.error ? <p className="text-rose-300/90">{log.error}</p> : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      )}
+
       {/* API */}
       {view === 'api' && (
-        <Panel title="API Ayarları — WaMessage (X-Api-Key)">
+        <Panel title="API Ayarları — WaMessage">
           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-50 space-y-2">
-            <p className="font-bold">Kişisel WP akışı (login/SMS yok)</p>
+            <p className="font-bold">Kişisel WP — kurulum</p>
             <ol className="text-emerald-50/85 text-xs leading-relaxed list-decimal pl-4 space-y-1">
-              <li>WaMessage → Api Entegrasyonu → <b>API Key Göster</b> → buraya yapıştırın.</li>
-              <li>Gönderici telefonu kaydedin (<code className="text-emerald-100">905xxxxxxxxx</code>).</li>
-              <li><b>QR Okut</b> → WhatsApp’tan 30 sn içinde okutun → <code className="text-emerald-100">reg_id</code> otomatik kaydolur.</li>
-              <li>Gönderim: <code className="text-emerald-100">POST /api/whatsapp/v1/messages/send</code> (reg_id, to, message).</li>
+              <li>WaMessage → <a className="underline" href="https://app.wamessage.app/apiIntegration" target="_blank" rel="noreferrer">Api Entegrasyonu</a> → <b>API Key Göster</b> → SMS’teki anahtarı buraya yapıştırın.</li>
+              <li>Gönderici telefon: <code className="text-emerald-100">+905xxxxxxxxx</code></li>
+              <li>WaMessage → <b>WhatsApp Hesaplarım</b> → Aktif satırdaki <code className="text-emerald-100">REG_ID</code>’yi kopyalayıp aşağıdaki alana yapıştırın (QR şart değil).</li>
+              <li>Gönderim: <code className="text-emerald-100">POST /bulk/wp/nton</code></li>
             </ol>
-            <p className="text-[11px] text-emerald-100/70">
-              Panelde “bağlı” görünmesi yetmez; QR bu uygulamanın API Key oturumunda üretilmeli.
-            </p>
           </div>
 
           {apiStatus.connected ? (
@@ -636,33 +983,38 @@ const WhatsAppManagement: React.FC = () => {
             className="input-field"
           />
 
-          <label className="text-xs font-bold text-slate-400 uppercase">API Key (X-Api-Key)</label>
+          <label className="text-xs font-bold text-slate-400 uppercase">API Key</label>
           <input
-            value={config.apiKey}
-            onChange={(e) => persistConfig({ ...config, apiKey: e.target.value.trim() })}
             type="password"
+            value={config.apiKey || ''}
+            onChange={(e) => persistConfig({ ...config, apiKey: e.target.value.trim(), authMode: undefined })}
             placeholder="WaMessage → Api Entegrasyonu → API Key Göster"
-            className="input-field"
+            className="input-field font-mono text-sm"
+            autoComplete="off"
           />
 
-          <label className="text-xs font-bold text-slate-400 uppercase">Gönderici telefon</label>
+          <label className="text-xs font-bold text-slate-400 uppercase">Gönderici telefon (+90…)</label>
           <input
+            type="text"
             value={config.devicePhone || ''}
             onChange={(e) => persistConfig({ ...config, devicePhone: e.target.value.trim() })}
-            placeholder="905059860303"
-            className="input-field"
+            placeholder="+905059860303"
+            className="input-field font-mono text-sm"
           />
-          <p className="text-[11px] text-slate-500">QR ve device/check için 905… formatı (artı olmadan da olur).</p>
+          <p className="text-[11px] text-slate-500">QR ve device/check için +905… (artısız 905… da kabul edilir).</p>
 
           <label className="text-xs font-bold text-slate-400 uppercase">
-            {config.provider === 'evolution' ? 'Instance Adı' : 'reg_id (QR sonrası otomatik)'}
+            {config.provider === 'evolution' ? 'Instance Adı' : 'REG_ID (WhatsApp Hesaplarım)'}
           </label>
           <input
             value={config.instanceName}
             onChange={(e) => persistConfig({ ...config, instanceName: e.target.value.trim() })}
-            placeholder={config.provider === 'evolution' ? 'netchess' : 'QR sonrası dolar'}
-            className="input-field"
+            placeholder={config.provider === 'evolution' ? 'netchess' : 'ör. 704346159'}
+            className="input-field font-mono"
           />
+          <p className="text-[11px] text-amber-200/80">
+            Panelde Aktif cihazın REG_ID’sini yapıştırın. Eski/yanlış reg_id (ör. QR denemesinden kalan) 401 veya cihaz yok hatası verir.
+          </p>
 
           {(config.provider || 'wamessage') === 'wamessage' && (
             <div className="flex flex-wrap gap-2">
@@ -837,20 +1189,50 @@ const WhatsAppManagement: React.FC = () => {
         </Panel>
       )}
 
-      <style>{`.input-field{width:100%;padding:.75rem 1rem;border-radius:.5rem;background:#1e293b;border:1px solid rgba(255,255,255,.1);color:#fff;font-size:.875rem;outline:none}.input-field:focus{border-color:rgba(16,185,129,.5)}`}</style>
+      <style>{`
+        .input-field{
+          width:100%;
+          padding:.75rem 1rem;
+          border-radius:.75rem;
+          background:rgba(15,23,42,.85);
+          border:1px solid rgba(255,255,255,.08);
+          color:#fff;
+          font-size:.875rem;
+          outline:none;
+          transition:border-color .15s ease;
+        }
+        .input-field:focus{border-color:rgba(37,211,102,.45)}
+      `}</style>
     </div>
   );
 };
 
-const Panel: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <div className="rounded-xl border border-white/5 bg-slate-900/60 p-6 space-y-4 max-w-2xl">
-    <h2 className="text-lg font-black text-white">{title}</h2>
+const Panel: React.FC<{
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+  wide?: boolean;
+}> = ({ title, subtitle, children, action, wide }) => (
+  <section className={`rounded-2xl border border-white/[0.07] bg-slate-900/70 p-5 sm:p-6 space-y-4 ${wide ? 'max-w-5xl' : 'max-w-2xl'}`}>
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h2 className="text-lg font-black tracking-tight text-white">{title}</h2>
+        {subtitle ? <p className="mt-1 text-xs text-slate-500">{subtitle}</p> : null}
+      </div>
+      {action}
+    </div>
     {children}
-  </div>
+  </section>
 );
 
 const SendBtn: React.FC<{ loading: boolean; onClick: () => void; label?: string }> = ({ loading, onClick, label }) => (
-  <button type="button" disabled={loading} onClick={onClick} className="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-sm">
+  <button
+    type="button"
+    disabled={loading}
+    onClick={onClick}
+    className="inline-flex items-center gap-2 rounded-xl bg-[#25D366] px-5 py-3 text-sm font-bold text-[#0b141a] hover:bg-[#20bd5a] disabled:opacity-50 transition"
+  >
     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
     {label ?? 'Gönder'}
   </button>

@@ -351,13 +351,9 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
           .filter((event) => String(event.studentId) === String(student.id))
           .filter((event) => event.result !== 'wrong');
         const live = buildPresenceStudyEvents(study, student, presenceRows);
-        const vsChapterIds = new Set(
-          study.chapters
-            .filter((ch) => ch.lessonMode === 'interactive' && ch.interactiveType === 'vsComputer')
-            .map((ch) => ch.id),
-        );
-        const persistedNonVs = persisted.filter((event) => !vsChapterIds.has(String(event.chapterId ?? '')));
-        setActiveStudyEvents(mergeVisibleStudyEvents(persistedNonVs, live));
+        // Presence (study_id,user_id) tek satır — bölüm değişince eski vs geçmişi silinir.
+        // Bu yüzden DB + practiceLogs kayıtlarını da tut; presence yalnızca canlı tamamlayıcı.
+        setActiveStudyEvents(mergeVisibleStudyEvents(persisted, live));
       } catch {
         if (!cancelled) setActiveStudyEvents([]);
       } finally {
@@ -372,6 +368,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
         if (cancelled) return;
         void loadStudyPresence(study.id).then((rows) => {
           if (cancelled) return;
+          setActiveStudyPresenceRows(rows);
           setActiveStudyEvents((prev) => {
             const persisted = prev.filter((event) => !event.id.startsWith('presence-'));
             const live = buildPresenceStudyEvents(study, student, rows);
@@ -439,14 +436,23 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
       entry.events.push({ ...event, chapterId });
     });
 
-    return [...grouped.values()].map((entry) => {
-      const isVs =
-        entry.chapter?.lessonMode === 'interactive' && entry.chapter.interactiveType === 'vsComputer';
-      if (!isVs) return { ...entry, vsMoveHistory: [] };
-      const fromPresence = entry.vsMoveHistory;
-      const full = resolveFullVsMoveList(entry.chapter, entry.events, fromPresence);
-      return { ...entry, vsMoveHistory: full.length > 0 ? full : fromPresence };
-    });
+    return [...grouped.values()]
+      .map((entry) => {
+        const isVs =
+          entry.chapter?.lessonMode === 'interactive' && entry.chapter.interactiveType === 'vsComputer';
+        if (!isVs) return { ...entry, vsMoveHistory: [] as string[] };
+        const fromPresence = entry.vsMoveHistory;
+        const full = resolveFullVsMoveList(entry.chapter, entry.events, fromPresence);
+        return { ...entry, vsMoveHistory: full.length > 0 ? full : fromPresence };
+      })
+      .sort((a, b) => {
+        const ai = study.chapters.findIndex((ch) => ch.id === a.chapterId);
+        const bi = study.chapters.findIndex((ch) => ch.id === b.chapterId);
+        const aRank = ai >= 0 ? ai : 999;
+        const bRank = bi >= 0 ? bi : 999;
+        if (aRank !== bRank) return aRank - bRank;
+        return a.chapterTitle.localeCompare(b.chapterTitle, 'tr');
+      });
   }, [activeStudyLog, activeStudyEvents, activeStudyPresenceRows]);
 
   useEffect(() => {
@@ -704,8 +710,14 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
               <>
                 <div className="shrink-0 px-3 sm:px-6 py-2 border-b border-white/10 bg-black/25 overflow-x-auto">
                   <div className="flex gap-2 min-w-max">
-                    {activeStudyEventsByChapter.map((chapter) => {
+                    {activeStudyEventsByChapter.map((chapter, index) => {
                       const selected = chapter.chapterId === activeLogChapterId;
+                      const studyChapterIndex = activeStudyLog.study.chapters.findIndex(
+                        (ch) => ch.id === chapter.chapterId,
+                      );
+                      const sectionLabel = studyChapterIndex >= 0
+                        ? `Bölüm ${studyChapterIndex + 1}`
+                        : `Bölüm ${index + 1}`;
                       return (
                         <button
                           key={chapter.chapterId}
@@ -717,7 +729,12 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
                               : 'bg-white/[0.03] border-white/10 text-slate-300 hover:bg-white/[0.06]'
                           }`}
                         >
-                          <span className="block text-xs font-bold truncate">{chapter.chapterTitle}</span>
+                          <span className="block text-xs font-bold truncate">
+                            {sectionLabel}
+                            {chapter.chapterTitle && chapter.chapterTitle !== sectionLabel
+                              ? ` · ${chapter.chapterTitle}`
+                              : ''}
+                          </span>
                           <span className="block text-[10px] text-slate-500 truncate">
                             {chapter.chapterType}
                             {chapter.chapterType === 'Bilgisayara karşı' && chapter.vsMoveHistory.length > 0

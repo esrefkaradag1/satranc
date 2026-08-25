@@ -29,7 +29,7 @@ import { DashboardHeroScene } from '../dashboard/DashboardHeroScene';
 import { QuickMenuButton, QuickStatCard } from '../dashboard/dashboardQuickUI';
 import type { Club, Coach, Student, Transaction } from '../../types';
 import { canShowStudentCounts } from '../../lib/studentCountVisibility';
-import { summarizeClubMonthDues } from '../../lib/duesCalendarUtils';
+import { formatTransactionDateTR, summarizeClubMonthDues } from '../../lib/duesCalendarUtils';
 import { istanbulDayKey } from '../../lib/homeworkDayUtils';
 
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
@@ -582,7 +582,7 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
                     <div key={t.id} className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                       <div className="min-w-0">
                         <p className="text-xs font-medium text-slate-200 truncate">{t.description || t.category}</p>
-                        <p className="text-[10px] text-slate-500">{t.date}</p>
+                        <p className="text-[10px] text-slate-500">{formatTransactionDateTR(t)}</p>
                       </div>
                       <span className={`text-xs font-bold shrink-0 ${t.type === 'income' ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {t.type === 'income' ? '+' : '-'}₺{(t.amount || 0).toLocaleString('tr-TR')}

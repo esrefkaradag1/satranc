@@ -1,5 +1,22 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { resolveScopedStudents, resolveScopedTransactions, resolveScopedCoaches, resolveScopedTrainingGroups, resolveScopedDisciplineBranches, resolveScopedLessonPackages, resolveScopedTournaments, resolveScopedHomeworks, resolveScopedAttendanceRecords, resolveScopedGallery, isStudentIdInScope, resolveClubBranch } from './lib/orgScope';
+import {
+  resolveScopedStudents,
+  resolveScopedTransactions,
+  resolveScopedCoaches,
+  resolveScopedTrainingGroups,
+  resolveScopedDisciplineBranches,
+  resolveScopedLessonPackages,
+  resolveScopedTournaments,
+  resolveScopedHomeworks,
+  resolveScopedAttendanceRecords,
+  resolveScopedGallery,
+  isStudentIdInScope,
+  resolveClubBranch,
+  filterStudentsForAdminClub,
+  filterTransactionsForAdminClub,
+  filterCoachesForAdminClub,
+  filterOrgRecordsForAdminClub,
+} from './lib/orgScope';
 import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, LessonPackage, TrainingGroup, AppRole } from './types';
 import { MOCK_STUDENTS } from './constants';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
@@ -90,6 +107,11 @@ interface AppContextType {
   scopedGallery: GalleryItem[];
   /** Kulüp girişinde aktif şube adı */
   activeClubBranch?: string;
+  /** Süper admin: seçili kulüp id (null = kulüp seçilmedi; birleşik toplam yok) */
+  adminViewClubId: string | null;
+  setAdminViewClubId: (clubId: string | null) => void;
+  /** Süper admin seçili kulüp kaydı */
+  adminViewClub: Club | null;
   addStudent: (student: Omit<Student, 'id'>) => Promise<Student>;
   updateStudent: (id: string, student: Partial<Student>) => void;
   deleteStudent: (id: string) => void;
@@ -255,9 +277,14 @@ function applyStudentScopeFromAuth(
   auth: AuthUser | null,
   coaches: Coach[],
   clubs: { id: string; name: string }[] = [],
+  adminClub?: { id: string; name: string } | null,
 ): Omit<Student, 'id'> {
   if (!auth) return student;
   const next = { ...student };
+  if (auth.role === 'admin' && adminClub) {
+    next.clubId = adminClub.id;
+    if (!next.branchOffice?.trim()) next.branchOffice = adminClub.name.trim();
+  }
   if (auth.role === 'club') {
     const clubId = resolveClubIdFromAuth(auth, clubs);
     if (clubId) next.clubId = clubId;
@@ -1449,6 +1476,11 @@ function dbToTransaction(row: Record<string, unknown>): Transaction {
     validityDays: r.validity_days != null ? Number(r.validity_days) : r.validityDays != null ? Number(r.validityDays) : undefined,
     branch: row.branch != null ? String(row.branch) : undefined,
     processedBy: r.processed_by != null ? String(r.processed_by) : r.processedBy != null ? String(r.processedBy) : undefined,
+    collectedAt: r.collected_at != null && String(r.collected_at) !== ''
+      ? String(r.collected_at).slice(0, 10)
+      : r.collectedAt != null && String(r.collectedAt) !== ''
+        ? String(r.collectedAt).slice(0, 10)
+        : undefined,
     studentId: r.student_id != null && r.student_id !== '' ? String(r.student_id) : undefined,
     personalCash: r.personal_cash === true || r.personalCash === true,
     includeInGeneralCash: r.include_in_general_cash === true || r.includeInGeneralCash === true,
@@ -1473,6 +1505,7 @@ function transactionToDb(t: Transaction): Record<string, unknown> {
     starting_used_lessons: t.startingUsedLessons ?? null,
     validity_days: t.validityDays ?? null,
     processed_by: t.processedBy ?? null,
+    collected_at: t.collectedAt ?? null,
     student_id: t.studentId ?? null,
     branch: t.branch ?? null,
     personal_cash: !!t.personalCash,
@@ -1834,37 +1867,99 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  const scopedStudents = useMemo(
-    () =>
-      resolveScopedStudents(auth, students, trainingGroups, coaches, branchOfficeRecords, clubs)
-        .slice()
-        .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'tr')),
-    [auth, students, trainingGroups, coaches, branchOfficeRecords, clubs],
-  );
+  const ADMIN_VIEW_CLUB_KEY = 'netchess_admin_view_club_id';
+  const [adminViewClubId, setAdminViewClubIdState] = useState<string | null>(() => {
+    if (typeof sessionStorage === 'undefined') return null;
+    try {
+      const raw = sessionStorage.getItem(ADMIN_VIEW_CLUB_KEY)?.trim();
+      return raw || null;
+    } catch {
+      return null;
+    }
+  });
+  const setAdminViewClubId = useCallback((clubId: string | null) => {
+    const next = clubId?.trim() || null;
+    setAdminViewClubIdState(next);
+    try {
+      if (next) sessionStorage.setItem(ADMIN_VIEW_CLUB_KEY, next);
+      else sessionStorage.removeItem(ADMIN_VIEW_CLUB_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
-  const scopedTransactions = useMemo(
-    () => resolveScopedTransactions(auth, transactions, students, coaches),
-    [auth, transactions, students, coaches],
-  );
+  const adminViewClub = useMemo(() => {
+    if (auth?.role !== 'admin' || !adminViewClubId) return null;
+    return clubs.find((c) => c.id === adminViewClubId) ?? null;
+  }, [auth?.role, adminViewClubId, clubs]);
 
-  const scopedCoaches = useMemo(
-    () => resolveScopedCoaches(auth, coaches),
-    [auth, coaches],
-  );
+  // Silinen kulüp seçili kaldıysa temizle
+  useEffect(() => {
+    if (auth?.role !== 'admin' || !adminViewClubId) return;
+    if (!clubs.some((c) => c.id === adminViewClubId)) setAdminViewClubId(null);
+  }, [auth?.role, adminViewClubId, clubs, setAdminViewClubId]);
 
-  const scopedTrainingGroups = useMemo(
-    () => resolveScopedTrainingGroups(auth, trainingGroups, branchOfficeRecords, clubs),
-    [auth, trainingGroups, branchOfficeRecords, clubs],
-  );
+  const scopedStudents = useMemo(() => {
+    let list = resolveScopedStudents(auth, students, trainingGroups, coaches, branchOfficeRecords, clubs);
+    if (auth?.role === 'admin') {
+      if (!adminViewClub) list = [];
+      else list = filterStudentsForAdminClub(list, adminViewClub, coaches, branchOfficeRecords, clubs);
+    }
+    return list.slice().sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'tr'));
+  }, [auth, students, trainingGroups, coaches, branchOfficeRecords, clubs, adminViewClub]);
 
-  const scopedDisciplineBranches = useMemo(
-    () => resolveScopedDisciplineBranches(auth, disciplineBranches, branchOfficeRecords, clubs, trainingGroups),
-    [auth, disciplineBranches, branchOfficeRecords, clubs, trainingGroups],
-  );
-  const scopedLessonPackages = useMemo(
-    () => resolveScopedLessonPackages(auth, lessonPackages, branchOfficeRecords, clubs),
-    [auth, lessonPackages, branchOfficeRecords, clubs],
-  );
+  const scopedTransactions = useMemo(() => {
+    let list = resolveScopedTransactions(auth, transactions, students, coaches);
+    if (auth?.role === 'admin') {
+      if (!adminViewClub) list = [];
+      else {
+        list = filterTransactionsForAdminClub(
+          list,
+          adminViewClub,
+          students,
+          coaches,
+          branchOfficeRecords,
+          clubs,
+        );
+      }
+    }
+    return list;
+  }, [auth, transactions, students, coaches, adminViewClub, branchOfficeRecords, clubs]);
+
+  const scopedCoaches = useMemo(() => {
+    let list = resolveScopedCoaches(auth, coaches);
+    if (auth?.role === 'admin') {
+      if (!adminViewClub) list = [];
+      else list = filterCoachesForAdminClub(list, adminViewClub);
+    }
+    return list;
+  }, [auth, coaches, adminViewClub]);
+
+  const scopedTrainingGroups = useMemo(() => {
+    let list = resolveScopedTrainingGroups(auth, trainingGroups, branchOfficeRecords, clubs);
+    if (auth?.role === 'admin') {
+      if (!adminViewClub) list = [];
+      else list = filterOrgRecordsForAdminClub(list, adminViewClub, branchOfficeRecords, clubs);
+    }
+    return list;
+  }, [auth, trainingGroups, branchOfficeRecords, clubs, adminViewClub]);
+
+  const scopedDisciplineBranches = useMemo(() => {
+    let list = resolveScopedDisciplineBranches(auth, disciplineBranches, branchOfficeRecords, clubs, trainingGroups);
+    if (auth?.role === 'admin') {
+      if (!adminViewClub) list = [];
+      else list = filterOrgRecordsForAdminClub(list, adminViewClub, branchOfficeRecords, clubs);
+    }
+    return list;
+  }, [auth, disciplineBranches, branchOfficeRecords, clubs, trainingGroups, adminViewClub]);
+  const scopedLessonPackages = useMemo(() => {
+    let list = resolveScopedLessonPackages(auth, lessonPackages, branchOfficeRecords, clubs);
+    if (auth?.role === 'admin') {
+      if (!adminViewClub) list = [];
+      else list = filterOrgRecordsForAdminClub(list, adminViewClub, branchOfficeRecords, clubs);
+    }
+    return list;
+  }, [auth, lessonPackages, branchOfficeRecords, clubs, adminViewClub]);
 
   const scopedTournaments = useMemo(
     () => resolveScopedTournaments(auth, tournaments),
@@ -1886,12 +1981,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [auth, gallery, scopedStudents],
   );
 
-  const activeClubBranch = useMemo(() => resolveClubBranch(auth), [auth]);
+  const activeClubBranch = useMemo(() => {
+    if (auth?.role === 'admin' && adminViewClub) return normalizeClubKey(adminViewClub.name);
+    return resolveClubBranch(auth);
+  }, [auth, adminViewClub]);
 
-  const branchOffices = useMemo(
-    () => resolveBranchOfficeNames(branchOfficeRecords, [], auth, clubs),
-    [branchOfficeRecords, auth, clubs],
-  );
+  const branchOffices = useMemo(() => {
+    const scopeAuth =
+      auth?.role === 'admin' && adminViewClub
+        ? { role: 'club' as const, branch: adminViewClub.name, clubId: adminViewClub.id }
+        : auth;
+    return resolveBranchOfficeNames(branchOfficeRecords, [], scopeAuth, clubs);
+  }, [branchOfficeRecords, auth, clubs, adminViewClub]);
 
   const [stockfishReady, setStockfishReady] = useState(false);
   const [stockfishLoading, setStockfishLoading] = useState(false);
@@ -3139,7 +3240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addStudent = useCallback(async (student: Omit<Student, 'id'>): Promise<Student> => {
     const normalizedStudent = normalizeStudentPersonNames(student) as Omit<Student, 'id'>;
-    const scoped = applyStudentScopeFromAuth(normalizedStudent, auth, coaches, clubs);
+    const scoped = applyStudentScopeFromAuth(normalizedStudent, auth, coaches, clubs, adminViewClub);
     const clubId = scoped.clubId;
     const existingUsernames = (clubId
       ? students.filter((s) => s.clubId === clubId)
@@ -3168,7 +3269,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
     return newStudent;
-  }, [addActivityLog, students, showToast, auth, coaches, clubs]);
+  }, [addActivityLog, students, showToast, auth, coaches, clubs, adminViewClub]);
 
   const updateStudent = useCallback(async (id: string, updatedFields: Partial<Student>) => {
     if (!isStudentIdInScope(auth, id, scopedStudents)) {
@@ -3282,8 +3383,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addTransaction = useCallback(async (transaction: Omit<Transaction, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
     const branch =
-      transaction.branch ??
-      (auth?.role === 'club' ? auth.branch : auth?.role === 'coach' && auth.branch ? auth.branch : undefined);
+      transaction.branch
+      ?? (auth?.role === 'club' ? auth.branch : undefined)
+      ?? (auth?.role === 'coach' && auth.branch ? auth.branch : undefined)
+      ?? (auth?.role === 'admin' && adminViewClub ? adminViewClub.name : undefined);
     const newTransaction = { ...transaction, id, branch } as Transaction;
     setTransactions(prev => [newTransaction, ...prev]);
     addActivityLog({
@@ -3294,10 +3397,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     const sb = getServiceSupabase();
     if (sb) try {
-      const { error } = await sb.from('transactions').insert(transactionToDb(newTransaction));
-      if (error) console.error('Supabase transactions insert error:', error);
+      const row = transactionToDb(newTransaction);
+      const { error } = await sb.from('transactions').insert(row);
+      if (error) {
+        const msg = String(error.message || '');
+        if (msg.includes('collected_at') && 'collected_at' in row) {
+          const { collected_at: _omit, ...withoutCollected } = row;
+          const retry = await sb.from('transactions').insert(withoutCollected);
+          if (retry.error) console.error('Supabase transactions insert error:', retry.error);
+        } else {
+          console.error('Supabase transactions insert error:', error);
+        }
+      }
     } catch (err) { console.error('Supabase transactions throw error:', err); }
-  }, [addActivityLog, auth]);
+  }, [addActivityLog, auth, adminViewClub]);
 
   const updateTransaction = useCallback(async (id: string, transaction: Partial<Transaction>) => {
     setTransactions(prev => prev.map(t => t.id === id ? { ...t, ...transaction } : t));
@@ -3319,6 +3432,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (transaction.startingUsedLessons !== undefined) payload.starting_used_lessons = transaction.startingUsedLessons ?? null;
       if (transaction.validityDays !== undefined) payload.validity_days = transaction.validityDays ?? null;
       if (transaction.processedBy !== undefined) payload.processed_by = transaction.processedBy ?? null;
+      if (transaction.collectedAt !== undefined) payload.collected_at = transaction.collectedAt ?? null;
       if (transaction.branch !== undefined) payload.branch = transaction.branch ?? null;
       if (transaction.studentId !== undefined) payload.student_id = transaction.studentId ?? null;
       if (transaction.personalCash !== undefined) payload.personal_cash = !!transaction.personalCash;
@@ -4409,6 +4523,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{ 
       students, scopedStudents, scopedTransactions, scopedCoaches, scopedTrainingGroups, scopedDisciplineBranches, scopedLessonPackages, scopedTournaments, scopedHomeworks, scopedAttendanceRecords, scopedGallery, activeClubBranch,
+      adminViewClubId, setAdminViewClubId, adminViewClub,
       addStudent, updateStudent, deleteStudent,
       bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach,
       transactions, addTransaction, updateTransaction, removeTransaction,

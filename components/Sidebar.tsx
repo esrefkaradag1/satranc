@@ -112,28 +112,33 @@ function renderNavItem(
   };
 
   return (
-    <div key={item.id} className="space-y-0.5">
+    <div key={item.id} className="space-y-0.5 relative group">
       <button
         type="button"
         onClick={handleClick}
         title={iconOnly ? label : undefined}
-        className={`w-full flex items-center rounded-xl transition-all duration-200 group ${
+        className={`w-full flex items-center rounded-xl transition-all duration-200 relative ${
           iconOnly ? "justify-center px-2 py-2.5" : "gap-3 px-3.5 py-2.5"
         } ${
           isActive || isParentActive
-            ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
-            : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200"
+            ? "bg-gradient-to-r from-indigo-600/90 to-indigo-700/80 text-white shadow-lg shadow-indigo-600/20 border border-indigo-500/30"
+            : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-100"
         }`}
       >
+        {(isActive || isParentActive) && !iconOnly && (
+          <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-indigo-400 shadow-[0_0_8px_#818cf8]" />
+        )}
         <div
-          className={`flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
-            item.iconColor && ICON_BOX_CLASS[item.iconColor]
-              ? `${ICON_BOX_CLASS[item.iconColor]} text-white shadow-md`
-              : "bg-white/10 text-slate-300 group-hover:bg-white/15"
+          className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-200 ${
+            isActive || isParentActive
+              ? "bg-white/20 text-white shadow-sm backdrop-blur-sm"
+              : item.iconColor && ICON_BOX_CLASS[item.iconColor]
+              ? `${ICON_BOX_CLASS[item.iconColor]} text-white shadow-md shadow-indigo-500/10`
+              : "bg-white/[0.06] text-slate-400 group-hover:text-slate-200 group-hover:bg-white/10"
           }`}
         >
           {React.cloneElement(item.icon as React.ReactElement<{ className?: string }>, {
-            className: "w-5 h-5",
+            className: "w-4 h-4",
           })}
         </div>
         {!iconOnly && (
@@ -144,7 +149,7 @@ function renderNavItem(
             {hasSubItems && (
               <ChevronDown
                 className={`w-4 h-4 flex-shrink-0 transition-transform duration-200 ${
-                  isExpanded ? "rotate-180" : ""
+                  isExpanded ? "rotate-180 text-indigo-300" : "text-slate-500"
                 }`}
               />
             )}
@@ -153,21 +158,21 @@ function renderNavItem(
       </button>
 
       {hasSubItems && isExpanded && !iconOnly && (
-        <div className="ml-4 pl-5 border-l border-white/10 space-y-0.5 py-1.5 animate-in fade-in slide-in-from-top-1 duration-200">
+        <div className="ml-4 pl-4 border-l border-white/10 space-y-0.5 py-1 animate-in fade-in slide-in-from-top-1 duration-200">
           {item.subItems?.map((sub) => (
             <button
               key={sub.id}
               type="button"
               onClick={() => setActiveTab(sub.id)}
-              className={`w-full flex items-center gap-2.5 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
+              className={`w-full flex items-center gap-2.5 py-2 px-3 rounded-lg text-xs font-semibold transition-all duration-150 ${
                 activeTab === sub.id
-                  ? "text-indigo-300 bg-indigo-500/20"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+                  ? "text-indigo-300 bg-indigo-500/20 border border-indigo-500/30 shadow-sm"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]"
               }`}
             >
               <span
-                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                  activeTab === sub.id ? "bg-indigo-400" : "bg-slate-500 group-hover:bg-slate-400"
+                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 transition-all ${
+                  activeTab === sub.id ? "bg-indigo-400 shadow-[0_0_6px_#818cf8]" : "bg-slate-600"
                 }`}
               />
               {sub.label}

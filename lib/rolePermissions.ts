@@ -318,6 +318,8 @@ export function mergeNavForPermissions(allowed: Set<string>, catalogs: NavCatego
 
 export function clubNavForPermissions(allowed: Set<string>): NavCategory[] {
   const effective = new Set(allowed);
+  // Eski roller WhatsApp iznini taşımasa bile menüde görünsün
+  effective.add('whatsapp');
   // Kulüp "students" ile admin/antrenör "student-list" aynı menü — çift kayıt önlenir
   if (effective.has('student-list')) effective.delete('students');
 
@@ -340,12 +342,14 @@ export function clubNavForPermissions(allowed: Set<string>): NavCategory[] {
 /** Antrenör paneli: yönetim menüsü + antrenör menüsü (izinlere göre) */
 export function coachNavForPermissions(allowed: Set<string>): NavCategory[] {
   const effective = new Set(allowed);
+  effective.add('whatsapp');
   if (effective.has('student-list')) effective.delete('students');
   return mergeNavForPermissions(effective, [NAV_CATEGORIES, COACH_NAV_CATEGORIES]);
 }
 
 /** Antrenör panelinde sekme izni (alt sayfalar dahil) */
 export function isCoachPanelTabAllowed(allowed: Set<string>, tab: string): boolean {
+  if (tab === 'whatsapp') return true;
   if (allowed.has(tab)) return true;
   if (tab === 'student-detail' && (allowed.has('student-list') || allowed.has('students'))) return true;
   if (tab === 'qr-attendance' && allowed.has('attendance')) return true;
@@ -369,6 +373,7 @@ export function clubPreferredStudentListTab(allowed: Set<string>): string {
 
 /** Kulüp panelinde sekme izni (alt sayfalar dahil) */
 export function isClubPanelTabAllowed(allowed: Set<string>, tab: string): boolean {
+  if (tab === 'whatsapp') return true;
   if (allowed.has(tab)) return true;
   if (tab === 'student-detail' && (allowed.has('student-list') || allowed.has('students'))) return true;
   if (tab === 'qr-attendance' && allowed.has('attendance')) return true;

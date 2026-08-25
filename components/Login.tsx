@@ -1,4 +1,4 @@
-import React, { Suspense, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import {
   Lock,
   User,
@@ -93,14 +93,24 @@ const labelCls = 'block text-[10px] font-bold text-slate-400 uppercase tracking-
 type LoginProps = {
   /** `/yonetim` — yalnızca yönetim parolası girişi */
   adminOnly?: boolean;
+  /** Public front’tan gelen sekme (`#/giris/veli` vb.) */
+  initialTab?: PublicTab;
 };
 
-const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
+const Login = ({ adminOnly = false, initialTab }: LoginProps) => {
   const { loginAdmin, loginCoach, loginClub, loginParent, loginStudent, setAuthWithStudent, initialDataLoaded } = useApp();
   const webgl3d = useDashboard3DEnabled();
 
-  const [tab, setTab] = useState<Tab>(adminOnly ? 'admin' : 'parent');
+  const [tab, setTab] = useState<Tab>(adminOnly ? 'admin' : (initialTab ?? 'parent'));
   const theme = THEME[tab];
+
+  useEffect(() => {
+    if (adminOnly) {
+      setTab('admin');
+      return;
+    }
+    if (initialTab) setTab(initialTab);
+  }, [adminOnly, initialTab]);
 
   const [adminPassword, setAdminPassword] = useState('');
   const [coachPassword, setCoachPassword] = useState('');
@@ -129,9 +139,9 @@ const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
     setStudentError('');
   };
 
-  const inputWrap = `flex rounded-xl border border-white/[0.08] bg-white/[0.04] backdrop-blur-sm overflow-hidden transition-all duration-300 ${theme.ring}`;
-  const inputInner = 'flex-1 min-w-0 py-3 px-4 bg-transparent border-0 text-white placeholder:text-slate-500 outline-none text-sm';
-  const iconSlot = 'flex items-center justify-center w-11 shrink-0 text-slate-500 border-r border-white/[0.06]';
+  const inputWrap = `flex rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur-md overflow-hidden transition-all duration-300 focus-within:shadow-[0_0_20px_rgba(99,102,241,0.15)] ${theme.ring}`;
+  const inputInner = 'flex-1 min-w-0 py-3 px-4 bg-transparent border-0 text-white placeholder:text-slate-500 outline-none text-sm font-medium';
+  const iconSlot = 'flex items-center justify-center w-11 shrink-0 text-slate-400 border-r border-white/[0.08] bg-white/[0.02]';
 
   const handleAdminSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -503,8 +513,16 @@ const Login: React.FC<LoginProps> = ({ adminOnly = false }) => {
                 dönün.
               </p>
             ) : (
-            <p className="text-center text-slate-600 text-[11px] mt-6 leading-relaxed max-w-sm mx-auto">
-              Öğrenci girişi: kullanıcı adı, öğrenci no veya veli telefonu + PIN ile yapılabilir.
+            <p className="text-center text-slate-600 text-[11px] mt-6 leading-relaxed max-w-sm mx-auto space-y-2">
+              <span className="block">
+                Öğrenci girişi: kullanıcı adı, öğrenci no veya veli telefonu + PIN ile yapılabilir.
+              </span>
+              <a
+                href="#/"
+                className="inline-flex text-amber-400/90 hover:text-amber-300 font-semibold underline underline-offset-2"
+              >
+                ← Ana sayfa (satrancedu.com)
+              </a>
             </p>
             )}
           </div>

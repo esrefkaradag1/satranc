@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, FileText, CheckSquare, BarChart3, 
   Wallet, MessageCircle, Video, Image, ExternalLink, Trophy,
   CalendarCheck, BookOpen, ShieldCheck, Box, CalendarDays, Grid, CreditCard, User, Building2,
-  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone
+  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone, Globe
 } from 'lucide-react';
 
 /** Menü öğesi ikon kutusu rengi: Tailwind sınıfı (bg-* veya gradient) */
@@ -105,6 +105,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     icon: <MessageSquare className="w-4 h-4" />,
     items: [
       { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
+      { id: 'main-site', label: 'Ana Site', icon: <Globe className="w-5 h-5" />, iconColor: 'teal' },
       { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
       { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'emerald' },
     ],
@@ -215,6 +216,7 @@ export const CLUB_NAV_ITEMS: NavItem[] = [
   { id: 'students', label: 'Öğrenciler', icon: <Users className="w-5 h-5" />, iconColor: 'violet-pink' },
   { id: 'tournaments', label: 'Turnuvalar', icon: <Trophy className="w-5 h-5" />, iconColor: 'indigo' },
   { id: 'finance', label: 'Kasa Özeti', icon: <Wallet className="w-5 h-5" />, iconColor: 'emerald' },
+  { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'emerald' },
 ];
 
 /** Kulüp paneli — kategorize menü */
@@ -260,6 +262,15 @@ export const CLUB_NAV_CATEGORIES: NavCategory[] = [
     icon: <Wallet className="w-4 h-4" />,
     items: [
       { id: 'finance', label: 'Kasa Özeti', icon: <Wallet className="w-5 h-5" />, iconColor: 'emerald' },
+    ],
+  },
+  {
+    title: 'Medya & İletişim',
+    icon: <MessageSquare className="w-4 h-4" />,
+    items: [
+      { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
+      { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+      { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'emerald' },
     ],
   },
 ];

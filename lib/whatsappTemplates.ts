@@ -74,13 +74,29 @@ Yapılan: {{bulmaca_sayisi}} bulmaca, {{mac_sayisi}} maç
 {{kulup_adi}}`,
   },
   {
-    id: 'tpl-training-missed',
-    key: 'training_incomplete',
-    name: 'Antrenman Eksik (21:00)',
+    id: 'tpl-training-partial',
+    key: 'training_partial',
+    name: 'Antrenman Kısmi (23:00)',
     enabled: true,
     body: `Merhaba {{veli_adi}},
 
-{{ogrenci_adi}} bugünkü antrenmanını tamamlayamadı ({{tarih}}).
+{{ogrenci_adi}} bugünkü antrenmanını kısmen yaptı ({{tarih}}).
+
+Hedef: {{bulmaca_hedef}} bulmaca, {{mac_hedef}} maç
+Yapılan: {{bulmaca_sayisi}} bulmaca, {{mac_sayisi}} maç
+
+Eksik kalan kısmı tamamlamasını hatırlatabilirsiniz.
+
+{{kulup_adi}}`,
+  },
+  {
+    id: 'tpl-training-missed',
+    key: 'training_incomplete',
+    name: 'Antrenman Yapılmadı (23:00)',
+    enabled: true,
+    body: `Merhaba {{veli_adi}},
+
+{{ogrenci_adi}} bugünkü antrenmanını yapmadı ({{tarih}}).
 
 Hedef: {{bulmaca_hedef}} bulmaca, {{mac_hedef}} maç
 Yapılan: {{bulmaca_sayisi}} bulmaca, {{mac_sayisi}} maç
@@ -96,6 +112,7 @@ export const DEFAULT_WHATSAPP_AUTO_RULES: WhatsAppAutoRule[] = [
   { event: 'parent_consent', enabled: true, templateKey: 'parent_consent' },
   { event: 'lesson_start', enabled: true, templateKey: 'lesson_start' },
   { event: 'training_completed', enabled: true, templateKey: 'training_completed' },
+  { event: 'training_partial', enabled: true, templateKey: 'training_partial' },
   { event: 'training_incomplete', enabled: true, templateKey: 'training_incomplete' },
 ];
 
@@ -108,6 +125,33 @@ export function findTemplate(
   key: WhatsAppTemplateKey,
 ): WhatsAppTemplate | undefined {
   return templates.find((t) => t.key === key && t.enabled);
+}
+
+const SYSTEM_TEMPLATE_KEYS = new Set(
+  DEFAULT_WHATSAPP_TEMPLATES.map((t) => t.key),
+);
+
+export function isSystemWhatsAppTemplate(key: WhatsAppTemplateKey): boolean {
+  return SYSTEM_TEMPLATE_KEYS.has(key as (typeof DEFAULT_WHATSAPP_TEMPLATES)[number]['key']);
+}
+
+export function createCustomWhatsAppTemplate(input: {
+  name: string;
+  body: string;
+}): WhatsAppTemplate {
+  const slug = String(input.name || 'ozel')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/[^a-z0-9ğüşıöç]+/gi, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 32) || 'ozel';
+  const id = `tpl-custom-${Date.now().toString(36)}`;
+  return {
+    id,
+    key: `custom_${slug}_${Date.now().toString(36)}`,
+    name: String(input.name || 'Yeni şablon').trim() || 'Yeni şablon',
+    body: String(input.body || '').trim() || 'Merhaba {{veli_adi}},\n\n{{ogrenci_adi}}\n\n{{kulup_adi}}',
+    enabled: true,
+  };
 }
 
 export function buildStudentTemplateVars(

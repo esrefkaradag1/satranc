@@ -263,14 +263,16 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 const softFail = parsed.searchParams.get('soft') === '1';
                 const searchParams = new URLSearchParams(parsed.searchParams);
                 searchParams.delete('path');
-                searchParams.delete('soft');
+                // soft'u Lichess throttle'a ilet — silinirse soft bypass/boş yanıt çalışmaz, kuyruk kilitlenir.
+                if (softFail) searchParams.set('soft', '1');
+                else searchParams.delete('soft');
                 const upstream = await lichessProxyRequest(
                   parsed.searchParams.get('path') ?? '',
                   searchParams,
                   Array.isArray(accept) ? accept[0] : accept,
                   env,
                 );
-                if (softFail && upstream.status === 429) {
+                if (softFail && (upstream.status === 429 || upstream.rateLimited || upstream.status >= 400)) {
                   res.statusCode = 200;
                   res.setHeader('Content-Type', 'application/json; charset=utf-8');
                   res.setHeader('X-Lichess-Rate-Limited', '1');

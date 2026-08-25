@@ -263,9 +263,18 @@ export function resolveScopedHomeworks(
   auth: AuthUser | null,
   homeworks: HomeworkAssignment[],
   scopedStudents: Student[],
-  scopedTrainingGroups: TrainingGroup[],
+  _scopedTrainingGroups: TrainingGroup[],
 ): HomeworkAssignment[] {
-  if (!auth || auth.role === 'admin') return homeworks;
+  if (!auth) return homeworks;
+  // Admin kulüp seçmeden scoped boş → ödev gösterme; seçince kulüp gibi filtrele
+  if (auth.role === 'admin' && scopedStudents.length === 0) return [];
+  if (auth.role === 'admin') {
+    const studentIds = scopedStudentIdSet(scopedStudents);
+    return homeworks.filter((hw) => {
+      const assigneeIds = getAssignedStudentIds(hw, scopedStudents);
+      return assigneeIds.some((id) => studentIds.has(id));
+    });
+  }
   const studentIds = scopedStudentIdSet(scopedStudents);
   return homeworks.filter((hw) => {
     const assigneeIds = getAssignedStudentIds(hw, scopedStudents);
@@ -279,8 +288,10 @@ export function resolveScopedAttendanceRecords(
   records: AttendanceRecord[],
   scopedStudents: Student[],
 ): AttendanceRecord[] {
-  if (!auth || auth.role === 'admin') return records;
+  if (!auth) return records;
+  if (auth.role === 'admin' && scopedStudents.length === 0) return [];
   const studentIds = scopedStudentIdSet(scopedStudents);
+  if (auth.role === 'admin') return records.filter((r) => studentIds.has(r.studentId));
   return records.filter((r) => studentIds.has(r.studentId));
 }
 
@@ -290,9 +301,18 @@ export function resolveScopedGallery(
   gallery: GalleryItem[],
   scopedStudents: Student[],
 ): GalleryItem[] {
-  if (!auth || auth.role === 'admin') return gallery;
+  if (!auth) return gallery;
+  if (auth.role === 'admin' && scopedStudents.length === 0) return [];
   const studentIds = scopedStudentIdSet(scopedStudents);
   const groupNames = new Set(scopedStudents.map((s) => (s.group ?? '').trim()).filter(Boolean));
+  if (auth.role === 'admin') {
+    return gallery.filter((item) => {
+      if (item.studentId?.trim()) return studentIds.has(item.studentId.trim());
+      const g = (item.group ?? '').trim();
+      if (!g || g === 'Hepsi') return false;
+      return groupNames.has(g);
+    });
+  }
   return gallery.filter((item) => {
     if (item.studentId?.trim()) return studentIds.has(item.studentId.trim());
     const g = (item.group ?? '').trim();
@@ -307,6 +327,71 @@ export function isStudentIdInScope(
   studentId: string,
   scopedStudents: Student[],
 ): boolean {
-  if (!auth || auth.role === 'admin') return true;
+  if (!auth) return false;
   return scopedStudentIdSet(scopedStudents).has(studentId);
+}
+
+/** Süper admin paneli: seçili kulüp için sahte kulüp oturumu (filtreleme). */
+export function adminClubAuthProxy(
+  club: { id: string; name: string } | null | undefined,
+): AuthUser | null {
+  if (!club?.id || !club.name?.trim()) return null;
+  return { role: 'club', branch: club.name.trim(), clubId: club.id };
+}
+
+/** Admin kulüp seçimi: öğrencileri kulübe indirger. */
+export function filterStudentsForAdminClub(
+  students: Student[],
+  club: { id: string; name: string },
+  coaches: Coach[],
+  branchOfficeRecords: BranchOfficeRecord[],
+  clubs: { id: string; name: string }[],
+): Student[] {
+  const proxy = adminClubAuthProxy(club);
+  if (!proxy) return students;
+  const offices = clubOfficeNamesForAuth(proxy, branchOfficeRecords, clubs);
+  return filterStudentsByClub(students, club.name, coaches, offices, club.id);
+}
+
+/** Admin kulüp seçimi: kasa işlemlerini kulübe indirger (şube adı + öğrenci bağı). */
+export function filterTransactionsForAdminClub(
+  transactions: Transaction[],
+  club: { id: string; name: string },
+  students: Student[],
+  coaches: Coach[],
+  branchOfficeRecords: BranchOfficeRecord[] = [],
+  clubs: { id: string; name: string }[] = [],
+): Transaction[] {
+  const proxy = adminClubAuthProxy(club);
+  if (!proxy) return transactions;
+  const offices = clubOfficeNamesForAuth(proxy, branchOfficeRecords, clubs);
+  const key = normalizeClubKey(club.name);
+  const officeKeys = new Set([key, ...offices.map((o) => normalizeClubKey(o))]);
+  return transactions.filter((tx) => {
+    if (tx.branch && officeKeys.has(normalizeClubKey(tx.branch))) return true;
+    if (filterTransactionsByClub([tx], club.name).length > 0) return true;
+    if (tx.studentId) {
+      const student = students.find((s) => s.id === tx.studentId);
+      if (student && studentBelongsToClub(student, club.name, coaches, offices, club.id)) return true;
+    }
+    return false;
+  });
+}
+
+export function filterCoachesForAdminClub(coaches: Coach[], club: { id: string; name: string }): Coach[] {
+  const byId = coaches.filter((c) => c.clubId && c.clubId === club.id);
+  if (byId.length > 0) return byId;
+  return filterCoachesByClub(coaches, club.name);
+}
+
+export function filterOrgRecordsForAdminClub<T extends { clubId?: string; branchOffice?: string }>(
+  records: T[],
+  club: { id: string; name: string },
+  branchOfficeRecords: BranchOfficeRecord[],
+  clubs: { id: string; name: string }[],
+): T[] {
+  const proxy = adminClubAuthProxy(club);
+  if (!proxy) return records;
+  const offices = clubOfficeNamesForAuth(proxy, branchOfficeRecords, clubs);
+  return records.filter((r) => orgRecordBelongsToClub(r, proxy, offices, clubs));
 }

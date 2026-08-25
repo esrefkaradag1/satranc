@@ -135,7 +135,7 @@ import {
   lessonPackageNamesForSelection,
   trainingGroupNamesForSelection,
 } from '../lib/trainingGroupUtils';
-import { getDuesMonthCell } from '../lib/duesCalendarUtils';
+import { getDuesMonthCell, parseDuesPeriodFromTransaction } from '../lib/duesCalendarUtils';
 import type { GroupLessonSlot } from '../types';
 
 const MONTHS_TR = [
@@ -210,6 +210,24 @@ function formatDateTR(iso?: string) {
  const d = new Date(iso);
  if (Number.isNaN(d.getTime())) return iso;
  return d.toLocaleDateString('tr-TR');
+}
+
+/** Aidat dönemi: 2026-08-01 → "Ağustos 2026" */
+function formatPeriodLabelTR(iso?: string) {
+  if (!iso) return '—';
+  const m = /^(\d{4})-(\d{2})/.exec(iso.slice(0, 10));
+  if (!m) return formatDateTR(iso);
+  const monthNum = Number(m[2]);
+  if (monthNum < 1 || monthNum > 12) return formatDateTR(iso);
+  return `${monthLabelTr(monthNum)} ${m[1]}`;
+}
+
+function isDuesPeriodCategory(category?: string) {
+  return category === 'Aidat' || category === 'Paket';
+}
+
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 const KV: React.FC<{ label: string; value?: React.ReactNode }> = ({ label, value }) => (
@@ -982,6 +1000,7 @@ const StudentDetail: React.FC<{
   const [duesMonth, setDuesMonth] = useState('');
   const [duesPaymentType, setDuesPaymentType] = useState<'Nakit' | 'Havale/EFT' | 'Kredi Kartı'>('Nakit');
   const [duesProcessedBy, setDuesProcessedBy] = useState('');
+  const [duesCollectedDate, setDuesCollectedDate] = useState(() => todayIsoDate());
   const [showDuesPlanModal, setShowDuesPlanModal] = useState(false);
   const [duesPlanMonth, setDuesPlanMonth] = useState('');
   const [duesPlanAmount, setDuesPlanAmount] = useState('');
@@ -1112,7 +1131,7 @@ const StudentDetail: React.FC<{
     setEditTxnTotalAmount(t.totalAmount != null ? String(t.totalAmount) : '');
     setEditTxnLessonCount(totalLessons != null ? String(totalLessons) : '');
     setEditTxnRemainingLessons(currentRemainingLessons != null ? String(currentRemainingLessons) : '');
-    setEditTxnDate(normalizeDateInputYear(t.date || ''));
+    setEditTxnDate(normalizeDateInputYear(t.collectedAt || t.date || ''));
     setEditTxnPaymentType(t.paymentType);
     setEditTxnProcessedBy(t.processedBy || '');
     setEditTxnDescription(t.description || '');
@@ -1369,6 +1388,7 @@ const StudentDetail: React.FC<{
       validityDays: saleType === 'ozel-ders' && saleValidityDays.trim() ? Number(saleValidityDays) : undefined,
       studentId: student.id,
       date: today,
+      collectedAt: today,
     });
 
     if (saleType === 'aylik-paket') {
@@ -1705,19 +1725,14 @@ const StudentDetail: React.FC<{
     const attendanceRate = expected30 > 0 ? `${Math.round((last30 / expected30) * 100)}%` : (totalAttendance > 0 ? '100%' : '—');
 
     // Aidat durumu: bu yılki gerçek tahsilata göre (Aidat Takvimi ile aynı veri)
-    const yearStr = String(calendarYearForDerived);
     const monthPayments: Record<number, number> = {};
     for (let m = 1; m <= 12; m++) monthPayments[m] = 0;
     let totalPaidThisYear = 0;
     filterDuesTransactions(studentTransactions).forEach((t) => {
-      const d = t.date || '';
-      if (d.slice(0, 4) === yearStr) {
-        totalPaidThisYear += t.amount || 0;
-        const monthNum = parseInt(d.slice(5, 7), 10);
-        if (monthNum >= 1 && monthNum <= 12) {
-          monthPayments[monthNum] = (monthPayments[monthNum] || 0) + (t.amount || 0);
-        }
-      }
+      const period = parseDuesPeriodFromTransaction(t);
+      if (!period || period.year !== calendarYearForDerived) return;
+      totalPaidThisYear += t.amount || 0;
+      monthPayments[period.month] = (monthPayments[period.month] || 0) + (t.amount || 0);
     });
     const paidMonthsSummary = formatPaidMonthsSummary(monthPayments);
     const expectedThisYear =
@@ -2145,6 +2160,7 @@ const StudentDetail: React.FC<{
  setDuesMonth(String(new Date().getMonth() + 1));
  setDuesPaymentType('Nakit');
  setDuesProcessedBy('');
+ setDuesCollectedDate(todayIsoDate());
  }}
  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 sm:py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all min-h-[44px]"
  >
@@ -2244,6 +2260,7 @@ const StudentDetail: React.FC<{
          setDuesAmount(student.registrationType === 'package' ? '' : String(planExpected || derived.monthlyFee || ''));
          setDuesPaymentType('Nakit');
          setDuesProcessedBy('');
+         setDuesCollectedDate(todayIsoDate());
          setShowDuesModal(true);
        }}
        className="w-full text-left hover:scale-[1.01] transition-transform cursor-pointer"
@@ -2397,7 +2414,14 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <CreditCard className="w-4 h-4 text-indigo-600" />
  <div className="text-sm font-black text-white">Ödeme Geçmişi (Tüm İşlemler)</div>
  </div>
- <button type="button" onClick={() => setShowDuesModal(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold transition-colors">
+ <button type="button" onClick={() => {
+   setDuesMonth(String(new Date().getMonth() + 1));
+   setDuesAmount(student.registrationType === 'package' ? '' : String(derived.monthlyFee || ''));
+   setDuesPaymentType('Nakit');
+   setDuesProcessedBy('');
+   setDuesCollectedDate(todayIsoDate());
+   setShowDuesModal(true);
+ }} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold transition-colors">
  <Wallet className="w-3.5 h-3.5" /> Ödeme ekle
  </button>
  </div>
@@ -2420,7 +2444,11 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  ) : (
  studentTransactions.slice(0, 12).map((t) => (
  <tr key={t.id} className="text-sm border-l-[3px] border-l-emerald-500 bg-emerald-500/[0.06] odd:bg-emerald-500/[0.09] hover:bg-emerald-500/[0.14] transition-colors">
- <td data-label="Dönem" className="py-3 pr-4 font-bold text-white">{formatDateTR(t.date)}</td>
+ <td data-label="Dönem" className="py-3 pr-4 font-bold text-white">{(() => {
+   if (!isDuesPeriodCategory(t.category)) return formatDateTR(t.collectedAt || t.date);
+   const period = parseDuesPeriodFromTransaction(t);
+   return period ? `${monthLabelTr(period.month)} ${period.year}` : formatPeriodLabelTR(t.date);
+ })()}</td>
  <td data-label="Kategori" className="py-3 pr-4">
  <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest bg-indigo-500/30 text-indigo-200 border border-indigo-400/50">{t.category}</span>
  </td>
@@ -2430,7 +2458,10 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <td data-label="Ödeme Tipi" className="py-3 pr-4">
  <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest bg-violet-500/30 text-violet-200 border border-violet-400/50">{t.paymentType}</span>
  </td>
- <td data-label="Tahsilat" className="py-3 pr-4 text-slate-300 font-bold">{t.processedBy || '—'}</td>
+ <td data-label="Tahsilat" className="py-3 pr-4 text-slate-300 font-bold">
+   <div>{formatDateTR(t.collectedAt || t.date)}</div>
+   {t.processedBy ? <div className="text-[10px] font-medium text-slate-500 mt-0.5">{t.processedBy}</div> : null}
+ </td>
  <td data-label="İşlem" className="py-3 pr-4 text-right">
  <div className="flex items-center justify-end gap-1">
 <button type="button" onClick={() => openEditTransaction(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" title="Düzenle"><Edit2 className="w-4 h-4" /></button>
@@ -3107,6 +3138,17 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
            </select>
          </div>
          <div>
+           <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Tahsilat tarihi</label>
+           <input
+             type="date"
+             min={DATE_INPUT_MIN}
+             max={DATE_INPUT_MAX}
+             value={duesCollectedDate}
+             onChange={(e) => setDuesCollectedDate(normalizeDateInputYear(e.target.value))}
+             className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium [color-scheme:dark]"
+           />
+         </div>
+         <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Tahsil eden (opsiyonel)</label>
            <input
              type="text"
@@ -3128,8 +3170,9 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                const monthIndex = Number(duesMonth) || new Date().getMonth() + 1;
                const monthName = MONTHS_TR[monthIndex - 1] || '';
                const year = calendarYear;
-               const monthPadded = String(monthIndex).padStart(2, '0');
                const isPackage = student.registrationType === 'package';
+               const collectedAt = normalizeDateInputYear(duesCollectedDate) || todayIsoDate();
+               // date = fiili tahsilat (kasa listesinde bu görünür); dönem açıklamada tutulur
                addTransaction({
                  type: 'income',
                  category: isPackage ? 'Paket' : 'Aidat',
@@ -3137,7 +3180,8 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                  paymentType: duesPaymentType,
                  amount,
                  studentId: student.id,
-                 date: `${year}-${monthPadded}-01`,
+                 date: collectedAt,
+                 collectedAt,
                  processedBy: duesProcessedBy.trim() || undefined,
                });
                if (student.registrationType !== 'package' && derived.expectedThisYear > 0) {
@@ -3668,6 +3712,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
    const editingTxn = transactions.find((t) => t.id === editingTransactionId);
    const showSaleTotal = editingTxn ? isPackageSaleCategory(editingTxn.category) : false;
   const isPrivateLessonSale = editingTxn?.category === 'Özel Ders' || editingTxn?.saleKind === 'private_lesson';
+  const isPeriodTxn = isDuesPeriodCategory(editingTxn?.category);
   const trackedUsage = editingTxn ? privateLessonUsageById.get(editingTxn.id) : undefined;
    return (
    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={() => setEditingTransactionId(null)}>
@@ -3683,8 +3728,9 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
            <input type="text" value={editTxnDescription} onChange={(e) => setEditTxnDescription(e.target.value)} className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium" placeholder="Örn: 6 Aylık Yaz Kampı" />
          </div>
          <div>
-           <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Tarih</label>
+           <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">{isPeriodTxn ? 'Tahsilat tarihi' : 'Tarih'}</label>
            <input type="date" min={DATE_INPUT_MIN} max={DATE_INPUT_MAX} value={editTxnDate} onChange={(e) => setEditTxnDate(normalizeDateInputYear(e.target.value))} className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium [color-scheme:dark]" />
+           {isPeriodTxn ? <p className="mt-1 text-[10px] text-slate-500">Aidat dönemi açıklamada kalır (ör. TEMMUZ 2026 aidat). Buraya fiili ödeme gününü yazın.</p> : null}
          </div>
          {showSaleTotal ? (
            <div>
@@ -3748,6 +3794,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                updateTransaction(editingTransactionId, {
                  description: editTxnDescription.trim() || undefined,
                  date: editTxnDate ? normalizeDateInputYear(editTxnDate) : undefined,
+                 collectedAt: editTxnDate ? normalizeDateInputYear(editTxnDate) : undefined,
                  amount,
                  totalAmount: showSaleTotal ? totalAmount : undefined,
                 lessonCount: isPrivateLessonSale ? lessonCount : undefined,

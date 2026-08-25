@@ -3,24 +3,166 @@ import {
   TrendingUp, Users, Calendar, ClipboardCheck, Box,
   MessageSquare, MessageCircle, CheckCircle2, Clock, Target,
   Image as ImageIcon, Video, Wallet, AlertTriangle, UserPlus, Activity, FileText,
-  ChevronRight, GraduationCap, QrCode,
+  ChevronRight, GraduationCap, QrCode, Building2,
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { useApp } from '../AppContext';
 import { getSessionDisplay } from '../lib/sessionDisplayName';
 import { DashboardHeroScene } from './dashboard/DashboardHeroScene';
 import { Dashboard3DBackground } from './dashboard/Dashboard3DBackground';
+import {
+  filterStudentsForAdminClub,
+  filterTransactionsForAdminClub,
+} from '../lib/orgScope';
+import { countsTowardGeneralCash } from '../lib/transactionUtils';
 
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 
+function formatMoneyShort(amount: number): string {
+  if (amount >= 1000) return `₺${(amount / 1000).toFixed(1)}k`;
+  return `₺${amount.toLocaleString('tr-TR')}`;
+}
+
 const Dashboard: React.FC = () => {
-  const { scopedStudents, scopedTransactions: transactions, scopedHomeworks: homeworks, lessons, auth, coaches, clubs, hasAuthPermission } = useApp();
+  const {
+    students: allStudents,
+    transactions: allTransactions,
+    scopedStudents,
+    scopedTransactions: transactions,
+    scopedHomeworks: homeworks,
+    lessons,
+    auth,
+    coaches,
+    clubs,
+    branchOfficeRecords,
+    hasAuthPermission,
+    adminViewClub,
+    setAdminViewClubId,
+  } = useApp();
   const students = scopedStudents;
   const canFinance = hasAuthPermission('finance');
+  const isAdmin = auth?.role === 'admin';
   const session = useMemo(
-    () => getSessionDisplay(auth, { students, coaches, clubs }),
-    [auth, students, coaches, clubs],
+    () => getSessionDisplay(auth, { students: allStudents, coaches, clubs }),
+    [auth, allStudents, coaches, clubs],
   );
+
+  const clubOverviewRows = useMemo(() => {
+    if (!isAdmin) return [];
+    const now = new Date();
+    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    return clubs
+      .slice()
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'tr'))
+      .map((club) => {
+        const clubStudents = filterStudentsForAdminClub(
+          allStudents,
+          club,
+          coaches,
+          branchOfficeRecords,
+          clubs,
+        );
+        const clubTx = filterTransactionsForAdminClub(
+          allTransactions,
+          club,
+          allStudents,
+          coaches,
+          branchOfficeRecords,
+          clubs,
+        ).filter(countsTowardGeneralCash);
+        const active = clubStudents.filter((s) => s.status !== 'inactive').length;
+        const groups = new Set(clubStudents.map((s) => s.group).filter(Boolean)).size;
+        const monthIncome = clubTx
+          .filter((t) => t.type === 'income' && t.date.startsWith(thisMonth))
+          .reduce((sum, t) => sum + t.amount, 0);
+        const balance = clubTx.reduce(
+          (sum, t) => sum + (t.type === 'income' ? t.amount : -t.amount),
+          0,
+        );
+        return { club, active, groups, monthIncome, balance };
+      });
+  }, [isAdmin, clubs, allStudents, allTransactions, coaches, branchOfficeRecords]);
+
+  // Süper admin: kulüp seçilmeden birleşik öğrenci/kasa gösterme
+  if (isAdmin && !adminViewClub) {
+    return (
+      <Dashboard3DBackground>
+        <div className="space-y-4 sm:space-y-5 animate-in fade-in duration-500">
+          <section className="relative rounded-2xl overflow-hidden border border-indigo-400/25 dashboard-glass p-5 sm:p-6">
+            <div className="absolute inset-0 bg-gradient-to-r from-indigo-600/40 via-indigo-500/20 to-transparent pointer-events-none" />
+            <div className="relative z-10 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Süper Yönetici</p>
+                <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight mt-0.5">
+                  Hoş geldiniz, {session.firstName}
+                </h1>
+                <p className="text-sm text-indigo-100/80 mt-1 max-w-xl">
+                  Her kulübün öğrencileri ve kasası ayrıdır. İşlem yapmak için bir kulüp seçin — tüm kulüplerin toplamı burada birleştirilmez.
+                </p>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-slate-900/50 px-3 py-2 text-xs text-slate-300">
+                <Building2 className="w-4 h-4 text-indigo-400" />
+                Üst menüden kulüp seçin
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+            {clubOverviewRows.length === 0 ? (
+              <div className="bento-card p-6 sm:col-span-2 xl:col-span-3 text-center">
+                <p className="text-sm text-slate-400">Henüz kulüp yok. Kurumsal Yapı’dan kulüp ekleyin.</p>
+                <a href="#/kurumsal-yapi" className="inline-flex mt-3 text-xs font-bold text-indigo-400 hover:text-indigo-300">
+                  Kurumsal Yapıya git
+                </a>
+              </div>
+            ) : (
+              clubOverviewRows.map(({ club, active, groups, monthIncome, balance }) => (
+                <button
+                  key={club.id}
+                  type="button"
+                  onClick={() => setAdminViewClubId(club.id)}
+                  className="bento-card p-5 text-left hover:border-indigo-500/40 hover:bg-indigo-500/[0.04] transition-all group"
+                >
+                  <div className="flex items-start justify-between gap-2 mb-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center shrink-0">
+                          <Building2 className="w-4 h-4 text-indigo-400" />
+                        </div>
+                        <h3 className="text-base font-bold text-white truncate">{club.name}</h3>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-indigo-400 shrink-0 transition-colors" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2.5">
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Öğrenci</p>
+                      <p className="text-lg font-black text-white tabular-nums mt-0.5">{active}</p>
+                      <p className="text-[10px] text-slate-500">{groups} grup</p>
+                    </div>
+                    {canFinance ? (
+                      <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Bu Ay Gelir</p>
+                        <p className="text-lg font-black text-white tabular-nums mt-0.5">{formatMoneyShort(monthIncome)}</p>
+                        <p className={`text-[10px] ${balance >= 0 ? 'text-emerald-400/80' : 'text-rose-400/80'}`}>
+                          {balance >= 0 ? 'Kasa pozitif' : 'Dikkat'}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Kapsam</p>
+                        <p className="text-sm font-bold text-slate-200 mt-1">Kulübe gir</p>
+                      </div>
+                    )}
+                  </div>
+                </button>
+              ))
+            )}
+          </section>
+        </div>
+      </Dashboard3DBackground>
+    );
+  }
 
   const totalIncome = useMemo(() =>
     transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0),
@@ -133,7 +275,9 @@ const Dashboard: React.FC = () => {
               Hoş geldiniz, {session.firstName}
             </h1>
             <p className="text-xs sm:text-sm text-indigo-100/80 font-medium mt-1">
-              Tüm istatistikleri ve işlemleri buradan yönetin
+              {adminViewClub
+                ? `${adminViewClub.name} · öğrenci ve kasa bu kulüp için`
+                : 'Tüm istatistikleri ve işlemleri buradan yönetin'}
             </p>
           </div>
         </div>
@@ -474,25 +618,25 @@ const QuickStatBox: React.FC<{
 }> = ({ href, icon, value, label, sub, bg }) => (
   <a
     href={href}
-    className={`group relative flex flex-col items-center justify-center rounded-2xl bg-gradient-to-b ${bg} h-[128px] sm:h-[132px] px-2 text-white shadow-lg overflow-hidden transition-transform hover:scale-[1.02] active:scale-[0.98] ring-1 ring-white/10 backdrop-blur-sm`}
+    className={`group relative flex flex-col items-center justify-center rounded-2xl bg-gradient-to-b ${bg} h-[128px] sm:h-[132px] px-2 text-white shadow-xl overflow-hidden transition-all duration-300 hover:scale-[1.03] hover:-translate-y-0.5 active:scale-[0.98] ring-1 ring-white/15 backdrop-blur-md glow-card`}
   >
-    <div className="absolute inset-0 bg-white/0 group-hover:bg-white/5 transition-colors" />
-    <div className="relative w-9 h-9 rounded-full bg-white/15 flex items-center justify-center mb-2 border border-white/20">
+    <div className="absolute inset-0 bg-white/0 group-hover:bg-white/10 transition-colors pointer-events-none" />
+    <div className="relative w-9 h-9 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center mb-2 border border-white/25 shadow-sm group-hover:bg-white/30 transition-all">
       {icon}
     </div>
-    <p className="relative text-xl sm:text-2xl font-black tabular-nums leading-none">{value}</p>
-    <p className="relative text-[10px] font-bold uppercase tracking-wide mt-1 opacity-90">{label}</p>
-    <p className="relative text-[9px] text-white/60 mt-0.5">{sub}</p>
+    <p className="relative text-xl sm:text-2xl font-black tabular-nums leading-none tracking-tight">{value}</p>
+    <p className="relative text-[10px] font-bold uppercase tracking-wider mt-1 opacity-90">{label}</p>
+    <p className="relative text-[9px] font-medium text-white/70 mt-0.5">{sub}</p>
   </a>
 );
 
 const quickMenuColors: Record<string, string> = {
-  indigo: 'from-indigo-600/90 to-indigo-800/90 hover:shadow-indigo-500/20',
-  violet: 'from-violet-600/90 to-violet-800/90 hover:shadow-violet-500/20',
-  emerald: 'from-emerald-600/90 to-emerald-800/90 hover:shadow-emerald-500/20',
-  sky: 'from-sky-600/90 to-sky-800/90 hover:shadow-sky-500/20',
-  amber: 'from-amber-600/90 to-amber-800/90 hover:shadow-amber-500/20',
-  rose: 'from-rose-600/90 to-rose-800/90 hover:shadow-rose-500/20',
+  indigo: 'from-indigo-600/80 to-indigo-900/80 hover:shadow-indigo-500/25 border-indigo-500/30',
+  violet: 'from-violet-600/80 to-violet-900/80 hover:shadow-violet-500/25 border-violet-500/30',
+  emerald: 'from-emerald-600/80 to-emerald-900/80 hover:shadow-emerald-500/25 border-emerald-500/30',
+  sky: 'from-sky-600/80 to-sky-900/80 hover:shadow-sky-500/25 border-sky-500/30',
+  amber: 'from-amber-600/80 to-amber-900/80 hover:shadow-amber-500/25 border-amber-500/30',
+  rose: 'from-rose-600/80 to-rose-900/80 hover:shadow-rose-500/25 border-rose-500/30',
 };
 
 const QuickMenuBox: React.FC<{
@@ -503,12 +647,12 @@ const QuickMenuBox: React.FC<{
 }> = ({ href, icon, label, color }) => (
   <a
     href={href}
-    className={`group flex flex-col items-center justify-center gap-2 p-3 sm:p-4 rounded-2xl bg-gradient-to-br ${quickMenuColors[color]} text-white shadow-md hover:shadow-lg transition-all hover:-translate-y-0.5 active:translate-y-0 border border-white/10`}
+    className={`group flex flex-col items-center justify-center gap-2.5 p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br ${quickMenuColors[color]} text-white shadow-lg backdrop-blur-xl hover:shadow-xl transition-all duration-300 hover:-translate-y-1 active:translate-y-0 border`}
   >
-    <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center border border-white/20 group-hover:bg-white/25 transition-colors">
+    <div className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-md flex items-center justify-center border border-white/20 group-hover:bg-white/30 group-hover:scale-110 transition-all duration-300">
       {icon}
     </div>
-    <span className="text-[10px] sm:text-[11px] font-bold text-center leading-tight">{label}</span>
+    <span className="text-[10px] sm:text-[11px] font-bold text-center leading-tight tracking-tight">{label}</span>
   </a>
 );
 
@@ -524,14 +668,14 @@ const PanelCard: React.FC<{
   return (
     <div className="bento-card p-5 sm:p-6 flex flex-col">
       <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
             {icon}
           </div>
-          <h3 className="font-bold text-white text-sm">{title}</h3>
+          <h3 className="font-bold text-white text-sm tracking-tight">{title}</h3>
         </div>
-        <a href={href} className="text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 uppercase tracking-wide">
-          {linkLabel}
+        <a href={href} className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 uppercase tracking-wider flex items-center gap-1 transition-colors">
+          {linkLabel} <ChevronRight className="w-3 h-3" />
         </a>
       </div>
       <div className="space-y-2 flex-1">

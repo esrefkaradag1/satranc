@@ -1,9 +1,9 @@
 import type { Student } from '../types';
 import type { PlatformDayStats } from '../lib/homeworkPlatformUtils';
 
-const BATCH_TIMEOUT_MS = 55_000;
-/** Sunucu maxDuration (60s) içinde kalması için öğrenci grubu boyutu */
-const STUDENT_CHUNK_SIZE = 12;
+const BATCH_TIMEOUT_MS = 70_000;
+/** Sunucu maxDuration (60s) içinde kalması için öğrenci grubu boyutu — Lichess sıralı çekildiği için küçük tutulur */
+const STUDENT_CHUNK_SIZE = 5;
 
 async function fetchStudentsPlatformWeekStatsChunk(
   students: Student[],

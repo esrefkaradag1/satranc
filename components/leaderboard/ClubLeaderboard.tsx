@@ -97,6 +97,59 @@ function MetricCell({ entry, rankMode }: { entry: LeaderboardEntry; rankMode: Le
   );
 }
 
+function winRatePercent(wins: number, draws: number, losses: number): number | null {
+  const total = wins + draws + losses;
+  if (total <= 0) return null;
+  return Math.round((wins / total) * 100);
+}
+
+/** G/B/M + kazanma oranı — podyum ve tablo ortak */
+function RecordCell({
+  wins,
+  draws,
+  losses,
+  layout = 'stack',
+}: {
+  wins: number;
+  draws: number;
+  losses: number;
+  layout?: 'stack' | 'inline';
+}) {
+  const rate = winRatePercent(wins, draws, losses);
+  const wdl = (
+    <span className="tabular-nums">
+      <span className="text-emerald-400 font-bold">{wins}</span>
+      <span className="text-slate-600 mx-0.5">/</span>
+      <span className="text-slate-400 font-bold">{draws}</span>
+      <span className="text-slate-600 mx-0.5">/</span>
+      <span className="text-rose-400 font-bold">{losses}</span>
+    </span>
+  );
+  const pct =
+    rate != null ? (
+      <span className="text-emerald-400 font-bold tabular-nums">%{rate} G</span>
+    ) : (
+      <span className="text-slate-600">—</span>
+    );
+
+  if (layout === 'inline') {
+    return (
+      <div className="inline-flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 text-xs">
+        {wdl}
+        {rate != null ? <span className="text-slate-600">·</span> : null}
+        {pct}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-0.5 text-xs">
+      {wdl}
+      {pct}
+    </div>
+  );
+}
+
 export const ClubLeaderboard: React.FC<Props> = ({
   allStudents,
   anchorStudent,
@@ -331,11 +384,9 @@ export const ClubLeaderboard: React.FC<Props> = ({
               <div className="flex justify-center gap-4 mt-3 text-xs">
                 <span className="text-violet-400 font-bold">{e.puzzles} bulmaca</span>
                 <span className="text-indigo-400 font-bold">{e.games} maç</span>
-                {e.wins + e.losses + e.draws > 0 ? (
-                  <span className="text-emerald-400 font-bold">
-                    %{Math.round((e.wins / (e.wins + e.losses + e.draws)) * 100)} G
-                  </span>
-                ) : null}
+              </div>
+              <div className="mt-2 flex justify-center">
+                <RecordCell wins={e.wins} draws={e.draws} losses={e.losses} layout="stack" />
               </div>
             </div>
           ))}
@@ -358,7 +409,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
                   <th className="px-4 py-3 text-center">
                     <span className="inline-flex items-center gap-1"><Gamepad2 className="w-3 h-3" /> Maç</span>
                   </th>
-                  <th className="px-4 py-3 text-center">G/B/M</th>
+                  <th className="px-4 py-3 text-center">G/B/M · %</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -400,12 +451,8 @@ export const ClubLeaderboard: React.FC<Props> = ({
                     </td>
                     <td data-label="Bulmaca" className="px-4 py-3 text-center font-black text-violet-400">{e.puzzles}</td>
                     <td data-label="Maç" className="px-4 py-3 text-center font-black text-indigo-400">{e.games}</td>
-                    <td data-label="G/B/M" className="px-4 py-3 text-center text-xs">
-                      <span className="text-emerald-400 font-bold">{e.wins}</span>
-                      <span className="text-slate-600 mx-0.5">/</span>
-                      <span className="text-slate-400 font-bold">{e.draws}</span>
-                      <span className="text-slate-600 mx-0.5">/</span>
-                      <span className="text-rose-400 font-bold">{e.losses}</span>
+                    <td data-label="G/B/M · %" className="px-4 py-3 text-center text-xs">
+                      <RecordCell wins={e.wins} draws={e.draws} losses={e.losses} layout="inline" />
                     </td>
                   </tr>
                 ))}

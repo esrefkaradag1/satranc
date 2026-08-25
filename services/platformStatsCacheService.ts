@@ -41,38 +41,58 @@ export async function loadPlatformDayStatsFromDb(
   const isoDays = normalizeDays(days);
   if (ids.length === 0 || isoDays.length === 0) return { stats: {}, timeSeconds: {} };
 
-  try {
-    const client = getServiceSupabase() ?? supabase;
-    const { data, error } = await client
-      .from(TABLE)
-      .select('student_id, day, stats, time_seconds')
-      .in('student_id', ids)
-      .in('day', isoDays);
-    if (error) {
-      console.warn('[PlatformStatsCache] load error:', error.message);
+  const run = async (): Promise<PlatformStatsCachePayload | null> => {
+    try {
+      const client = getServiceSupabase() ?? supabase;
+      const { data, error } = await client
+        .from(TABLE)
+        .select('student_id, day, stats, time_seconds')
+        .in('student_id', ids)
+        .in('day', isoDays);
+      if (error) {
+        console.warn('[PlatformStatsCache] load error:', error.message);
+        return null;
+      }
+      const stats: Record<string, Record<string, PlatformDayStats>> = {};
+      const timeSeconds: Record<string, Record<string, number>> = {};
+      for (const row of (data ?? []) as Array<{
+        student_id: string;
+        day: string;
+        stats: PlatformDayStats | null;
+        time_seconds: number | null;
+      }>) {
+        const sid = String(row.student_id);
+        const iso = String(row.day).slice(0, 10);
+        if (row.stats && typeof row.stats === 'object') {
+          (stats[sid] ??= {})[iso] = row.stats;
+        }
+        const sec = Number(row.time_seconds) || 0;
+        if (sec > 0) (timeSeconds[sid] ??= {})[iso] = sec;
+      }
+      return { stats, timeSeconds };
+    } catch (e) {
+      console.warn('[PlatformStatsCache] load failed:', e);
       return null;
     }
-    const stats: Record<string, Record<string, PlatformDayStats>> = {};
-    const timeSeconds: Record<string, Record<string, number>> = {};
-    for (const row of (data ?? []) as Array<{
-      student_id: string;
-      day: string;
-      stats: PlatformDayStats | null;
-      time_seconds: number | null;
-    }>) {
-      const sid = String(row.student_id);
-      const iso = String(row.day).slice(0, 10);
-      if (row.stats && typeof row.stats === 'object') {
-        (stats[sid] ??= {})[iso] = row.stats;
+  };
+
+  // CORS/DNS takılırsa Platform Çek sonsuza kilitlenmesin — API yoluna düş.
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
       }
-      const sec = Number(row.time_seconds) || 0;
-      if (sec > 0) (timeSeconds[sid] ??= {})[iso] = sec;
-    }
-    return { stats, timeSeconds };
-  } catch (e) {
-    console.warn('[PlatformStatsCache] load failed:', e);
-    return null;
-  }
+    }, 5_000);
+    void run().then((value) => {
+      if (!settled) {
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(value);
+      }
+    });
+  });
 }
 
 /** Verilen satırları DB'ye upsert eder (student_id + day birincil anahtar). */

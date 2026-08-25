@@ -12,8 +12,44 @@ export const MONTHS_TR = [
   'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık',
 ] as const;
 
+const MONTHS_TR_LOWER = MONTHS_TR.map((m) => m.toLocaleLowerCase('tr-TR'));
+
 function monthLabelTr(month: number): string {
   return MONTHS_TR[month - 1] ?? String(month);
+}
+
+/**
+ * Aidat dönemini çözümler: önce açıklamadaki "Temmuz 2026 aidat",
+ * yoksa date alanındaki YYYY-MM (eski kayıtlarda dönem 1’i).
+ */
+export function parseDuesPeriodFromTransaction(t: Transaction): { year: number; month: number } | null {
+  const desc = String(t.description || '').toLocaleLowerCase('tr-TR');
+  for (let i = 0; i < MONTHS_TR_LOWER.length; i++) {
+    const name = MONTHS_TR_LOWER[i];
+    if (!name || !desc.includes(name)) continue;
+    const yearMatch = desc.match(/\b(20\d{2})\b/);
+    if (yearMatch) return { year: Number(yearMatch[1]), month: i + 1 };
+  }
+  const d = String(t.date || '').slice(0, 10);
+  const m = /^(\d{4})-(\d{2})/.exec(d);
+  if (!m) return null;
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  return { year: Number(m[1]), month };
+}
+
+/** Listelerde gösterilecek tahsilat / işlem tarihi */
+export function transactionDisplayDate(t: Pick<Transaction, 'date' | 'collectedAt'>): string {
+  const raw = (t.collectedAt || t.date || '').slice(0, 10);
+  return raw;
+}
+
+export function formatTransactionDateTR(t: Pick<Transaction, 'date' | 'collectedAt'>): string {
+  const iso = transactionDisplayDate(t);
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('tr-TR');
 }
 
 export function formatPaidMonthsSummary(monthPayments: Record<number, number>): string {
@@ -230,16 +266,12 @@ export function duesPaidByMonthForYear(
   studentId: string,
   calendarYear: number,
 ): Record<number, number> {
-  const yearStr = String(calendarYear);
   const map: Record<number, number> = {};
   for (let m = 1; m <= 12; m++) map[m] = 0;
   filterDuesTransactions(transactions, studentId).forEach((t) => {
-    const d = t.date || '';
-    if (d.slice(0, 4) !== yearStr) return;
-    const monthNum = parseInt(d.slice(5, 7), 10);
-    if (monthNum >= 1 && monthNum <= 12) {
-      map[monthNum] = (map[monthNum] || 0) + (t.amount || 0);
-    }
+    const period = parseDuesPeriodFromTransaction(t);
+    if (!period || period.year !== calendarYear) return;
+    map[period.month] = (map[period.month] || 0) + (t.amount || 0);
   });
   return map;
 }

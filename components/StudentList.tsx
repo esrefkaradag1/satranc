@@ -30,6 +30,7 @@ import {
  getExpectedDueForMonth,
 } from '../lib/trainingGroupUtils';
 import { filterDuesTransactions } from '../lib/transactionUtils';
+import { parseDuesPeriodFromTransaction } from '../lib/duesCalendarUtils';
 import { APPLICATIONS_UPDATED_EVENT, loadApplicationListMetaAsync, loadApplicationPhotoMapAsync } from'../services/applicationStorage';
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
 import { StudentLoginQuickInfo, StudentLoginQuickInfoInline } from './student/StudentLoginQuickInfo';
@@ -55,7 +56,7 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast, scopedTransactions: transactions } = useApp();
+ const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast, scopedTransactions: transactions, adminViewClub, setAdminViewClubId, clubs } = useApp();
  const isAdmin = auth?.role === 'admin';
  const isCoach = auth?.role === 'coach';
  const baseStudents = scopedStudents;
@@ -504,8 +505,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
     );
     let totalPaidThisYear = 0;
     studentTransactions.forEach((t) => {
-      const d = t.date || '';
-      if (d.slice(0, 4) === String(currentYear)) {
+      const period = parseDuesPeriodFromTransaction(t);
+      if (period && period.year === currentYear) {
         totalPaidThisYear += t.amount || 0;
       }
     });
@@ -582,6 +583,32 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   },
  ];
 
+ if (isAdmin && !adminViewClub) {
+  return (
+   <div className="max-w-xl mx-auto mt-10 sm:mt-16 rounded-2xl border border-white/[0.06] bg-[#1e293b]/80 p-6 sm:p-8 text-center space-y-4">
+    <div className="w-12 h-12 mx-auto rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center">
+     <Users className="w-5 h-5 text-indigo-300" />
+    </div>
+    <h2 className="text-lg font-bold text-white">Kulüp seçin</h2>
+    <p className="text-sm text-slate-400 leading-relaxed">
+     Süper yönetici öğrenci listesinde tüm kulüpler bir arada gösterilmez. Üst menüden veya aşağıdaki kartlardan bir kulüp seçin.
+    </p>
+    <div className="flex flex-wrap justify-center gap-2 pt-1">
+     {clubs.slice(0, 12).map((club) => (
+      <button
+       key={club.id}
+       type="button"
+       onClick={() => setAdminViewClubId(club.id)}
+       className="px-3 py-1.5 rounded-lg border border-white/10 bg-slate-900/60 text-xs font-bold text-slate-200 hover:border-indigo-500/40 hover:text-white transition-colors"
+      >
+       {club.name}
+      </button>
+     ))}
+    </div>
+   </div>
+  );
+ }
+
  return (
  <div className="space-y-3 sm:space-y-4 min-w-0 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-20 lg:pb-0">
  {/* Compact header + actions */}
@@ -598,7 +625,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
        {isCoach
         ? 'Size atanmış öğrenciler'
         : isAdmin
-          ? 'Tüm kurumlar — şube ve antrenör bilgisiyle'
+          ? (adminViewClub ? `${adminViewClub.name} öğrencileri` : 'Kulüp seçin — öğrenciler birleştirilmez')
           : 'Ara, filtrele ve yönet'}
        {' · '}
        <span className="text-slate-300 font-semibold">{filteredStudents.length}</span> kayıt

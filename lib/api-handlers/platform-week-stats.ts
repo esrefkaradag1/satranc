@@ -76,7 +76,9 @@ function parseBody(req: Req): { students: StudentInput[]; days: string[] } {
   return { students, days };
 }
 
-const LICHESS_ACTIVITY_TIMEOUT_MS = 12_000;
+const LICHESS_ACTIVITY_TIMEOUT_MS = 8_000;
+/** Chunk içinde Lichess sıralı çekimine ayrılan üst süre (ms) — istemci abort'undan önce bitirmek için */
+const LICHESS_BATCH_BUDGET_MS = 40_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return new Promise((resolve) => {
@@ -106,18 +108,31 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   });
 }
 
-async function fetchLichessActivity(username: string): Promise<LichessActivityRow[]> {
-  const run = async (): Promise<LichessActivityRow[]> => {
+async function fetchLichessActivity(
+  username: string,
+): Promise<{ rows: LichessActivityRow[]; unavailable: boolean }> {
+  const run = async (): Promise<{ rows: LichessActivityRow[]; unavailable: boolean }> => {
     const qs = new URLSearchParams();
     qs.set('soft', '1');
     const upstream = await lichessProxyRequest(`user/${username}/activity`, qs, 'application/json', process.env);
-    if (upstream.rateLimited || upstream.status === 429) return [];
-    if (upstream.status < 200 || upstream.status >= 300) return [];
+    if (upstream.rateLimited || upstream.status === 429 || upstream.status === 504) {
+      return { rows: [], unavailable: true };
+    }
+    if (upstream.status < 200 || upstream.status >= 300) {
+      return { rows: [], unavailable: true };
+    }
     const data = JSON.parse(upstream.body);
-    return Array.isArray(data) ? (data as LichessActivityRow[]) : [];
+    return {
+      rows: Array.isArray(data) ? (data as LichessActivityRow[]) : [],
+      unavailable: false,
+    };
   };
-  // Lichess yavaşsa/backoff'taysa batch isteğini kilitleme: zaman aşımında boş dön.
-  return withTimeout(run().catch(() => [] as LichessActivityRow[]), LICHESS_ACTIVITY_TIMEOUT_MS, []);
+  // Lichess yavaşsa/backoff'taysa batch isteğini kilitleme: zaman aşımında "unavailable".
+  return withTimeout(
+    run().catch(() => ({ rows: [] as LichessActivityRow[], unavailable: true })),
+    LICHESS_ACTIVITY_TIMEOUT_MS,
+    { rows: [], unavailable: true },
+  );
 }
 
 async function fetchChessComMemberTacticsLifetime(username: string) {
@@ -144,14 +159,25 @@ async function fetchChessComPuzzlesRated(username: string) {
       { headers: { Accept: 'application/json', Referer: profileUrl } },
       CHESSCOM_FETCH_TIMEOUT_MS,
     );
-    if (!upstream.ok) return { attempts: [], lifetimeFromBundle: null as ReturnType<typeof tacticsLifetimeFromMemberStats> };
+    if (!upstream.ok) {
+      return {
+        attempts: [] as ReturnType<typeof parseChessComTactics2Puzzles>,
+        lifetimeFromBundle: null as ReturnType<typeof tacticsLifetimeFromMemberStats>,
+        failed: true,
+      };
+    }
     const data = await upstream.json();
     return {
       attempts: parseChessComTactics2Puzzles(data, 'rated'),
       lifetimeFromBundle: tacticsLifetimeFromMemberStats(parseChessComTacticsLifetimeFromTactics2Bundle(data)),
+      failed: false,
     };
   } catch {
-    return { attempts: [], lifetimeFromBundle: null as ReturnType<typeof tacticsLifetimeFromMemberStats> };
+    return {
+      attempts: [] as ReturnType<typeof parseChessComTactics2Puzzles>,
+      lifetimeFromBundle: null as ReturnType<typeof tacticsLifetimeFromMemberStats>,
+      failed: true,
+    };
   }
 }
 
@@ -163,9 +189,9 @@ async function loadChessComUserData(
     const key = `${username}:${year}-${month.padStart(2, '0')}`;
     try {
       const result = await fetchChessComMonthGames(username, year, month);
-      return { key, games: result.games ?? [] };
+      return { key, games: result.games ?? [], failed: false };
     } catch {
-      return { key, games: [] };
+      return { key, games: [] as Awaited<ReturnType<typeof fetchChessComMonthGames>>['games'], failed: true };
     }
   });
 
@@ -178,11 +204,16 @@ async function loadChessComUserData(
   const lifetime = lifetimeMember ?? ratedBundle.lifetimeFromBundle;
 
   const monthGames = new Map<string, Awaited<ReturnType<typeof fetchChessComMonthGames>>['games']>();
+  let monthFetchFailed = months.length > 0;
   for (const row of monthResults) {
     monthGames.set(row.key, row.games);
+    if (!row.failed) monthFetchFailed = false;
   }
 
-  return { rated: ratedBundle.attempts, lifetime, dailyChart, monthGames };
+  // Boş gün ≠ hata. Yalnızca temel Chess.com çağrıları gerçekten başarısızsa işaretle.
+  const unavailable = ratedBundle.failed && monthFetchFailed && !lifetimeMember;
+
+  return { rated: ratedBundle.attempts, lifetime, dailyChart, monthGames, unavailable };
 }
 
 async function loadActivityPuzzleEnrichment(
@@ -229,6 +260,8 @@ export async function computePlatformWeekStats(
   const months = uniqueYearMonths(uniqueDays);
 
   const lichessActivityByUser = new Map<string, LichessActivityRow[]>();
+  const lichessUnavailableUsers = new Set<string>();
+  const chessComUnavailableUsers = new Set<string>();
   const chessPuzzlesByUser = new Map<string, Awaited<ReturnType<typeof loadChessComUserData>>['rated']>();
   const chessLifetimeByUser = new Map<string, NonNullable<Awaited<ReturnType<typeof loadChessComUserData>>['lifetime']>>();
   const chessDailyChartByUser = new Map<string, Record<string, ChessComPuzzleDailyChartRow>>();
@@ -241,16 +274,30 @@ export async function computePlatformWeekStats(
   const studentIds = students.map((s) => String(s.id ?? '').trim()).filter(Boolean);
 
   const [activityEnrichment, lifetimeSnaps] = await Promise.all([
-    loadActivityPuzzleEnrichment(studentIds, uniqueDays),
-    loadTacticsLifetimeSnapshots(chessUsers, [yesterday, ...uniqueDays.filter((d) => d !== yesterday)]),
+    withTimeout(loadActivityPuzzleEnrichment(studentIds, uniqueDays), 4_000, {}),
+    withTimeout(
+      loadTacticsLifetimeSnapshots(chessUsers, [yesterday, ...uniqueDays.filter((d) => d !== yesterday)]),
+      4_000,
+      {} as Awaited<ReturnType<typeof loadTacticsLifetimeSnapshots>>,
+    ),
   ]);
 
-  // Lichess: "Only make one request at a time" — öğrencileri sıralı çek.
+  // Lichess: "Only make one request at a time" — sıralı çek; bütçe bitince kalanları boş bırak.
   // Chess.com ayrı API; paralel kalabilir.
   await Promise.all([
     (async () => {
+      const started = Date.now();
       for (const username of lichessUsers) {
-        lichessActivityByUser.set(username, await fetchLichessActivity(username));
+        if (Date.now() - started > LICHESS_BATCH_BUDGET_MS) {
+          if (!lichessActivityByUser.has(username)) {
+            lichessActivityByUser.set(username, []);
+            lichessUnavailableUsers.add(username);
+          }
+          continue;
+        }
+        const fetched = await fetchLichessActivity(username);
+        lichessActivityByUser.set(username, fetched.rows);
+        if (fetched.unavailable) lichessUnavailableUsers.add(username);
       }
     })(),
     Promise.all(
@@ -259,6 +306,7 @@ export async function computePlatformWeekStats(
         chessPuzzlesByUser.set(username, loaded.rated);
         if (loaded.lifetime) chessLifetimeByUser.set(username, loaded.lifetime);
         if (loaded.dailyChart) chessDailyChartByUser.set(username, loaded.dailyChart);
+        if (loaded.unavailable) chessComUnavailableUsers.add(username);
         for (const [key, games] of loaded.monthGames.entries()) {
           chessMonthGamesByUserMonth.set(key, games);
         }
@@ -381,12 +429,15 @@ export async function computePlatformWeekStats(
         {
           games: lichessGames,
           puzzles: lichessPuzzles,
-          error: lichessUser ? activities.length === 0 : undefined,
+          // Boş aktivite ≠ hata; yalnızca rate-limit / timeout / HTTP hatasında işaretle
+          // ki merge önceki doğru Lichess sayılarını korusun.
+          error: lichessUser ? lichessUnavailableUsers.has(lichessUser) : undefined,
         },
         {
           games: chessGames,
           puzzles: chessPuzzles,
-          error: chessUser ? ratedPuzzles.length === 0 && chessGames === 0 : undefined,
+          // Boş Chess.com günü (0 maç / 0 bulmaca) hata sayılmaz.
+          error: chessUser ? chessComUnavailableUsers.has(chessUser) : undefined,
         },
         activityTimeSeconds,
       );

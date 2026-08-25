@@ -1,10 +1,11 @@
-import type { Student, WhatsAppMessageLog, WhatsAppMessageStatus, WhatsAppConfig } from '../types';
+import type { Student, WhatsAppMessageLog, WhatsAppMessageStatus, WhatsAppConfig, WhatsAppTemplate } from '../types';
 import { openWhatsAppSend } from '../lib/whatsappUtils';
 import {
   appendWhatsAppLog,
   loadWhatsAppAutoRules,
   loadWhatsAppConfig,
   loadWhatsAppTemplates,
+  saveWhatsAppConfig,
 } from '../lib/whatsappStorage';
 import {
   buildStudentTemplateVars,
@@ -61,6 +62,7 @@ export async function fetchWhatsAppStatus(): Promise<{
   regId?: string;
   phone?: string;
   devices?: { regId: string; phone: string; connected: boolean }[];
+  authMode?: string;
   error?: string;
 }> {
   const config = loadWhatsAppConfig();
@@ -77,8 +79,14 @@ export async function fetchWhatsAppStatus(): Promise<{
     regId?: string;
     phone?: string;
     devices?: { regId: string; phone: string; connected: boolean }[];
+    authMode?: string;
     error?: string;
   };
+  // Çalışan auth modunu kalıcı kaydet
+  if (data.authMode && data.authMode !== config.authMode) {
+    saveWhatsAppConfig({ ...config, authMode: data.authMode as WhatsAppConfig['authMode'] });
+  }
+  // Paneldeki aktif cihaz tekse ve reg_id boş/yanlışsa öneriyi yazma — UI'da seçilir
   return {
     connected: Boolean(data.connected),
     state: data.state || 'pasif',
@@ -87,6 +95,7 @@ export async function fetchWhatsAppStatus(): Promise<{
     regId: data.regId,
     phone: data.phone,
     devices: data.devices,
+    authMode: data.authMode,
     error: data.error,
   };
 }
@@ -387,3 +396,62 @@ export async function sendParentLoginBulk(
   }
   return sendWhatsAppBulk(recipients, { branchOffice, delayMs: 1500 });
 }
+
+/** Sunucu (Supabase) şablon / kural / config — otomatik antrenman bildirimleri bunu kullanır */
+export async function fetchWhatsAppServerSettings(): Promise<{
+  config: {
+    provider?: string;
+    apiBaseUrl: string;
+    apiKey: string;
+    apiKeySet: boolean;
+    instanceName: string;
+    enabled: boolean;
+  };
+  templates: { key: string; body: string; enabled: boolean }[];
+  rules: { event: string; enabled: boolean }[];
+  scheduler?: { eveningHourTr: number; pollIntervalMin: number; kinds: string[] };
+} | null> {
+  try {
+    const data = await callWhatsAppApi('settings-get');
+    return {
+      config: data.config as {
+        provider?: string;
+        apiBaseUrl: string;
+        apiKey: string;
+        apiKeySet: boolean;
+        instanceName: string;
+        enabled: boolean;
+      },
+      templates: (data.templates as { key: string; body: string; enabled: boolean }[]) ?? [],
+      rules: (data.rules as { event: string; enabled: boolean }[]) ?? [],
+      scheduler: data.scheduler as { eveningHourTr: number; pollIntervalMin: number; kinds: string[] } | undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function saveWhatsAppServerSettings(payload: {
+  config?: Partial<WhatsAppConfig>;
+  templates?: WhatsAppTemplate[];
+  rules?: { event: string; enabled: boolean; templateKey?: string }[];
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await callWhatsAppApi('settings-save', payload as Record<string, unknown>);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Kayıt başarısız' };
+  }
+}
+
+/** Sunucu gönderim günlüğü (otomatik antrenman dahil) */
+export async function fetchWhatsAppServerLogs(limit = 80): Promise<WhatsAppMessageLog[]> {
+  try {
+    const data = await callWhatsAppApi('logs', { limit });
+    const rows = (data.logs as WhatsAppMessageLog[]) ?? [];
+    return rows;
+  } catch {
+    return [];
+  }
+}
+

@@ -14,7 +14,7 @@ create table if not exists public.whatsapp_config (
 );
 
 -- 2) Otomatik mesaj kuralları (parent_login, parent_consent, lesson_start,
---    training_completed, training_incomplete)
+--    training_completed, training_partial, training_incomplete)
 create table if not exists public.whatsapp_auto_rules (
   event      text        primary key,
   enabled    boolean     not null default false,
@@ -71,6 +71,7 @@ alter table public.whatsapp_message_logs          enable row level security;
 --   ('parent_consent', true),
 --   ('lesson_start', true),
 --   ('training_completed', true),
+--   ('training_partial', true),
 --   ('training_incomplete', true)
 -- on conflict (event) do update set enabled = excluded.enabled;
 

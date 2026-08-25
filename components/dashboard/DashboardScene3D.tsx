@@ -26,9 +26,10 @@ function ChessBoardFloor() {
   });
   return (
     <group ref={ref} position={[0, -2.8, -2]} rotation={[-Math.PI / 2.8, 0, 0]}>
-      <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[14, 14]} />
-        <meshStandardMaterial color="#1e1b4b" metalness={0.2} roughness={0.6} transparent opacity={0.85} />
+      {/* 3D Ahşap/Mermer Çerçeve Kaidesi */}
+      <mesh receiveShadow position={[0, -0.1, 0]}>
+        <boxGeometry args={[7.6, 0.18, 7.6]} />
+        <meshPhysicalMaterial color="#0f172a" metalness={0.3} roughness={0.18} clearcoat={0.8} />
       </mesh>
       {Array.from({ length: 64 }, (_, i) => {
         const row = Math.floor(i / 8);
@@ -37,16 +38,17 @@ function ChessBoardFloor() {
         return (
           <mesh
             key={i}
-            position={[(col - 3.5) * 0.85, 0.01, (row - 3.5) * 0.85]}
-            rotation={[-Math.PI / 2, 0, 0]}
+            position={[(col - 3.5) * 0.88, 0.04, (row - 3.5) * 0.88]}
+            receiveShadow
+            castShadow
           >
-            <planeGeometry args={[0.82, 0.82]} />
-            <meshStandardMaterial
-              color={light ? '#312e81' : '#1e1b4b'}
-              metalness={0.15}
-              roughness={0.5}
-              transparent
-              opacity={0.9}
+            <boxGeometry args={[0.84, 0.08, 0.84]} />
+            <meshPhysicalMaterial
+              color={light ? '#3730a3' : '#1e1b4b'}
+              metalness={0.2}
+              roughness={0.15}
+              clearcoat={0.9}
+              clearcoatRoughness={0.1}
             />
           </mesh>
         );

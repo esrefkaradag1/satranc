@@ -521,7 +521,9 @@ function dropPuzzleContribution(s: PlatformDayStats): PlatformDayStats {
   };
 }
 
-/** Rate limit veya geçici hata sonrası daha düşük sayıların iyi verinin üzerine yazılmasını önler. */
+/** Rate limit veya geçici hata sonrası daha düşük sayıların iyi verinin üzerine yazılmasını önler.
+ * İlk başarılı çekimden sonra güncelleme yalnızca eksik/yüksek değerleri doldurur; sıfırlamaz.
+ */
 export function mergePlatformDayStats(
   prevRaw: PlatformDayStats | undefined,
   nextRaw: PlatformDayStats,
@@ -532,23 +534,34 @@ export function mergePlatformDayStats(
 
   if (!prev) return { ...next };
 
-  // Maçlar: aylık arşiv güvenilir → hatasız çekimde taze değer.
-  const lichessGames = !next.lichessError
-    ? next.lichessGames
-    : Math.max(prev.lichessGames, next.lichessGames);
-  const chessComGames = !next.chessComError
-    ? next.chessComGames
-    : Math.max(prev.chessComGames, next.chessComGames);
+  const prevGames = (prev.lichessGames ?? 0) + (prev.chessComGames ?? 0);
+  const prevPuzzles = (prev.lichessPuzzles ?? 0) + (prev.chessComPuzzles ?? 0);
+  const prevTime = prev.activityTimeSeconds ?? 0;
+  const nextGames = (next.lichessGames ?? 0) + (next.chessComGames ?? 0);
+  const nextPuzzles = (next.lichessPuzzles ?? 0) + (next.chessComPuzzles ?? 0);
+  const nextTime = next.activityTimeSeconds ?? 0;
 
-  // Bulmaca: Chess.com yalnızca son ~25 denemeyi döndürür; yeni günde eskiler listeden
-  // düşünce 0 gelir. Maç varken "taze" sayılıp geçmiş günün bulmacasını sıfırlamak YASAK —
-  // her zaman bilinen en zengin sayıyı koru.
-  const lichessPuzzles = Math.max(prev.lichessPuzzles, next.lichessPuzzles);
-  const chessComPuzzles = Math.max(prev.chessComPuzzles, next.chessComPuzzles);
-  const lichessPuzzlePassed = Math.max(prev.lichessPuzzlePassed, next.lichessPuzzlePassed);
-  const chessComPuzzlePassed = Math.max(prev.chessComPuzzlePassed, next.chessComPuzzlePassed);
-  const lichessPuzzleFailed = Math.max(prev.lichessPuzzleFailed, next.lichessPuzzleFailed);
-  const chessComPuzzleFailed = Math.max(prev.chessComPuzzleFailed, next.chessComPuzzleFailed);
+  const prevHasData = prevGames > 0 || prevPuzzles > 0 || prevTime > 0;
+  const nextEmpty = nextGames === 0 && nextPuzzles === 0 && nextTime <= 0;
+
+  // Soft-empty / rate-limit boş yanıtı: önceki zengin günü koru (hata bayraklarını yine işle).
+  if (nextEmpty && prevHasData) {
+    return {
+      ...prev,
+      lichessError: next.lichessError ? true : prev.lichessError,
+      chessComError: next.chessComError ? true : prev.chessComError,
+    };
+  }
+
+  // Gün içinde sayılar düşmez — her zaman bilinen en yüksek değeri koru.
+  const lichessGames = Math.max(prev.lichessGames ?? 0, next.lichessGames ?? 0);
+  const chessComGames = Math.max(prev.chessComGames ?? 0, next.chessComGames ?? 0);
+  const lichessPuzzles = Math.max(prev.lichessPuzzles ?? 0, next.lichessPuzzles ?? 0);
+  const chessComPuzzles = Math.max(prev.chessComPuzzles ?? 0, next.chessComPuzzles ?? 0);
+  const lichessPuzzlePassed = Math.max(prev.lichessPuzzlePassed ?? 0, next.lichessPuzzlePassed ?? 0);
+  const chessComPuzzlePassed = Math.max(prev.chessComPuzzlePassed ?? 0, next.chessComPuzzlePassed ?? 0);
+  const lichessPuzzleFailed = Math.max(prev.lichessPuzzleFailed ?? 0, next.lichessPuzzleFailed ?? 0);
+  const chessComPuzzleFailed = Math.max(prev.chessComPuzzleFailed ?? 0, next.chessComPuzzleFailed ?? 0);
 
   const games = lichessGames + chessComGames;
   const puzzleSolved = lichessPuzzles + chessComPuzzles;
@@ -557,10 +570,7 @@ export function mergePlatformDayStats(
 
   const lichessKept = lichessGames > 0 || lichessPuzzles > 0;
   const chessKept = chessComGames > 0 || chessComPuzzles > 0;
-  const activityTimeSeconds = Math.max(
-    prev.activityTimeSeconds ?? 0,
-    next.activityTimeSeconds ?? 0,
-  );
+  const activityTimeSeconds = Math.max(prevTime, nextTime);
 
   return {
     games,

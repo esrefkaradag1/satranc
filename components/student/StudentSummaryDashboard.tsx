@@ -368,7 +368,7 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
                   <div key={t.id} className="flex items-center justify-between gap-3 py-2.5 px-3 rounded-xl bg-white/[0.03] border border-white/[0.05]">
                     <div>
                       <p className="text-sm font-semibold text-white">{t.category}</p>
-                      <p className="text-xs text-slate-500">{formatDateTR(t.date)} · {t.paymentType}</p>
+                      <p className="text-xs text-slate-500">{formatDateTR(t.collectedAt || t.date)} · {t.paymentType}</p>
                     </div>
                     <span className="text-sm font-bold text-emerald-400">₺{Number(t.amount).toLocaleString('tr-TR')}</span>
                   </div>

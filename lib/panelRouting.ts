@@ -21,6 +21,7 @@ export const TAB_TO_SLUG: Record<string, string> = {
   finance: 'kasa-finans',
   inventory: 'depo-envanter',
   gallery: 'galeri',
+  'main-site': 'ana-site',
   lessons: 'canli-ders',
   curriculum: 'ders-programi',
   messages: 'mesajlar',
@@ -124,4 +125,38 @@ export function isAdminLoginRoute(): boolean {
   if (path === '/yonetim') return true;
   const head = window.location.hash.replace(/^#\/?/, '').split('/')[0];
   return head === 'yonetim';
+}
+
+export type PublicLoginTab = 'parent' | 'student' | 'coach' | 'club';
+
+const GIRIS_TAB_SLUGS: Record<string, PublicLoginTab> = {
+  veli: 'parent',
+  ogrenci: 'student',
+  antrenor: 'coach',
+  kulup: 'club',
+  parent: 'parent',
+  student: 'student',
+  coach: 'coach',
+  club: 'club',
+};
+
+/** Public front → login: `#/giris` veya `#/giris/veli|ogrenci|antrenor|kulup` */
+export function getPublicLoginRoute(): { tab?: PublicLoginTab } | null {
+  if (typeof window === 'undefined') return null;
+  const parts = window.location.hash.replace(/^#\/?/, '').split('/');
+  if (parts[0] !== 'giris') return null;
+  const slug = (parts[1] || '').trim().toLowerCase();
+  if (!slug) return {};
+  const tab = GIRIS_TAB_SLUGS[slug];
+  return tab ? { tab } : {};
+}
+
+export function publicLoginHref(tab?: PublicLoginTab): string {
+  if (!tab) return '#/giris';
+  const slug =
+    tab === 'parent' ? 'veli'
+    : tab === 'student' ? 'ogrenci'
+    : tab === 'coach' ? 'antrenor'
+    : 'kulup';
+  return `#/giris/${slug}`;
 }

@@ -7,6 +7,7 @@ import { DATE_INPUT_MAX, DATE_INPUT_MIN, normalizeDateInputYear } from '../lib/d
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { isPackageSaleCategory } from '../lib/salePaymentUtils';
 import { countsTowardGeneralCash, isDuesPaymentTransaction, isPersonalCashTransaction } from '../lib/transactionUtils';
+import { formatTransactionDateTR } from '../lib/duesCalendarUtils';
 import SalePaymentCell from './SalePaymentCell';
 
 const CATEGORY_PRESETS = ['Aidat', 'Özel Ders', 'Paket', 'Kira', 'Malzeme', 'Diğer'] as const;
@@ -19,7 +20,40 @@ const Finance: React.FC = () => {
     removeTransaction,
     scopedStudents: students,
     confirmDialog,
+    auth,
+    adminViewClub,
+    setAdminViewClubId,
+    clubs,
   } = useApp();
+
+  if (auth?.role === 'admin' && !adminViewClub) {
+    return (
+      <div className="max-w-xl mx-auto mt-10 sm:mt-16 bento-card p-6 sm:p-8 text-center space-y-4">
+        <div className="w-12 h-12 mx-auto rounded-2xl bg-rose-500/15 border border-rose-500/25 flex items-center justify-center">
+          <Lock className="w-5 h-5 text-rose-400" />
+        </div>
+        <h2 className="text-lg font-bold text-white">Kulüp seçin</h2>
+        <p className="text-sm text-slate-400 leading-relaxed">
+          Süper yönetici kasasında tüm kulüplerin toplamı birleştirilmez. Üst menüden bir kulüp seçin veya anasayfadaki kulüp kartına tıklayın.
+        </p>
+        <div className="flex flex-wrap justify-center gap-2 pt-1">
+          {clubs.slice(0, 8).map((club) => (
+            <button
+              key={club.id}
+              type="button"
+              onClick={() => setAdminViewClubId(club.id)}
+              className="px-3 py-1.5 rounded-lg border border-white/10 bg-slate-900/60 text-xs font-bold text-slate-200 hover:border-indigo-500/40 hover:text-white transition-colors"
+            >
+              {club.name}
+            </button>
+          ))}
+        </div>
+        <a href="#/anasayfa" className="inline-block text-xs font-bold text-indigo-400 hover:text-indigo-300">
+          Anasayfaya dön
+        </a>
+      </div>
+    );
+  }
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -130,6 +164,7 @@ const Finance: React.FC = () => {
       studentId: formData.studentId || undefined,
       personalCash: formData.personalCash || undefined,
       includeInGeneralCash: formData.personalCash ? formData.includeInGeneralCash : undefined,
+      collectedAt: normalizeDateInputYear(formData.date),
     };
     if (formData.type === 'income' && isPackageSaleCategory(formData.category) && formData.totalAmount > 0) {
       payload.totalAmount = formData.totalAmount;
@@ -162,6 +197,7 @@ const Finance: React.FC = () => {
     updateTransaction(editingId, {
       description: editTxnDescription.trim(),
       date: editTxnDate ? normalizeDateInputYear(editTxnDate) : undefined,
+      collectedAt: editTxnDate ? normalizeDateInputYear(editTxnDate) : undefined,
       category: editTxnCategory.trim() || undefined,
       amount,
       totalAmount: showSaleTotal && !Number.isNaN(totalRaw) && totalRaw > 0 ? totalRaw : undefined,
@@ -315,7 +351,7 @@ const Finance: React.FC = () => {
                         <div className="mt-1.5"><SalePaymentCell transaction={transaction} /></div>
                       ) : null}
                     </td>
-                    <td data-label="Tarih" className="px-6 sm:px-8 py-4 sm:py-5 text-sm text-slate-300 font-semibold">{transaction.date}</td>
+                    <td data-label="Tarih" className="px-6 sm:px-8 py-4 sm:py-5 text-sm text-slate-300 font-semibold">{formatTransactionDateTR(transaction)}</td>
                     <td data-label="Tür" className="px-6 sm:px-8 py-4 sm:py-5">
                       <span className={`text-[10px] px-3 py-1.5 rounded-lg font-black uppercase tracking-widest border ${
                         isIncome

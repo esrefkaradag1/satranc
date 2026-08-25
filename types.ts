@@ -183,6 +183,119 @@ export interface ClubExtendedProfile {
   contactPerson?: string;
 }
 
+/** satrancedu.com ana site içeriği (platform — kulüp değil) */
+export interface MainSiteFeature {
+  title: string;
+  body: string;
+  /** Kısa etiket / eyebrow (örn. ÖĞREN, 01) */
+  tag?: string;
+}
+
+export interface MainSiteFaq {
+  q: string;
+  a: string;
+}
+
+export interface MainSiteStat {
+  label: string;
+  value: string;
+}
+
+export interface MainSiteAnnouncement {
+  id: string;
+  title: string;
+  body: string;
+  date?: string;
+}
+
+export interface MainSiteHeroSlide {
+  title: string;
+  body: string;
+  ctaLabel?: string;
+  /** Kart alt yazısı örn. 3. KADEME FIDE TRAINER */
+  cardCaption?: string;
+}
+
+export interface MainSitePageBlock {
+  title: string;
+  body: string;
+  items?: { title: string; body: string }[];
+}
+
+export interface MainSiteContent {
+  enabled?: boolean;
+  brandTitle?: string;
+  heroEyebrow?: string;
+  heroTitle?: string;
+  heroSubtitle?: string;
+  /** Slider slaytları (opsiyonel; ana sayfada kullanılmayabilir) */
+  heroSlides?: MainSiteHeroSlide[];
+  aboutTitle?: string;
+  aboutBody?: string;
+  features?: MainSiteFeature[];
+  stats?: MainSiteStat[];
+  /** Platform modül kartları */
+  modulesTitle?: string;
+  modulesSubtitle?: string;
+  modules?: MainSiteFeature[];
+  /** Kimler kullanır */
+  rolesTitle?: string;
+  rolesSubtitle?: string;
+  roles?: MainSiteFeature[];
+  /** Nasıl çalışır adımları */
+  stepsTitle?: string;
+  stepsSubtitle?: string;
+  steps?: MainSiteFeature[];
+  /** Neden biz / 3 büyük fayda */
+  benefitsTitle?: string;
+  benefitsSubtitle?: string;
+  benefits?: MainSiteFeature[];
+  /** Yolculuk / harita adımları */
+  journeyTitle?: string;
+  journeySubtitle?: string;
+  journey?: MainSiteFeature[];
+  /** Kullanım modları */
+  modesTitle?: string;
+  modesSubtitle?: string;
+  modes?: MainSiteFeature[];
+  /** SSS */
+  faqTitle?: string;
+  faqSubtitle?: string;
+  faqs?: MainSiteFaq[];
+  /** Hero alt güven şeridi */
+  trustLine?: string;
+  announcementsTitle?: string;
+  announcementsSubtitle?: string;
+  announcements?: MainSiteAnnouncement[];
+  galleryTitle?: string;
+  gallerySubtitle?: string;
+  showGallery?: boolean;
+  ctaTitle?: string;
+  ctaBody?: string;
+  ctaButtonLabel?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  contactWhatsapp?: string;
+  contactAddress?: string;
+  /** Google Maps embed URL */
+  mapEmbedUrl?: string;
+  openingHoursWeekday?: string;
+  openingHoursSaturday?: string;
+  openingHoursSunday?: string;
+  facebookUrl?: string;
+  instagramUrl?: string;
+  twitterUrl?: string;
+  youtubeUrl?: string;
+  linkedinUrl?: string;
+  websiteUrl?: string;
+  foundedYear?: string;
+  /** Alt sayfalar */
+  pageKurumsal?: MainSitePageBlock;
+  pageEgitimler?: MainSitePageBlock;
+  pageAntrenman?: MainSitePageBlock;
+  pageDenemeDersi?: MainSitePageBlock;
+}
+
 export interface Club {
   id: string;
   name: string;
@@ -256,6 +369,11 @@ export interface Transaction {
   validityDays?: number;
   branch?: string;
   processedBy?: string;
+  /**
+   * Gerçek tahsilat / eklenme tarihi (YYYY-MM-DD).
+   * Aidat/paket kayıtlarında `date` aidat dönemi (ayın 1’i) kalır; bu alan fiili ödeme günüdür.
+   */
+  collectedAt?: string;
   /** Öğrenciye ait gelir/gider için öğrenci id */
   studentId?: string;
   /** Kişisel kasa işlemi (varsayılan olarak genel kasa toplamlarına dahil edilmez) */
@@ -587,27 +705,33 @@ export interface WhatsAppConfig {
   /** wamessage = api.toplusms.app · evolution = self-host Evolution API */
   provider: WhatsAppProvider;
   apiBaseUrl: string;
-  /** WaMessage: X-Api-Key (Api Entegrasyonu → API Key Göster) · Evolution: apikey */
+  /** WaMessage: API Key (Api Entegrasyonu → API Key Göster) · Evolution: apikey */
   apiKey: string;
   /** WaMessage: cihaz reg_id · Evolution: instance adı */
   instanceName: string;
   enabled: boolean;
-  /** Gönderici WhatsApp numarası (905xxxxxxxxx veya +90…) — QR / check için */
+  /** Gönderici WhatsApp numarası (+905… veya 905…) — QR / check için */
   devicePhone?: string;
-  /** @deprecated SMS login kullanılmıyor; X-Api-Key yeterli */
+  /** Çalışan auth: x-api-key | authorization-raw | bearer */
+  authMode?: 'x-api-key' | 'authorization-raw' | 'bearer';
+  /** @deprecated Eski SMS login */
   loginIdentifier?: string;
   /** Şube bazlı ayar — boşsa tüm şubeler */
   branchOffice?: string;
 }
 
-export type WhatsAppTemplateKey =
+export type WhatsAppSystemTemplateKey =
   | 'parent_login'
   | 'parent_consent'
   | 'lesson_start'
   | 'attendance_reminder'
   | 'training_completed'
+  | 'training_partial'
   | 'training_incomplete'
   | 'manual';
+
+/** Sistem + kullanıcı tanımlı özel şablon anahtarları */
+export type WhatsAppTemplateKey = WhatsAppSystemTemplateKey | (string & {});
 
 export interface WhatsAppTemplate {
   id: string;
@@ -637,6 +761,7 @@ export type WhatsAppAutoEvent =
   | 'parent_consent'
   | 'lesson_start'
   | 'training_completed'
+  | 'training_partial'
   | 'training_incomplete';
 
 export interface WhatsAppAutoRule {

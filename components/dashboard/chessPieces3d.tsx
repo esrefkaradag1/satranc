@@ -1,7 +1,7 @@
 import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Float } from '@react-three/drei';
-import type { Group, Mesh } from 'three';
+import * as THREE from 'three';
 
 export type PieceProps = {
   position: [number, number, number];
@@ -12,35 +12,138 @@ export type PieceProps = {
   scale?: number;
 };
 
+// ─── Gerçekçi Staunton torna (lathe) profilleri ───────────────────────────
+
+function createLathePoints(profile: Array<[number, number]>): THREE.Vector2[] {
+  return profile.map(([r, y]) => new THREE.Vector2(r, y));
+}
+
+const KING_PROFILE: Array<[number, number]> = [
+  [0, 0],
+  [0.48, 0],
+  [0.48, 0.08],
+  [0.42, 0.15],
+  [0.36, 0.28],
+  [0.26, 0.55],
+  [0.29, 0.62],
+  [0.24, 0.68],
+  [0.22, 0.82],
+  [0.36, 0.95],
+  [0.38, 1.08],
+  [0.32, 1.18],
+  [0.22, 1.25],
+  [0.08, 1.32],
+  [0, 1.35],
+];
+
+const QUEEN_PROFILE: Array<[number, number]> = [
+  [0, 0],
+  [0.46, 0],
+  [0.46, 0.08],
+  [0.40, 0.15],
+  [0.34, 0.28],
+  [0.24, 0.52],
+  [0.26, 0.58],
+  [0.22, 0.64],
+  [0.20, 0.78],
+  [0.35, 0.92],
+  [0.32, 1.05],
+  [0.18, 1.15],
+  [0.08, 1.22],
+  [0, 1.25],
+];
+
+const ROOK_PROFILE: Array<[number, number]> = [
+  [0, 0],
+  [0.45, 0],
+  [0.45, 0.08],
+  [0.38, 0.15],
+  [0.32, 0.26],
+  [0.28, 0.56],
+  [0.35, 0.65],
+  [0.36, 0.92],
+  [0.30, 0.92],
+  [0.0, 0.92],
+];
+
+const BISHOP_PROFILE: Array<[number, number]> = [
+  [0, 0],
+  [0.42, 0],
+  [0.42, 0.08],
+  [0.36, 0.15],
+  [0.24, 0.45],
+  [0.26, 0.52],
+  [0.20, 0.58],
+  [0.28, 0.75],
+  [0.24, 0.92],
+  [0.10, 0.98],
+  [0, 1.02],
+];
+
+const KNIGHT_BASE_PROFILE: Array<[number, number]> = [
+  [0, 0],
+  [0.44, 0],
+  [0.44, 0.08],
+  [0.38, 0.15],
+  [0.30, 0.28],
+  [0.28, 0.42],
+  [0, 0.42],
+];
+
+const PAWN_PROFILE: Array<[number, number]> = [
+  [0, 0],
+  [0.38, 0],
+  [0.38, 0.06],
+  [0.32, 0.12],
+  [0.20, 0.35],
+  [0.22, 0.40],
+  [0.16, 0.45],
+  [0.25, 0.58],
+  [0.08, 0.65],
+  [0, 0.70],
+];
+
+// Material helper for realistic polished wood/marble look
+function PieceMaterial({ color, accent }: { color: string; accent?: string }) {
+  const isDark = color === '#1e1b4b' || color === '#0f172a' || color === '#64748b';
+  return (
+    <meshPhysicalMaterial
+      color={color}
+      metalness={0.15}
+      roughness={0.18}
+      clearcoat={0.6}
+      clearcoatRoughness={0.1}
+      reflectivity={0.9}
+      emissive={accent ?? '#000000'}
+      emissiveIntensity={0.08}
+    />
+  );
+}
+
 export function ChessKing({ position, color, accent, speed = 0.35, phase = 0, scale = 0.55 }: PieceProps) {
-  const ref = useRef<Group>(null);
+  const ref = useRef<THREE.Group>(null);
+  const latheGeometry = useMemo(() => new THREE.LatheGeometry(createLathePoints(KING_PROFILE), 32), []);
+
   useFrame((state) => {
     if (!ref.current) return;
-    const t = state.clock.elapsedTime * speed + phase;
-    ref.current.rotation.y = Math.sin(t * 0.6) * 0.4;
+    ref.current.rotation.y = Math.sin(state.clock.elapsedTime * speed + phase) * 0.35;
   });
+
   return (
     <Float speed={1.2} rotationIntensity={0.15} floatIntensity={0.35}>
       <group ref={ref} position={position} scale={scale}>
-        <mesh position={[0, 0.12, 0]}>
-          <cylinderGeometry args={[0.42, 0.48, 0.22, 20]} />
-          <meshStandardMaterial color={color} metalness={0.4} roughness={0.22} />
+        <mesh geometry={latheGeometry} castShadow receiveShadow>
+          <PieceMaterial color={color} accent={accent} />
         </mesh>
-        <mesh position={[0, 0.42, 0]}>
-          <cylinderGeometry args={[0.28, 0.32, 0.38, 20]} />
-          <meshStandardMaterial color={color} metalness={0.42} roughness={0.18} />
-        </mesh>
-        <mesh position={[0, 0.72, 0]}>
-          <sphereGeometry args={[0.18, 16, 16]} />
-          <meshStandardMaterial color={accent} metalness={0.5} roughness={0.15} emissive={accent} emissiveIntensity={0.18} />
-        </mesh>
-        <mesh position={[0, 0.95, 0]}>
+
+        {/* Haç (King's Cross) */}
+        <mesh position={[0, 1.42, 0]} castShadow>
           <boxGeometry args={[0.06, 0.22, 0.06]} />
-          <meshStandardMaterial color={accent} metalness={0.55} roughness={0.15} />
+          <meshPhysicalMaterial color={accent} metalness={0.5} roughness={0.12} clearcoat={0.8} />
         </mesh>
-        <mesh position={[0, 1.02, 0]}>
-          <boxGeometry args={[0.2, 0.06, 0.06]} />
-          <meshStandardMaterial color={accent} metalness={0.55} roughness={0.15} />
+        <mesh position={[0, 1.48, 0]} castShadow>
+          <boxGeometry args={[0.18, 0.06, 0.06]} />
+          <meshPhysicalMaterial color={accent} metalness={0.5} roughness={0.12} clearcoat={0.8} />
         </mesh>
       </group>
     </Float>
@@ -48,29 +151,24 @@ export function ChessKing({ position, color, accent, speed = 0.35, phase = 0, sc
 }
 
 export function ChessQueen({ position, color, accent, speed = 0.32, phase = 0.5, scale = 0.52 }: PieceProps) {
-  const ref = useRef<Group>(null);
+  const ref = useRef<THREE.Group>(null);
+  const latheGeometry = useMemo(() => new THREE.LatheGeometry(createLathePoints(QUEEN_PROFILE), 32), []);
+
   useFrame((state) => {
     if (!ref.current) return;
     ref.current.rotation.y = state.clock.elapsedTime * speed * 0.4 + phase;
   });
+
   return (
     <Float speed={1.4} rotationIntensity={0.12} floatIntensity={0.32}>
       <group ref={ref} position={position} scale={scale}>
-        <mesh position={[0, 0.12, 0]}>
-          <cylinderGeometry args={[0.4, 0.46, 0.22, 20]} />
-          <meshStandardMaterial color={color} metalness={0.38} roughness={0.22} />
+        <mesh geometry={latheGeometry} castShadow receiveShadow>
+          <PieceMaterial color={color} accent={accent} />
         </mesh>
-        <mesh position={[0, 0.48, 0]}>
-          <cylinderGeometry args={[0.22, 0.3, 0.5, 20]} />
-          <meshStandardMaterial color={color} metalness={0.4} roughness={0.2} />
-        </mesh>
-        <mesh position={[0, 0.88, 0]}>
-          <sphereGeometry args={[0.2, 16, 16]} />
-          <meshStandardMaterial color={accent} metalness={0.48} roughness={0.16} emissive={accent} emissiveIntensity={0.14} />
-        </mesh>
-        <mesh position={[0, 1.05, 0]}>
-          <coneGeometry args={[0.1, 0.18, 12]} />
-          <meshStandardMaterial color={accent} metalness={0.5} roughness={0.15} />
+        {/* Taç bilyesi */}
+        <mesh position={[0, 1.32, 0]} castShadow>
+          <sphereGeometry args={[0.1, 16, 16]} />
+          <meshPhysicalMaterial color={accent} metalness={0.6} roughness={0.1} clearcoat={1} />
         </mesh>
       </group>
     </Float>
@@ -78,51 +176,55 @@ export function ChessQueen({ position, color, accent, speed = 0.32, phase = 0.5,
 }
 
 export function ChessRook({ position, color, accent, speed = 0.3, phase = 1.2, scale = 0.5 }: PieceProps) {
-  const ref = useRef<Group>(null);
+  const ref = useRef<THREE.Group>(null);
+  const latheGeometry = useMemo(() => new THREE.LatheGeometry(createLathePoints(ROOK_PROFILE), 32), []);
+
   useFrame((state) => {
     if (!ref.current) return;
     ref.current.rotation.y = state.clock.elapsedTime * speed * 0.5 + phase;
   });
+
   return (
     <Float speed={1.5} rotationIntensity={0.1} floatIntensity={0.3}>
       <group ref={ref} position={position} scale={scale}>
-        <mesh position={[0, 0.12, 0]}>
-          <cylinderGeometry args={[0.4, 0.46, 0.22, 16]} />
-          <meshStandardMaterial color={color} metalness={0.38} roughness={0.22} />
+        <mesh geometry={latheGeometry} castShadow receiveShadow>
+          <PieceMaterial color={color} accent={accent} />
         </mesh>
-        <mesh position={[0, 0.5, 0]}>
-          <cylinderGeometry args={[0.3, 0.32, 0.55, 16]} />
-          <meshStandardMaterial color={color} metalness={0.4} roughness={0.2} />
-        </mesh>
-        <mesh position={[0, 0.86, 0]}>
-          <cylinderGeometry args={[0.36, 0.34, 0.14, 16]} />
-          <meshStandardMaterial color={accent} metalness={0.45} roughness={0.18} />
-        </mesh>
+        {/* Kale dişleri (Crenellations) */}
+        {[0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2].map((angle, i) => (
+          <mesh
+            key={i}
+            position={[Math.cos(angle) * 0.26, 0.98, Math.sin(angle) * 0.26]}
+            castShadow
+          >
+            <boxGeometry args={[0.12, 0.12, 0.12]} />
+            <meshPhysicalMaterial color={accent} metalness={0.4} roughness={0.15} />
+          </mesh>
+        ))}
       </group>
     </Float>
   );
 }
 
 export function ChessBishop({ position, color, accent, speed = 0.38, phase = 1.8, scale = 0.48 }: PieceProps) {
-  const ref = useRef<Group>(null);
+  const ref = useRef<THREE.Group>(null);
+  const latheGeometry = useMemo(() => new THREE.LatheGeometry(createLathePoints(BISHOP_PROFILE), 32), []);
+
   useFrame((state) => {
     if (!ref.current) return;
     ref.current.rotation.y = Math.sin(state.clock.elapsedTime * speed + phase) * 0.35;
   });
+
   return (
     <Float speed={1.3} rotationIntensity={0.14} floatIntensity={0.28}>
       <group ref={ref} position={position} scale={scale}>
-        <mesh position={[0, 0.12, 0]}>
-          <cylinderGeometry args={[0.38, 0.44, 0.2, 16]} />
-          <meshStandardMaterial color={color} metalness={0.38} roughness={0.22} />
+        <mesh geometry={latheGeometry} castShadow receiveShadow>
+          <PieceMaterial color={color} accent={accent} />
         </mesh>
-        <mesh position={[0, 0.55, 0]}>
-          <sphereGeometry args={[0.26, 16, 16]} />
-          <meshStandardMaterial color={color} metalness={0.42} roughness={0.18} />
-        </mesh>
-        <mesh position={[0, 0.88, 0]}>
-          <coneGeometry args={[0.12, 0.22, 12]} />
-          <meshStandardMaterial color={accent} metalness={0.5} roughness={0.15} emissive={accent} emissiveIntensity={0.1} />
+        {/* Tepesindeki bilye */}
+        <mesh position={[0, 1.08, 0]} castShadow>
+          <sphereGeometry args={[0.07, 16, 16]} />
+          <meshPhysicalMaterial color={accent} metalness={0.6} roughness={0.1} />
         </mesh>
       </group>
     </Float>
@@ -130,51 +232,68 @@ export function ChessBishop({ position, color, accent, speed = 0.38, phase = 1.8
 }
 
 export function ChessKnight({ position, color, accent, speed = 0.4, phase = 2.4, scale = 0.48 }: PieceProps) {
-  const ref = useRef<Mesh>(null);
+  const ref = useRef<THREE.Group>(null);
+  const baseGeometry = useMemo(() => new THREE.LatheGeometry(createLathePoints(KNIGHT_BASE_PROFILE), 32), []);
+
   useFrame((state) => {
     if (!ref.current) return;
-    ref.current.rotation.y = Math.sin(state.clock.elapsedTime * speed + phase) * 0.5;
+    ref.current.rotation.y = Math.sin(state.clock.elapsedTime * speed + phase) * 0.4;
   });
+
   return (
     <Float speed={1.8} rotationIntensity={0.2} floatIntensity={0.4}>
-      <group position={position} scale={scale}>
-        <mesh position={[0, 0.12, 0]}>
-          <cylinderGeometry args={[0.38, 0.44, 0.2, 16]} />
-          <meshStandardMaterial color={color} metalness={0.38} roughness={0.22} />
+      <group ref={ref} position={position} scale={scale}>
+        {/* Alt Torna Kaide */}
+        <mesh geometry={baseGeometry} castShadow receiveShadow>
+          <PieceMaterial color={color} accent={accent} />
         </mesh>
-        <mesh ref={ref} position={[0.05, 0.55, 0]}>
-          <coneGeometry args={[0.28, 0.65, 16]} />
-          <meshStandardMaterial color={color} metalness={0.42} roughness={0.18} />
-        </mesh>
-        <mesh position={[0.18, 0.78, 0.08]}>
-          <sphereGeometry args={[0.12, 12, 12]} />
-          <meshStandardMaterial color={accent} metalness={0.5} roughness={0.15} emissive={accent} emissiveIntensity={0.12} />
-        </mesh>
+
+        {/* Gerçekçi At Başı Bünyesi (Curved Sculpted Head) */}
+        <group position={[0, 0.42, 0]}>
+          {/* Gövde / Boyun */}
+          <mesh position={[0.02, 0.22, 0]} rotation={[0, 0, -0.15]} castShadow>
+            <cylinderGeometry args={[0.18, 0.26, 0.45, 16]} />
+            <PieceMaterial color={color} />
+          </mesh>
+          {/* Ağız / Çene */}
+          <mesh position={[0.14, 0.34, 0]} rotation={[0, 0, -0.4]} castShadow>
+            <boxGeometry args={[0.26, 0.18, 0.22]} />
+            <PieceMaterial color={color} />
+          </mesh>
+          {/* Kulaklar */}
+          <mesh position={[-0.04, 0.46, 0.07]} rotation={[0.2, 0, -0.2]} castShadow>
+            <coneGeometry args={[0.05, 0.16, 8]} />
+            <meshPhysicalMaterial color={accent} metalness={0.4} roughness={0.15} />
+          </mesh>
+          <mesh position={[-0.04, 0.46, -0.07]} rotation={[-0.2, 0, -0.2]} castShadow>
+            <coneGeometry args={[0.05, 0.16, 8]} />
+            <meshPhysicalMaterial color={accent} metalness={0.4} roughness={0.15} />
+          </mesh>
+          {/* Göz Vurgusu */}
+          <mesh position={[0.12, 0.38, 0.09]} castShadow>
+            <sphereGeometry args={[0.035, 12, 12]} />
+            <meshPhysicalMaterial color={accent} metalness={0.8} roughness={0.1} />
+          </mesh>
+        </group>
       </group>
     </Float>
   );
 }
 
 export function ChessPawn({ position, color, accent, speed = 0.45, phase = 3, scale = 0.42 }: PieceProps) {
-  const ref = useRef<Group>(null);
+  const ref = useRef<THREE.Group>(null);
+  const latheGeometry = useMemo(() => new THREE.LatheGeometry(createLathePoints(PAWN_PROFILE), 32), []);
+
   useFrame((state) => {
     if (!ref.current) return;
     ref.current.rotation.y = Math.sin(state.clock.elapsedTime * speed + phase) * 0.25;
   });
+
   return (
     <Float speed={2} rotationIntensity={0.08} floatIntensity={0.25}>
       <group ref={ref} position={position} scale={scale}>
-        <mesh position={[0, 0.1, 0]}>
-          <cylinderGeometry args={[0.34, 0.4, 0.18, 14]} />
-          <meshStandardMaterial color={color} metalness={0.35} roughness={0.24} />
-        </mesh>
-        <mesh position={[0, 0.38, 0]}>
-          <cylinderGeometry args={[0.14, 0.22, 0.35, 14]} />
-          <meshStandardMaterial color={color} metalness={0.38} roughness={0.2} />
-        </mesh>
-        <mesh position={[0, 0.62, 0]}>
-          <sphereGeometry args={[0.14, 12, 12]} />
-          <meshStandardMaterial color={accent} metalness={0.42} roughness={0.18} />
+        <mesh geometry={latheGeometry} castShadow receiveShadow>
+          <PieceMaterial color={color} accent={accent} />
         </mesh>
       </group>
     </Float>
@@ -182,7 +301,7 @@ export function ChessPawn({ position, color, accent, speed = 0.45, phase = 3, sc
 }
 
 export function ParticleField({ count = 60, spread = 14 }: { count?: number; spread?: number }) {
-  const ref = useRef<Group>(null);
+  const ref = useRef<THREE.Group>(null);
   const dots = useMemo(
     () =>
       Array.from({ length: count }, (_, i) => ({
@@ -195,6 +314,7 @@ export function ParticleField({ count = 60, spread = 14 }: { count?: number; spr
       })),
     [count, spread],
   );
+
   useFrame((state) => {
     if (!ref.current) return;
     ref.current.rotation.y = state.clock.elapsedTime * 0.02;
@@ -203,12 +323,13 @@ export function ParticleField({ count = 60, spread = 14 }: { count?: number; spr
       child.position.y = d.y + Math.sin(state.clock.elapsedTime * 0.6 + d.phase) * 0.12;
     });
   });
+
   return (
     <group ref={ref}>
       {dots.map((d, i) => (
         <mesh key={i} position={[d.x, d.y, d.z]}>
-          <sphereGeometry args={[d.s, 6, 6]} />
-          <meshBasicMaterial color={d.color} transparent opacity={0.5} />
+          <sphereGeometry args={[d.s, 8, 8]} />
+          <meshBasicMaterial color={d.color} transparent opacity={0.6} />
         </mesh>
       ))}
     </group>
