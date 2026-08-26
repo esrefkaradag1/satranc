@@ -23,6 +23,7 @@ import {
 import { lichessProxyRequest } from '../lib/lichessProxyThrottle.mjs';
 import { parentStudentLoginViaEnv } from '../lib/studentParentAuth.mjs';
 import { trainingNotifyHandler, startTrainingNotifyScheduler } from '../lib/trainingWhatsAppNotify.mjs';
+import { whatsappApiGetHandler, whatsappApiPostHandler } from '../lib/whatsappApi.mjs';
 import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch.mjs';
 
 function syncServerEnv() {
@@ -31,6 +32,11 @@ function syncServerEnv() {
     ['SUPABASE_ANON_KEY', 'VITE_SUPABASE_ANON_KEY'],
     ['SUPABASE_SERVICE_ROLE_KEY', 'VITE_SUPABASE_SERVICE_ROLE_KEY'],
     ['SUPABASE_DB_PASSWORD', 'POSTGRES_PASSWORD'],
+    ['WHATSAPP_API_KEY', 'VITE_WHATSAPP_API_KEY'],
+    ['WHATSAPP_API_BASE_URL', 'VITE_WHATSAPP_API_BASE_URL'],
+    ['WHATSAPP_INSTANCE', 'VITE_WHATSAPP_INSTANCE'],
+    ['WHATSAPP_PROVIDER', 'VITE_WHATSAPP_PROVIDER'],
+    ['WHATSAPP_DEVICE_PHONE', 'VITE_WHATSAPP_DEVICE_PHONE'],
   ];
   for (const [target, source] of pairs) {
     if (!process.env[target]?.trim() && process.env[source]?.trim()) {
@@ -669,6 +675,22 @@ export async function dispatchApi(req, res, url) {
       const body = await readJsonBody(req);
       const result = await trainingNotifyHandler(body, process.env);
       sendJson(res, result.status, result.body);
+      return true;
+    }
+    if (path === '/api/whatsapp') {
+      const fullUrl = req.url || path;
+      if (req.method === 'GET') {
+        const result = await whatsappApiGetHandler(fullUrl, process.env);
+        sendJson(res, result.status, result.body);
+        return true;
+      }
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const result = await whatsappApiPostHandler(body, process.env, fullUrl);
+        sendJson(res, result.status, result.body);
+        return true;
+      }
+      sendJson(res, 405, { error: 'Yalnızca GET ve POST' });
       return true;
     }
 
