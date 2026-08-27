@@ -62,7 +62,7 @@ import { studentBoardFromPaste } from '../lib/externalGamePaste';
 import { isChessComPuzzleUrl, parseExternalGameLink } from '../lib/externalGameLink';
 import { Study, StudyChapter } from '../lib/studyTypes';
 import type { Student } from '../types';
-import { makeBuilderGame, applyMove, studyDisplayEmoji } from '../lib/studyUtils';
+import { makeBuilderGame, applyMove, studyDisplayEmoji, parsePgnBlockToMoves } from '../lib/studyUtils';
 import { BoardPositionBuilder, type BoardPositionBuilderApplyPayload } from './BoardPositionBuilder';
 import {
   liveLessonFenAt,
@@ -91,6 +91,7 @@ import {
 } from '../lib/boardFlipShortcut';
 import { promoteVariationLines } from '../lib/studySync/moveList';
 import { triggerWhatsAppAuto } from '../services/whatsappClient';
+import { buildPrivateLessonSessionRecord } from '../lib/privateLessonUsage';
 import { normalizeSearchText, searchIncludesText } from '../lib/searchText';
 import Analysis from './Analysis';
 
@@ -107,9 +108,9 @@ const BOARD_SCALE_DEFAULT = 100;
 /** UI %100 = önceki %80 boyut (canlı ders sınıf düzeni) */
 const BOARD_BASE_SCALE = 0.8;
 const VIDEO_DOCK_WIDTH_STORAGE_KEY = 'live_lesson_video_dock_width_px';
-const VIDEO_DOCK_WIDTH_MIN = 168;
-const VIDEO_DOCK_WIDTH_MAX = 520;
-const VIDEO_DOCK_WIDTH_DEFAULT = 232;
+const VIDEO_DOCK_WIDTH_MIN = 200;
+const VIDEO_DOCK_WIDTH_MAX = 480;
+const VIDEO_DOCK_WIDTH_DEFAULT = 280;
 
 function clampVideoDockWidth(v: number): number {
   return Math.min(VIDEO_DOCK_WIDTH_MAX, Math.max(VIDEO_DOCK_WIDTH_MIN, Math.round(v)));
@@ -609,16 +610,18 @@ function ClassroomMediaControlsCard({
   speakFloorSlot?: React.ReactNode;
 }) {
   return (
-    <div className="ll-live-card shrink-0">
-      <h3 className="ll-live-card-title">Ses &amp; video kontrolleri</h3>
-      <p className="text-[10px] text-slate-500 mt-1 mb-2 tabular-nums font-mono">{wallClock}</p>
-      {speakFloorSlot ? <div className="mb-2">{speakFloorSlot}</div> : null}
-      <div className="grid grid-cols-2 gap-2">
+    <div className="ll-live-card shrink-0 mt-auto !p-1.5 !rounded-lg">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <h3 className="ll-live-card-title !text-[8px] !tracking-[0.08em]">Ses &amp; video</h3>
+        <p className="text-[8px] text-slate-500 tabular-nums font-mono shrink-0">{wallClock}</p>
+      </div>
+      {speakFloorSlot ? <div className="mb-1">{speakFloorSlot}</div> : null}
+      <div className={`grid gap-1 ${vbSupported ? 'grid-cols-3' : 'grid-cols-2'}`}>
         <button
           type="button"
           onClick={onToggleMic}
           disabled={studentMicToggleDisabled}
-          className={`ll-media-btn col-span-1 ${
+          className={`ll-media-btn ll-media-btn-compact ${
             studentMicToggleDisabled
               ? 'bg-slate-800/50 text-slate-600 border-white/[0.06] cursor-not-allowed'
               : localMicMuted
@@ -635,24 +638,24 @@ function ClassroomMediaControlsCard({
                 : 'Mikrofonu kapat'
           }
         >
-          {localMicMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-          Mikrofon
+          {localMicMuted ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
+          Mik
         </button>
         <button
           type="button"
           onClick={onToggleCam}
-          className={`ll-media-btn col-span-1 ${localCamOff ? 'll-media-btn-off' : 'll-media-btn-on'}`}
+          className={`ll-media-btn ll-media-btn-compact ${localCamOff ? 'll-media-btn-off' : 'll-media-btn-on'}`}
           title={localCamOff ? 'Kamerayı aç' : 'Kamerayı kapat'}
         >
-          {localCamOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-          Kamera
+          {localCamOff ? <VideoOff className="w-3 h-3" /> : <Video className="w-3 h-3" />}
+          Kam
         </button>
         {vbSupported ? (
           <button
             type="button"
             onClick={onToggleBlur}
             disabled={localCamOff || vbApplying}
-            className={`ll-media-btn col-span-2 ${
+            className={`ll-media-btn ll-media-btn-compact ${
               cameraBackgroundBlur ? 'll-media-btn-on' : 'bg-[#1c1c26]/80 text-slate-300 border-white/[0.08] hover:bg-white/[0.06]'
             } ${localCamOff || vbApplying ? 'opacity-50 cursor-not-allowed' : ''}`}
             title={
@@ -663,8 +666,8 @@ function ClassroomMediaControlsCard({
                   : 'Arka planı bulanıklaştır'
             }
           >
-            {vbApplying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Focus className="w-5 h-5" />}
-            Arka plan
+            {vbApplying ? <Loader2 className="w-3 h-3 animate-spin" /> : <Focus className="w-3 h-3" />}
+            Blur
           </button>
         ) : null}
       </div>
@@ -681,10 +684,10 @@ function ClassroomVideoDockResizeHandle({
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Kamera paneli genişliği"
-      title="Sürükleyerek kamera alanını genişletin"
+      aria-label="Tahta ve yan panel genişliği"
+      title="Sürükleyerek tahta alanını büyütün veya küçültün"
       onPointerDown={onResizeStart}
-      className="hidden lg:flex shrink-0 w-4 cursor-col-resize items-center justify-center group touch-none select-none self-stretch py-4"
+      className="hidden lg:flex shrink-0 w-4 cursor-col-resize items-center justify-center group touch-none select-none self-stretch py-4 z-20"
     >
       <div className="flex h-14 w-2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/10 bg-slate-800/90 shadow-md group-hover:border-indigo-500/40 group-hover:bg-slate-700/90 group-active:border-indigo-500/60 group-active:bg-indigo-950/80 transition-colors">
         <span className="block h-1 w-1 rounded-full bg-slate-500 group-hover:bg-indigo-300" aria-hidden />
@@ -995,24 +998,69 @@ function ClassroomAttendancePanel({
 
   if (variant === 'mobile') {
     return (
-      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-2 space-y-2">
-        {coachTile ? (
-          <div className="relative aspect-video max-h-24 rounded-lg overflow-hidden ring-1 ring-white/10">
-            <ClassroomVideoTile tile={coachTile} muted={coachTile.isSelf} className="w-full h-full" />
-            {blurButton}
-          </div>
-        ) : null}
-        <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-0.5 min-h-[7.5rem]">
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="flex gap-2 overflow-x-auto custom-scrollbar min-w-0 flex-1 py-0.5">
+          {coachTile ? (
+            <button
+              type="button"
+              onClick={() => onFocus(coachTile.id)}
+              className={`relative shrink-0 w-[6.75rem] aspect-video rounded-xl overflow-hidden ${
+                focusedId === coachTile.id ? 'ring-2 ring-indigo-500' : 'ring-1 ring-white/15'
+              }`}
+              title={coachTile.name}
+            >
+              <ClassroomVideoTile tile={coachTile} muted={coachTile.isSelf} className="w-full h-full" labelClassName="text-[8px]" />
+              {blurButton}
+            </button>
+          ) : null}
           {joinedStudents.length > 0 ? (
-            joinedStudents.map((s) => (
-              <div key={s.id} className="shrink-0 w-32">{studentRow(s, true)}</div>
-            ))
+            joinedStudents.map((s) => {
+              const sid = normalizeStudentId(s.id);
+              const tile = tileByStudentId.get(sid);
+              const tileId = tile?.id ?? `student-${sid}`;
+              const isPending = pendingIds.some((k) => idsEqual(k, sid));
+              const handRaised = handRaisedStudentIds.some((kid) => idsEqual(kid, sid));
+              const hasFloor = idsEqual(floorStudentId, sid);
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => (isPending ? onAdmit(s.id) : onFocus(tileId))}
+                  className={`relative shrink-0 w-[6.75rem] aspect-video rounded-xl overflow-hidden text-left ${
+                    isPending
+                      ? 'ring-2 ring-amber-400/70'
+                      : hasFloor
+                        ? 'ring-2 ring-emerald-400/80'
+                        : handRaised
+                          ? 'ring-2 ring-indigo-400/70'
+                          : focusedId === tileId
+                            ? 'ring-2 ring-indigo-500'
+                            : 'ring-1 ring-white/15'
+                  }`}
+                  title={isPending ? `${s.name} — derse al` : s.name}
+                >
+                  {tile ? (
+                    <ClassroomVideoTile tile={tile} muted={tile.isSelf} className="w-full h-full" showLabel={false} />
+                  ) : s.photoUrl ? (
+                    <img src={s.photoUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-slate-800 text-base font-bold text-slate-400">
+                      {s.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <span className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-1 py-0.5 text-[8px] font-semibold text-white">
+                    {isPending ? 'Al' : s.name.split(' ')[0]}
+                  </span>
+                </button>
+              );
+            })
           ) : (
-            <p className="text-[10px] text-slate-500 py-6 px-2 text-center w-full">
-              Henüz öğrenci katılmadı. Katıldıkça burada görünecek.
-            </p>
+            <p className="text-[10px] text-slate-500 self-center px-1">Henüz öğrenci yok</p>
           )}
         </div>
+        <p className="shrink-0 text-[8px] font-bold uppercase tracking-wide text-slate-500 max-w-[3.5rem] leading-tight text-right">
+          Panel → detay
+        </p>
       </div>
     );
   }
@@ -1223,19 +1271,16 @@ function ClassroomStudentVideoPanel({
 
   if (variant === 'mobile') {
     return (
-      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-2">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Canlı görüntü</span>
-          {blurBtn}
-        </div>
-        {speakFloorBar ? <div className="mb-2">{speakFloorBar}</div> : null}
-        <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-0.5">
+      <div className="flex items-center gap-2 min-w-0">
+        {speakFloorBar ? <div className="shrink-0">{speakFloorBar}</div> : null}
+        <div className="flex gap-2 overflow-x-auto custom-scrollbar min-w-0 flex-1 py-0.5">
           {tiles.map((tile) => (
-            <div key={tile.id} className="shrink-0 w-28 aspect-video rounded-lg overflow-hidden">
-              {tileButton(tile, 'w-full h-full rounded-lg')}
+            <div key={tile.id} className="shrink-0 w-[6.75rem] aspect-video rounded-xl overflow-hidden">
+              {tileButton(tile, 'w-full h-full rounded-xl', 'text-[8px]')}
             </div>
           ))}
         </div>
+        {blurBtn}
       </div>
     );
   }
@@ -2210,7 +2255,7 @@ function ClassroomHelpTip({ text }: { text: string }) {
 }
 
 const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: roomIdProp, studentId: studentIdProp }) => {
-  const { scopedStudents: students, refreshStudentsFromSupabase, addAttendanceRecord, showToast, confirmDialog, alertDialog, auth } = useApp();
+  const { scopedStudents: students, scopedTransactions: transactions, refreshStudentsFromSupabase, addAttendanceRecord, showToast, confirmDialog, alertDialog, auth } = useApp();
   const showStudentCounts = canShowStudentCounts(auth);
   /** Admin: seçilen oda (null = sınıf listesi göster) */
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -2441,6 +2486,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const boardVideoRowRef = useRef<HTMLDivElement>(null);
   const boardShellRef = useRef<HTMLDivElement>(null);
   const drawingToolbarWrapRef = useRef<HTMLDivElement>(null);
+  const drawingToolbarDesktopRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     videoDockWidthRef.current = videoDockWidthPx;
   }, [videoDockWidthPx]);
@@ -2453,7 +2499,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
     const onMove = (ev: PointerEvent) => {
       const rowW = boardVideoRowRef.current?.clientWidth ?? window.innerWidth;
-      const maxW = Math.min(VIDEO_DOCK_WIDTH_MAX, Math.floor(rowW * 0.52));
+      // Sağ ders paneli + tutamak için yer bırak; tahta alanı daralmasın
+      const maxW = Math.min(VIDEO_DOCK_WIDTH_MAX, Math.max(VIDEO_DOCK_WIDTH_MIN, Math.floor(rowW * 0.42)));
       const delta = ev.clientX - startX;
       setVideoDockWidthPx(clampVideoDockWidth(Math.min(maxW, startW - delta)));
     };
@@ -4334,19 +4381,37 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     attendanceRecordedRef.current = new Set();
   }, [effectiveRoomId]);
 
+  const resolveLiveAttendancePackageFields = useCallback(
+    (studentId: string) => {
+      const id = normalizeStudentId(studentId);
+      if (!id) return {};
+      const today = new Date().toISOString().slice(0, 10);
+      const sale = transactions
+        .filter((t) => t.category === 'Özel Ders')
+        .filter((t) => normalizeStudentId(String(t.studentId ?? '')) === id)
+        .filter((t) => String(t.date ?? '').slice(0, 10) <= today)
+        .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')))[0];
+      if (!sale) return {};
+      return buildPrivateLessonSessionRecord(sale);
+    },
+    [transactions],
+  );
+
   const recordLiveAttendance = useCallback(
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
       if (!id || attendanceRecordedRef.current.has(id)) return;
       attendanceRecordedRef.current.add(id);
+      const packageFields = resolveLiveAttendancePackageFields(id);
       void addAttendanceRecord({
         date: new Date().toISOString().slice(0, 10),
         studentId: id,
         status: 'present',
         lessonSummary: `Canlı ders: ${effectiveRoomName}`,
+        ...packageFields,
       });
     },
-    [addAttendanceRecord, effectiveRoomName],
+    [addAttendanceRecord, effectiveRoomName, resolveLiveAttendancePackageFields],
   );
 
   const setLiveAttendanceMark = useCallback(
@@ -4394,11 +4459,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         const status: 'present' | 'absent' | 'late' | 'excused' =
           marks[sid] ??
           (resolved === 'present' || resolved === 'late' || resolved === 'excused' ? resolved : 'absent');
+        const packageFields = resolveLiveAttendancePackageFields(sid);
         await addAttendanceRecord({
           date: today,
           studentId: sid,
           status,
           lessonSummary: `Canlı ders: ${effectiveRoomName}`,
+          ...packageFields,
         });
         attendanceRecordedRef.current.add(sid);
       }
@@ -4413,6 +4480,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     effectiveRoomName,
     isStudentView,
     remoteStreamsByUid,
+    resolveLiveAttendancePackageFields,
     sessionMedia.admittedStudentIds,
     sessionMedia.attendanceMarks,
     sessionMedia.pendingStudentIds,
@@ -4576,19 +4644,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     window.setTimeout(() => syncCoachRemoteAudioRef.current(), 120);
   }, [isStudentView, classroomRosterStudents, pushSessionMediaRemote]);
 
-  const grantDefaultStudentPlaySide = useCallback(
-    (prev: SessionMediaState, studentIds: string[]): Record<string, PlayBoardSide> => {
-      const playSides = { ...(prev.studentPlaySides ?? {}) };
-      for (const raw of studentIds) {
-        const sid = normalizeStudentId(raw);
-        if (!sid || playSides[sid] != null) continue;
-        playSides[sid] = 'both';
-      }
-      return playSides;
-    },
-    [],
-  );
-
   const admitStudentToClass = useCallback(
     (studentId: string) => {
       const id = normalizeStudentId(studentId);
@@ -4601,11 +4656,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         pendingStudentIds: pending,
         admittedStudentIds: admitted,
         attendanceMarks: marks,
-        studentPlaySides: grantDefaultStudentPlaySide(prev, [id]),
       });
       recordLiveAttendance(id);
     },
-    [isStudentView, pushSessionMediaRemote, recordLiveAttendance, grantDefaultStudentPlaySide],
+    [isStudentView, pushSessionMediaRemote, recordLiveAttendance],
   );
 
   const admitAllPendingStudents = useCallback(() => {
@@ -4622,10 +4676,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       pendingStudentIds: [],
       admittedStudentIds: admitted,
       attendanceMarks: marks,
-      studentPlaySides: grantDefaultStudentPlaySide(prev, pending),
     });
     pending.forEach((id) => recordLiveAttendance(id));
-  }, [isStudentView, pushSessionMediaRemote, recordLiveAttendance, grantDefaultStudentPlaySide]);
+  }, [isStudentView, pushSessionMediaRemote, recordLiveAttendance]);
 
   useEffect(() => {
     if (!isStudentView || showClassList || !isSupabaseBackend()) return;
@@ -4646,11 +4699,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const nextAdmitted = [...new Set([...(prev.admittedStudentIds ?? []), sid])];
       const nextPending = (prev.pendingStudentIds ?? []).filter((kid) => !idsEqual(kid, sid));
       const marks = { ...(prev.attendanceMarks ?? {}), [sid]: 'present' as const };
+      // Varsayılan oynama izni yok (X); öğretmen B/S/İk ile açar
       void pushSessionMediaRemote({
         admittedStudentIds: nextAdmitted,
         pendingStudentIds: nextPending,
         attendanceMarks: marks,
-        studentPlaySides: grantDefaultStudentPlaySide(prev, [sid]),
       });
       recordLiveAttendance(sid);
       return;
@@ -4676,7 +4729,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     pushSessionMediaRemote,
     recordLiveAttendance,
     effectiveRoomId,
-    grantDefaultStudentPlaySide,
   ]);
 
   useEffect(() => {
@@ -5439,16 +5491,27 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     const nextFen = liveLessonFenAt(baseFen, moveHistory, variations, mainPly, nextVar);
     setCurrentVariation(nextVar);
     setReplayNavPly(nextReplay);
+    let normalizedFen = nextFen;
     try {
       const g = makeBuilderGame(nextFen);
-      setFen(g.fen());
+      normalizedFen = g.fen();
+      setFen(normalizedFen);
       setGame(g);
     } catch {
       setFen(nextFen);
       try { setGame(new Chess(nextFen)); } catch { setGame(new Chess()); }
     }
-    // Notasyon gezintisi yalnızca yerel — sunucuya yazılmaz; öğrenci canlı uçta kalır.
-  }, [isStudentView, baseFen, moveHistory, variations]);
+    // Öğrenci tahtası antrenörün gördüğü konumu hemen takip etsin
+    // (önce yalnızca yerelde kalıyordu; boş tıklanınca pushState ile gecikmeli geliyordu).
+    pushState(
+      normalizedFen,
+      moveHistory,
+      arrows,
+      marks,
+      coachSide ?? undefined,
+      variations,
+    );
+  }, [isStudentView, baseFen, moveHistory, variations, arrows, marks, coachSide, pushState]);
 
   const selectLiveMove = useCallback((idx: number, varInfo?: LiveVariationRef) => {
     if (isStudentView) return;
@@ -5759,13 +5822,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       try {
         const g = makeBuilderGame(base);
         for (const m of moves) {
-          const played = g.move(m);
-          if (!played) break;
+          if (!applyMove(g, m)) break;
         }
         headFen = g.fen();
       } catch {
         headFen = snapshot.fen?.trim() || base;
       }
+    }
+    let nextGame: Chess;
+    try {
+      nextGame = makeBuilderGame(headFen);
+    } catch {
+      headFen = START_FEN;
+      nextGame = makeBuilderGame(START_FEN);
     }
     setReplayNavPly(null);
     setCurrentVariation(null);
@@ -5776,7 +5845,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     setBaseFen(base);
     setMoveHistory(moves);
     setVariations(snapshot.variations ?? {});
-    setGame(makeBuilderGame(headFen));
+    setGame(nextGame);
     setFen(headFen);
     setFenInput(headFen);
     setArrows([]);
@@ -5799,13 +5868,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setPgnError('');
       try {
         const trimmed = payload.pgn.trim();
-        if (trimmed.includes('1.') || trimmed.includes('[Event')) {
-          const c = new Chess();
-          const loaded = (c.loadPgn as (pgn: string, opts?: { strict?: boolean }) => boolean)(trimmed, { strict: false });
-          if (loaded) {
-            const moves = c.history();
-            const headFen = c.fen();
-            const nextBase = inferLiveLessonExportBaseFen(headFen, moves, [START_FEN, baseFen]);
+        const looksLikePgn = /(?:^|\s)1\./.test(trimmed) || trimmed.includes('[Event') || /\b(O-O-O|O-O|[NBRQK]?[a-h]?[1-8]?x?[a-h][1-8])\b/.test(trimmed);
+        if (looksLikePgn) {
+          const { startFen, moves } = parsePgnBlockToMoves(trimmed);
+          if (moves.length > 0) {
+            const headFen = liveLessonFenAt(startFen, moves, {}, moves.length, null);
+            const nextBase = inferLiveLessonExportBaseFen(headFen, moves, [START_FEN, startFen, baseFen]);
+            let c: Chess;
+            try { c = new Chess(headFen); } catch { c = new Chess(); }
             setReplayNavPly(null);
             setCurrentVariation(null);
             setHoverFen(null);
@@ -5815,9 +5885,10 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             setGame(c);
             setFen(headFen);
             setMoveHistory(moves);
+            setVariations({});
             setPgnInput('');
             lastLocalMoveTimeRef.current = Date.now();
-            pushState(headFen, moves, [], {}, coachSide ?? undefined);
+            pushState(headFen, moves, [], {}, coachSide ?? undefined, {});
             analyseEngineFen(headFen);
             setSidebarTab('analiz');
             return;
@@ -5836,7 +5907,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (applyFenString(payload.fen)) {
       setSidebarTab('analiz');
     }
-  }, [applyFenString, pushState, arrows, coachSide, baseFen, analyseEngineFen]);
+  }, [applyFenString, pushState, coachSide, baseFen, analyseEngineFen]);
 
   const loadPgn = useCallback(() => {
     setPgnError('');
@@ -5846,33 +5917,47 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       return;
     }
     try {
-      if (trimmed.includes('1.') || trimmed.includes('[Event')) {
-        const c = new Chess();
-        const loaded = (c.loadPgn as (pgn: string, opts?: { strict?: boolean }) => boolean)(trimmed, { strict: false });
-        if (loaded) {
-          const moves = c.history();
-          setReplayNavPly(null);
-          setGame(c);
-          setFen(c.fen());
-          setMoveHistory(moves);
-          setPgnInput('');
-          pushState(c.fen(), moves, arrows, marks, coachSide ?? undefined);
-        } else {
+      const looksLikePgn =
+        /(?:^|\s)1\./.test(trimmed)
+        || trimmed.includes('[Event')
+        || /\b(O-O-O|O-O|[NBRQK]?[a-h]?[1-8]?x?[a-h][1-8])\b/.test(trimmed);
+      if (looksLikePgn) {
+        const { startFen, moves } = parsePgnBlockToMoves(trimmed);
+        if (moves.length === 0) {
           setPgnError('PGN ayrıştırılamadı.');
+          return;
         }
-      } else {
-        const c = new Chess(trimmed);
+        const headFen = liveLessonFenAt(startFen, moves, {}, moves.length, null);
+        const nextBase = inferLiveLessonExportBaseFen(headFen, moves, [START_FEN, startFen, baseFen]);
+        let c: Chess;
+        try { c = new Chess(headFen); } catch { c = new Chess(); }
         setReplayNavPly(null);
+        setCurrentVariation(null);
+        setHoverFen(null);
+        setBaseFen(nextBase);
         setGame(c);
-        setFen(c.fen());
-        setMoveHistory([]);
+        setFen(headFen);
+        setMoveHistory(moves);
+        setVariations({});
         setPgnInput('');
-        pushState(c.fen(), [], arrows, marks, coachSide ?? undefined);
+        lastLocalMoveTimeRef.current = Date.now();
+        pushState(headFen, moves, arrows, marks, coachSide ?? undefined, {});
+        return;
       }
+      const c = new Chess(trimmed);
+      setReplayNavPly(null);
+      setCurrentVariation(null);
+      setGame(c);
+      setFen(c.fen());
+      setBaseFen(c.fen());
+      setMoveHistory([]);
+      setVariations({});
+      setPgnInput('');
+      pushState(c.fen(), [], arrows, marks, coachSide ?? undefined, {});
     } catch {
       setPgnError('Geçersiz PGN veya FEN.');
     }
-  }, [pgnInput, pushState, arrows, coachSide]);
+  }, [pgnInput, pushState, arrows, marks, coachSide, baseFen]);
 
   const resetBoard = useCallback(() => {
     const c = new Chess();
@@ -5908,6 +5993,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const t = e.target as HTMLElement;
       if (boardShellRef.current?.contains(t)) return;
       if (drawingToolbarWrapRef.current?.contains(t)) return;
+      if (drawingToolbarDesktopRef.current?.contains(t)) return;
       if (t.closest('[data-board-chrome]')) return;
       clearAllAnnotations();
     },
@@ -6057,7 +6143,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const boardArrowsToShow = arrowsToShow;
 
-  const moveHintsToolOk = !isStudentView && drawingTool === 'mouse';
+  const moveHintsToolOk = isStudentView
+    ? playSide != null
+    : drawingTool === 'mouse';
 
   const liveLessonPieceEligibleForMoveHints = (
     square: string,
@@ -6159,7 +6247,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     /** Klasik yeşil / krem Chess.com tahtası */
     darkSquareStyle: { backgroundColor: '#769656' },
     lightSquareStyle: { backgroundColor: '#eeeed2' },
-    ...CHESSBOARD_ANIMATION,
+    ...(replayNavActive
+      ? { showAnimations: false as const, animationDurationInMs: 0 }
+      : CHESSBOARD_ANIMATION),
     /** Sürüklemeye başlayınca hedef kareleri göster — dnd sensörleri tıklamayı yutmaya eğilimli */
     onPieceDrag: ({
       square,
@@ -6176,16 +6266,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     onPieceDrop: (args: unknown) => {
       const { sourceSquare, targetSquare } = pickDropArgs(args, undefined);
       if (!sourceSquare) return false;
-      if (!targetSquare) {
-        setMoveHintSquare(null);
+      /** Aynı kareye bırakma / iptal: seçimi koru (mobilde tap → hedef dokunuş) */
+      if (!targetSquare || targetSquare === sourceSquare) {
+        setMoveHintSquare(sourceSquare);
         return false;
       }
       const ok = onPieceDrop(sourceSquare, targetSquare);
-      if (!ok) setMoveHintSquare(null);
+      if (!ok) setMoveHintSquare(sourceSquare);
       return ok;
     },
     allowDragging:
       (isStudentView ? playSide != null : drawingTool === 'mouse') && boardExploreMode,
+    /** Dokunmatikte hafif kaymayı sürükleme sayıp tıklamayı yutmasın */
+    dragActivationDistance: 8,
     onPieceClick: ({
       piece,
       square,
@@ -6195,14 +6288,26 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       piece?: { pieceType?: string };
       square?: string | null;
     }) => {
-      if (!square || !liveLessonPieceEligibleForMoveHints(square, piece, !!isSparePiece)) return;
+      if (!square) return;
+      /** İkinci dokunuş hedefte taş varsa (alma) — mobil/masaüstü tap-to-move */
+      if (
+        moveHintsToolOk &&
+        boardExploreMode &&
+        moveHintSquare &&
+        moveHintSquare !== square &&
+        legalMoveHintDests.has(square)
+      ) {
+        const ok = handleDrop(moveHintSquare, square);
+        if (ok) setMoveHintSquare(null);
+        return;
+      }
+      if (!liveLessonPieceEligibleForMoveHints(square, piece, !!isSparePiece)) return;
       setMoveHintSquare((prev) => (prev === square ? null : square));
     },
     onSquareRightClick: !isStudentView && drawingTool === 'mouse' ? handleBoardSquareRightClick : undefined,
     onSquareClick: (arg: unknown) => {
       const square = pickSquare(arg);
       if (!square) return;
-      if (isStudentView) return;
       const mousePlay = moveHintsToolOk && boardExploreMode;
       if (mousePlay && moveHintSquare) {
         if (square === moveHintSquare) {
@@ -6217,20 +6322,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         setMoveHintSquare(null);
         return;
       }
+      if (isStudentView) return;
       if (drawingTool === 'mouse') {
-        const hasDrawings =
-          Object.keys(marks).length > 0 || sanitizedArrows.length > 0;
-        if (hasDrawings && !moveHintSquare) {
-          let squareEmpty = true;
-          try {
-            squareEmpty = !new Chess(boardDisplayFen).get(square as any);
-          } catch {
-            squareEmpty = true;
-          }
-          if (squareEmpty) {
-            clearAllAnnotations();
-          }
-        }
         return;
       }
       if (drawingTool === 'eraser') {
@@ -6261,6 +6354,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     },
     allowDrawingArrows: liveLessonDrawArrowsEnabled,
     arrows: boardArrowsToShow,
+    /** false: tıklayınca önceki (farklı renkli) oklar silinmesin */
+    clearArrowsOnClick: false,
     clearArrowsOnPositionChange: false,
     arrowOptions: {
       color: COLOR_VALUES[drawingColor],
@@ -6281,15 +6376,38 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         : ((payload as { arrows?: ArrowItem[] } | null)?.arrows ?? []);
       const withoutPreview = raw.filter((a) => !ARROW_PREVIEW_COLORS.has(a.color));
       const next = sanitizeArrows(withoutPreview);
-      const prevKeys = new Set(sanitizedArrows.map((a) => `${a.startSquare}-${a.endSquare}`));
-      const colored = next.map((a) => {
+      /** Kütüphane clearArrows boş dizi yollar — mevcut çok renkli okları koru */
+      if (next.length === 0) return;
+
+      const prevByKey = new Map(
+        sanitizedArrows.map((a) => [`${a.startSquare}-${a.endSquare}`, a] as const),
+      );
+      const merged: ArrowItem[] = [];
+      const seen = new Set<string>();
+
+      for (const a of next) {
         const key = `${a.startSquare}-${a.endSquare}`;
-        if (!prevKeys.has(key)) {
-          return { ...a, color: COLOR_VALUES[drawingColor] };
+        seen.add(key);
+        const existing = prevByKey.get(key);
+        if (existing) {
+          merged.push(existing);
+        } else {
+          merged.push({ ...a, color: COLOR_VALUES[drawingColor] });
         }
-        return a;
-      });
-      const toPersist = persistedArrows(colored);
+      }
+      /** Controlled props'ta olup internal listede olmayan okları koru */
+      for (const a of sanitizedArrows) {
+        const key = `${a.startSquare}-${a.endSquare}`;
+        if (!seen.has(key)) {
+          merged.push(a);
+          seen.add(key);
+        }
+      }
+
+      const toPersist = persistedArrows(merged);
+      const prevSig = sanitizedArrows.map((a) => `${a.startSquare}-${a.endSquare}-${a.color}`).join('|');
+      const nextSig = toPersist.map((a) => `${a.startSquare}-${a.endSquare}-${a.color}`).join('|');
+      if (prevSig === nextSig) return;
       setArrows(toPersist);
       pushState(fen, moveHistory, toPersist, marks, coachSide ?? undefined);
     },
@@ -7147,15 +7265,21 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const lessonBoardSizing = 'w-full mx-auto';
   const boardScalePct = isStudentView ? studentBoardScalePct : coachBoardScalePct;
   const boardMul = (boardScalePct / 100) * BOARD_BASE_SCALE;
-  const boardViewportDeduction = mobileClassroomPanel === 'board' ? '11rem' : (isStudentView ? '14rem' : '17rem');
+  const boardViewportDeduction =
+    mobileClassroomPanel === 'board'
+      ? '15.5rem'
+      : isStudentView
+        ? '14rem'
+        : '17rem';
   const liveClassParticipantCount = (sessionMedia.admittedStudentIds ?? []).length + 1;
   /** Eval + rakam sütunu + alt harf satırı — tahta karesi dışındaki pay */
   const boardChromeW = showLiveEvalBar ? '2.875rem' : '1.25rem';
   const classroomEvalWidth = '1.625rem';
   const boardFileRowH = '1.25rem';
   const boardColumnStyle: CSSProperties = { width: '100%', maxWidth: '100%' };
+  /** Mobilde tam genişlik; masaüstünde ölçek çarpanı */
   const boardShellStyle: CSSProperties = {
-    width: `min(calc(100% * ${boardMul}), calc((100dvh - ${boardViewportDeduction}) * ${boardMul}), calc(${Math.max(280, Math.round(980 * boardMul))}px + ${boardChromeW}))`,
+    width: `min(100%, calc(100% * ${boardMul}), calc((100dvh - ${boardViewportDeduction}) * ${boardMul}), calc(${Math.max(280, Math.round(980 * boardMul))}px + ${boardChromeW}))`,
     maxWidth: '100%',
   };
   const setBoardScalePct = isStudentView ? setStudentBoardScalePct : setCoachBoardScalePct;
@@ -7177,11 +7301,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   return (
     <div
-      className={`flex flex-col overflow-hidden rounded-none sm:rounded-2xl lg:rounded-3xl border-0 sm:border border-indigo-500/15 bg-[#0b0d14] animate-in fade-in duration-500 shadow-[0_24px_80px_rgba(0,0,0,0.55)] ring-0 sm:ring-1 ring-indigo-500/20 atmospheric-bg h-full min-h-0 max-h-[100dvh]`}
+      className={`flex flex-col overflow-hidden overscroll-none rounded-none sm:rounded-2xl lg:rounded-3xl border-0 sm:border border-indigo-500/15 bg-[#0b0d14] animate-in fade-in duration-500 shadow-[0_24px_80px_rgba(0,0,0,0.55)] ring-0 sm:ring-1 ring-indigo-500/20 atmospheric-bg h-full min-h-0 max-h-[100dvh]`}
     >
       {/* ── Canlı ders üst şerit ── */}
-      <header className="shrink-0 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 sm:px-5 py-2.5 border-b border-white/[0.06] bg-[#12121a]/95 backdrop-blur-xl z-20">
-        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+      <header className="shrink-0 flex items-center justify-between gap-2 sm:gap-4 px-2.5 sm:px-5 py-2 sm:py-2.5 border-b border-white/[0.06] bg-[#12121a]/95 backdrop-blur-xl z-20">
+        <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
           {!isStudentView ? (
             <button
               type="button"
@@ -7204,33 +7328,33 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           ) : null}
           <SatrancEduLogo variant="full" compact className="hidden md:inline-flex shrink-0" />
           <SatrancEduLogo variant="icon" className="md:hidden shrink-0" />
-          <span className="ll-live-badge shrink-0">
+          <span className="ll-live-badge shrink-0 hidden sm:inline-flex">
             <Sparkles className="w-3.5 h-3.5 text-indigo-100" aria-hidden />
             Canlı Ders
           </span>
         </div>
 
-        <div className="flex flex-col items-center min-w-0 flex-1 order-last sm:order-none w-full sm:w-auto">
-          <div className="flex items-center gap-2 min-w-0 max-w-full">
+        <div className="flex flex-col items-center min-w-0 flex-1 px-1">
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 max-w-full">
             <span className="relative flex h-2 w-2 shrink-0" aria-hidden>
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
             </span>
-            <p className="text-[11px] sm:text-sm font-semibold text-white truncate" title={effectiveRoomName}>
+            <p className="text-[10px] sm:text-sm font-semibold text-white truncate" title={effectiveRoomName}>
               <span className="text-slate-500 font-medium hidden sm:inline">Şu anki ders: </span>
               {effectiveRoomName}
             </p>
           </div>
-          <p className="text-[10px] text-emerald-400/90 font-bold uppercase tracking-wider mt-0.5">Canlı yayında</p>
+          <p className="hidden sm:block text-[10px] text-emerald-400/90 font-bold uppercase tracking-wider mt-0.5">Canlı yayında</p>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0 ml-auto sm:ml-0">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#1c1c26]/80 border border-white/[0.06] text-[11px] text-slate-300">
             <Users className="w-3.5 h-3.5 text-indigo-400" aria-hidden />
             <span className="font-bold tabular-nums">{liveClassParticipantCount}</span>
             <span className="text-slate-500 hidden md:inline">Katılımcı</span>
           </div>
-          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#1c1c26]/80 border border-white/[0.06] text-[11px] font-mono tabular-nums text-slate-300" title="Ders süresi">
+          <div className="flex items-center gap-1 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl bg-[#1c1c26]/80 border border-white/[0.06] text-[10px] sm:text-[11px] font-mono tabular-nums text-slate-300" title="Ders süresi">
             <Clock className="w-3.5 h-3.5 text-slate-500" aria-hidden />
             {sessionTime}
             <span className="text-slate-500 hidden md:inline font-sans text-[10px] font-semibold uppercase tracking-wide">ders süresi</span>
@@ -7248,23 +7372,21 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       </header>
 
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col pb-14 lg:pb-0">
-        <div className="flex flex-1 min-h-0 overflow-hidden flex-col lg:flex-row">
+        <div
+          ref={boardVideoRowRef}
+          className="flex flex-1 min-h-0 overflow-hidden flex-col lg:flex-row"
+        >
         {/* ── Classroom: Tahta (ekrana oturan kare) ── */}
         <section className={`${mobileClassroomPanel === 'board' ? 'flex' : 'hidden'} lg:flex flex-1 lg:flex-[1.35] min-w-0 min-h-0 flex-col bg-gradient-to-br from-[#0b0d14] via-[#10131c] to-[#0a0c12] lg:border-r-0`}>
           <div
-            className={`flex-1 flex flex-col min-h-0 items-stretch px-2 sm:px-3 lg:px-5 py-1 sm:py-2 overflow-x-hidden ${
-              isStudentView
-                ? 'overflow-y-auto overflow-x-hidden custom-scrollbar justify-center'
-                : 'overflow-y-auto custom-scrollbar justify-start'
-            }`}
+            className="flex-1 flex flex-col min-h-0 items-stretch px-1.5 sm:px-3 lg:px-5 py-1 sm:py-2 overflow-hidden lg:overflow-y-auto custom-scrollbar justify-start"
             onMouseDown={!isStudentView ? handleAnnotationClearBackdropClick : undefined}
             >
             <div
-              ref={boardVideoRowRef}
-              className="flex flex-1 min-h-0 w-full max-w-full flex-col lg:flex-row items-stretch lg:items-start justify-center gap-0 lg:gap-1 xl:gap-2"
+              className="flex flex-1 min-h-0 w-full max-w-full flex-col lg:flex-row items-stretch lg:items-start justify-center gap-0 lg:gap-1 xl:gap-2 overflow-hidden"
             >
             {showStudentBoardGrid ? (
-              <div className="flex-1 min-h-0 w-full flex flex-col py-1">
+              <div className="flex-1 min-h-0 w-full flex flex-col py-1 overflow-y-auto custom-scrollbar">
                 <LiveLessonBoardGrid
                   students={gridMonitorStudents}
                   studentBoards={sessionMedia.studentBoards ?? {}}
@@ -7304,65 +7426,85 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             ) : (
             <>
             <div
-              className={`${lessonBoardSizing} min-h-0 min-w-0 flex flex-col gap-2 ${
-                isStudentView ? 'flex-1 min-h-0' : 'shrink-0 lg:flex-1'
-              }`}
+              className={`${lessonBoardSizing} min-h-0 min-w-0 flex flex-col gap-1 sm:gap-2 flex-1 min-w-0`}
               style={boardColumnStyle}
             >
               <div
-                className="flex shrink-0 flex-wrap items-center justify-between gap-2 sm:gap-3 pb-2 px-1"
+                className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2 pb-1.5 sm:pb-2 px-0.5 sm:px-1 z-20"
                 aria-label="Tahta boyutu"
                 data-board-chrome
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
-                    Standart tahta
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex items-center rounded-xl border border-white/[0.08] bg-[#1c1c26]/90 p-0.5 shadow-inner">
-                    <button
-                      type="button"
-                      className="p-2 rounded-lg text-slate-300 hover:bg-indigo-500/20 hover:text-white disabled:opacity-35 disabled:pointer-events-none"
-                      disabled={boardScalePct <= BOARD_SCALE_MIN}
-                      aria-label="Tahtayı küçült"
-                      onClick={() =>
-                        setBoardScalePct((p) => clampBoardScalePct(p - BOARD_SCALE_STEP))
-                      }
-                    >
-                      <Minus className="h-4 w-4" aria-hidden />
-                    </button>
-                    <span className="min-w-[2.85rem] text-center text-[11px] font-bold tabular-nums text-white px-1">
-                      {boardScalePct}%
-                    </span>
-                    <button
-                      type="button"
-                      className="p-2 rounded-lg text-slate-300 hover:bg-indigo-500/20 hover:text-white disabled:opacity-35 disabled:pointer-events-none"
-                      disabled={boardScalePct >= BOARD_SCALE_MAX}
-                      aria-label="Tahtayı büyüt"
-                      onClick={() =>
-                        setBoardScalePct((p) => clampBoardScalePct(p + BOARD_SCALE_STEP))
-                      }
-                    >
-                      <Plus className="h-4 w-4" aria-hidden />
-                    </button>
-                  </div>
+                <span className="mr-auto text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500 truncate hidden sm:inline">
+                  Standart tahta
+                </span>
+                <div className="flex items-center rounded-xl border border-white/[0.08] bg-[#1c1c26]/95 p-0.5 shadow-inner shrink-0">
                   <button
                     type="button"
-                    className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 hover:text-indigo-300 px-2 py-1 rounded-lg border border-transparent hover:bg-indigo-500/10"
-                    onClick={() => setBoardScalePct(BOARD_SCALE_DEFAULT)}
+                    className="p-2 rounded-lg text-slate-300 hover:bg-indigo-500/20 hover:text-white disabled:opacity-35 disabled:pointer-events-none"
+                    disabled={boardScalePct <= BOARD_SCALE_MIN}
+                    aria-label="Tahtayı küçült"
+                    title="Küçült (−)"
+                    onClick={() =>
+                      setBoardScalePct((p) => clampBoardScalePct(p - BOARD_SCALE_STEP))
+                    }
                   >
-                    Sıfırla
+                    <Minus className="h-4 w-4" aria-hidden />
+                  </button>
+                  <span className="min-w-[2.85rem] text-center text-[11px] font-bold tabular-nums text-white px-1">
+                    {boardScalePct}%
+                  </span>
+                  <button
+                    type="button"
+                    className="p-2 rounded-lg text-slate-300 hover:bg-indigo-500/20 hover:text-white disabled:opacity-35 disabled:pointer-events-none"
+                    disabled={boardScalePct >= BOARD_SCALE_MAX}
+                    aria-label="Tahtayı büyüt"
+                    title="Büyüt (+)"
+                    onClick={() =>
+                      setBoardScalePct((p) => clampBoardScalePct(p + BOARD_SCALE_STEP))
+                    }
+                  >
+                    <Plus className="h-4 w-4" aria-hidden />
                   </button>
                 </div>
+                <button
+                  type="button"
+                  className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 hover:text-indigo-300 px-2 py-1 rounded-lg border border-transparent hover:bg-indigo-500/10 shrink-0"
+                  onClick={() => setBoardScalePct(BOARD_SCALE_DEFAULT)}
+                  title="Varsayılan boyut"
+                >
+                  Sıfırla
+                </button>
               </div>
 
+              <div className="flex-1 min-h-0 min-w-0 flex flex-col gap-1 sm:gap-2 overflow-hidden">
+
+              {/* Mobil: ok / çizim paneli tahtanın üstünde — yatay, tahta genişliği artar */}
+              {!isStudentView ? (
+                <div ref={drawingToolbarWrapRef} className="lg:hidden shrink-0 w-full flex justify-center px-0.5 pb-1">
+                  <div className="w-full max-w-full overflow-x-auto custom-scrollbar rounded-xl border border-white/[0.08] bg-[#1c1c26]/95 px-1.5 py-1 shadow-[0_8px_24px_rgba(0,0,0,0.35)] ring-1 ring-indigo-500/10">
+                    <DrawingToolbar
+                      orientation="horizontal"
+                      currentTool={drawingTool}
+                      currentColor={drawingColor}
+                      onToolSelect={(t, c) => {
+                        setDrawingTool(t);
+                        setDrawingColor(c);
+                      }}
+                      onClear={clearAllAnnotations}
+                      onCopy={() => {
+                        void navigator.clipboard?.writeText(new Chess(boardDisplayFen).fen());
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
               <div
-                className="flex flex-1 min-h-0 w-full min-w-0 items-center justify-center gap-2 sm:gap-3 overflow-visible py-1 sm:py-2"
+                className="flex flex-1 min-h-0 w-full min-w-0 items-center justify-center gap-1.5 sm:gap-3 overflow-hidden py-0 sm:py-2"
                 onMouseDown={!isStudentView ? handleAnnotationClearBackdropClick : undefined}
               >
               {!isStudentView ? (
-                <div ref={drawingToolbarWrapRef} className="shrink-0 self-center">
+                <div ref={drawingToolbarDesktopRef} className="hidden lg:block shrink-0 self-center">
                   <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c26]/95 p-1.5 shadow-[0_8px_32px_rgba(0,0,0,0.45)] ring-1 ring-indigo-500/10">
                     <DrawingToolbar
                       orientation="vertical"
@@ -7382,8 +7524,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               ) : null}
               <div
                 ref={boardShellRef}
-                className="relative mx-auto shrink-0 rounded-2xl border border-white/[0.08] shadow-[0_16px_48px_rgba(0,0,0,0.5)] bg-[#161b26]/90 ring-1 ring-indigo-500/20"
-                style={boardShellStyle}
+                className="relative mx-auto shrink-0 rounded-xl sm:rounded-2xl border border-white/[0.08] shadow-[0_16px_48px_rgba(0,0,0,0.5)] bg-[#161b26]/90 ring-1 ring-indigo-500/20 max-lg:max-h-full max-lg:!w-[min(100%,calc(100dvh-15.5rem))] max-lg:!max-w-full"
+                style={{ ...boardShellStyle, maxHeight: '100%' }}
                 onWheel={(e) => {
                   if (isStudentView) return;
                   // Tahta üstünde mouse wheel ile hamle gez (ArrowLeft/Right gibi).
@@ -7428,7 +7570,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                   className="w-full min-h-0"
                   shellClassName="bg-slate-900 border-r border-white/10 min-w-[1.625rem]"
                   boardClassName="min-w-0 w-full"
-                  onShellClick={!isStudentView ? clearAllAnnotations : undefined}
+                  onShellClick={undefined}
                   evalBar={
                     showLiveEvalBar ? (
                       <ChessEvalBar
@@ -7459,13 +7601,22 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 </ChessBoardFrame>
               </div>
               </div>
+              </div>
             </div>
 
             </>
             )}
             </div>
 
-            <div className={`${isStudentView ? '' : 'lg:hidden'} w-full shrink-0 max-w-lg mx-auto`}>
+            {/* Tahta görünmez kaldığında hata bildir */}
+            {!isStudentView && coachSide !== null && mediaError ? (
+              <p className="text-xs text-red-400 text-center mt-3 shrink-0">{mediaError}</p>
+            ) : null}
+          </div>
+
+          {/* Mobil: ince video şeridi — tahtanın dışında, kaydırmaz */}
+          {!showStudentBoardGrid ? (
+            <div className="lg:hidden shrink-0 border-t border-white/[0.06] bg-[#12121a]/90 px-2 py-1.5">
               {!isStudentView ? (
               <ClassroomAttendancePanel
                 variant="mobile"
@@ -7497,50 +7648,54 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 onSetStudentPlayPermission={setStudentPlayPermission}
               />
               ) : (
-              <div className="lg:hidden">
-                <ClassroomStudentVideoPanel
-                  variant="mobile"
-                  tiles={liveVideoTiles}
-                  focusedId={focusedVideoTileId}
-                  onFocus={setFocusedVideoTileId}
-                  vbSupported={vbSupported}
-                  cameraBackgroundBlur={cameraBackgroundBlur}
-                  onToggleBlur={toggleCameraBackgroundBlur}
-                  vbApplying={vbApplying}
-                  localCamOff={localCamOff}
-                  mediaLoading={mediaLoading}
-                  speakingStudentIds={speakingStudentIds}
-                  coachIsSpeaking={speakingUids.has('coach')}
-                  studentSpeakFloor={
-                    canStudentRequestSpeak && !classroomStudentsCanUnmuteSelf
-                      ? {
-                          hasFloor: studentHasSpeakFloor,
-                          hasRaisedHand: studentHasRaisedHand,
-                          canRequest: canStudentRequestSpeak,
-                          onRequest: requestSpeakFloor,
-                          onCancel: cancelSpeakRequest,
-                          onRelease: () => releaseSpeakFloor(),
-                        }
-                      : undefined
-                  }
-                />
-              </div>
+              <ClassroomStudentVideoPanel
+                variant="mobile"
+                tiles={liveVideoTiles}
+                focusedId={focusedVideoTileId}
+                onFocus={setFocusedVideoTileId}
+                vbSupported={vbSupported}
+                cameraBackgroundBlur={cameraBackgroundBlur}
+                onToggleBlur={toggleCameraBackgroundBlur}
+                vbApplying={vbApplying}
+                localCamOff={localCamOff}
+                mediaLoading={mediaLoading}
+                speakingStudentIds={speakingStudentIds}
+                coachIsSpeaking={speakingUids.has('coach')}
+                studentSpeakFloor={
+                  canStudentRequestSpeak && !classroomStudentsCanUnmuteSelf
+                    ? {
+                        hasFloor: studentHasSpeakFloor,
+                        hasRaisedHand: studentHasRaisedHand,
+                        canRequest: canStudentRequestSpeak,
+                        onRequest: requestSpeakFloor,
+                        onCancel: cancelSpeakRequest,
+                        onRelease: () => releaseSpeakFloor(),
+                      }
+                    : undefined
+                }
+              />
               )}
             </div>
-
-            {/* Tahta görünmez kaldığında hata bildir */}
-            {!isStudentView && coachSide !== null && mediaError ? (
-              <p className="text-xs text-red-400 text-center mt-3">{mediaError}</p>
-            ) : null}
-          </div>
+          ) : null}
         </section>
 
-        {/* ── Orta sütun: video + katılımcılar (xl+) ── */}
+        {/* Tahta ↔ yan panel sürükle tutamacı */}
+        {!showStudentBoardGrid ? (
+          <ClassroomVideoDockResizeHandle onResizeStart={handleVideoDockResizeStart} />
+        ) : null}
+
+        {/* ── Orta sütun: video + katılımcılar (lg+) ── */}
         {!showStudentBoardGrid ? (
           <section
-            className="hidden lg:flex w-[min(300px,26vw)] shrink-0 flex-col gap-3 p-3 bg-[#131620] border-r border-white/[0.06] min-h-0 overflow-y-auto custom-scrollbar"
+            className="hidden lg:flex shrink-0 flex-col gap-2 p-2 bg-[#131620] border-r border-white/[0.06] min-h-0 overflow-hidden"
+            style={{
+              width: videoDockWidthPx,
+              minWidth: videoDockWidthPx,
+              maxWidth: videoDockWidthPx,
+            }}
             aria-label="Canlı görüntü ve katılımcılar"
           >
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
             {!isStudentView ? (
               <ClassroomAttendancePanel
                 variant="stack"
@@ -7599,6 +7754,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                 }
               />
             )}
+            </div>
             <ClassroomMediaControlsCard
               wallClock={wallClock}
               localMicMuted={localMicMuted}
@@ -7629,7 +7785,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         ) : null}
 
         {/* ── Classroom sağ sidebar ── */}
-        <aside className={`${mobileClassroomPanel === 'sidebar' ? 'grid' : 'hidden'} lg:grid flex-1 lg:flex-none w-full lg:w-[min(380px,28vw)] lg:shrink-0 grid-rows-[auto_1fr_auto_auto] overflow-hidden bg-[#12121a]/98 backdrop-blur-xl border-t lg:border-t-0 lg:border-l border-white/[0.06] min-h-0 lg:max-w-[440px]`}>
+        <aside className={`${mobileClassroomPanel === 'sidebar' ? 'grid' : 'hidden'} lg:grid flex-1 lg:flex-none w-full ${
+          !isStudentView && sidebarTab === 'oyunlar' && oyunlarSection === 'position'
+            ? 'lg:w-[min(480px,36vw)] lg:max-w-[560px]'
+            : 'lg:w-[min(380px,28vw)] lg:max-w-[440px]'
+        } lg:shrink-0 grid-rows-[auto_1fr_auto_auto] overflow-hidden bg-[#12121a]/98 backdrop-blur-xl border-t lg:border-t-0 lg:border-l border-white/[0.06] min-h-0`}>
           <nav className="flex overflow-x-auto scrollbar-none snap-x snap-mandatory border-b border-white/[0.06] bg-[#161b26]/60 px-2 py-2 row-start-1 gap-1 sm:grid sm:grid-cols-7 sm:overflow-visible sm:px-2">
             {visibleSidebarTabs.map(({ id, Icon: Ico, label }) => (
               <button
@@ -7825,18 +7985,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                       compact
                       onDeleteFromHere={!isStudentView ? deleteLiveMoveFromHere : undefined}
                       onPromoteVariation={!isStudentView ? promoteLiveVariation : undefined}
-                      onHoverMove={
-                        isStudentView
-                          ? undefined
-                          : (idx, varInfo) => {
-                        if (varInfo) {
-                          setHoverFen(liveLessonFenAt(displayBaseFen, displayMoveHistory, displayVariations, varInfo[0], varInfo));
-                        } else if (idx == null) {
-                          setHoverFen(null);
-                        } else {
-                          setHoverFen(liveLessonFenAt(displayBaseFen, displayMoveHistory, displayVariations, Math.max(0, idx), null));
-                        }
-                      }}
                     />
                   )}
                 </div>

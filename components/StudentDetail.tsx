@@ -473,9 +473,13 @@ const LichessChessCard: React.FC<{
   const [chessComPuzzlesCount, setChessComPuzzlesCount] = useState(0);
   const [dailyLichessPuzzle, setDailyLichessPuzzle] = useState<Puzzle | null>(null);
   const [loadingDailyLichessPuzzle, setLoadingDailyLichessPuzzle] = useState(false);
-  const lichessPracticePuzzles = useMemo(
-    () => puzzles.filter((p) => p.source === 'lichess').slice(0, 24),
+  const lichessPracticePool = useMemo(
+    () => puzzles.filter((p) => p.source === 'lichess' || !!p.lichessId),
     [puzzles],
+  );
+  const lichessPracticePuzzles = useMemo(
+    () => lichessPracticePool.slice(0, 24),
+    [lichessPracticePool],
   );
   const lichessPuzzlesCount = (dailyLichessPuzzle ? 1 : 0) + lichessPracticePuzzles.length;
 
@@ -696,6 +700,7 @@ const LichessChessCard: React.FC<{
                         student={student}
                         dailyPuzzle={dailyLichessPuzzle}
                         practicePuzzles={lichessPracticePuzzles}
+                        practicePool={lichessPracticePool}
                         loadingDaily={loadingDailyLichessPuzzle}
                         activityRows={lichessActivities}
                       />
@@ -1653,8 +1658,12 @@ const StudentDetail: React.FC<{
   const headerGroupLabel = student?.group?.trim() || headerPrivateLessonMeta?.group || 'Grup Belirtilmemiş';
 
   const privateLessonUsageById = useMemo(() => {
+    const sales = privateLessonTransactions.map((t) => ({
+      ...t,
+      studentId: String(t.studentId ?? studentId).trim(),
+    }));
     return buildPrivateLessonUsageById(
-      privateLessonTransactions,
+      sales,
       studentAttendances,
       studentId,
       resolvePackageLessonCount,

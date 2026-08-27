@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft, Grid, Users, Percent, Trophy, Clock, RotateCcw, LayoutGrid, Table2, Trash2,
+  CalendarPlus, Pencil,
 } from 'lucide-react';
 import type { HomeworkAssignment, Puzzle, Student } from '../../types';
 import type { StudentHwStat } from '../../lib/homeworkAnalysisUtils';
@@ -26,6 +27,8 @@ type Props = {
   onSelectStudent: (stat: StudentHwStat) => void;
   onResetStudent: (studentId: string) => void;
   onDelete?: () => void;
+  onExtend?: () => void;
+  onEditSchedule?: () => void;
 };
 
 function formatDateTime(iso?: string): string {
@@ -52,6 +55,8 @@ export const HomeworkAssignmentDetail: React.FC<Props> = ({
   onSelectStudent,
   onResetStudent,
   onDelete,
+  onExtend,
+  onEditSchedule,
 }) => {
   const { auth } = useApp();
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('cards');
@@ -83,6 +88,26 @@ export const HomeworkAssignmentDetail: React.FC<Props> = ({
           <ArrowLeft className="w-4 h-4" />
           Atama Listesine Dön
         </button>
+        {onExtend ? (
+          <button
+            type="button"
+            onClick={onExtend}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition-colors"
+          >
+            <CalendarPlus className="w-4 h-4" />
+            {status === 'Süresi Doldu' ? 'Süreyi Uzat' : 'Süreyi Uzat'}
+          </button>
+        ) : null}
+        {onEditSchedule ? (
+          <button
+            type="button"
+            onClick={onEditSchedule}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 border border-white/10 text-slate-200 hover:bg-slate-700 text-sm font-bold transition-colors"
+          >
+            <Pencil className="w-4 h-4" />
+            Düzenle
+          </button>
+        ) : null}
         {onDelete ? (
           <button
             type="button"

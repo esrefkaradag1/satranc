@@ -4438,6 +4438,8 @@ const StudyPage: React.FC = () => {
                           canEditStudy &&
                           (drawingTool === 'mouse' || drawingTool === 'arrow' || arrowCtrlShortcutHeld),
                         arePiecesDraggable: drawingTool === 'mouse',
+                        clearArrowsOnClick: false,
+                        clearArrowsOnPositionChange: false,
                         arrows: (() => {
                           const base = boardArrows || [];
                           const seen = new Set<string>();
@@ -4505,11 +4507,32 @@ const StudyPage: React.FC = () => {
                               endSquare: a.endSquare.toLowerCase()
                             });
                           }
+                          /** Boş clear olayı — mevcut çok renkli okları silme */
+                          if (filtered.length === 0) return;
                           const currentArrows = boardArrows || [];
-                          if (filtered.length > currentArrows.length) {
-                            filtered[filtered.length - 1].color = COLOR_VALUES[drawingColor];
+                          const prevByKey = new Map(
+                            currentArrows.map((a) => [`${a.startSquare}-${a.endSquare}`, a] as const),
+                          );
+                          const merged: Array<{ startSquare: string; endSquare: string; color: string }> = [];
+                          const mergedSeen = new Set<string>();
+                          for (const a of filtered) {
+                            const k = `${a.startSquare}-${a.endSquare}`;
+                            mergedSeen.add(k);
+                            const existing = prevByKey.get(k);
+                            merged.push(
+                              existing
+                                ? existing
+                                : { ...a, color: COLOR_VALUES[drawingColor] },
+                            );
                           }
-                          setBoardArrows(filtered);
+                          for (const a of currentArrows) {
+                            const k = `${a.startSquare}-${a.endSquare}`;
+                            if (!mergedSeen.has(k)) {
+                              merged.push(a);
+                              mergedSeen.add(k);
+                            }
+                          }
+                          setBoardArrows(merged);
                           if (write && selectedStudy && selectedChapter) {
                             const ml = syncState?.tree?.mainline ?? [];
                             const nodeId = ml.length > 0 ? ml[Math.max(0, Math.min(ml.length - 1, currentMoveIndex))] : (syncState?.tree?.rootId ?? 'root');
@@ -4519,10 +4542,10 @@ const StudyPage: React.FC = () => {
                               actorId,
                               actorRole,
                               type: 'setShapes',
-                              payload: { nodeId, shapes: filtered },
+                              payload: { nodeId, shapes: merged },
                             });
                           } else {
-                            updateChapterAtIndex(selectedChapterIndex, { arrows: filtered });
+                            updateChapterAtIndex(selectedChapterIndex, { arrows: merged });
                           }
                         },
                         squareStyles: studyBoardSquareStyles,

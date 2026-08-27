@@ -510,6 +510,8 @@ export interface HomeworkAssignment {
   groupName?: string;
   startDate?: string;
   endDate?: string;
+  /** Oluşturulma zamanı (ISO) — yeni programda aynı gün platform aktivitesi katılım sayılmaz */
+  createdAt?: string;
   timeLimitMinutes?: number;
   hintCount?: number;
   description?: string;

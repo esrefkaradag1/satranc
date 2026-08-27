@@ -16,6 +16,16 @@
     min-width: 0;
   }
 
+  /* Panel arayüzü: %100 tarayıcı zoomunda içeriği ~%10 sıkıştırır (container / tipografi) */
+  .app-ui-scale {
+    zoom: 0.9;
+  }
+  @supports not (zoom: 0.9) {
+    .app-ui-scale {
+      font-size: 90%;
+    }
+  }
+
   :where(input, select, textarea, button) {
     font: inherit;
   }
@@ -400,6 +410,10 @@
 
 .ll-media-btn {
   @apply flex flex-col items-center justify-center gap-1.5 min-h-[4.5rem] rounded-xl border text-[10px] font-bold uppercase tracking-wide transition-all active:scale-[0.98];
+}
+
+.ll-media-btn-compact {
+  @apply min-h-[2rem] gap-0 rounded-md text-[7px] tracking-wide px-0.5 py-1;
 }
 
 .ll-media-btn-on {

@@ -14,11 +14,88 @@ export function applyPuzzleMove(game: Chess, moveStr: string): ReturnType<Chess[
       const promotion = s[4] ? (s[4].toLowerCase() as 'q' | 'r' | 'b' | 'n') : undefined;
       return game.move({ from, to, ...(promotion && { promotion }) });
     }
-    try {
-      return game.move(s);
-    } catch {
-      return game.move(s, { sloppy: true } as Parameters<Chess['move']>[1]);
+    const sanCandidates = [s];
+    // Bazı kayıtlarda şah/mat işaretli SAN (Qd8#) chess.js sürümünde reddedilebilir.
+    if (/[+#]$/.test(s)) sanCandidates.push(s.replace(/[+#]+$/, ''));
+    for (const cand of sanCandidates) {
+      try {
+        return game.move(cand);
+      } catch {
+        try {
+          return game.move(cand, { sloppy: true } as Parameters<Chess['move']>[1]);
+        } catch {
+          /* next */
+        }
+      }
     }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function samePuzzleMoveToken(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * Lichess kurulum hamlesi hâlâ bu FEN üzerinde oynanmayı bekliyor mu?
+ * (Ham kayıt: FEN kurulum öncesi + solution[0]/lichessSetupMove = rakip hamlesi)
+ */
+function isLichessSetupStillPending(
+  fen: string,
+  solution: string[],
+  setupMove: string | undefined,
+): boolean {
+  if (!setupMove || solution.length === 0) return false;
+  if (!isMoveLegalForSideToMove(fen, setupMove)) return false;
+  if (samePuzzleMoveToken(solution[0]!, setupMove)) return true;
+
+  try {
+    const g = new Chess(fen);
+    const applied = applyPuzzleMove(g, setupMove);
+    if (!applied || g.isGameOver()) return false;
+    if (g.turn() === new Chess(fen).turn()) return false;
+    return canReplayMovesFrom(g.fen(), solution);
+  } catch {
+    return false;
+  }
+}
+
+/** Bekleyen rakip kurulumunu uygula; öğrenci hattını döndür. */
+function applyPendingLichessSetup(
+  fen: string,
+  solution: string[],
+  setupMove: string,
+): { playFen: string; solutionMoves: string[]; setupMoveSan?: string; lichessSetupMove?: string } | null {
+  if (solution.length >= 2 && samePuzzleMoveToken(solution[0]!, setupMove)) {
+    const imported = lichessImportToPlayState(fen, solution);
+    if (imported.playFen !== fen && imported.solutionMoves.length > 0) {
+      return {
+        playFen: imported.playFen,
+        solutionMoves: imported.solutionMoves,
+        setupMoveSan: imported.setupMoveSan,
+        lichessSetupMove: imported.lichessSetupMove ?? setupMove,
+      };
+    }
+  }
+
+  try {
+    const g = new Chess(fen);
+    const setup = applyPuzzleMove(g, setupMove);
+    if (!setup || g.isGameOver()) return null;
+    let rest = solution;
+    if (solution.length > 0 && samePuzzleMoveToken(solution[0]!, setupMove)) {
+      rest = solution.slice(1);
+    }
+    if (rest.length === 0 || !canReplayMovesFrom(g.fen(), rest)) return null;
+    if (g.turn() === new Chess(fen).turn()) return null;
+    return {
+      playFen: g.fen(),
+      solutionMoves: rest,
+      setupMoveSan: setup.san,
+      lichessSetupMove: setupMove,
+    };
   } catch {
     return null;
   }
@@ -221,8 +298,23 @@ export function lichessPlayStateFromStored(
     isMoveLegalForSideToMove(rawFen, rawSolution[0]!) &&
     canReplayMovesFrom(rawFen, rawSolution);
 
-  // Import sonrası normalize kayıt (kurulum FEN'de uygulanmış)
-  if (setupMove && directOk) {
+  // Ham Lichess kaydı: FEN kurulum öncesi + lichessSetupMove hâlâ oynanabilir.
+  // Eski hata: setupMove && directOk → kurulumu atlayıp rakip rengiyle soruyordu ("ters").
+  if (setupMove && isLichessSetupStillPending(rawFen, rawSolution, setupMove)) {
+    const pending = applyPendingLichessSetup(rawFen, rawSolution, setupMove);
+    if (pending && pending.solutionMoves.length > 0) {
+      return {
+        playFen: pending.playFen,
+        solutionMoves: pending.solutionMoves,
+        setupMoveSan: pending.setupMoveSan,
+        studentColor: safeTurnAtFen(pending.playFen),
+        lichessSetupMove: pending.lichessSetupMove ?? setupMove,
+      };
+    }
+  }
+
+  // Import sonrası normalize kayıt (kurulum FEN'de uygulanmış; setup artık illegal)
+  if (setupMove && directOk && !isLichessSetupStillPending(rawFen, rawSolution, setupMove)) {
     return {
       playFen: rawFen,
       solutionMoves: rawSolution,
@@ -1081,6 +1173,33 @@ export function displayPuzzleMoveLabel(
   const fen = fenBeforeSolutionMove(startFen, solutionMoves, moveIndex);
   const label = formatMoveLabel(fen, raw);
   return label === '—' ? '' : label;
+}
+
+/** Öğrencinin bulmacada bulması gereken hamle sayısı (rakip cevapları hariç). */
+export function countStudentSolutionPlies(
+  playFen: string,
+  solutionMoves: string[],
+  studentColor: 'w' | 'b',
+): number {
+  let n = 0;
+  for (let i = 0; i < solutionMoves.length; i++) {
+    if (isStudentMoveAtIndex(playFen, solutionMoves, i, studentColor)) n += 1;
+  }
+  return n;
+}
+
+/** Antrenör detayı: yalnızca öğrenci çözüm hamleleri (SAN). */
+export function formatStudentSolutionLabels(puzzle: Puzzle): string[] {
+  const session = initCoachStyleSession(puzzle);
+  const out: string[] = [];
+  for (let i = 0; i < session.solutionMoves.length; i++) {
+    if (!isStudentMoveAtIndex(session.playFen, session.solutionMoves, i, session.studentColor)) {
+      continue;
+    }
+    const label = displayPuzzleMoveLabel(session.playFen, session.solutionMoves, i);
+    if (label) out.push(label);
+  }
+  return out;
 }
 
 /** Ödevde sıradaki bulmacayı döndürür. */

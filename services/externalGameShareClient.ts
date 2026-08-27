@@ -39,7 +39,18 @@ export async function fetchStudentExternalGameAuto(studentId: string): Promise<S
     const qs = new URLSearchParams({ mode: 'auto', studentId });
     const res = await fetch(`/api/external-game-snapshot?${qs.toString()}`);
     const data = (await res.json().catch(() => ({}))) as StudentExternalGameAutoResponse;
-    if (!res.ok) return { ok: false, error: data.error || 'Oyun çekilemedi' };
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: data.error || `Oyun çekilemedi (HTTP ${res.status})`,
+      };
+    }
+    if (data.ok === false) {
+      return {
+        ok: false,
+        error: data.error || 'Aktif oyun bulunamadı',
+      };
+    }
     return data;
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Ağ hatası' };
@@ -112,7 +123,12 @@ export async function fetchStudentActivityAuto(studentId: string): Promise<Stude
     const qs = new URLSearchParams({ mode: 'activity', studentId });
     const res = await fetch(`/api/external-game-snapshot?${qs.toString()}`);
     const data = (await res.json().catch(() => ({}))) as StudentActivityAutoResponse;
-    if (!res.ok) return { ok: false, error: data.error || 'Aktivite çekilemedi' };
+    if (!res.ok) {
+      return { ok: false, error: data.error || `Aktivite çekilemedi (HTTP ${res.status})` };
+    }
+    if (data.ok === false) {
+      return { ok: false, error: data.error || 'Aktif oyun/bulmaca bulunamadı' };
+    }
     return data;
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Ağ hatası' };

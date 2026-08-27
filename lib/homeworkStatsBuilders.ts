@@ -2,6 +2,7 @@ import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puz
 import { weekdayKeyFromIso, isDailyHomeworkDayClosed } from './homeworkDayUtils';
 import {
   countPerPuzzleResults,
+  filterAttemptsForHomeworkPuzzles,
   studentTotalThinkSeconds,
   type StudentHwStat,
 } from './homeworkAnalysisUtils';
@@ -137,13 +138,21 @@ export function buildInternalHomeworkStats(
     const submitted = homeworkSubmissions.some(
       (s) => s.studentId === student.id && s.homeworkId === hw.id,
     );
-    const attempts = homeworkAttempts.filter(
-      (a) => a.homeworkId === hw.id && a.studentId === student.id,
+    const attempts = filterAttemptsForHomeworkPuzzles(
+      homeworkAttempts,
+      hw,
+      student.id,
+      puzzles,
     );
-    const { correct, wrong, skipped } = countPerPuzzleResults(hw.puzzles, attempts);
+    const { correct, wrong, skipped } = countPerPuzzleResults(hw.puzzles, attempts, puzzles);
     const points = hw.puzzles.reduce((sum, puzzleId) => {
-      if (!attempts.some((a) => a.puzzleId === puzzleId && a.correct)) return sum;
-      return sum + (puzzles.find((p) => p.id === puzzleId)?.points ?? 0);
+      const p = puzzles.find((x) => x.id === puzzleId);
+      const aliases = new Set<string>([puzzleId]);
+      if (p?.lichessId?.trim()) aliases.add(p.lichessId.trim());
+      if (![...aliases].some((id) => attempts.some((a) => a.puzzleId === id && a.correct))) {
+        return sum;
+      }
+      return sum + (p?.points ?? 0);
     }, 0);
     const totalPuzzles = hw.puzzles.length;
     const progress = totalPuzzles > 0 ? Math.round((correct / totalPuzzles) * 100) : 0;

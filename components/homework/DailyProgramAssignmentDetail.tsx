@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Users, Percent, Trophy, Calendar, RefreshCw, ChevronDown, ChevronUp, Target,
-  ChevronLeft, ChevronRight, Swords, CheckCircle2, XCircle,
+  ChevronLeft, ChevronRight, Swords, CheckCircle2, XCircle, CalendarPlus, Pencil,
 } from 'lucide-react';
 import type { HomeworkAssignment, Student, StudentDailyTarget } from '../../types';
 import type { PlatformStudentStat } from '../../lib/homeworkStatsBuilders';
@@ -41,6 +41,8 @@ type Props = {
   onSelectScheduleStudent?: (id: string | null) => void;
   dayCompletion?: Record<number, DayCompletionStatus>;
   dayProgress?: Record<number, { games: number; gameTarget: number; puzzles: number; puzzleTarget: number; syncNote?: string | null }>;
+  onExtend?: () => void;
+  onEditScheduleMeta?: () => void;
 };
 
 export const DailyProgramAssignmentDetail: React.FC<Props> = ({
@@ -65,6 +67,8 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
   onSelectScheduleStudent,
   dayCompletion,
   dayProgress,
+  onExtend,
+  onEditScheduleMeta,
 }) => {
   const { auth } = useApp();
   const [showSchedule, setShowSchedule] = useState(false);
@@ -136,6 +140,26 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
           <Target className="w-4 h-4" />
           Haftalık Hedef Düzenle
         </button>
+        {onExtend ? (
+          <button
+            type="button"
+            onClick={onExtend}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition-colors"
+          >
+            <CalendarPlus className="w-4 h-4" />
+            {status === 'Süresi Doldu' ? 'Süreyi Uzat' : 'Süreyi Uzat'}
+          </button>
+        ) : null}
+        {onEditScheduleMeta ? (
+          <button
+            type="button"
+            onClick={onEditScheduleMeta}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 border border-white/10 text-slate-200 hover:bg-slate-700 text-sm font-bold transition-colors"
+          >
+            <Pencil className="w-4 h-4" />
+            Düzenle
+          </button>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#1a2332]/80 px-4 py-3">

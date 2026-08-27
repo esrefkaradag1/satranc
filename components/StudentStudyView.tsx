@@ -853,25 +853,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const totalMoves = chapterMovesForUi.length;
   const isComplete = isLiveAnalysis ? false : totalMoves > 0 && currentMoveIndex >= totalMoves;
 
-  const scenarioText = useMemo(() => {
-    if (vsComputer && isVcGameOver) {
-      return vcOutcome
-        ? `${vcOutcome.title}. ${vcOutcome.subtitle}`
-        : 'Oyun bitti.';
-    }
-    if (isInteractivePuzzle && isComplete) {
-      return 'Bölüm tamamlandı. Sonraki bölüme geçebilir veya tekrar deneyebilirsiniz.';
-    }
-    if (effectiveChapter?.guidedPrompt?.trim()) return effectiveChapter.guidedPrompt.trim();
-    if (effectiveChapter?.comment?.trim()) return effectiveChapter.comment.trim();
-    if (isInteractivePuzzle && puzzlePlayNorm) {
-      const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
-      const colorLabel = turnCode === 'w' ? 'Beyaz' : 'Siyah';
-      return `Sıra ${colorLabel} tarafında. Sıradaki hamleyi bulun.`;
-    }
-    return 'Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.';
-  }, [effectiveChapter, isInteractivePuzzle, puzzlePlayNorm, vsComputer, isVcGameOver, vcOutcome, isComplete]);
-
   const currentFen = useMemo(() => {
     if (isLiveAnalysis && moveListChapter) {
       return fenToCurrentFen(moveListChapter, currentMoveIndex);
@@ -974,6 +955,34 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (freePlayFen != null) return freePlayFen;
     return currentFen;
   }, [vsComputer, vcFen, vcReviewPly, vcHistory, vcStartFen, puzzleSetupPreviewFen, hideEngineForStudentPuzzle, isComplete, hoverPly, effectiveChapter, moveListChapter, totalMoves, freePlayFen, currentFen]);
+
+  const scenarioText = useMemo(() => {
+    if (vsComputer && isVcGameOver) {
+      return vcOutcome
+        ? `${vcOutcome.title}. ${vcOutcome.subtitle}`
+        : 'Oyun bitti.';
+    }
+    if (isInteractivePuzzle && isComplete) {
+      return 'Bölüm tamamlandı. Sonraki bölüme geçebilir veya tekrar deneyebilirsiniz.';
+    }
+    if (effectiveChapter?.guidedPrompt?.trim()) return effectiveChapter.guidedPrompt.trim();
+    if (effectiveChapter?.comment?.trim()) return effectiveChapter.comment.trim();
+    if (isInteractivePuzzle && puzzlePlayNorm) {
+      const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
+      const colorLabel = turnCode === 'w' ? 'Beyaz' : 'Siyah';
+      return `Sıra ${colorLabel} tarafında. Sıradaki hamleyi bulun.`;
+    }
+    return 'Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.';
+  }, [
+    effectiveChapter,
+    isInteractivePuzzle,
+    puzzlePlayNorm,
+    vsComputer,
+    isVcGameOver,
+    vcOutcome,
+    isComplete,
+    studyBoardFen,
+  ]);
 
   const turn = sideToMove(studyBoardFen);
   const studentTurnCode: 'w' | 'b' | null =
@@ -2624,6 +2633,32 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           </div>
 
           <div className="flex-1 overflow-y-auto p-3 sm:p-6 lg:p-8 flex flex-col items-center justify-start gap-4 sm:gap-6 custom-scrollbar overflow-x-hidden">
+             {hideEngineForStudentPuzzle ? (
+               <div className="w-full max-w-full sm:max-w-[min(66vh,66vw)] rounded-2xl border border-violet-500/25 bg-gradient-to-br from-violet-500/15 via-indigo-500/10 to-transparent px-3.5 py-3 sm:px-4 sm:py-3.5">
+                 <div className="flex items-start justify-between gap-3">
+                   <div className="min-w-0">
+                     <p className="text-[10px] font-black uppercase tracking-[0.16em] text-violet-300/90">Hamle bul</p>
+                     <p className="text-sm sm:text-[15px] font-semibold text-white mt-1 leading-snug">
+                       {scenarioText}
+                     </p>
+                     {puzzlePlayNorm?.setupMoveSan ? (
+                       <p className="text-[11px] text-sky-300/90 mt-1.5 font-mono">
+                         Kurulum: {puzzlePlayNorm.setupMoveSan}
+                       </p>
+                     ) : null}
+                   </div>
+                   <div className="shrink-0 text-right">
+                     <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">İlerleme</p>
+                     <p className="text-sm font-black tabular-nums text-violet-200 mt-0.5">
+                       {Math.min(currentMoveIndex, totalMoves)}/{totalMoves || '—'}
+                     </p>
+                     <p className="text-[10px] text-slate-500 mt-1">
+                       {sideToMove(studyBoardFen) === 'white' ? 'Beyaz' : 'Siyah'} oynar
+                     </p>
+                   </div>
+                 </div>
+               </div>
+             ) : null}
              <div className="w-full max-w-full sm:max-w-[min(66vh,66vw)] relative">
                 <div className="flex justify-end items-center gap-1.5 mb-1.5">
                   <button
@@ -2887,21 +2922,34 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           <div className="flex-1 overflow-y-auto bg-[#1e293b] border-t border-[rgba(255,255,255,0.05)]">
             {!vsComputer ? (
               hideEngineForStudentPuzzle ? (
-                <div className="p-4 min-h-[140px] flex flex-col items-center justify-center text-center border-b border-white/5">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Hamle geçmişi</p>
-                  <p className="text-xs text-slate-400 leading-relaxed max-w-[260px]">
-                    Bulmacada çözüm hamleleri gizlidir. Hamlenizi tahtada oynayın; ipucu ve çözüm için alttaki butonları kullanın.
-                  </p>
+                <div className="p-4 space-y-3 border-b border-white/5">
+                  <div className="rounded-2xl border border-violet-500/20 bg-violet-500/10 px-3.5 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300/90">Hamle bul</p>
+                    <p className="text-sm font-semibold text-white mt-1.5 leading-snug">{scenarioText}</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-xl border border-white/8 bg-slate-950/40 px-3 py-2.5">
+                      <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">İlerleme</p>
+                      <p className="text-base font-black tabular-nums text-white mt-0.5">
+                        {Math.min(currentMoveIndex, totalMoves)}
+                        <span className="text-slate-500 font-semibold text-sm"> / {totalMoves || 0}</span>
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/8 bg-slate-950/40 px-3 py-2.5">
+                      <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Sıra</p>
+                      <p className="text-base font-black text-white mt-0.5">
+                        {sideToMove(studyBoardFen) === 'white' ? 'Beyaz' : 'Siyah'}
+                      </p>
+                    </div>
+                  </div>
                   {puzzlePlayNorm?.setupMoveSan ? (
-                    <p className="text-xs text-sky-300/90 mt-3">
-                      Rakip kurulum hamlesi: <span className="font-mono font-bold">{puzzlePlayNorm.setupMoveSan}</span>
+                    <p className="text-xs text-sky-300/90 rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2">
+                      Rakip kurulum: <span className="font-mono font-bold">{puzzlePlayNorm.setupMoveSan}</span>
                     </p>
                   ) : null}
-                  {!isComplete && puzzlePlayNorm ? (
-                    <p className="text-[11px] text-slate-500 mt-2">
-                      Sıradaki taraf hamle yapar · tahta yönü: {puzzlePlayNorm.studentColor === 'w' ? 'Beyaz' : 'Siyah'} altta
-                    </p>
-                  ) : null}
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Çözüm hamleleri gizli. Taşları sürükleyin; ipucu ve çözüm için alttaki butonları kullanın.
+                  </p>
                 </div>
               ) : (
                 <StudyMoveTree

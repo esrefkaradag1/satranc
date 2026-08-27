@@ -1,6 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { Chessboard } from 'react-chessboard';
-import { Chess } from 'chess.js';
 import {
   ChevronLeft,
   ChevronRight,
@@ -19,6 +18,7 @@ import {
 import type { Student } from '../../types';
 import type { LiveStudentBoardSnapshot } from '../LiveLesson';
 import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
+import { applyMove, makeBuilderGame } from '../../lib/studyUtils';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -39,17 +39,17 @@ function normalizeStudentId(id: string | null | undefined): string {
 
 function fenAtPly(baseFen: string, moves: string[], ply: number | null): string {
   try {
-    const game = new Chess(baseFen);
+    const game = makeBuilderGame(baseFen.trim() || START_FEN);
     const total = moves.length;
     const target = ply ?? total;
     for (let i = 0; i < Math.min(target, total); i++) {
       const m = moves[i];
       if (!m) break;
-      game.move(m);
+      if (!applyMove(game, m)) break;
     }
     return game.fen();
   } catch {
-    return baseFen;
+    return baseFen.trim() || START_FEN;
   }
 }
 
@@ -353,9 +353,11 @@ export function LiveLessonBoardGrid({
                   <div className="w-full max-w-[min(100%,240px)] aspect-square rounded-md overflow-hidden border border-white/10 shadow-lg pointer-events-none">
                     <Chessboard
                       options={{
-                        id: `live-grid-${sid}-${fen.slice(0, 16)}-${displayPly}`,
+                        id: `live-grid-${sid}`,
                         position: fen,
                         allowDragging: false,
+                        showAnimations: false,
+                        animationDurationInMs: 0,
                         showNotation: CHESSBOARD_NO_NOTATION.showNotation,
                         boardOrientation,
                         darkSquareStyle: { backgroundColor: theme.dark },

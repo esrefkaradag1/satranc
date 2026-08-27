@@ -24,7 +24,11 @@ export function fenAtSanMoves(baseFen: string, moves: string[], ply: number | nu
     for (let i = 0; i < Math.min(target, total); i++) {
       const m = moves[i];
       if (!m) break;
-      game.move(m);
+      try {
+        if (!game.move(m)) break;
+      } catch {
+        break;
+      }
     }
     return game.fen();
   } catch {
@@ -119,11 +123,26 @@ export function snapshotFromLichessStreamLine(
   meta: { gameId: string; gameUrl: string; label?: string },
 ): ExternalGameSnapshot | null {
   const type = String(line.type ?? '');
-  const fenRaw = typeof line.fen === 'string' ? line.fen.trim() : '';
-  const movesUci = typeof line.moves === 'string' ? line.moves.trim() : '';
-  if (!fenRaw && !movesUci) return null;
+  /** gameFull: hamleler `state.moves` / `state.fen` içinde; gameState: üst düzey `moves` */
+  const state =
+    line.state && typeof line.state === 'object'
+      ? (line.state as Record<string, unknown>)
+      : null;
+  const initialFenRaw =
+    typeof line.initialFen === 'string' && line.initialFen.trim()
+      ? line.initialFen.trim()
+      : START_FEN;
+  const fenRaw =
+    (typeof line.fen === 'string' && line.fen.trim())
+    || (typeof state?.fen === 'string' && state.fen.trim())
+    || '';
+  const movesUci =
+    (typeof line.moves === 'string' && line.moves.trim())
+    || (typeof state?.moves === 'string' && state.moves.trim())
+    || '';
+  if (!fenRaw && !movesUci && type !== 'gameFull') return null;
 
-  const baseFen = START_FEN;
+  const baseFen = initialFenRaw.includes('/') ? initialFenRaw : START_FEN;
   try {
     const game = new Chess(baseFen);
     const sans: string[] = [];
@@ -143,7 +162,8 @@ export function snapshotFromLichessStreamLine(
       }
     }
     const fen = fenRaw || (sans.length ? game.fen() : baseFen);
-    const status = String(line.status ?? '');
+    if (!fen.includes('/')) return null;
+    const status = String(state?.status ?? line.status ?? '');
     return {
       fen,
       moves: sans,
@@ -152,7 +172,14 @@ export function snapshotFromLichessStreamLine(
       gameId: meta.gameId,
       gameUrl: meta.gameUrl,
       label: meta.label,
-      isFinished: status === 'mate' || status === 'draw' || status === 'stalemate' || status === 'resign' || status === 'outoftime' || status === 'aborted',
+      isFinished:
+        status === 'mate'
+        || status === 'draw'
+        || status === 'stalemate'
+        || status === 'resign'
+        || status === 'outoftime'
+        || status === 'aborted'
+        || status === 'timeout',
     };
   } catch {
     if (!fenRaw) return null;

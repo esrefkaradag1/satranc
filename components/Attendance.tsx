@@ -1087,7 +1087,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
  </span>
  <span className="min-w-0">
    <span className="block">Ders Bazlı</span>
-   <span className={`block text-[11px] font-medium ${attendanceType === 'lesson' ? 'text-indigo-200/80' : 'text-slate-500'}`}>Özel ders / paket</span>
+   <span className={`block text-[11px] font-medium ${attendanceType === 'lesson' ? 'text-indigo-200/80' : 'text-slate-500'}`}>Özel ders / paket (hak düşer)</span>
  </span>
  </button>
  </div>

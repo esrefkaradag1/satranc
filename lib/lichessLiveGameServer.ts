@@ -6,6 +6,8 @@ import {
   type ExternalGameSnapshot,
 } from './externalGameSnapshot';
 
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
 function parseNdjson(text: string): Record<string, unknown>[] {
   return text
     .split('\n')
@@ -21,12 +23,25 @@ function parseNdjson(text: string): Record<string, unknown>[] {
     .filter((x): x is Record<string, unknown> => x != null);
 }
 
+/** fullId = gameId + color suffix (ör. rCRw1AuOvonq) — stream/export için sadece gameId */
+export function normalizeLichessGameId(raw: string): string {
+  const id = String(raw ?? '').trim();
+  if (!id) return '';
+  if (/^[a-zA-Z0-9]{8}$/.test(id)) return id;
+  if (/^[a-zA-Z0-9]{12}$/.test(id)) return id.slice(0, 8);
+  const m = id.match(/([a-zA-Z0-9]{8})/);
+  return m?.[1] ?? id;
+}
+
 export type LichessPlayingGame = {
   gameId: string;
   fullId?: string;
   color?: 'white' | 'black';
   speed?: string;
   variant?: string;
+  fen?: string;
+  lastMove?: string;
+  isMyTurn?: boolean;
 };
 
 export async function fetchLichessPlayingGames(token: string): Promise<LichessPlayingGame[]> {
@@ -40,6 +55,9 @@ export async function fetchLichessPlayingGames(token: string): Promise<LichessPl
       gameId?: string;
       fullId?: string;
       color?: string;
+      fen?: string;
+      lastMove?: string;
+      isMyTurn?: boolean;
       speed?: string;
       variant?: { key?: string };
     }>;
@@ -47,21 +65,41 @@ export async function fetchLichessPlayingGames(token: string): Promise<LichessPl
   const rows = Array.isArray(data.nowPlaying) ? data.nowPlaying : [];
   return rows
     .map((row) => {
-      const gameId = String(row.fullId ?? row.gameId ?? '').trim();
-      if (!gameId) return null;
+      const bare = normalizeLichessGameId(String(row.gameId ?? '').trim())
+        || normalizeLichessGameId(String(row.fullId ?? '').trim());
+      if (!bare) return null;
       return {
-        gameId,
+        gameId: bare,
         fullId: row.fullId,
         color: row.color === 'black' ? 'black' : row.color === 'white' ? 'white' : undefined,
         speed: row.speed,
         variant: row.variant?.key,
+        fen: typeof row.fen === 'string' ? row.fen.trim() : undefined,
+        lastMove: typeof row.lastMove === 'string' ? row.lastMove.trim() : undefined,
+        isMyTurn: row.isMyTurn === true,
       } satisfies LichessPlayingGame;
     })
     .filter((x): x is LichessPlayingGame => x != null);
 }
 
+/** account/playing FEN'inden acil fallback snapshot (hamle listesi olmayabilir) */
+function snapshotFromPlayingRow(row: LichessPlayingGame): ExternalGameSnapshot | null {
+  const fen = row.fen?.trim();
+  if (!fen || !fen.includes('/')) return null;
+  return {
+    fen,
+    moves: [],
+    baseFen: fen,
+    source: 'lichess',
+    gameId: row.gameId,
+    gameUrl: `https://lichess.org/${row.gameId}`,
+    label: [row.speed, row.variant].filter(Boolean).join(' · ') || undefined,
+    isFinished: false,
+  };
+}
+
 async function fetchLichessSnapshotFromStream(gameId: string): Promise<ExternalGameSnapshot | null> {
-  const id = gameId.trim();
+  const id = normalizeLichessGameId(gameId);
   if (!id) return null;
   const res = await fetch(`https://lichess.org/api/stream/game/${encodeURIComponent(id)}`, {
     headers: { Accept: 'application/x-ndjson' },
@@ -77,18 +115,24 @@ async function fetchLichessSnapshotFromStream(gameId: string): Promise<ExternalG
       gameUrl: `https://lichess.org/${id}`,
       label: typeof line.speed === 'string' ? line.speed : undefined,
     });
-    if (snap) best = snap;
-    if (line.type === 'gameFull' || line.type === 'gameState') break;
+    if (snap) {
+      best = snap;
+      /** gameFull yeterli konum verdiyse dur; aksi halde gameState de dene */
+      if (snap.moves.length > 0 || snap.fen !== START_FEN) break;
+    }
+    if (line.type === 'gameState' && best) break;
   }
   return best;
 }
 
 export async function fetchLichessGameSnapshot(gameId: string): Promise<ExternalGameSnapshot | null> {
-  const id = gameId.trim();
+  const id = normalizeLichessGameId(gameId);
   if (!id) return null;
 
   const fromStream = await fetchLichessSnapshotFromStream(id);
-  if (fromStream && fromStream.moves.length > 0) return fromStream;
+  if (fromStream && (fromStream.moves.length > 0 || fromStream.fen.includes('/'))) {
+    return fromStream;
+  }
 
   const pgn = await fetchLichessGamePgn(id);
   if (pgn) {
@@ -118,7 +162,10 @@ export async function fetchLichessOAuthLiveSnapshot(studentId: string): Promise<
       return { connected: true, playing: [], error: 'Devam eden Lichess oyunu yok' };
     }
     const primary = playing[0]!;
-    const snapshot = await fetchLichessGameSnapshot(primary.gameId);
+    let snapshot = await fetchLichessGameSnapshot(primary.gameId);
+    if (!snapshot) {
+      snapshot = snapshotFromPlayingRow(primary);
+    }
     if (!snapshot) {
       return { connected: true, playing, error: 'Oyun konumu alınamadı' };
     }

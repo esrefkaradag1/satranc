@@ -742,7 +742,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   ];
 
   return (
-    <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
+    <div className="app-ui-scale flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
       <Sidebar
         activeTab={sidebarTab}
         setActiveTab={setActiveTab}
@@ -761,7 +761,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
       />
       <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
-        <header className="relative z-10 h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/40 backdrop-blur-xl border-b border-white/5 shrink-0">
+        <header className="relative z-10 h-14 sm:h-16 lg:h-16 px-3 sm:px-5 lg:px-6 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/40 backdrop-blur-xl border-b border-white/5 shrink-0">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <button
               type="button"
@@ -797,7 +797,7 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
           className={
             FULL_BLEED_CLUB_TABS.has(activeTab)
               ? 'relative z-10 flex-1 min-h-0 flex flex-col p-0 overflow-hidden w-full'
-              : 'relative z-10 p-4 sm:p-6 lg:p-8 mx-auto w-full min-w-0 flex-1'
+              : 'relative z-10 p-3 sm:p-5 lg:p-6 mx-auto w-full min-w-0 flex-1'
           }
         >
           {renderContent()}

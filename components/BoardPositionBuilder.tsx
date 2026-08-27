@@ -205,15 +205,18 @@ export function BoardPositionBuilder({
       key={p}
       type="button"
       onClick={() => setBuilderTool(builderTool === p ? 'cursor' : p)}
-      className={`aspect-square rounded-lg flex items-center justify-center transition-all ${
-        builderTool === p ? 'bg-indigo-500/25 ring-2 ring-indigo-500' : 'hover:bg-white/10 bg-white/5'
+      className={`aspect-square w-full rounded-lg flex items-center justify-center transition-all ${
+        builderTool === p
+          ? 'bg-indigo-500/30 ring-2 ring-indigo-400 shadow-md shadow-indigo-500/20'
+          : 'hover:bg-white/15 bg-white/10 border border-white/10'
       }`}
       title={p}
     >
       <img
         src={LICHESS_PIECE(p)}
         alt={p}
-        className={compact ? 'w-6 h-6' : 'w-9 h-9 lg:w-10 lg:h-10'}
+        className={compact ? 'w-7 h-7 drop-shadow-sm' : 'w-9 h-9 lg:w-10 lg:h-10'}
+        draggable={false}
       />
     </button>
   );
@@ -290,66 +293,76 @@ export function BoardPositionBuilder({
 
   if (embedded) {
     return (
-      <div className="flex flex-col gap-2.5 flex-1 min-h-0 rounded-xl border border-white/[0.08] bg-slate-900/50 p-2.5 overflow-y-auto custom-scrollbar">
-        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Tahta yapıcı</p>
-
-        <div className="space-y-1.5">
-          <div className="grid grid-cols-6 gap-1">
-            {['wP', 'wB', 'wN', 'wR', 'wQ', 'wK'].map((p) => pieceBtn(p, true))}
-          </div>
-          <div className="grid grid-cols-6 gap-1">
-            {['bP', 'bB', 'bN', 'bR', 'bQ', 'bK'].map((p) => pieceBtn(p, true))}
+      <div className="flex flex-col gap-2.5 flex-1 min-h-0 rounded-xl border border-white/[0.08] bg-slate-900/50 p-2.5 sm:p-3 overflow-y-auto custom-scrollbar">
+        <div className="flex items-center justify-between gap-2 shrink-0">
+          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Tahta yapıcı</p>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => setBuilderTool(builderTool === 'trash' ? 'cursor' : 'trash')}
+              className={`p-1.5 rounded-lg border transition-colors ${
+                builderTool === 'trash'
+                  ? 'bg-rose-600/25 border-rose-500/40 text-rose-200'
+                  : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+              }`}
+              title="Silgi"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrientation((o) => (o === 'white' ? 'black' : 'white'))}
+              className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-white"
+              title="Tahtayı çevir"
+            >
+              <FlipHorizontal2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setFenWithMeta(DEFAULT_FEN)}
+              className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-white"
+              title="Başlangıç konumu"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setFenWithMeta('8/8/8/8/8/8/8/8 w - - 0 1')}
+              className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-rose-300"
+              title="Tahtayı temizle"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
 
-        <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={() => setBuilderTool(builderTool === 'trash' ? 'cursor' : 'trash')}
-            className={`p-1.5 rounded-lg border transition-colors ${
-              builderTool === 'trash'
-                ? 'bg-rose-600/25 border-rose-500/40 text-rose-200'
-                : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
-            }`}
-            title="Silgi"
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 w-full">
+          <div
+            className="flex flex-col gap-1 shrink-0 w-9 sm:w-10 self-stretch justify-center"
+            aria-label="Beyaz taşlar"
           >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setOrientation((o) => (o === 'white' ? 'black' : 'white'))}
-            className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-white"
-            title="Tahtayı çevir"
-          >
-            <FlipHorizontal2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setFenWithMeta(DEFAULT_FEN)}
-            className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-white"
-            title="Başlangıç konumu"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setFenWithMeta('8/8/8/8/8/8/8/8 w - - 0 1')}
-            className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-rose-300"
-            title="Tahtayı temizle"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+            {['wK', 'wQ', 'wR', 'wB', 'wN', 'wP'].map((p) => pieceBtn(p, true))}
+          </div>
 
-        {boardBlock(true)}
+          <div className="flex-1 min-w-0 max-w-full">
+            {boardBlock(true)}
+          </div>
+
+          <div
+            className="flex flex-col gap-1 shrink-0 w-9 sm:w-10 self-stretch justify-center"
+            aria-label="Siyah taşlar"
+          >
+            {['bK', 'bQ', 'bR', 'bB', 'bN', 'bP'].map((p) => pieceBtn(p, true))}
+          </div>
+        </div>
 
         {builderTool !== 'cursor' ? (
-          <p className="text-[10px] text-indigo-300/80 text-center">
+          <p className="text-[10px] text-indigo-300/80 text-center shrink-0">
             {builderTool === 'trash' ? 'Silmek için kareye tıklayın' : 'Yerleştirmek için kareye tıklayın'}
           </p>
         ) : (
-          <p className="text-[9px] text-slate-600 text-center leading-snug">
-            Sağ tık: renk değiştir · Sürükle: taşı taşı
+          <p className="text-[9px] text-slate-600 text-center leading-snug shrink-0">
+            Sol: beyaz · Sağ: siyah · Sağ tık: renk · Sürükle: taşı
           </p>
         )}
 
@@ -359,7 +372,7 @@ export function BoardPositionBuilder({
             const t = e.target.value as 'w' | 'b';
             setFenWithMeta(builderFen, t, castling);
           }}
-          className="w-full bg-slate-900 border border-white/10 rounded-lg px-2.5 py-2 text-white text-[11px] outline-none focus:border-indigo-500/50"
+          className="w-full bg-slate-900 border border-white/10 rounded-lg px-2.5 py-2 text-white text-[11px] outline-none focus:border-indigo-500/50 shrink-0"
         >
           <option value="w">Sıra beyazda</option>
           <option value="b">Sıra siyahta</option>

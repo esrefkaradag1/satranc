@@ -8,6 +8,8 @@ import {
  X,
  ChevronDown,
  ChevronUp,
+ ChevronLeft,
+ ChevronRight,
  Users,
  UserCheck,
  UserX,
@@ -50,6 +52,9 @@ const FILTER_ALL_OFFICES = 'Tüm Şubeler';
 const FILTER_ALL_BRANCHES = 'Tüm Branşlar';
 const FILTER_ALL_GROUPS = 'Tüm Gruplar';
 
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 25;
+
 interface StudentListProps {
  onAddNew?: () => void;
  onViewDetail?: (studentId: string) => void;
@@ -69,6 +74,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const [filterPackage, setFilterPackage] = useState<'all' | 'yes'>('all');
  const [filterCoach, setFilterCoach] = useState('Tüm Antrenörler');
  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(true);
+ const [page, setPage] = useState(1);
+ const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
 
  const [isModalOpen, setIsModalOpen] = useState(false);
  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
@@ -262,6 +269,38 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  filterCoach,
  ]);
 
+ const totalPages = Math.max(1, Math.ceil(filteredStudents.length / pageSize));
+ const currentPage = Math.min(page, totalPages);
+
+ const paginatedStudents = useMemo(() => {
+  const start = (currentPage - 1) * pageSize;
+  return filteredStudents.slice(start, start + pageSize);
+ }, [filteredStudents, currentPage, pageSize]);
+
+ const pageStartIndex = filteredStudents.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+ const pageEndIndex = Math.min(currentPage * pageSize, filteredStudents.length);
+ const pageIds = useMemo(() => paginatedStudents.map((s) => s.id), [paginatedStudents]);
+ const allPageSelected =
+  pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
+
+ useEffect(() => {
+  setPage(1);
+ }, [
+  searchTerm,
+  filterBranchOffice,
+  filterBranch,
+  filterGroup,
+  filterStatus,
+  filterScholarship,
+  filterPackage,
+  filterCoach,
+  pageSize,
+ ]);
+
+ useEffect(() => {
+  if (page > totalPages) setPage(totalPages);
+ }, [page, totalPages]);
+
  const stats = useMemo(() => {
  const total = baseStudents.length;
  const active = baseStudents.filter((s) => s.status !== 'inactive').length;
@@ -319,11 +358,11 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  };
 
  const toggleSelectAll = () => {
- if (selectedIds.length === filteredStudents.length) {
- setSelectedIds([]);
- } else {
- setSelectedIds(filteredStudents.map((s) => s.id));
- }
+  if (allPageSelected) {
+   setSelectedIds((prev) => prev.filter((id) => !pageIds.includes(id)));
+  } else {
+   setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+  }
  };
 
  const toggleSelect = (id: string) => {
@@ -623,7 +662,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
       <h1 className="text-base sm:text-xl font-black tracking-tight text-white">Öğrenci Listesi</h1>
       <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate">
        {isCoach
-        ? 'Size atanmış öğrenciler'
+        ? 'Kulübünüzdeki / size atanmış öğrenciler'
         : isAdmin
           ? (adminViewClub ? `${adminViewClub.name} öğrencileri` : 'Kulüp seçin — öğrenciler birleştirilmez')
           : 'Ara, filtrele ve yönet'}
@@ -820,7 +859,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
 
  {/* Mobil: kart listesi */}
  <div className="lg:hidden space-y-2.5">
- {filteredStudents.map((student) => (
+ {paginatedStudents.map((student) => (
  <div
  key={student.id}
  className={`rounded-2xl border bg-[#1e293b]/80 p-3.5 transition-colors ${
@@ -888,41 +927,41 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  )}
  </div>
 
- {/* Masaüstü: tablo */}
- <div className="hidden lg:block rounded-2xl border border-white/[0.06] bg-[#1e293b]/75 overflow-hidden">
- <ResponsiveTable minWidth={980} className="table-scroll">
+ {/* Masaüstü: tablo — overflow-hidden kaydırmayı kesmesin; İşlem sütunu sağa yapışık */}
+ <div className="hidden lg:block rounded-2xl border border-white/[0.06] bg-[#1e293b]/75 overflow-x-auto">
+ <ResponsiveTable minWidth={920} className="table-scroll">
  <table className="w-full text-left border-collapse">
  <thead>
  <tr className="border-b border-white/[0.06] bg-slate-950/40">
- <th className="px-4 py-3 w-10">
+ <th className="px-3 py-2.5 w-10">
  <input
  type="checkbox"
  className="w-4 h-4 rounded border-slate-600 bg-[#1e293b] text-indigo-600 focus:ring-indigo-500/50 cursor-pointer"
- checked={selectedIds.length === filteredStudents.length && filteredStudents.length > 0}
+ checked={allPageSelected}
  onChange={toggleSelectAll}
  />
  </th>
- <th className="px-2 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest w-10">#</th>
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Öğrenci</th>
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Şube / Branş</th>
+ <th className="px-2 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest w-8">#</th>
+ <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Öğrenci</th>
+ <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Şube / Branş</th>
  {isAdmin && (
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Antrenör</th>
+ <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Antrenör</th>
  )}
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Grup</th>
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Aidat</th>
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Kayıt</th>
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Giriş</th>
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Durum</th>
- <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">İşlem</th>
+ <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Grup</th>
+ <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Aidat</th>
+ <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Kayıt</th>
+ <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Giriş</th>
+ <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Durum</th>
+ <th className="sticky right-0 z-20 px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right bg-slate-950/95 backdrop-blur-sm shadow-[-8px_0_12px_-8px_rgba(0,0,0,0.5)]">İşlem</th>
  </tr>
  </thead>
  <tbody className="divide-y divide-white/[0.04]">
- {filteredStudents.map((student, index) => (
+ {paginatedStudents.map((student, index) => (
  <tr
  key={student.id}
  className={`group hover:bg-white/[0.025] transition-colors ${selectedIds.includes(student.id) ? 'bg-indigo-500/[0.06]' : ''}`}
  >
- <td data-label="" className="px-4 py-3">
+ <td data-label="" className="px-3 py-2.5">
  <input
  type="checkbox"
  className="w-4 h-4 rounded border-slate-600 bg-[#1e293b] text-indigo-600 focus:ring-indigo-500/50 cursor-pointer"
@@ -930,14 +969,14 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  onChange={() => toggleSelect(student.id)}
  />
  </td>
- <td data-label="#" className="px-2 py-3 text-xs font-medium text-slate-500 tabular-nums">{index + 1}</td>
- <td data-label="Öğrenci" className="px-3 py-3">
+ <td data-label="#" className="px-2 py-2.5 text-xs font-medium text-slate-500 tabular-nums">{pageStartIndex + index}</td>
+ <td data-label="Öğrenci" className="px-2.5 py-2.5">
  <button
   type="button"
   onClick={() => onViewDetail?.(student.id)}
-  className="flex items-center gap-3 text-left min-w-0 group/name"
+  className="flex items-center gap-2.5 text-left min-w-0 group/name"
  >
- <StudentAvatar student={student} applicationPhotos={applicationPhotos} className="w-9 h-9" />
+ <StudentAvatar student={student} applicationPhotos={applicationPhotos} className="w-8 h-8" />
  <div className="min-w-0">
  <p className="font-bold text-white text-sm tracking-tight truncate group-hover/name:text-indigo-200 transition-colors">{student.name}</p>
  <p className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
@@ -946,39 +985,39 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
  </button>
  </td>
- <td data-label="Şube / Branş" className="px-3 py-3">
- <p className="text-sm text-slate-300 max-w-[12rem] truncate" title={[student.branchOffice, student.branch].filter(Boolean).join(' / ')}>
+ <td data-label="Şube / Branş" className="px-2.5 py-2.5">
+ <p className="text-sm text-slate-300 max-w-[10rem] truncate" title={[student.branchOffice, student.branch].filter(Boolean).join(' / ')}>
  {student.branchOffice || '—'}
  </p>
  {student.branch ? <p className="text-[11px] text-slate-500 mt-0.5 truncate">{student.branch}</p> : null}
  </td>
  {isAdmin && (
- <td data-label="Antrenör" className="px-3 py-3">
- <p className="text-[11px] text-teal-300/90 font-medium max-w-[9rem] truncate" title={getCoachNamesForStudent(student, scopedCoaches, scopedTrainingGroups).join(', ')}>
+ <td data-label="Antrenör" className="px-2.5 py-2.5">
+ <p className="text-[11px] text-teal-300/90 font-medium max-w-[8rem] truncate" title={getCoachNamesForStudent(student, scopedCoaches, scopedTrainingGroups).join(', ')}>
  {getCoachNamesForStudent(student, scopedCoaches, scopedTrainingGroups).join(', ') || 'Atanmamış'}
  </p>
  </td>
  )}
- <td data-label="Grup" className="px-3 py-3">
- <p className="text-sm font-medium text-slate-200 max-w-[10rem] truncate" title={student.group}>{student.group || '—'}</p>
+ <td data-label="Grup" className="px-2.5 py-2.5">
+ <p className="text-sm font-medium text-slate-200 max-w-[9rem] truncate" title={student.group}>{student.group || '—'}</p>
  {student.registrationType && (
  <p className="text-[10px] text-slate-500 mt-0.5">
  {student.registrationType === 'monthly' ? 'Aylık' : 'Paket'}
  </p>
  )}
  </td>
- <td data-label="Aidat" className="px-3 py-3">{formatDues(student)}</td>
- <td data-label="Kayıt" className="px-3 py-3 text-xs text-slate-400 tabular-nums whitespace-nowrap">
+ <td data-label="Aidat" className="px-2.5 py-2.5">{formatDues(student)}</td>
+ <td data-label="Kayıt" className="px-2.5 py-2.5 text-xs text-slate-400 tabular-nums whitespace-nowrap">
  {student.registrationDate ? new Date(student.registrationDate).toLocaleDateString('tr-TR') : '—'}
  </td>
- <td data-label="Giriş" className="px-3 py-3">
+ <td data-label="Giriş" className="px-2.5 py-2.5">
  <StudentLoginQuickInfo
    student={student}
    compact
    onCopied={() => showToast('Giriş bilgileri kopyalandı.', 'success')}
  />
  </td>
- <td data-label="Durum" className="px-3 py-3">
+ <td data-label="Durum" className="px-2.5 py-2.5">
  <span
  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold ${
  student.status === 'inactive'
@@ -990,8 +1029,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  {student.status === 'inactive' ? 'Pasif' : 'Aktif'}
  </span>
  </td>
- <td data-label="İşlem" className="px-3 py-3">
- <div className="flex justify-end items-center gap-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
+ <td data-label="İşlem" className="sticky right-0 z-10 px-2.5 py-2.5 bg-[#1e293b]/95 group-hover:bg-[#243044] backdrop-blur-sm shadow-[-8px_0_12px_-8px_rgba(0,0,0,0.45)]">
+ <div className="flex justify-end items-center gap-0.5 opacity-80 group-hover:opacity-100 transition-opacity">
  <button
  type="button"
  title="Detay"
@@ -1057,6 +1096,53 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  )}
  </ResponsiveTable>
  </div>
+
+ {filteredStudents.length > 0 && (
+  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-white/[0.06] bg-[#1e293b]/70 px-3.5 py-3">
+   <p className="text-xs text-slate-400 tabular-nums">
+    <span className="text-slate-200 font-semibold">{pageStartIndex}–{pageEndIndex}</span>
+    {' / '}
+    <span className="text-slate-300">{filteredStudents.length}</span> kayıt
+   </p>
+   <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+    <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
+     <span className="whitespace-nowrap">Sayfa başı</span>
+     <select
+      value={pageSize}
+      onChange={(e) => setPageSize(Number(e.target.value))}
+      className="rounded-lg border border-white/10 bg-slate-900 text-slate-200 text-[11px] font-semibold px-2 py-1.5 outline-none focus:border-indigo-500/40"
+     >
+      {PAGE_SIZE_OPTIONS.map((n) => (
+       <option key={n} value={n}>{n}</option>
+      ))}
+     </select>
+    </label>
+    <div className="flex items-center gap-1">
+     <button
+      type="button"
+      disabled={currentPage <= 1}
+      onClick={() => setPage((p) => Math.max(1, p - 1))}
+      className="p-1.5 rounded-lg border border-white/10 text-slate-300 hover:bg-white/[0.06] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+      title="Önceki sayfa"
+     >
+      <ChevronLeft className="w-4 h-4" />
+     </button>
+     <span className="min-w-[4.5rem] text-center text-[11px] font-bold text-slate-300 tabular-nums">
+      {currentPage} / {totalPages}
+     </span>
+     <button
+      type="button"
+      disabled={currentPage >= totalPages}
+      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+      className="p-1.5 rounded-lg border border-white/10 text-slate-300 hover:bg-white/[0.06] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+      title="Sonraki sayfa"
+     >
+      <ChevronRight className="w-4 h-4" />
+     </button>
+    </div>
+   </div>
+  </div>
+ )}
 
  {/* Bulk group modal */}
  {isBulkGroupModalOpen && (

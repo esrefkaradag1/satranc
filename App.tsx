@@ -338,7 +338,7 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   ];
 
   return (
-    <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
+    <div className="app-ui-scale flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
         <Sidebar
           activeTab={sidebarTab}
           setActiveTab={handleSidebarTab}
@@ -359,7 +359,7 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
           <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
 
-          <header className="h-14 sm:h-16 lg:h-18 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 transition-all duration-300 bg-[#070b14]/75 backdrop-blur-2xl border-b border-white/[0.08] shrink-0">
+          <header className="h-14 sm:h-16 lg:h-16 px-3 sm:px-5 lg:px-6 flex items-center justify-between sticky top-0 z-30 transition-all duration-300 bg-[#070b14]/75 backdrop-blur-2xl border-b border-white/[0.08] shrink-0">
             <div className="flex items-center gap-3 sm:gap-6 min-w-0">
               <button type="button" onClick={() => setSidebarOpen(true)} className="p-2.5 rounded-xl lg:hidden hover:bg-white/10 text-slate-300 transition-colors" aria-label="Menüyü aç">
                 <Menu className="w-5 h-5" />
@@ -398,7 +398,7 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
             className={
               FULL_BLEED_TABS.has(activeTab)
                 ? 'flex-1 min-h-0 flex flex-col p-0 overflow-hidden relative z-10 w-full'
-                : 'p-4 sm:p-6 lg:p-8 mx-auto w-full min-w-0 relative z-10 flex-1'
+                : 'p-3 sm:p-5 lg:p-6 mx-auto w-full min-w-0 relative z-10 flex-1'
             }
           >
             {renderContent()}
@@ -638,7 +638,7 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   ];
 
   return (
-    <div className="flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
+    <div className="app-ui-scale flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
       <Sidebar
         activeTab={sidebarTab}
         setActiveTab={handleSidebarTab}
@@ -657,7 +657,7 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       />
       <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
-        <header className="h-14 sm:h-16 lg:h-18 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 transition-all duration-300 bg-[#070b14]/75 backdrop-blur-2xl border-b border-white/[0.08] shrink-0">
+        <header className="h-14 sm:h-16 lg:h-16 px-3 sm:px-5 lg:px-6 flex items-center justify-between sticky top-0 z-30 transition-all duration-300 bg-[#070b14]/75 backdrop-blur-2xl border-b border-white/[0.08] shrink-0">
           <div className="flex items-center gap-3 sm:gap-6 min-w-0">
             <button type="button" onClick={() => setSidebarOpen(true)} className="p-2.5 rounded-xl lg:hidden hover:bg-white/10 text-slate-300 transition-colors" aria-label="Menüyü aç"><Menu className="w-5 h-5" /></button>
             <div className="hidden md:flex items-center rounded-xl px-3.5 py-2 border transition-all bg-slate-900/60 border-white/10 focus-within:border-indigo-500/60 focus-within:shadow-[0_0_15px_rgba(99,102,241,0.2)] flex-1 max-w-sm">
@@ -682,7 +682,7 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
           className={
             FULL_BLEED_TABS.has(activeTab)
               ? 'flex-1 min-h-0 flex flex-col p-0 overflow-hidden relative z-10 w-full'
-              : 'p-4 sm:p-6 lg:p-8 mx-auto w-full min-w-0 relative z-10 flex-1'
+              : 'p-3 sm:p-5 lg:p-6 mx-auto w-full min-w-0 relative z-10 flex-1'
           }
         >
           {renderContent()}

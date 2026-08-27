@@ -132,8 +132,11 @@ export async function fetchStudentActivityAuto(studentId: string): Promise<Stude
         method: gameResult.method,
       };
     }
-  } catch {
-    gameResult = { ok: false, error: 'Oyun çekilemedi' };
+  } catch (err) {
+    gameResult = {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Oyun çekilemedi',
+    };
   }
 
   if (profile.lichessOauthConnected) {

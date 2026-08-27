@@ -10,7 +10,14 @@ import {
   formatHomeworkDuration,
   studentTotalThinkSeconds,
 } from '../../lib/homeworkAnalysisUtils';
-import { puzzleBoardOrientationForFen, formatPuzzleHintText, puzzlePlayPreviewState } from '../../lib/puzzlePlayUtils';
+import {
+  formatPuzzleHintText,
+  puzzlePlayPreviewState,
+  initCoachStyleSession,
+  countStudentSolutionPlies,
+  formatStudentSolutionLabels,
+} from '../../lib/puzzlePlayUtils';
+import { filterAttemptsForHomeworkPuzzles } from '../../lib/homeworkAnalysisUtils';
 import { HomeworkPuzzleReplayModal } from './HomeworkPuzzleReplayModal';
 
 type Props = {
@@ -80,26 +87,29 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
   );
 
   const studentAttempts = useMemo(
-    () => attempts
-      .filter((a) => a.studentId === stat.studentId && a.homeworkId === homework.id)
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-    [attempts, stat.studentId, homework.id],
+    () => filterAttemptsForHomeworkPuzzles(
+      attempts,
+      homework,
+      stat.studentId,
+      puzzles,
+    ).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+    [attempts, stat.studentId, homework, puzzles],
   );
-
-  const attemptsByPuzzleId = useMemo(() => {
-    const map = new Map<string, HomeworkPuzzleAttempt[]>();
-    for (const a of studentAttempts) {
-      const list = map.get(a.puzzleId) ?? [];
-      list.push(a);
-      map.set(a.puzzleId, list);
-    }
-    return map;
-  }, [studentAttempts]);
 
   const totalTime = studentTotalThinkSeconds(studentAttempts);
 
+  const attemptsForPuzzle = (puzzle: Puzzle) => {
+    const aliases = new Set<string>([puzzle.id]);
+    if (puzzle.lichessId?.trim()) aliases.add(puzzle.lichessId.trim());
+    return studentAttempts.filter((a) => aliases.has(a.puzzleId));
+  };
+
   const cards = useMemo(() => hwPuzzles.map(({ puzzle, index }) => {
-    const puzzleAttempts = attemptsByPuzzleId.get(puzzle.id) ?? [];
+    const puzzleAttempts = (() => {
+      const aliases = new Set<string>([puzzle.id]);
+      if (puzzle.lichessId?.trim()) aliases.add(puzzle.lichessId.trim());
+      return studentAttempts.filter((a) => aliases.has(a.puzzleId));
+    })();
     const latestAttempt = puzzleAttempts[puzzleAttempts.length - 1];
     const bestAttempt = puzzleAttempts.find((a) => a.correct) ?? latestAttempt;
     const wrongCount = puzzleAttempts.filter((a) => !a.correct).length;
@@ -114,6 +124,13 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
     const meta = RESULT_META[result];
 
     const preview = puzzlePlayPreviewState(puzzle);
+    const session = initCoachStyleSession(puzzle);
+    const studentPlyCount = countStudentSolutionPlies(
+      session.playFen,
+      session.solutionMoves,
+      session.studentColor,
+    );
+    const solutionLabels = formatStudentSolutionLabels(puzzle);
 
     return {
       puzzle,
@@ -124,14 +141,15 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
       wrongCount,
       thinkSec,
       fen: bestAttempt?.finalFen || preview.fen,
-      boardOrientation: bestAttempt?.finalFen
-        ? puzzleBoardOrientationForFen(bestAttempt.finalFen)
-        : preview.orientation,
+      // Öğrenci rengi altta kalsın; finalFen sırası rakibe geçmiş olsa bile ters çevirme.
+      boardOrientation: preview.orientation,
       hintText: formatPuzzleHintText(puzzle),
       hintUsedEver,
       puzzleAttempts,
+      studentPlyCount: studentPlyCount > 0 ? studentPlyCount : 1,
+      solutionLabels,
     };
-  }), [hwPuzzles, attemptsByPuzzleId, studentAttempts]);
+  }), [hwPuzzles, studentAttempts]);
 
   return (
     <div className="modal-overlay z-50" onClick={onClose}>
@@ -187,7 +205,7 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
         <div className="modal-scroll-body p-4 sm:p-5 custom-scrollbar space-y-6">
           {cards.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {cards.map(({ puzzle, index, result, meta, attempt, wrongCount, thinkSec, fen, boardOrientation, hintText, hintUsedEver, puzzleAttempts }) => {
+              {              cards.map(({ puzzle, index, result, meta, attempt, wrongCount, thinkSec, fen, boardOrientation, hintText, hintUsedEver, puzzleAttempts, studentPlyCount, solutionLabels }) => {
                 const StatusIcon = meta.icon;
                 return (
                   <div
@@ -233,7 +251,7 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
                         </span>
                       </DetailRow>
                       <DetailRow label="Kategori">{puzzle.category || '—'}</DetailRow>
-                      <DetailRow label="Hamle Sayısı">{puzzle.solution?.length ?? 1}</DetailRow>
+                      <DetailRow label="Hamle Sayısı">{studentPlyCount}</DetailRow>
                       <DetailRow label="Puan">
                         <span className="text-indigo-300 font-bold">
                           {result === 'correct' ? puzzle.points : 0}
@@ -310,13 +328,16 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
                           </p>
                         </div>
                       )}
-                      {attempt && !attempt.correct && attempt.solutionMoves.length > 0 && (
+                      {attempt && !attempt.correct && (solutionLabels.length > 0 || attempt.solutionMoves.length > 0) && (
                         <div className="pt-2">
                           <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                             Doğru Çözüm
                           </p>
                           <p className="font-mono text-[11px] text-emerald-400/90 break-all leading-relaxed">
-                            {attempt.solutionMoves.join(' · ')}
+                            {(solutionLabels.length > 0
+                              ? solutionLabels
+                              : attempt.solutionMoves
+                            ).join(' · ')}
                           </p>
                         </div>
                       )}
@@ -336,7 +357,7 @@ export const StudentPuzzleDetailModal: React.FC<Props> = ({
           puzzle={replayPuzzle.puzzle}
           puzzleIndex={replayPuzzle.index}
           studentName={stat.name}
-          attempts={attemptsByPuzzleId.get(replayPuzzle.puzzle.id) ?? []}
+          attempts={attemptsForPuzzle(replayPuzzle.puzzle)}
           onClose={() => setReplayPuzzle(null)}
         />
       )}

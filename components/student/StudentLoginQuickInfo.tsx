@@ -41,34 +41,44 @@ export const StudentLoginQuickInfo: React.FC<Props> = ({ student, onCopied, comp
 
   if (compact) {
     return (
-      <div className="inline-flex items-center gap-1.5 max-w-[10.5rem]">
-        <span className="text-[11px] font-mono text-slate-200 truncate" title={username || undefined}>
-          {username || '—'}
-        </span>
-        <div className="inline-flex items-center gap-0.5 shrink-0">
-          {password ? (
+      <div className="inline-flex flex-col gap-0.5 min-w-0 max-w-[12rem]">
+        <div className="inline-flex items-center gap-1.5 min-w-0">
+          <span className="text-[11px] font-mono text-slate-200 truncate" title={username || undefined}>
+            {username || '—'}
+          </span>
+          <div className="inline-flex items-center gap-0.5 shrink-0">
+            {password ? (
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="p-1.5 rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors"
+                title={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}
+              >
+                {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={() => setShowPassword((v) => !v)}
-              className="p-1.5 rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors"
-              title={showPassword ? password : 'Şifreyi göster'}
+              onClick={copyAll}
+              className={`p-1.5 rounded-md transition-colors ${
+                copied
+                  ? 'text-emerald-400 bg-emerald-500/10'
+                  : 'text-slate-500 hover:text-indigo-300 hover:bg-indigo-500/10'
+              }`}
+              title={copied ? 'Kopyalandı' : 'Giriş bilgilerini kopyala'}
             >
-              {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={copyAll}
-            className={`p-1.5 rounded-md transition-colors ${
-              copied
-                ? 'text-emerald-400 bg-emerald-500/10'
-                : 'text-slate-500 hover:text-indigo-300 hover:bg-indigo-500/10'
-            }`}
-            title={copied ? 'Kopyalandı' : 'Giriş bilgilerini kopyala'}
-          >
-            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
+          </div>
         </div>
+        {password ? (
+          <span
+            className={`text-[11px] font-mono ${showPassword ? 'text-amber-200 break-all' : 'text-slate-500 truncate'}`}
+            title={showPassword ? password : 'Şifre gizli'}
+          >
+            {showPassword ? password : '••••••••'}
+          </span>
+        ) : null}
       </div>
     );
   }

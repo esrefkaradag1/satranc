@@ -1,5 +1,6 @@
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../types';
 import { resolveHomeworkAssignees } from '../homeworkUtils';
+import { homeworkDayKey } from './homeworkDayUtils';
 import { studentInitials } from './homeworkPanelUtils';
 
 /** Tek bulmaca denemesi için makul üst sınır (2 saat). */
@@ -27,26 +28,77 @@ export type StudentHwStat = {
   status: HomeworkStudentStatus;
 };
 
-/** Ödevdeki her bulmaca için doğru / yanlış / çözülmedi sayar */
+/** Ödevdeki her bulmaca için doğru / yanlış / çözülmedi sayar.
+ * `wrong` = henüz doğrulanmamış (yalnızca yanlış denemesi olan) bulmaca sayısı —
+ * deneme adedi değil. Böylece 3 bulmacada wrong ≤ 3 olur.
+ */
 export function countPerPuzzleResults(
   puzzleIds: string[],
   attempts: HomeworkPuzzleAttempt[],
+  puzzles: Puzzle[] = [],
 ): { correct: number; wrong: number; skipped: number } {
   let correct = 0;
   let wrong = 0;
   let skipped = 0;
   for (const puzzleId of puzzleIds) {
-    const forPuzzle = attempts.filter((a) => a.puzzleId === puzzleId);
+    const forPuzzle = attemptsForAssignedPuzzle(attempts, puzzleId, puzzles);
     if (forPuzzle.length === 0) {
       skipped += 1;
+    } else if (forPuzzle.some((a) => a.correct)) {
+      correct += 1;
     } else {
-      if (forPuzzle.some((a) => a.correct)) {
-        correct += 1;
-      }
-      wrong += forPuzzle.filter((a) => !a.correct).length;
+      wrong += 1;
     }
   }
   return { correct, wrong, skipped };
+}
+
+/** Ödev listesindeki id + varsa lichessId eşlemeleri. */
+export function homeworkAssignedPuzzleIdSet(
+  hw: Pick<HomeworkAssignment, 'puzzles'>,
+  puzzles: Puzzle[] = [],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const id of hw.puzzles) {
+    if (!id) continue;
+    ids.add(id);
+    const p = puzzles.find((x) => x.id === id);
+    if (p?.lichessId?.trim()) ids.add(p.lichessId.trim());
+  }
+  return ids;
+}
+
+export function isPuzzleAssignedToHomework(
+  puzzleId: string,
+  hw: Pick<HomeworkAssignment, 'puzzles'>,
+  puzzles: Puzzle[] = [],
+): boolean {
+  if (!puzzleId) return false;
+  return homeworkAssignedPuzzleIdSet(hw, puzzles).has(puzzleId);
+}
+
+/** Bu ödeve atanmış bulmacalara ait öğrenci denemeleri (ödev dışı kayıtlar elenir). */
+export function filterAttemptsForHomeworkPuzzles(
+  attempts: HomeworkPuzzleAttempt[],
+  hw: Pick<HomeworkAssignment, 'id' | 'puzzles'>,
+  studentId: string,
+  puzzles: Puzzle[] = [],
+): HomeworkPuzzleAttempt[] {
+  const allowed = homeworkAssignedPuzzleIdSet(hw, puzzles);
+  return attempts.filter(
+    (a) => a.homeworkId === hw.id && a.studentId === studentId && allowed.has(a.puzzleId),
+  );
+}
+
+function attemptsForAssignedPuzzle(
+  attempts: HomeworkPuzzleAttempt[],
+  puzzleId: string,
+  puzzles: Puzzle[],
+): HomeworkPuzzleAttempt[] {
+  const p = puzzles.find((x) => x.id === puzzleId);
+  const aliases = new Set<string>([puzzleId]);
+  if (p?.lichessId?.trim()) aliases.add(p.lichessId.trim());
+  return attempts.filter((a) => aliases.has(a.puzzleId));
 }
 
 export function studentTotalThinkSeconds(attempts: HomeworkPuzzleAttempt[]): number {
@@ -103,8 +155,9 @@ export function getHomeworkBranchLabel(hw: HomeworkAssignment, students: Student
 }
 
 export function homeworkStatusLabel(hw: HomeworkAssignment): 'Aktif' | 'Süresi Doldu' {
-  if (!hw.dueDate?.trim()) return 'Aktif';
-  const end = hw.endDate?.trim() ? new Date(hw.endDate) : new Date(hw.dueDate);
+  const raw = hw.endDate?.trim() || hw.dueDate?.trim();
+  if (!raw) return 'Aktif';
+  const end = new Date(raw.includes('T') ? raw : `${raw}T23:59:59`);
   return end < new Date() ? 'Süresi Doldu' : 'Aktif';
 }
 
@@ -123,16 +176,56 @@ export function homeworkParticipation(
   students: Student[],
   attempts: HomeworkPuzzleAttempt[],
   submissions: HomeworkSubmission[],
-  opts?: { isStudentActive?: (studentId: string) => boolean },
+  opts?: {
+    /** @deprecated Yerine hasPlatformActivityInRange kullanın — tüm programlara bugünü yazar. */
+    isStudentActive?: (studentId: string) => boolean;
+    /** Platform aktivitesi bu ödevin tarih aralığında mı? (oluşturma günü hariç tutulabilir) */
+    hasPlatformActivityInRange?: (
+      studentId: string,
+      range: { startDay: string | null; endDay: string | null; createdDay: string | null },
+    ) => boolean;
+  },
 ): { started: number; total: number } {
   const assignees = getHomeworkAssignees(hw, students);
-  const started = assignees.filter(
-    (s) =>
-      attempts.some((a) => a.homeworkId === hw.id && a.studentId === s.id)
-      || submissions.some((sub) => sub.homeworkId === hw.id && sub.studentId === s.id)
-      || opts?.isStudentActive?.(s.id),
-  ).length;
+  const startDay = (hw.startDate || '').trim().slice(0, 10) || null;
+  const endDay = (hw.endDate || hw.dueDate || '').trim().slice(0, 10) || null;
+  const createdDay = hw.createdAt?.trim().slice(0, 10) || null;
+  const range = { startDay, endDay, createdDay };
+
+  const started = assignees.filter((s) => {
+    if (attempts.some((a) => a.homeworkId === hw.id && a.studentId === s.id)) return true;
+    if (submissions.some((sub) => sub.homeworkId === hw.id && sub.studentId === s.id)) return true;
+    if (opts?.hasPlatformActivityInRange) {
+      return opts.hasPlatformActivityInRange(s.id, range);
+    }
+    if (opts?.isStudentActive?.(s.id)) return true;
+    return false;
+  }).length;
   return { started, total: assignees.length };
+}
+
+/** Platform katılımı: ödev tarih aralığındaki aktivite; oluşturma / başlangıç günü sayılmaz (yeni programda sahte katılım olmasın). */
+export function studentHasPlatformActivityInHomeworkRange(
+  byDay: Record<string, { games?: number; puzzleSolved?: number } | undefined> | undefined,
+  range: { startDay: string | null; endDay: string | null; createdDay: string | null },
+  today = homeworkDayKey(),
+): boolean {
+  if (!byDay) return false;
+  const { startDay, endDay, createdDay } = range;
+  // Başlangıç tarihi yoksa platform aktivitesini bu ödeve yazma (global "bugün aktif" sahte katılım üretir)
+  if (!startDay) return false;
+
+  // Oluşturma günü veya (createdAt yoksa) bugün başlayan programın ilk günü listede sayılmaz
+  const skipDay = createdDay || (startDay === today ? startDay : null);
+
+  for (const [day, stats] of Object.entries(byDay)) {
+    if (!stats) continue;
+    if (day < startDay) continue;
+    if (endDay && day > endDay) continue;
+    if (skipDay && day === skipDay) continue;
+    if ((stats.games ?? 0) > 0 || (stats.puzzleSolved ?? 0) > 0) return true;
+  }
+  return false;
 }
 
 export function homeworkStatusFromAttempts(
@@ -160,10 +253,10 @@ export function buildStudentStatsForHomework(
 
   return assignees.map((student) => {
     const submitted = submissions.some((s) => s.studentId === student.id && s.homeworkId === hw.id);
-    const studentAttempts = attempts.filter((a) => a.homeworkId === hw.id && a.studentId === student.id);
-    const { correct, wrong, skipped } = countPerPuzzleResults(hw.puzzles, studentAttempts);
+    const studentAttempts = filterAttemptsForHomeworkPuzzles(attempts, hw, student.id, puzzles);
+    const { correct, wrong, skipped } = countPerPuzzleResults(hw.puzzles, studentAttempts, puzzles);
     const points = hw.puzzles.reduce((sum, puzzleId) => {
-      const solved = studentAttempts.some((a) => a.puzzleId === puzzleId && a.correct);
+      const solved = attemptsForAssignedPuzzle(studentAttempts, puzzleId, puzzles).some((a) => a.correct);
       if (!solved) return sum;
       return sum + (puzzles.find((p) => p.id === puzzleId)?.points ?? 0);
     }, 0);

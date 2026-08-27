@@ -14,7 +14,7 @@ export type PrivateLessonSaleRef = Pick<
   | 'lessonBranchOffice'
 >;
 
-function buildPrivateLessonSessionRecord(transaction: Pick<Transaction, 'lessonPackageId' | 'lessonPackageName' | 'lessonDiscipline' | 'lessonBranchOffice'>) {
+export function buildPrivateLessonSessionRecord(transaction: Pick<Transaction, 'lessonPackageId' | 'lessonPackageName' | 'lessonDiscipline' | 'lessonBranchOffice'>) {
   return {
     lessonId: String(transaction.lessonPackageId ?? '').trim() || undefined,
     attendanceType: 'lesson' as const,
@@ -26,6 +26,81 @@ function buildPrivateLessonSessionRecord(transaction: Pick<Transaction, 'lessonP
 
 function norm(value: unknown): string {
   return String(value ?? '').trim().toLocaleLowerCase('tr-TR');
+}
+
+function isPresentOrLate(record: Pick<AttendanceRecord, 'status'>): boolean {
+  const s = norm(record.status);
+  return s === 'present' || s === 'late' || s === 'var' || s === 'geç' || s === 'gec';
+}
+
+/** Canlı ders / etiketsiz yoklama: paket oturumuna bağlanabilir. */
+export function isUnscopedOrLiveAttendance(
+  record: Pick<AttendanceRecord, 'attendanceType' | 'lessonId' | 'lessonSummary' | 'groupName' | 'branch' | 'branchOffice'>,
+): boolean {
+  const summary = norm(record.lessonSummary);
+  if (summary.startsWith('canlı ders') || summary.startsWith('canli ders')) return true;
+  if (record.attendanceType === 'group' || record.attendanceType === 'lesson') return false;
+  const lessonId = String(record.lessonId ?? '').trim();
+  const hasSessionHint = !!(
+    lessonId
+    || String(record.groupName ?? '').trim()
+    || String(record.branch ?? '').trim()
+    || String(record.branchOffice ?? '').trim()
+  );
+  return !hasSessionHint;
+}
+
+/** Yoklama kaydı bu özel ders satışının paket hakkından düşer mi? */
+export function attendanceMatchesPrivateLessonPackage(
+  record: Pick<AttendanceRecord, 'status' | 'lessonId' | 'attendanceType' | 'groupName' | 'branch' | 'branchOffice' | 'lessonSummary'>,
+  sale: Pick<Transaction, 'lessonPackageId' | 'lessonPackageName' | 'lessonDiscipline' | 'lessonBranchOffice'>,
+): boolean {
+  return (
+    hardAttendanceMatchesPrivateLessonPackage(record, sale)
+    || softAttendanceMatchesPrivateLessonPackage(record, sale)
+  );
+}
+
+/** Paket kimliğiyle birebir eşleşen yoklama (özel ders sekmesi / paket id). */
+function hardAttendanceMatchesPrivateLessonPackage(
+  record: Pick<AttendanceRecord, 'status' | 'lessonId' | 'attendanceType' | 'groupName' | 'branch' | 'branchOffice' | 'lessonSummary'>,
+  sale: Pick<Transaction, 'lessonPackageId' | 'lessonPackageName' | 'lessonDiscipline' | 'lessonBranchOffice'>,
+): boolean {
+  if (!isPresentOrLate(record)) return false;
+
+  const lessonPackageId = String(sale.lessonPackageId ?? '').trim();
+  const sessionRecord = buildPrivateLessonSessionRecord(sale);
+  if (lessonPackageId && String(record.lessonId ?? '').trim() === lessonPackageId) return true;
+  if (attendanceRecordsShareSession(record, sessionRecord)) return true;
+
+  // Paket adıyla kaydedilmiş grup/ders yoklaması
+  const pkgName = norm(sale.lessonPackageName);
+  const recGroup = norm(record.groupName);
+  if (pkgName && recGroup && pkgName === recGroup) {
+    const saleOffice = norm(sale.lessonBranchOffice);
+    const saleBranch = norm(sale.lessonDiscipline);
+    const recOffice = norm(record.branchOffice);
+    const recBranch = norm(record.branch);
+    if (saleOffice && recOffice && saleOffice !== recOffice) return false;
+    if (saleBranch && recBranch && saleBranch !== recBranch) return false;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Paket kimliği taşımayan (veya başka oturuma yazılmış) var/geç yoklaması.
+ * Öğrencinin aktif özel ders satışına soft bağlanır.
+ */
+function softAttendanceMatchesPrivateLessonPackage(
+  record: Pick<AttendanceRecord, 'status' | 'lessonId' | 'attendanceType' | 'groupName' | 'branch' | 'branchOffice' | 'lessonSummary'>,
+  sale: Pick<Transaction, 'lessonPackageId' | 'lessonPackageName' | 'lessonDiscipline' | 'lessonBranchOffice'>,
+): boolean {
+  if (!isPresentOrLate(record)) return false;
+  if (hardAttendanceMatchesPrivateLessonPackage(record, sale)) return false;
+  // Her var/geç kaydı hard eşleşmedikçe soft adaydır
+  // (grup, canlı ders, yanlış paket id'li lesson, etiketsiz…).
+  return true;
 }
 
 export function samePrivateLessonPackageIdentity(
@@ -50,27 +125,45 @@ export function resolveAttendanceOwnerSaleId(
   allSalesNewestFirst: PrivateLessonSaleRef[],
 ): string | null {
   const studentId = String(sale.studentId ?? '').trim();
-  if (!studentId || record.studentId !== studentId) return null;
-  if (record.status !== 'present' && record.status !== 'late') return null;
+  if (!studentId || String(record.studentId ?? '').trim() !== studentId) return null;
+
+  const hard = hardAttendanceMatchesPrivateLessonPackage(record, sale);
+  const soft = softAttendanceMatchesPrivateLessonPackage(record, sale);
+  if (!hard && !soft) return null;
 
   const recordDate = String(record.date ?? '').slice(0, 10);
   if (!recordDate) return null;
 
-  const sessionRecord = buildPrivateLessonSessionRecord(sale);
-  const lessonPackageId = String(sale.lessonPackageId ?? '').trim();
-  const matchesPackage =
-    (lessonPackageId && String(record.lessonId ?? '').trim() === lessonPackageId)
-    || attendanceRecordsShareSession(record, sessionRecord);
-  if (!matchesPackage) return null;
+  const studentSales = allSalesNewestFirst.filter(
+    (candidate) => String(candidate.studentId ?? '').trim() === studentId,
+  );
 
-  const candidates = allSalesNewestFirst
-    .filter((candidate) => String(candidate.studentId ?? '').trim() === studentId)
-    .filter((candidate) => samePrivateLessonPackageIdentity(candidate, sale))
-    .filter((candidate) => String(candidate.date ?? '').slice(0, 10) <= recordDate);
+  if (hard) {
+    const candidates = studentSales
+      .filter((candidate) => samePrivateLessonPackageIdentity(candidate, sale))
+      .filter((candidate) => {
+        const saleDay = String(candidate.date ?? '').slice(0, 10);
+        return !saleDay || saleDay <= recordDate;
+      });
+    if (candidates.length > 0) return String(candidates[0]?.id ?? '') || null;
+    // Paket sonradan kaydedildiyse bile hard eşleşen kaydı en güncel aynı pakete yaz
+    const samePkg = studentSales.filter((candidate) => samePrivateLessonPackageIdentity(candidate, sale));
+    if (samePkg.length === 0) return null;
+    return String(samePkg[0]?.id ?? '') || null;
+  }
 
-  if (candidates.length === 0) return null;
-  // Newest-first list: first match is the active owner for that attendance day.
-  return String(candidates[0]?.id ?? '') || null;
+  // Soft: başka bir satış hard sahipleniyorsa çalma
+  const hardOwner = studentSales.find((candidate) => hardAttendanceMatchesPrivateLessonPackage(record, candidate));
+  if (hardOwner) return null;
+
+  // Önce satış tarihi ≤ yoklama günü olan en güncel; yoksa (paket sonradan işlendiyse) en güncel satış
+  const onOrBefore = studentSales.filter((candidate) => {
+    const saleDay = String(candidate.date ?? '').slice(0, 10);
+    return !saleDay || saleDay <= recordDate;
+  });
+  const owner = onOrBefore[0] ?? studentSales[0];
+  if (!owner) return null;
+  return String(owner.id) === String(sale.id) ? String(sale.id) : null;
 }
 
 export type PrivateLessonBalance = {
@@ -123,12 +216,11 @@ export function computePrivateLessonBalance(
     const sessionRecord = buildPrivateLessonSessionRecord(sale);
     const existingToday = attendanceRecords.find(
       (record) =>
-        record.studentId === studentId &&
-        attendanceRecordsShareSession(record, sessionRecord) &&
+        String(record.studentId ?? '').trim() === studentId &&
+        attendanceMatchesPrivateLessonPackage(record, sale) &&
         String(record.date ?? '').slice(0, 10) === todayIso,
     );
-    const savedTodayUsed =
-      existingToday && (existingToday.status === 'present' || existingToday.status === 'late') ? 1 : 0;
+    const savedTodayUsed = existingToday && isPresentOrLate(existingToday) ? 1 : 0;
     const pendingTodayUsed =
       pending === 'Present' || pending === 'Late'
         ? 1
@@ -183,31 +275,33 @@ export function countPrivateLessonAttendanceUsage(
 ): number {
   const studentId = String(studentIdOverride ?? transaction.studentId ?? '').trim();
   if (!studentId) return 0;
-  const lessonPackageId = String(transaction.lessonPackageId ?? '').trim();
-  const sessionRecord = buildPrivateLessonSessionRecord(transaction);
   const saleWithStudent = { ...transaction, studentId };
 
-  return attendanceRecords.filter((record) => {
-    if (record.studentId !== studentId) return false;
-    if (record.status !== 'present' && record.status !== 'late') return false;
-
-    const matchesPackage =
-      (lessonPackageId && String(record.lessonId ?? '').trim() === lessonPackageId)
-      || attendanceRecordsShareSession(record, sessionRecord);
-    if (!matchesPackage) return false;
+  const matchedDates = new Set<string>();
+  for (const record of attendanceRecords) {
+    if (String(record.studentId ?? '').trim() !== studentId) continue;
+    if (!attendanceMatchesPrivateLessonPackage(record, saleWithStudent)) continue;
 
     if (!allSalesNewestFirst || allSalesNewestFirst.length === 0) {
-      // Geriye dönük: satış tarihinden önceki yoklamaları sayma.
-      const fromDate = String(transaction.date ?? '').slice(0, 10);
-      if (fromDate) {
-        const recordDate = String(record.date ?? '').slice(0, 10);
-        if (recordDate && recordDate < fromDate) return false;
+      // Soft eşleşmede satış tarihinden önceki devam da sayılır (paket sonradan kaydedilmiş olabilir).
+      // Hard eşleşmede satış öncesi yoklamayı sayma.
+      if (hardAttendanceMatchesPrivateLessonPackage(record, saleWithStudent)) {
+        const fromDate = String(transaction.date ?? '').slice(0, 10);
+        if (fromDate) {
+          const recordDate = String(record.date ?? '').slice(0, 10);
+          if (recordDate && recordDate < fromDate) continue;
+        }
       }
-      return true;
+    } else if (
+      resolveAttendanceOwnerSaleId(record, saleWithStudent, allSalesNewestFirst) !== String(transaction.id)
+    ) {
+      continue;
     }
 
-    return resolveAttendanceOwnerSaleId(record, saleWithStudent, allSalesNewestFirst) === String(transaction.id);
-  }).length;
+    const day = String(record.date ?? '').slice(0, 10);
+    if (day) matchedDates.add(day);
+  }
+  return matchedDates.size;
 }
 
 /** Satış günü ve öncesi yoklama (devir bakiyesi için). */
@@ -227,21 +321,20 @@ export function countPrivateLessonAttendanceBeforeDate(
   const until = String(untilDate ?? '').slice(0, 10);
   if (!sid || !until) return 0;
   const fromDate = String(transaction.date ?? '').slice(0, 10);
-  const lessonPackageId = String(transaction.lessonPackageId ?? '').trim();
-  const sessionRecord = buildPrivateLessonSessionRecord(transaction);
   const includeUntil = options?.includeUntilDate === true;
   const includeBeforeSale = options?.includeBeforeSaleDate !== false; // default: satış öncesi de say
 
-  return attendanceRecords.filter((record) => {
-    if (record.studentId !== sid) return false;
-    if (record.status !== 'present' && record.status !== 'late') return false;
+  const matchedDates = new Set<string>();
+  for (const record of attendanceRecords) {
+    if (String(record.studentId ?? '').trim() !== sid) continue;
+    if (!attendanceMatchesPrivateLessonPackage(record, transaction)) continue;
     const recordDate = String(record.date ?? '').slice(0, 10);
-    if (!recordDate) return false;
-    if (includeUntil ? recordDate > until : recordDate >= until) return false;
-    if (!includeBeforeSale && fromDate && recordDate < fromDate) return false;
-    if (lessonPackageId && String(record.lessonId ?? '').trim() === lessonPackageId) return true;
-    return attendanceRecordsShareSession(record, sessionRecord);
-  }).length;
+    if (!recordDate) continue;
+    if (includeUntil ? recordDate > until : recordDate >= until) continue;
+    if (!includeBeforeSale && fromDate && recordDate < fromDate) continue;
+    matchedDates.add(recordDate);
+  }
+  return matchedDates.size;
 }
 
 /**
@@ -331,7 +424,8 @@ export function buildPrivateLessonUsageById(
   getPackageLessonCount?: (sale: PrivateLessonSaleRef) => number | null | undefined,
 ): Map<string, PrivateLessonBalance> {
   const map = new Map<string, PrivateLessonBalance>();
-  const scoped = salesNewestFirst.filter((sale) => String(sale.studentId ?? '').trim() === String(studentId));
+  const sid = String(studentId ?? '').trim();
+  const scoped = salesNewestFirst.filter((sale) => String(sale.studentId ?? '').trim() === sid);
   const oldestFirst = [...scoped].reverse();
 
   for (const sale of oldestFirst) {
@@ -343,7 +437,7 @@ export function buildPrivateLessonUsageById(
           previousSale,
           attendanceRecords,
           scoped,
-          studentId,
+          sid,
           saleDate || '9999-99-99',
           previousBalance?.totalLessons,
           previousBalance?.startingUsedLessons,
@@ -355,7 +449,7 @@ export function buildPrivateLessonUsageById(
     const storedTotal = Number(sale.lessonCount ?? 0) || 0;
 
     // 1) Gösterim için çıkarılan devir (henüz kayda yazılmamış eski satışlar)
-    let inferredCarry = inferCarriedInLessons({
+    const inferredCarry = inferCarriedInLessons({
       sale,
       previousSale,
       previousRemaining,
@@ -363,7 +457,7 @@ export function buildPrivateLessonUsageById(
     });
 
     // 2) Satın alınan paket saati
-    let purchasedLessons =
+    const purchasedLessons =
       packageLessonCount != null && packageLessonCount > 0
         ? packageLessonCount
         : inferredCarry > 0
@@ -379,9 +473,10 @@ export function buildPrivateLessonUsageById(
     }
 
     const balance = computePrivateLessonBalance(sale, attendanceRecords, {
-      studentId,
+      studentId: sid,
       allSalesNewestFirst: scoped,
       carriedInLessons: addCarryToTotal,
+      fallbackTotalLessons: packageLessonCount ?? undefined,
     });
     if (!balance) continue;
 

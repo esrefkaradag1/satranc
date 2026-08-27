@@ -12,7 +12,7 @@ export const Dashboard3DBackground: React.FC<Props> = ({ children }) => {
   const enabled = useDashboard3DEnabled();
 
   return (
-    <div className="relative min-h-[720px] -m-4 sm:-m-6 lg:-m-8 p-4 sm:p-6 lg:p-8 overflow-hidden">
+    <div className="relative min-h-[720px] -m-3 sm:-m-5 lg:-m-6 p-3 sm:p-5 lg:p-6 overflow-hidden">
       {enabled && (
         <Suspense fallback={null}>
           <DashboardScene3D className="absolute inset-0 z-0 w-full h-full min-h-[720px]" />

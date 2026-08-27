@@ -120,6 +120,7 @@ import {
 import { homeworkWeekDaysUpToToday, syncStudentPlatformDays } from '../lib/platformStatsClientSync';
 import { loadPlatformDayStatsFromDb } from '../services/platformStatsCacheService';
 import { nextHomeworkPuzzle } from '../lib/puzzlePlayUtils';
+import { isPracticeHomeworkId } from '../lib/studentPuzzlePractice';
 import { attendanceRecordGroupName, attendanceRecordSessionScopeKey, attendanceRecordTime } from '../lib/attendanceSession';
 import { buildPrivateLessonUsageById } from '../lib/privateLessonUsage';
 import { requestTrainingNotifyCheck } from '../services/trainingNotifyClient';
@@ -840,9 +841,13 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     return filtered;
   }, [viewAs, panelPermissions, studentPrivateLessonSummary, privateLessonTransactions.length]);
 
+  const lichessPracticePool = useMemo(
+    () => puzzles.filter((p) => p.source === 'lichess' || !!p.lichessId),
+    [puzzles],
+  );
   const lichessPracticePuzzles = useMemo(
-    () => puzzles.filter((p) => p.source === 'lichess').slice(0, 24),
-    [puzzles]
+    () => lichessPracticePool.slice(0, 24),
+    [lichessPracticePool],
   );
 
   const [dailyLichessPuzzle, setDailyLichessPuzzle] = useState<Puzzle | null>(null);
@@ -1335,7 +1340,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   ];
 
   return (
-    <div className="flex min-h-screen bg-[#020617] text-slate-100 min-w-0">
+    <div className="app-ui-scale flex min-h-screen bg-[#020617] text-slate-100 min-w-0">
       <Sidebar
         activeTab={activeTab}
         setActiveTab={(id) => setActiveTab(id as PanelTab)}
@@ -1393,7 +1398,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           className={
             activeTab === 'study' || activeTab === 'live-lesson'
               ? 'relative z-10 flex-1 min-h-0 flex flex-col p-0 mx-auto w-full overflow-hidden'
-              : 'relative z-10 flex-1 p-4 sm:p-6 lg:p-8 mx-auto w-full min-w-0 overflow-y-auto overflow-x-hidden'
+              : 'relative z-10 flex-1 p-3 sm:p-5 lg:p-6 mx-auto w-full min-w-0 overflow-y-auto overflow-x-hidden'
           }
         >
         {activeTab === 'summary' && derived && (
@@ -1969,6 +1974,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                               student={student}
                               dailyPuzzle={dailyLichessPuzzle}
                               practicePuzzles={lichessPracticePuzzles}
+                              practicePool={lichessPracticePool}
                               loadingDaily={loadingDailyLichessPuzzle}
                               activityRows={lichessActivities}
                             />
@@ -2630,7 +2636,20 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             });
           }}
           onClose={() => setPlayingPuzzle(null)}
-          onAttemptRecord={(record) => addHomeworkAttempt(record)}
+          onAttemptRecord={(record) => {
+            if (isPracticeHomeworkId(record.homeworkId)) return;
+            const hw = assignedHomeworks.find((h) => h.id === record.homeworkId)
+              ?? homeworks.find((h) => h.id === record.homeworkId);
+            if (hw && hw.puzzles.length > 0) {
+              const allowed = new Set(hw.puzzles);
+              for (const id of hw.puzzles) {
+                const p = puzzles.find((x) => x.id === id);
+                if (p?.lichessId?.trim()) allowed.add(p.lichessId.trim());
+              }
+              if (!allowed.has(record.puzzleId)) return;
+            }
+            addHomeworkAttempt(record);
+          }}
         />
       )}
       {lichessViewerGame && student?.lichessUsername && (

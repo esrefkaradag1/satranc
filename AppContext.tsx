@@ -963,7 +963,47 @@ export function getDisplayStudentNo(student: Student, allStudents: Student[]): n
 
 /** Supabase homeworks tablosu: supabase_tables.sql'de id, title, puzzles, dueDate, assignedTo kolonları var.
  * Postgres tarafında bunlar sırasıyla id, title, puzzles, duedate, assignedto olarak tutulur.
- * O yüzden sadece bu alanları, doğru isimlerle gönderiyoruz. */
+ * startDate/endDate/createdAt → student_daily_targets.__hwMeta (yeni kolon gerekmez). */
+const HOMEWORK_META_KEY = '__hwMeta';
+
+function attachHomeworkMetaToTargets(
+  targets: Record<string, StudentDailyTarget> | undefined,
+  meta: { startDate?: string; endDate?: string; createdAt?: string },
+): Record<string, StudentDailyTarget> | undefined {
+  const clean: Record<string, string> = {};
+  if (meta.startDate?.trim()) clean.startDate = meta.startDate.trim().slice(0, 10);
+  if (meta.endDate?.trim()) clean.endDate = meta.endDate.trim().slice(0, 10);
+  if (meta.createdAt?.trim()) clean.createdAt = meta.createdAt.trim();
+  if (Object.keys(clean).length === 0) return targets;
+  return {
+    ...(targets || {}),
+    [HOMEWORK_META_KEY]: clean as unknown as StudentDailyTarget,
+  };
+}
+
+function detachHomeworkMetaFromTargets(raw: unknown): {
+  studentDailyTargets?: Record<string, StudentDailyTarget>;
+  startDate?: string;
+  endDate?: string;
+  createdAt?: string;
+} {
+  if (!raw || typeof raw !== 'object') return {};
+  const obj = raw as Record<string, unknown>;
+  const metaRaw = obj[HOMEWORK_META_KEY];
+  const rest: Record<string, StudentDailyTarget> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === HOMEWORK_META_KEY) continue;
+    if (v && typeof v === 'object') rest[k] = v as StudentDailyTarget;
+  }
+  const meta = metaRaw && typeof metaRaw === 'object' ? (metaRaw as Record<string, string>) : {};
+  return {
+    studentDailyTargets: Object.keys(rest).length > 0 ? rest : undefined,
+    startDate: meta.startDate ? String(meta.startDate).slice(0, 10) : undefined,
+    endDate: meta.endDate ? String(meta.endDate).slice(0, 10) : undefined,
+    createdAt: meta.createdAt ? String(meta.createdAt) : undefined,
+  };
+}
+
 function homeworkToDb(h: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (h.id != null) out.id = h.id;
@@ -974,7 +1014,18 @@ function homeworkToDb(h: Record<string, unknown>): Record<string, unknown> {
   if ((h as any).dailyGameTarget != null) out.daily_game_target = (h as any).dailyGameTarget;
   if ((h as any).dailyPuzzleTarget != null) out.daily_puzzle_target = (h as any).dailyPuzzleTarget;
   if ((h as any).minPuzzleAccuracyPct != null) out.min_puzzle_accuracy_pct = (h as any).minPuzzleAccuracyPct;
-  if ((h as any).studentDailyTargets != null) out.student_daily_targets = (h as any).studentDailyTargets;
+  const hasScheduleMeta =
+    (h as any).startDate != null || (h as any).endDate != null || (h as any).createdAt != null;
+  if ((h as any).studentDailyTargets != null || hasScheduleMeta) {
+    out.student_daily_targets = attachHomeworkMetaToTargets(
+      (h as any).studentDailyTargets as Record<string, StudentDailyTarget> | undefined,
+      {
+        startDate: (h as any).startDate as string | undefined,
+        endDate: (h as any).endDate as string | undefined,
+        createdAt: (h as any).createdAt as string | undefined,
+      },
+    );
+  }
   return out;
 }
 function dbToHomework(row: Record<string, unknown>): HomeworkAssignment {
@@ -988,10 +1039,10 @@ function dbToHomework(row: Record<string, unknown>): HomeworkAssignment {
   const dailyPuzzleTargetRaw = (row as any).dailyPuzzleTarget ?? (row as any).daily_puzzle_target;
   const minPuzzleAccuracyPctRaw = (row as any).minPuzzleAccuracyPct ?? (row as any).min_puzzle_accuracy_pct;
   const studentDailyTargetsRaw = (row as any).studentDailyTargets ?? (row as any).student_daily_targets;
-  const studentDailyTargets =
-    studentDailyTargetsRaw && typeof studentDailyTargetsRaw === 'object'
-      ? (studentDailyTargetsRaw as Record<string, StudentDailyTarget>)
-      : undefined;
+  const peeled = detachHomeworkMetaFromTargets(studentDailyTargetsRaw);
+  const startDateRaw = (row as any).startDate ?? (row as any).start_date ?? peeled.startDate;
+  const endDateRaw = (row as any).endDate ?? (row as any).end_date ?? peeled.endDate;
+  const createdAtRaw = (row as any).createdAt ?? (row as any).created_at ?? peeled.createdAt;
   return {
     id,
     title,
@@ -1001,7 +1052,10 @@ function dbToHomework(row: Record<string, unknown>): HomeworkAssignment {
     dailyGameTarget: dailyGameTargetRaw != null ? Number(dailyGameTargetRaw) : undefined,
     dailyPuzzleTarget: dailyPuzzleTargetRaw != null ? Number(dailyPuzzleTargetRaw) : undefined,
     minPuzzleAccuracyPct: minPuzzleAccuracyPctRaw != null ? Number(minPuzzleAccuracyPctRaw) : undefined,
-    studentDailyTargets,
+    studentDailyTargets: peeled.studentDailyTargets,
+    startDate: startDateRaw != null && String(startDateRaw).trim() ? String(startDateRaw).slice(0, 10) : undefined,
+    endDate: endDateRaw != null && String(endDateRaw).trim() ? String(endDateRaw).slice(0, 10) : undefined,
+    createdAt: createdAtRaw != null && String(createdAtRaw).trim() ? String(createdAtRaw) : undefined,
   };
 }
 
@@ -1241,7 +1295,18 @@ function dbToAttendanceRecord(row: Record<string, unknown>): AttendanceRecord {
   const branchOffice = branchOfficeVal != null ? String(branchOfficeVal) : undefined;
   const sessionTimeVal = (row as any).session_time ?? (row as any).sessionTime;
   const sessionTime = sessionTimeVal != null ? String(sessionTimeVal) : undefined;
-  const status = String((row as any).status ?? 'absent') as AttendanceRecord['status'];
+  const statusRaw = String((row as any).status ?? 'absent').trim().toLowerCase();
+  const status = (
+    statusRaw === 'present' || statusRaw === 'var'
+      ? 'present'
+      : statusRaw === 'late' || statusRaw === 'geç' || statusRaw === 'gec'
+        ? 'late'
+        : statusRaw === 'excused' || statusRaw === 'izinli'
+          ? 'excused'
+          : statusRaw === 'absent' || statusRaw === 'yok'
+            ? 'absent'
+            : (statusRaw as AttendanceRecord['status'])
+  );
   const notifiedParent = (row as any).notified_parent ?? (row as any).notifiedParent;
   const teacherNameVal = (row as any).teacher_name ?? (row as any).teacherName;
   const teacherName = teacherNameVal != null ? String(teacherNameVal) : undefined;
@@ -3741,7 +3806,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addHomework = useCallback(async (hw: Omit<HomeworkAssignment, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
-    const newHw = { ...hw, id } as HomeworkAssignment;
+    const newHw = {
+      ...hw,
+      id,
+      createdAt: hw.createdAt || new Date().toISOString(),
+    } as HomeworkAssignment;
     const incomingCategory = homeworkAssignmentCategory(newHw);
     const supersededIds: string[] = [];
     setHomeworks((prev) => {
@@ -3780,10 +3849,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [addActivityLog, students]);
 
   const updateHomework = useCallback(async (id: string, fields: Partial<HomeworkAssignment>) => {
-    setHomeworks(prev => prev.map(h => h.id === id ? { ...h, ...fields } : h));
+    let merged: HomeworkAssignment | null = null;
+    setHomeworks(prev => prev.map(h => {
+      if (h.id !== id) return h;
+      merged = { ...h, ...fields };
+      return merged;
+    }));
     const sb = getServiceSupabase();
     if (sb) try {
-      const payload = homeworkToDb(fields as Record<string, unknown>);
+      const scheduleTouched =
+        fields.startDate !== undefined
+        || fields.endDate !== undefined
+        || fields.createdAt !== undefined
+        || fields.studentDailyTargets !== undefined;
+      const payload = homeworkToDb(
+        (scheduleTouched && merged
+          ? (merged as unknown as Record<string, unknown>)
+          : (fields as Record<string, unknown>)),
+      );
       if (Object.keys(payload).length > 0) {
         const { error } = await sb.from('homeworks').update(payload).eq('id', id);
         if (error) console.error('Supabase homeworks update error:', error);

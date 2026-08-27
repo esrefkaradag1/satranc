@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, SkipForward } from 'l
 import type { StudyChapter } from '../../lib/studyTypes';
 import type { StudyEvent } from '../../studyEvents';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
-import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
+import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
 import {
   buildChapterReplaySteps,
   buildReplayTableRows,
@@ -184,7 +184,7 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
   return (
     <div ref={rowRef} className="flex flex-col md:flex-row min-h-0 flex-1 h-full overflow-hidden">
       <aside
-        className="study-replay-board-aside-mobile-reset shrink-0 border-b md:border-b-0 bg-black/25 flex items-center md:flex-col md:items-center gap-3 p-3 md:p-4 md:overflow-y-auto w-full"
+        className="study-replay-board-aside-mobile-reset shrink-0 border-b md:border-b-0 bg-black/25 flex flex-col items-center gap-3 p-3 md:p-4 md:overflow-y-auto w-full"
         style={{
           width: boardPanelWidthPx,
           minWidth: boardPanelWidthPx,
@@ -194,30 +194,31 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
         <ChessBoardFrame
           boardOrientation={orientation}
           hideCoordinates
-          className="w-[150px] sm:w-[170px] md:w-full rounded-lg overflow-hidden border border-white/10 shadow-inner shrink-0"
+          className="w-full max-w-[min(100%,320px)] md:max-w-none aspect-square rounded-lg overflow-hidden border border-white/10 shadow-inner shrink-0 mx-auto"
         >
           <Chessboard
             options={{
               id: `study-replay-${studyId}-${chapter?.id ?? 'x'}-${studentId}`,
               position: current?.fen ?? startFen,
               allowDragging: false,
+              showAnimations: false,
+              animationDurationInMs: 0,
               boardOrientation: orientation,
               darkSquareStyle: { backgroundColor: '#779952' },
               lightSquareStyle: { backgroundColor: '#edeed1' },
-              ...CHESSBOARD_ANIMATION,
               ...CHESSBOARD_NO_NOTATION,
             }}
           />
         </ChessBoardFrame>
 
-        <div className="flex-1 md:flex-none md:w-full min-w-0 flex flex-col gap-2 md:items-center">
-          <div className="md:text-center min-w-0 w-full">
+        <div className="w-full min-w-0 flex flex-col gap-2 items-center">
+          <div className="text-center min-w-0 w-full px-1">
             <p className="text-sm font-bold text-white truncate">{current?.label ?? 'Başlangıç'}</p>
             <p className="text-[11px] text-slate-500 mt-0.5">
               {stepIndex + 1} / {Math.max(1, steps.length)} pozisyon
             </p>
           </div>
-          <div className="flex items-center gap-1 flex-wrap md:justify-center">
+          <div className="flex items-center gap-1 flex-wrap justify-center">
             <button type="button" onClick={() => { setPlaying(false); setStepIndex(0); }} disabled={stepIndex <= 0} className={navBtn} aria-label="Başa dön">
               <SkipBack className="w-4 h-4" />
             </button>

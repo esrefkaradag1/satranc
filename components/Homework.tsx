@@ -18,6 +18,7 @@ import { HomeworkTargetSelector } from './homework/HomeworkTargetSelector';
 import { HomeworkAssignmentsList } from './homework/HomeworkAssignmentsList';
 import { HomeworkAssignmentDetail } from './homework/HomeworkAssignmentDetail';
 import { DailyProgramAssignmentDetail } from './homework/DailyProgramAssignmentDetail';
+import { HomeworkScheduleEditModal, type HomeworkScheduleEditSave } from './homework/HomeworkScheduleEditModal';
 import { WeeklyScheduleGrid } from './homework/WeeklyScheduleGrid';
 import { StudentPuzzleDetailModal } from './homework/StudentPuzzleDetailModal';
 import { StudentPlatformDetailModal } from './homework/StudentPlatformDetailModal';
@@ -104,6 +105,7 @@ function weekTimeForDate(
 import {
   countPerPuzzleResults,
   studentTotalThinkSeconds,
+  studentHasPlatformActivityInHomeworkRange,
   type StudentHwStat,
 } from '../lib/homeworkAnalysisUtils';
 
@@ -258,6 +260,37 @@ const Homework: React.FC = () => {
     setProgramAnalysisView('list');
     setProgramDetailStat(null);
   }, []);
+
+  const [scheduleEdit, setScheduleEdit] = useState<{
+    homework: HomeworkAssignment;
+    mode: 'extend' | 'edit';
+  } | null>(null);
+
+  const openExtendHomework = useCallback((homework: HomeworkAssignment) => {
+    setScheduleEdit({ homework, mode: 'extend' });
+  }, []);
+
+  const openEditHomeworkSchedule = useCallback((homework: HomeworkAssignment) => {
+    setScheduleEdit({ homework, mode: 'edit' });
+  }, []);
+
+  const handleSaveHomeworkSchedule = useCallback((patch: HomeworkScheduleEditSave) => {
+    if (!scheduleEdit) return;
+    const id = scheduleEdit.homework.id;
+    updateHomework(id, {
+      title: patch.title,
+      startDate: patch.startDate,
+      endDate: patch.endDate,
+      dueDate: patch.dueDate,
+    });
+    showToast(
+      scheduleEdit.mode === 'extend'
+        ? `Süre uzatıldı · bitiş ${new Date(patch.endDate + 'T12:00:00').toLocaleDateString('tr-TR')}`
+        : 'Program güncellendi',
+      'success',
+    );
+    setScheduleEdit(null);
+  }, [scheduleEdit, updateHomework, showToast]);
 
   const handleDeleteHomework = useCallback(async (homeworkId: string) => {
     const hw = homeworks.find((h) => h.id === homeworkId);
@@ -704,12 +737,13 @@ const Homework: React.FC = () => {
     applyPlatformTimePatch,
   ]);
 
-  const isStudentDailyActive = useCallback((studentId: string) => {
-    const today = homeworkDayKey();
-    const platform = studentPlatformWeekStats[studentId]?.[today];
-    if (!platform) return false;
-    return platform.games > 0 || platform.puzzleSolved > 0;
-  }, [studentPlatformWeekStats]);
+  const hasPlatformActivityInRange = useCallback(
+    (
+      studentId: string,
+      range: { startDay: string | null; endDay: string | null; createdDay: string | null },
+    ) => studentHasPlatformActivityInHomeworkRange(studentPlatformWeekStats[studentId], range),
+    [studentPlatformWeekStats],
+  );
 
   useEffect(() => {
     if (!PLATFORM_TODAY_AUTO_REFRESH_ENABLED) return;
@@ -1544,10 +1578,15 @@ const Homework: React.FC = () => {
       }
     }
 
+    const today = homeworkDayKey();
+    const due = assignDueDate.trim();
     addHomework({
       title: assignTitle.trim(),
       puzzles: isProgramForm ? [] : assignSelectedPuzzles,
-      dueDate: assignDueDate.trim(),
+      dueDate: due,
+      startDate: today,
+      endDate: due || undefined,
+      createdAt: new Date().toISOString(),
       assignedTo: selectedTargets,
       studentDailyTargets: isProgramForm && Object.keys(studentDailyTargets).length > 0
         ? studentDailyTargets
@@ -2361,6 +2400,8 @@ const Homework: React.FC = () => {
                   attempts={homeworkAttempts}
                   submissions={homeworkSubmissions}
                   onOpenDetail={openHomeworkDetail}
+                  onExtend={openExtendHomework}
+                  onEditSchedule={openEditHomeworkSchedule}
                 />
               ) : selectedHw ? (
                 <HomeworkAssignmentDetail
@@ -2372,6 +2413,8 @@ const Homework: React.FC = () => {
                   onSelectStudent={setDetailStat}
                   onResetStudent={handleResetStudent}
                   onDelete={() => handleDeleteHomework(selectedHw.id)}
+                  onExtend={() => openExtendHomework(selectedHw)}
+                  onEditSchedule={() => openEditHomeworkSchedule(selectedHw)}
                 />
               ) : (
                 <HomeworkAssignmentsList
@@ -2380,6 +2423,8 @@ const Homework: React.FC = () => {
                   attempts={homeworkAttempts}
                   submissions={homeworkSubmissions}
                   onOpenDetail={openHomeworkDetail}
+                  onExtend={openExtendHomework}
+                  onEditSchedule={openEditHomeworkSchedule}
                 />
               )}
             </>
@@ -2395,7 +2440,9 @@ const Homework: React.FC = () => {
                     attempts={homeworkAttempts}
                     submissions={homeworkSubmissions}
                     onOpenDetail={openProgramDetail}
-                    isStudentActive={isStudentDailyActive}
+                    onExtend={openExtendHomework}
+                    onEditSchedule={openEditHomeworkSchedule}
+                    hasPlatformActivityInRange={hasPlatformActivityInRange}
                     variant="platform"
                   />
                 ) : (
@@ -2428,6 +2475,8 @@ const Homework: React.FC = () => {
                   onSelectScheduleStudent={setProgramStudentId}
                   dayCompletion={programDayCompletion}
                   dayProgress={programDayProgress}
+                  onExtend={() => openExtendHomework(programSelectedHw)}
+                  onEditScheduleMeta={() => openEditHomeworkSchedule(programSelectedHw)}
                 />
               ) : (
                 <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-12 text-center">
@@ -2790,6 +2839,15 @@ const Homework: React.FC = () => {
           </div>
         </div>
       )}
+
+      {scheduleEdit ? (
+        <HomeworkScheduleEditModal
+          homework={scheduleEdit.homework}
+          mode={scheduleEdit.mode}
+          onClose={() => setScheduleEdit(null)}
+          onSave={handleSaveHomeworkSchedule}
+        />
+      ) : null}
     </div>
   );
 };

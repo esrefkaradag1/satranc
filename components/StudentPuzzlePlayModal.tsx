@@ -93,7 +93,10 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   );
   const { playFen, solutionMoves, studentColor, setupMoveSan, rawFen } = session;
   const hasSetupMove = !!setupMoveSan && !fenPositionsEqual(rawFen, playFen);
-  const fullSolution = Array.isArray(playPuzzle.solution) ? playPuzzle.solution.filter(Boolean) : [];
+  /** Kayda öğrenci çözüm hattı yazılır (rakip kurulum UCI'leri değil). */
+  const fullSolution = solutionMoves.length > 0
+    ? solutionMoves
+    : (Array.isArray(playPuzzle.solution) ? playPuzzle.solution.filter(Boolean) : []);
 
   const lichessRepairAttemptedRef = useRef(false);
 
@@ -411,9 +414,13 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
         if (wrongMove) {
           movesPlayedRef.current = [...movesPlayedRef.current, wrongMove.san];
           setMovesPlayed([...movesPlayedRef.current]);
+          setStatus('wrong');
+          // Yanlış hamle sonrası FEN kaydet — antrenör oynatmada hamleyi görebilsin.
+          reportAttempt(false, wrongCopy.fen());
+        } else {
+          setStatus('wrong');
+          reportAttempt(false, game.fen());
         }
-        setStatus('wrong');
-        reportAttempt(false, game.fen());
         return false;
       }
 

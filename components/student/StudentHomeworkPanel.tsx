@@ -92,12 +92,22 @@ export function buildHomeworkProgress(
     .filter((p): p is Puzzle => p != null);
   const totalPoints = hwPuzzles.reduce((s, p) => s + p.points, 0);
   const studentAttempts = attempts.filter((a) => a.studentId === student.id && a.homeworkId === hw.id);
+  const assignedIds = new Set(hw.puzzles);
+  for (const id of hw.puzzles) {
+    const p = puzzles.find((x) => x.id === id);
+    if (p?.lichessId?.trim()) assignedIds.add(p.lichessId.trim());
+  }
+  const assignedAttempts = studentAttempts.filter((a) => assignedIds.has(a.puzzleId));
   const submitted = submissions.some((s) => s.studentId === student.id && s.homeworkId === hw.id);
 
-  const solvedIds = new Set(studentAttempts.filter((a) => a.correct).map((a) => a.puzzleId));
-  const wrongIds = new Set(studentAttempts.filter((a) => !a.correct).map((a) => a.puzzleId));
-  const solvedCount = hwPuzzles.filter((p) => solvedIds.has(p.id)).length;
-  const wrongCount = hwPuzzles.filter((p) => wrongIds.has(p.id) && !solvedIds.has(p.id)).length;
+  const solvedIds = new Set(assignedAttempts.filter((a) => a.correct).map((a) => a.puzzleId));
+  const wrongIds = new Set(assignedAttempts.filter((a) => !a.correct).map((a) => a.puzzleId));
+  const solvedCount = hwPuzzles.filter((p) => solvedIds.has(p.id) || (p.lichessId && solvedIds.has(p.lichessId))).length;
+  const wrongCount = hwPuzzles.filter((p) => {
+    const failed = wrongIds.has(p.id) || (p.lichessId ? wrongIds.has(p.lichessId) : false);
+    const solved = solvedIds.has(p.id) || (p.lichessId ? solvedIds.has(p.lichessId) : false);
+    return failed && !solved;
+  }).length;
 
   const puzzleStates = hwPuzzles.map((puzzle) => {
     if (solvedIds.has(puzzle.id)) return { puzzle, state: 'done' as const };
@@ -152,9 +162,9 @@ export function buildHomeworkProgress(
       status = 'Tamamlandı';
     } else if (todayClosedMissed && dailyStarted && !dailyGoalsMet) {
       status = 'Kısmi yaptı';
-    } else if (todayClosedMissed && !hasWeekProgress && studentAttempts.length === 0) {
+    } else if (todayClosedMissed && !hasWeekProgress && assignedAttempts.length === 0) {
       status = 'Yapılmadı';
-    } else if (hasWeekProgress || studentAttempts.length > 0) {
+    } else if (hasWeekProgress || assignedAttempts.length > 0) {
       status = 'Devam Ediyor';
     } else if (todayClosedMissed) {
       status = 'Yapılmadı';
@@ -175,7 +185,7 @@ export function buildHomeworkProgress(
     status = 'Başlamadı';
     if (submitted || (hasDailyTargets && dailyGoalsMet) || (puzzlesDone && !hasDailyTargets)) {
       status = 'Tamamlandı';
-    } else if (studentAttempts.length > 0 || dailyStarted) {
+    } else if (assignedAttempts.length > 0 || dailyStarted) {
       status = 'Devam Ediyor';
     }
   }

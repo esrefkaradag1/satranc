@@ -1,5 +1,5 @@
 import React from 'react';
-import { Eye, List, Grid } from 'lucide-react';
+import { Eye, List, Grid, Pencil, CalendarPlus } from 'lucide-react';
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Student } from '../../types';
 import {
   getHomeworkBranchLabel,
@@ -11,13 +11,23 @@ import {
 import { homeworkHasPlatformGoals } from '../../lib/homeworkStatsBuilders';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
 
+type PlatformActivityRange = {
+  startDay: string | null;
+  endDay: string | null;
+  createdDay: string | null;
+};
+
 type Props = {
   homeworks: HomeworkAssignment[];
   students: Student[];
   attempts: HomeworkPuzzleAttempt[];
   submissions: HomeworkSubmission[];
   onOpenDetail: (homeworkId: string) => void;
+  onExtend?: (homework: HomeworkAssignment) => void;
+  onEditSchedule?: (homework: HomeworkAssignment) => void;
+  /** @deprecated Platform listesi için hasPlatformActivityInRange kullanın */
   isStudentActive?: (studentId: string) => boolean;
+  hasPlatformActivityInRange?: (studentId: string, range: PlatformActivityRange) => boolean;
   variant?: 'internal' | 'platform';
 };
 
@@ -27,7 +37,10 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
   attempts,
   submissions,
   onOpenDetail,
+  onExtend,
+  onEditSchedule,
   isStudentActive,
+  hasPlatformActivityInRange,
   variant = 'internal',
 }) => {
   const sorted = [...homeworks].sort((a, b) => {
@@ -54,7 +67,7 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
           {homeworks.length} kayıt
         </span>
       </div>
-      <ResponsiveTable minWidth={720}>
+      <ResponsiveTable minWidth={760}>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-[10px] text-slate-500 uppercase tracking-wider border-b border-white/[0.06] bg-black/20">
@@ -71,8 +84,12 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
           </thead>
           <tbody>
             {sorted.map((hw) => {
-              const participation = homeworkParticipation(hw, students, attempts, submissions, { isStudentActive });
+              const participation = homeworkParticipation(hw, students, attempts, submissions, {
+                isStudentActive: hasPlatformActivityInRange ? undefined : isStudentActive,
+                hasPlatformActivityInRange,
+              });
               const status = homeworkStatusLabel(hw);
+              const expired = status === 'Süresi Doldu';
               return (
                 <tr
                   key={hw.id}
@@ -82,9 +99,9 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
                     <div className="min-w-0">
                       <p className="font-semibold text-white truncate">{hw.title}</p>
                       <span className={`inline-block mt-1 text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                        status === 'Aktif'
-                          ? 'bg-emerald-500/15 text-emerald-400'
-                          : 'bg-rose-500/15 text-rose-400'
+                        expired
+                          ? 'bg-rose-500/15 text-rose-400'
+                          : 'bg-emerald-500/15 text-emerald-400'
                       }`}>
                         {status}
                       </span>
@@ -130,15 +147,42 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
                   <td data-label="Bitiş" className="py-3 px-3 text-center text-slate-400 text-xs hidden sm:table-cell">
                     {homeworkEndDateLabel(hw)}
                   </td>
-                  <td data-label="İşlem" className="py-3 px-4 text-center">
-                    <button
-                      type="button"
-                      onClick={() => onOpenDetail(hw.id)}
-                      className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/30 transition-colors"
-                      title="Detay"
-                    >
-                      <Eye className="w-4 h-4" />
-                    </button>
+                  <td data-label="İşlem" className="py-3 px-4">
+                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                      {onExtend ? (
+                        <button
+                          type="button"
+                          onClick={() => onExtend(hw)}
+                          className={`inline-flex items-center justify-center gap-1 px-2.5 h-9 rounded-full text-white text-[10px] font-bold shadow-lg transition-colors ${
+                            expired
+                              ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30'
+                              : 'bg-emerald-600/80 hover:bg-emerald-500 shadow-emerald-900/20'
+                          }`}
+                          title="Süreyi uzat"
+                        >
+                          <CalendarPlus className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">{expired ? 'Uzat' : 'Uzat'}</span>
+                        </button>
+                      ) : null}
+                      {onEditSchedule ? (
+                        <button
+                          type="button"
+                          onClick={() => onEditSchedule(hw)}
+                          className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/30 transition-colors"
+                          title="Düzenle"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => onOpenDetail(hw.id)}
+                        className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/30 transition-colors"
+                        title="Detay"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );

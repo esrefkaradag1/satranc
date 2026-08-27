@@ -108,8 +108,23 @@ export function resolveScopedStudents(
   if (!auth) return students;
   if (auth.role === 'admin') return students;
   if (auth.role === 'coach') {
-    if (auth.coachId) return filterStudentsByCoach(students, auth.coachId, trainingGroups);
-    if (auth.branch) return filterStudentsByClub(students, auth.branch, coaches);
+    const clubId = resolveClubIdFromAuth(auth, clubs) ?? auth.clubId?.trim();
+    const offices = clubOfficeNamesForAuth(auth, branchOfficeRecords, clubs);
+    const clubBranch = auth.branch?.trim() || '';
+
+    if (auth.coachId?.trim()) {
+      const assigned = filterStudentsByCoach(students, auth.coachId, trainingGroups);
+      // Doğrudan / grup ataması varsa onu kullan
+      if (assigned.length > 0) return assigned;
+      // Eski kayıtlar: izin var ama coachId öğrencilere işlenmemiş → kulüp kapsamına düş
+      if (clubBranch || clubId) {
+        return filterStudentsByClub(students, clubBranch || offices[0] || '', coaches, offices, clubId);
+      }
+      return [];
+    }
+    if (clubBranch) {
+      return filterStudentsByClub(students, clubBranch, coaches, offices, clubId);
+    }
     return [];
   }
   if (auth.role === 'club') {
@@ -188,7 +203,10 @@ export function resolveScopedTrainingGroups(
       ? trainingGroups.filter((g) => normalizeClubKey(g.branchOffice) === key)
       : trainingGroups;
     if (auth.coachId?.trim()) {
-      list = filterTrainingGroupsByCoach(list, auth.coachId, key || undefined);
+      const byCoach = filterTrainingGroupsByCoach(list, auth.coachId, key || undefined);
+      // Atanmış grup yoksa kulüp gruplarını göster (eski antrenör kayıtları)
+      if (byCoach.length > 0) return byCoach;
+      return list;
     }
     return list;
   }

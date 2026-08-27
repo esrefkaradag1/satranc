@@ -98,6 +98,7 @@ function normalizeHomework(h: Record<string, unknown>): HomeworkAssignment {
     if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
     const out: Record<string, StudentDailyTarget> = {};
     Object.entries(source as Record<string, unknown>).forEach(([studentId, targetRaw]) => {
+      if (studentId === '__hwMeta') return;
       if (!targetRaw || typeof targetRaw !== 'object' || Array.isArray(targetRaw)) return;
       const t = targetRaw as Record<string, unknown>;
       const dailyGameTarget = parseTargetNumber(t.dailyGameTarget ?? t.daily_game_target);
@@ -130,6 +131,25 @@ function normalizeHomework(h: Record<string, unknown>): HomeworkAssignment {
     return Object.keys(out).length > 0 ? out : undefined;
   };
 
+  let meta: { startDate?: string; endDate?: string; createdAt?: string } = {};
+  {
+    let source: unknown = h.studentDailyTargets ?? h.student_daily_targets;
+    if (typeof source === 'string') {
+      try { source = JSON.parse(source); } catch { source = null; }
+    }
+    if (source && typeof source === 'object' && !Array.isArray(source)) {
+      const raw = (source as Record<string, unknown>).__hwMeta;
+      if (raw && typeof raw === 'object') {
+        const m = raw as Record<string, unknown>;
+        meta = {
+          startDate: m.startDate != null ? String(m.startDate).slice(0, 10) : undefined,
+          endDate: m.endDate != null ? String(m.endDate).slice(0, 10) : undefined,
+          createdAt: m.createdAt != null ? String(m.createdAt) : undefined,
+        };
+      }
+    }
+  }
+
   return {
     id: String(h.id ?? ''),
     title: String(h.title ?? ''),
@@ -139,8 +159,9 @@ function normalizeHomework(h: Record<string, unknown>): HomeworkAssignment {
     branch: h.branch != null ? String(h.branch) : undefined,
     branchName: h.branchName != null ? String(h.branchName) : (h.branch_name != null ? String(h.branch_name) : undefined),
     groupName: h.groupName != null ? String(h.groupName) : (h.group_name != null ? String(h.group_name) : undefined),
-    startDate: h.startDate != null ? String(h.startDate) : (h.start_date != null ? String(h.start_date) : undefined),
-    endDate: h.endDate != null ? String(h.endDate) : (h.end_date != null ? String(h.end_date) : undefined),
+    startDate: h.startDate != null ? String(h.startDate) : (h.start_date != null ? String(h.start_date) : meta.startDate),
+    endDate: h.endDate != null ? String(h.endDate) : (h.end_date != null ? String(h.end_date) : meta.endDate),
+    createdAt: h.createdAt != null ? String(h.createdAt) : (h.created_at != null ? String(h.created_at) : meta.createdAt),
     timeLimitMinutes: typeof h.timeLimitMinutes === 'number' ? h.timeLimitMinutes : (typeof (h as { time_limit_minutes?: number }).time_limit_minutes === 'number' ? (h as { time_limit_minutes: number }).time_limit_minutes : undefined),
     hintCount: typeof h.hintCount === 'number' ? h.hintCount : undefined,
     description: h.description != null ? String(h.description) : undefined,

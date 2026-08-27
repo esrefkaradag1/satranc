@@ -94,12 +94,15 @@ function replaySingleAttempt(
 
   const game = new Chess(playFen);
   let solPly = 0;
+  let appliedAny = false;
+  let applyFailed = false;
 
   for (let i = 0; i < studentMoves.length; i++) {
     const san = studentMoves[i]!;
     const fenBefore = game.fen();
 
     if (!tryApply(game, san)) {
+      applyFailed = true;
       pushFrame(
         frames,
         fenBefore,
@@ -110,6 +113,7 @@ function replaySingleAttempt(
       break;
     }
 
+    appliedAny = true;
     pushFrame(
       frames,
       game.fen(),
@@ -139,10 +143,19 @@ function replaySingleAttempt(
       'correct',
       { attemptIndex },
     );
+    return;
+  }
+
+  // Yanlış denemede tahtayı finalFen'e zıplatma — kayıtlı finalFen çoğu zaman
+  // yanlış hamleden ÖNCEKİ pozisyon (drop reject); hamleyi geri alır gibi görünür.
+  if (appliedAny) {
+    pushFrame(frames, game.fen(), 'Yanlış deneme', 'wrong', { attemptIndex });
+  } else if (applyFailed) {
+    pushFrame(frames, game.fen(), 'Yanlış deneme', 'wrong', { attemptIndex });
   } else {
     pushFrame(
       frames,
-      attempt.finalFen?.trim() || game.fen(),
+      attempt.finalFen?.trim() || playFen,
       'Yanlış deneme',
       'wrong',
       { attemptIndex },
@@ -169,13 +182,19 @@ export function buildHomeworkPuzzleReplay(
     ? solutionMoves
     : sorted.find((a) => a.solutionMoves.length)?.solutionMoves ?? [];
 
-  pushFrame(frames, rawFen, 'Başlangıç', 'neutral');
-
-  if (setupMoveSan && rawFen !== playFen) {
-    const setupGame = new Chess(rawFen);
-    if (tryApply(setupGame, setupMoveSan)) {
-      pushFrame(frames, setupGame.fen(), `Kurulum: ${setupMoveSan}`, 'setup', { moveSan: setupMoveSan });
+  // Kurulum öncesi FEN varsa göster; materialize sonrası rawFen===playFen olabilir.
+  if (rawFen !== playFen) {
+    pushFrame(frames, rawFen, 'Başlangıç', 'neutral');
+    if (setupMoveSan) {
+      const setupGame = new Chess(rawFen);
+      if (tryApply(setupGame, setupMoveSan)) {
+        pushFrame(frames, setupGame.fen(), `Kurulum: ${setupMoveSan}`, 'setup', { moveSan: setupMoveSan });
+      } else {
+        pushFrame(frames, playFen, 'Oynanış pozisyonu', 'setup');
+      }
     }
+  } else {
+    pushFrame(frames, playFen, 'Başlangıç', 'neutral');
   }
 
   if (sorted.length === 0) {
