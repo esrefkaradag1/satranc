@@ -10,11 +10,11 @@ import type { Student, WhatsAppContactGroup, WhatsAppMessageLog, WhatsAppProvide
 import {
   loadWhatsAppConfig, saveWhatsAppConfig, loadWhatsAppTemplates, saveWhatsAppTemplates,
   loadWhatsAppAutoRules, saveWhatsAppAutoRules, loadWhatsAppLogs, loadWhatsAppContactGroups,
-  saveWhatsAppContactGroups, whatsAppStats, DEFAULT_WHATSAPP_CONFIG,
+  saveWhatsAppContactGroups, whatsAppStats, mergeWhatsAppLogs, DEFAULT_WHATSAPP_CONFIG,
 } from '../lib/whatsappStorage';
 import { renderWhatsAppTemplate, buildStudentTemplateVars, createCustomWhatsAppTemplate, isSystemWhatsAppTemplate } from '../lib/whatsappTemplates';
 import { primaryParentPhone } from '../lib/whatsappPhones';
-import { isValidWhatsAppPhone } from '../lib/whatsappUtils';
+import { isValidWhatsAppPhone, resolveWhatsAppLogParties } from '../lib/whatsappUtils';
 import {
   fetchWhatsAppStatus, fetchWhatsAppQr, fetchWhatsAppDevices, fetchWhatsAppPairCode,
   waitWhatsAppDeviceLogin,
@@ -23,6 +23,22 @@ import {
 } from '../services/whatsappClient';
 import { studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { normalizeClubKey } from '../lib/clubScope';
+import {
+  CHANNEL_LABELS,
+  NOTIFICATION_EVENT_META,
+  NOTIFICATION_EVENTS,
+  channelUsesWhatsApp,
+  type NotificationChannel,
+  type NotificationDeliveryRule,
+  type NotificationEvent,
+} from '../lib/notificationEvents';
+import {
+  defaultDeliveryRules,
+  deliveryRulesFromWhatsAppAuto,
+  loadNotificationDeliveryRules,
+  saveNotificationDeliveryRules,
+  syncWhatsAppAutoRulesFromDelivery,
+} from '../lib/notificationRouting';
 
 type View =
   | 'home' | 'manual' | 'bulk' | 'groups' | 'templates' | 'api' | 'auto'
@@ -37,7 +53,7 @@ const MODULE_TILES: { id: View; title: string; desc: string; icon: React.ReactNo
   { id: 'api', title: 'API Ayarları', desc: 'WaMessage anahtar ve cihaz', icon: <KeyRound className="w-5 h-5" /> },
   { id: 'parent-login', title: 'Veli Giriş Bilgileri', desc: 'Toplu veli hesap bilgisi', icon: <UserCheck className="w-5 h-5" /> },
   { id: 'contacts', title: 'Telefon Rehberi', desc: 'İletişim grupları', icon: <Contact className="w-5 h-5" /> },
-  { id: 'auto', title: 'Otomatik Mesajlar', desc: 'Antrenman ve ders bildirimleri', icon: <MessageCircle className="w-5 h-5" /> },
+  { id: 'auto', title: 'Bildirim Kanalları', desc: 'WhatsApp / veli paneli yönlendirme', icon: <MessageCircle className="w-5 h-5" /> },
 ];
 
 const TEMPLATE_VARS = [
@@ -45,6 +61,35 @@ const TEMPLATE_VARS = [
   'ders_adi', 'ders_linki', 'form_linki', 'kulup_adi', 'grup', 'tarih', 'saat',
   'bulmaca_hedef', 'mac_hedef', 'bulmaca_sayisi', 'mac_sayisi', 'antrenman_adi',
 ];
+
+const TEMPLATE_KEY_LABELS: Record<string, string> = {
+  parent_login: 'Veli giriş',
+  parent_consent: 'Veli formu',
+  lesson_start: 'Canlı ders',
+  training_completed: 'Antrenman tamam',
+  training_partial: 'Antrenman kısmi',
+  training_incomplete: 'Antrenman eksik',
+};
+
+function templateKeyLabel(key?: string): string {
+  if (!key) return '—';
+  return TEMPLATE_KEY_LABELS[key] ?? key;
+}
+
+function statusLabel(status: WhatsAppMessageLog['status']): string {
+  if (status === 'sent') return 'Gönderildi';
+  if (status === 'manual') return 'Manuel';
+  if (status === 'failed') return 'Hata';
+  if (status === 'queued') return 'Kuyrukta';
+  return status;
+}
+
+function statusTone(status: WhatsAppMessageLog['status']): string {
+  if (status === 'sent') return 'text-[#25D366] bg-[#25D366]/10 border-[#25D366]/25';
+  if (status === 'manual') return 'text-amber-200 bg-amber-500/10 border-amber-500/25';
+  if (status === 'failed') return 'text-rose-300 bg-rose-500/10 border-rose-500/25';
+  return 'text-slate-300 bg-slate-700/40 border-white/10';
+}
 
 const WhatsAppManagement: React.FC = () => {
   const {
@@ -62,6 +107,7 @@ const WhatsAppManagement: React.FC = () => {
   const [config, setConfig] = useState(loadWhatsAppConfig);
   const [templates, setTemplates] = useState(loadWhatsAppTemplates);
   const [autoRules, setAutoRules] = useState(loadWhatsAppAutoRules);
+  const [deliveryRules, setDeliveryRules] = useState<NotificationDeliveryRule[]>(loadNotificationDeliveryRules);
   const [contactGroups, setContactGroups] = useState(loadWhatsAppContactGroups);
   const [logs, setLogs] = useState(loadWhatsAppLogs);
   const [serverLogs, setServerLogs] = useState<WhatsAppMessageLog[]>([]);
@@ -97,10 +143,19 @@ const WhatsAppManagement: React.FC = () => {
   const [newContactPhones, setNewContactPhones] = useState('');
 
   const stats = useMemo(() => {
-    const merged = [...serverLogs, ...logs];
-    const byId = new Map(merged.map((l) => [l.id, l]));
-    return whatsAppStats([...byId.values()]);
+    const merged = mergeWhatsAppLogs(serverLogs, logs, 2000);
+    return whatsAppStats(merged);
   }, [logs, serverLogs]);
+
+  const mergedLogs = useMemo(() => {
+    const merged = mergeWhatsAppLogs(serverLogs, logs, 2000);
+    if (!branchOffice) return merged;
+    const officeKey = normalizeClubKey(branchOffice);
+    return merged.filter((log) => {
+      if (!log.branchOffice) return true;
+      return normalizeClubKey(log.branchOffice) === officeKey;
+    });
+  }, [logs, serverLogs, branchOffice]);
   const officeStudents = useMemo(
     () => students.filter((s) => !branchOffice || normalizeClubKey(s.branchOffice ?? '') === normalizeClubKey(branchOffice)),
     [students, branchOffice],
@@ -135,15 +190,37 @@ const WhatsAppManagement: React.FC = () => {
     });
   }, [showToast]);
 
+  const persistDeliveryRules = useCallback((next: NotificationDeliveryRule[]) => {
+    setDeliveryRules(next);
+    saveNotificationDeliveryRules(next);
+    const syncedAuto = syncWhatsAppAutoRulesFromDelivery(next, loadWhatsAppAutoRules());
+    setAutoRules(syncedAuto);
+    saveWhatsAppAutoRules(syncedAuto);
+    void saveWhatsAppServerSettings({
+      deliveryRules: next.map((r) => ({ event: r.event, channel: r.channel })),
+      rules: syncedAuto.map((r) => ({ event: r.event, enabled: r.enabled, templateKey: r.templateKey })),
+    }).then((r) => {
+      if (r.ok) showToast('Bildirim kanalları kaydedildi.', 'success');
+      else if (r.error) showToast(`Yerel kaydedildi; sunucu: ${r.error}`, 'warning');
+    });
+  }, [showToast]);
+
   const refreshServerLogs = useCallback(async () => {
     setServerLogsLoading(true);
     try {
-      const rows = await fetchWhatsAppServerLogs(100);
+      const rows = await fetchWhatsAppServerLogs(500);
       setServerLogs(rows);
+      setLogs(loadWhatsAppLogs());
     } finally {
       setServerLogsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (view !== 'home' && view !== 'logs') return;
+    setLogs(loadWhatsAppLogs());
+    void refreshServerLogs();
+  }, [view, refreshServerLogs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -195,6 +272,27 @@ const WhatsAppManagement: React.FC = () => {
           saveWhatsAppAutoRules(merged);
           return merged;
         });
+      }
+      if (remote.deliveryRules && remote.deliveryRules.length > 0) {
+        const mapped = NOTIFICATION_EVENTS.map((event) => {
+          const row = remote.deliveryRules!.find((r) => r.event === event);
+          return {
+            event,
+            channel: (row?.channel ?? 'whatsapp') as NotificationChannel,
+          };
+        });
+        setDeliveryRules(mapped);
+        saveNotificationDeliveryRules(mapped);
+      } else if (remote.rules.length > 0) {
+        const derived = deliveryRulesFromWhatsAppAuto(
+          remote.rules.map((r) => ({
+            event: r.event as NotificationEvent,
+            enabled: r.enabled,
+            templateKey: r.event,
+          })),
+        );
+        setDeliveryRules(derived);
+        saveNotificationDeliveryRules(derived);
       }
       if (remote.config) {
         setConfig((prev) => {
@@ -566,6 +664,7 @@ const WhatsAppManagement: React.FC = () => {
       </div>
 
       {view === 'home' && (
+        <>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {MODULE_TILES.map((tile) => (
             <button
@@ -582,6 +681,15 @@ const WhatsAppManagement: React.FC = () => {
             </button>
           ))}
         </div>
+
+        <WhatsAppMessageFeed
+          logs={mergedLogs}
+          students={students}
+          loading={serverLogsLoading}
+          onRefresh={() => void refreshServerLogs()}
+          onOpenAll={() => setView('logs')}
+        />
+        </>
       )}
 
       {view !== 'home' && (
@@ -851,86 +959,84 @@ Mesajınızı buraya yazın.
         </Panel>
       )}
 
-      {/* Auto rules */}
+      {/* Bildirim kanalları */}
       {view === 'auto' && (
-        <Panel title="Otomatik Mesajlar">
+        <Panel title="Bildirim Kanalları">
           <p className="text-sm text-slate-400 mb-2">
-            Bu olaylar gerçekleştiğinde velilere otomatik WhatsApp bildirimi gönderilir.
-            Antrenman bildirimleri sunucu zamanlayıcısı ile çalışır — şablon ve kurallar kaydedilince Supabase’e yazılır.
+            Her olay için bildirimin nereye gideceğini seçin: WhatsApp, veli paneli bildirim ekranı, ikisi birden veya kapalı.
           </p>
           {serverSyncNote ? (
             <p className="text-[11px] text-emerald-300/90 mb-4">{serverSyncNote}</p>
           ) : null}
-          {autoRules.map((rule) => (
-            <label key={rule.event} className="flex items-center justify-between gap-4 p-4 rounded-lg border border-white/5 bg-slate-800/30 cursor-pointer">
-              <div>
-                <div className="font-bold text-white text-sm">
-                  {rule.event === 'parent_login' && 'Öğrenci kaydı — veli giriş bilgileri'}
-                  {rule.event === 'parent_consent' && 'Öğrenci kaydı — veli form daveti'}
-                  {rule.event === 'lesson_start' && 'Canlı ders başlangıcı'}
-                  {rule.event === 'training_completed' && 'Antrenman tamamlandı — anında veli bildirimi'}
-                  {rule.event === 'training_partial' && 'Antrenman kısmi — her gün 23:00 veli bildirimi'}
-                  {rule.event === 'training_incomplete' && 'Antrenman yapılmadı — her gün 23:00 veli bildirimi'}
+          <div className="mb-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => persistDeliveryRules(defaultDeliveryRules())}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-white/10 bg-slate-800/50 text-slate-300 hover:border-indigo-500/30"
+            >
+              Varsayılanlara dön
+            </button>
+          </div>
+          {(['kayit', 'ders', 'antrenman'] as const).map((category) => {
+            const events = NOTIFICATION_EVENTS.filter((e) => NOTIFICATION_EVENT_META[e].category === category);
+            const categoryLabel = category === 'kayit' ? 'Kayıt' : category === 'ders' ? 'Ders' : 'Antrenman';
+            return (
+              <div key={category} className="mb-6">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">{categoryLabel}</h3>
+                <div className="space-y-2">
+                  {events.map((event) => {
+                    const meta = NOTIFICATION_EVENT_META[event];
+                    const rule = deliveryRules.find((r) => r.event === event);
+                    const channel = rule?.channel ?? 'whatsapp';
+                    const autoRule = autoRules.find((r) => r.event === event);
+                    return (
+                      <div
+                        key={event}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-lg border border-white/5 bg-slate-800/30"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="font-bold text-white text-sm">{meta.label}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">{meta.description}</div>
+                          {channelUsesWhatsApp(channel) && autoRule ? (
+                            <div className="text-[10px] text-slate-600 mt-1">WhatsApp şablonu: {autoRule.templateKey}</div>
+                          ) : null}
+                        </div>
+                        <select
+                          value={channel}
+                          onChange={(e) => {
+                            const nextChannel = e.target.value as NotificationChannel;
+                            const next = deliveryRules.map((r) =>
+                              r.event === event ? { ...r, channel: nextChannel } : r,
+                            );
+                            persistDeliveryRules(next);
+                          }}
+                          className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white min-w-[11rem] shrink-0"
+                        >
+                          {(Object.keys(CHANNEL_LABELS) as NotificationChannel[]).map((ch) => (
+                            <option key={ch} value={ch}>{CHANNEL_LABELS[ch]}</option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div className="text-xs text-slate-500">Şablon: {rule.templateKey}</div>
               </div>
-              <input
-                type="checkbox"
-                checked={rule.enabled}
-                onChange={(e) => {
-                  const next = autoRules.map((r) => r.event === rule.event ? { ...r, enabled: e.target.checked } : r);
-                  persistAutoRules(next);
-                }}
-                className="w-5 h-5"
-              />
-            </label>
-          ))}
+            );
+          })}
+          <p className="text-[11px] text-slate-500 border-t border-white/5 pt-4">
+            Antrenman bildirimleri sunucu zamanlayıcısı ile çalışır. Şablon metinleri için Mesaj Şablonları bölümünü kullanın.
+          </p>
         </Panel>
       )}
 
       {view === 'logs' && (
-        <Panel title="Gönderim Geçmişi">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <p className="text-sm text-slate-400">
-              Sunucuya yazılan otomatik ve API gönderimleri (son 100).
-            </p>
-            <button
-              type="button"
-              onClick={() => void refreshServerLogs()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-white/5"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${serverLogsLoading ? 'animate-spin' : ''}`} />
-              Yenile
-            </button>
-          </div>
-          {serverLogs.length === 0 ? (
-            <p className="text-sm text-slate-500 py-8 text-center">
-              {serverLogsLoading ? 'Yükleniyor…' : 'Henüz sunucu kaydı yok. Tablolar (supabase_whatsapp.sql) ve service role gerekir.'}
-            </p>
-          ) : (
-            <div className="max-h-[28rem] overflow-y-auto divide-y divide-white/5 rounded-xl border border-white/5">
-              {serverLogs.map((log) => (
-                <div key={log.id} className="px-3 py-2.5 text-xs space-y-1">
-                  <div className="flex flex-wrap items-center gap-2 justify-between">
-                    <span className="font-bold text-white">{log.studentName || log.phone || '—'}</span>
-                    <span className={`font-black uppercase tracking-wide ${
-                      log.status === 'sent' ? 'text-[#25D366]'
-                        : log.status === 'failed' ? 'text-rose-400'
-                          : 'text-amber-300'
-                    }`}>{log.status}</span>
-                  </div>
-                  <div className="text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
-                    <span>{log.createdAt ? new Date(log.createdAt).toLocaleString('tr-TR') : '—'}</span>
-                    <span>{log.templateKey || '—'}</span>
-                    <span>{log.phone}</span>
-                  </div>
-                  <p className="text-slate-400 line-clamp-2 whitespace-pre-wrap">{log.message}</p>
-                  {log.error ? <p className="text-rose-300/90">{log.error}</p> : null}
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
+        <WhatsAppMessageFeed
+          logs={mergedLogs}
+          students={students}
+          loading={serverLogsLoading}
+          onRefresh={() => void refreshServerLogs()}
+          showAll
+        />
       )}
 
       {/* API */}
@@ -1213,8 +1319,11 @@ const Panel: React.FC<{
   children: React.ReactNode;
   action?: React.ReactNode;
   wide?: boolean;
-}> = ({ title, subtitle, children, action, wide }) => (
-  <section className={`rounded-2xl border border-white/[0.07] bg-slate-900/70 p-5 sm:p-6 space-y-4 ${wide ? 'max-w-5xl' : 'max-w-2xl'}`}>
+  fullWidth?: boolean;
+}> = ({ title, subtitle, children, action, wide, fullWidth }) => (
+  <section className={`rounded-2xl border border-white/[0.07] bg-slate-900/70 p-5 sm:p-6 space-y-4 ${
+    fullWidth ? 'w-full max-w-none' : wide ? 'max-w-5xl' : 'max-w-2xl'
+  }`}>
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
         <h2 className="text-lg font-black tracking-tight text-white">{title}</h2>
@@ -1243,6 +1352,138 @@ const PreviewTemplate: React.FC<{ templates: WhatsAppTemplate[]; templateKey: Wh
   if (!tpl || !student) return null;
   const preview = renderWhatsAppTemplate(tpl.body, buildStudentTemplateVars(student));
   return <pre className="text-xs text-slate-400 bg-slate-800/50 rounded-lg p-3 whitespace-pre-wrap">{preview}</pre>;
+};
+
+const WhatsAppMessageFeed: React.FC<{
+  logs: WhatsAppMessageLog[];
+  students?: Student[];
+  loading?: boolean;
+  onRefresh?: () => void;
+  onOpenAll?: () => void;
+  showAll?: boolean;
+}> = ({ logs, students = [], loading, onRefresh, onOpenAll, showAll }) => {
+  const displayLogs = showAll ? logs : logs.slice(0, 100);
+
+  return (
+    <section className="w-full rounded-2xl border border-white/[0.07] bg-slate-900/70 overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3 sm:px-5">
+        <div>
+          <h2 className="text-sm sm:text-base font-black text-white">Giden mesajlar</h2>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Veliye giden mesajlar — hitap edilen veli ve ilgili öğrenci ayrı gösterilir
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {onOpenAll ? (
+            <button
+              type="button"
+              onClick={onOpenAll}
+              className="rounded-lg border border-white/10 px-3 py-1.5 text-[11px] font-bold text-slate-300 hover:bg-white/5"
+            >
+              Tümünü gör
+            </button>
+          ) : null}
+          {onRefresh ? (
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-[11px] font-bold text-slate-300 hover:bg-white/5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Yenile
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {displayLogs.length === 0 ? (
+        <p className="px-5 py-10 text-center text-sm text-slate-500">
+          {loading ? 'Mesajlar yükleniyor…' : 'Henüz kayıt yok. Mesaj gönderince veya otomatik bildirim çalışınca burada görünür.'}
+        </p>
+      ) : (
+        <div className={`w-full overflow-auto custom-scrollbar ${showAll ? 'max-h-[min(70vh,42rem)]' : 'max-h-[min(60vh,36rem)]'}`}>
+          <table className="w-full min-w-[960px] text-left text-xs">
+            <thead className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur border-b border-white/[0.06]">
+              <tr className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                <th className="px-4 py-2.5 font-bold w-[7.5rem]">Tarih</th>
+                <th className="px-3 py-2.5 font-bold min-w-[9rem]">Veli (alıcı)</th>
+                <th className="px-3 py-2.5 font-bold min-w-[9rem]">Öğrenci</th>
+                <th className="px-3 py-2.5 font-bold w-[8.5rem]">Telefon</th>
+                <th className="px-3 py-2.5 font-bold min-w-[14rem]">Mesaj</th>
+                <th className="px-3 py-2.5 font-bold w-[6.5rem]">Tür</th>
+                <th className="px-4 py-2.5 font-bold w-[6.5rem]">Durum</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/[0.04]">
+              {displayLogs.map((log) => {
+                const parties = resolveWhatsAppLogParties(log, students);
+                return (
+                <tr key={log.id} className="hover:bg-white/[0.02] align-top">
+                  <td className="px-4 py-2.5 whitespace-nowrap tabular-nums text-slate-400">
+                    {log.createdAt
+                      ? new Date(log.createdAt).toLocaleString('tr-TR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      : '—'}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="font-semibold text-white" title={parties.parentName}>
+                      {parties.parentName}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="font-medium text-slate-200" title={parties.studentName}>
+                      {parties.studentName}
+                    </div>
+                    {log.branchOffice ? (
+                      <div className="text-[10px] text-slate-600 truncate max-w-[12rem]" title={log.branchOffice}>
+                        {log.branchOffice}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2.5 font-mono text-slate-400 whitespace-nowrap">{log.phone || '—'}</td>
+                  <td className="px-3 py-2.5">
+                    <p className="text-slate-300 line-clamp-3 whitespace-pre-wrap" title={log.message}>
+                      {log.message || '—'}
+                    </p>
+                    {log.error ? (
+                      <p className="mt-1 text-[10px] text-rose-300/90 line-clamp-1" title={log.error}>
+                        {log.error}
+                      </p>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">
+                    {templateKeyLabel(log.templateKey)}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusTone(log.status)}`}>
+                      {statusLabel(log.status)}
+                    </span>
+                  </td>
+                </tr>
+              );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!showAll && logs.length > 100 ? (
+        <div className="border-t border-white/[0.06] px-4 py-2 text-center">
+          <button
+            type="button"
+            onClick={onOpenAll}
+            className="text-[11px] font-bold text-[#25D366] hover:underline"
+          >
+            +{logs.length - 100} kayıt daha — tüm geçmişi aç
+          </button>
+        </div>
+      ) : null}
+    </section>
+  );
 };
 
 export default WhatsAppManagement;

@@ -1,6 +1,18 @@
 import type { ExternalGameSnapshot } from '../lib/externalGameSnapshot';
 import { normalizeExternalGamePasteInput } from '../lib/externalGameLink';
 
+export type StudentPlatformPullHints = {
+  lichessUsername?: string;
+  chessComUsername?: string;
+};
+
+function appendProfileHints(qs: URLSearchParams, hints?: StudentPlatformPullHints) {
+  const lichessUsername = hints?.lichessUsername?.trim();
+  const chessComUsername = hints?.chessComUsername?.trim();
+  if (lichessUsername) qs.set('lichessUsername', lichessUsername);
+  if (chessComUsername) qs.set('chessComUsername', chessComUsername.toLowerCase());
+}
+
 export type ExternalGameSnapshotResponse = {
   ok?: boolean;
   parsed?: { platform: string; gameId: string; url: string };
@@ -34,9 +46,13 @@ export type StudentExternalGameAutoResponse = {
   error?: string;
 };
 
-export async function fetchStudentExternalGameAuto(studentId: string): Promise<StudentExternalGameAutoResponse> {
+export async function fetchStudentExternalGameAuto(
+  studentId: string,
+  hints?: StudentPlatformPullHints,
+): Promise<StudentExternalGameAutoResponse> {
   try {
     const qs = new URLSearchParams({ mode: 'auto', studentId });
+    appendProfileHints(qs, hints);
     const res = await fetch(`/api/external-game-snapshot?${qs.toString()}`);
     const data = (await res.json().catch(() => ({}))) as StudentExternalGameAutoResponse;
     if (!res.ok) {
@@ -57,9 +73,13 @@ export async function fetchStudentExternalGameAuto(studentId: string): Promise<S
   }
 }
 
-export async function fetchLichessOAuthLiveSnapshot(studentId: string): Promise<LichessOAuthLiveResponse> {
+export async function fetchLichessOAuthLiveSnapshot(
+  studentId: string,
+  hints?: StudentPlatformPullHints,
+): Promise<LichessOAuthLiveResponse> {
   try {
     const qs = new URLSearchParams({ mode: 'lichess-oauth', studentId });
+    appendProfileHints(qs, hints);
     const res = await fetch(`/api/external-game-snapshot?${qs.toString()}`);
     const data = (await res.json().catch(() => ({}))) as LichessOAuthLiveResponse;
     if (!res.ok) return { connected: false, error: data.error || 'Lichess canlı oyun alınamadı' };
@@ -79,11 +99,13 @@ export type ChessComLiveResponse = {
 export async function fetchChessComLiveSnapshot(
   studentId: string,
   sharedGameUrl?: string,
+  hints?: StudentPlatformPullHints,
 ): Promise<ChessComLiveResponse> {
   try {
     const qs = new URLSearchParams({ mode: 'chesscom-live', studentId });
     const link = String(sharedGameUrl ?? '').trim();
     if (link) qs.set('sharedGameUrl', link);
+    appendProfileHints(qs, hints);
     const res = await fetch(`/api/external-game-snapshot?${qs.toString()}`);
     const data = (await res.json().catch(() => ({}))) as ChessComLiveResponse;
     if (!res.ok) return { ok: false, error: data.error || 'Chess.com canlı oyun alınamadı' };
@@ -118,9 +140,13 @@ export type StudentActivityAutoResponse = {
   error?: string;
 };
 
-export async function fetchStudentActivityAuto(studentId: string): Promise<StudentActivityAutoResponse> {
+export async function fetchStudentActivityAuto(
+  studentId: string,
+  hints?: StudentPlatformPullHints,
+): Promise<StudentActivityAutoResponse> {
   try {
     const qs = new URLSearchParams({ mode: 'activity', studentId });
+    appendProfileHints(qs, hints);
     const res = await fetch(`/api/external-game-snapshot?${qs.toString()}`);
     const data = (await res.json().catch(() => ({}))) as StudentActivityAutoResponse;
     if (!res.ok) {
@@ -135,9 +161,13 @@ export async function fetchStudentActivityAuto(studentId: string): Promise<Stude
   }
 }
 
-export async function fetchStudentLivePlatformStatus(studentId: string): Promise<StudentLivePlatformStatus> {
+export async function fetchStudentLivePlatformStatus(
+  studentId: string,
+  hints?: StudentPlatformPullHints,
+): Promise<StudentLivePlatformStatus> {
   try {
     const qs = new URLSearchParams({ mode: 'live-platforms', studentId });
+    appendProfileHints(qs, hints);
     const res = await fetch(`/api/external-game-snapshot?${qs.toString()}`);
     const data = (await res.json().catch(() => ({}))) as StudentLivePlatformStatus;
     if (!res.ok) return { lichessLive: false, chesscomLive: false, lichessPuzzleRecent: false, chesscomPuzzleRecent: false };

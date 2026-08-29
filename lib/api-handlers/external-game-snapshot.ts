@@ -5,6 +5,7 @@ import {
   fetchStudentChessComCurrentActivity,
   fetchStudentExternalGameAuto,
   fetchStudentLivePlatformStatus,
+  type StudentPlatformPullHints,
 } from '../studentExternalGamePull';
 import { fetchStudentActivityAuto } from '../studentActivityPull';
 import { fetchChessComGameSnapshotFromParsed } from '../chesscomLiveGameServer';
@@ -21,6 +22,17 @@ type Res = {
 function queryParam(q: Record<string, string | string[] | undefined>, key: string): string {
   const raw = q[key];
   return (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? '';
+}
+
+function profileHintsFromQuery(
+  q: Record<string, string | string[] | undefined>,
+): StudentPlatformPullHints {
+  const lichessUsername = queryParam(q, 'lichessUsername');
+  const chessComUsername = queryParam(q, 'chessComUsername');
+  return {
+    ...(lichessUsername ? { lichessUsername } : {}),
+    ...(chessComUsername ? { chessComUsername } : {}),
+  };
 }
 
 async function snapshotForPlatform(
@@ -41,6 +53,7 @@ export default async function handler(req: Req, res: Res) {
   const link = queryParam(req.query, 'link');
   const platform = queryParam(req.query, 'platform') as ExternalGamePlatform | '';
   const gameId = queryParam(req.query, 'gameId');
+  const profileHints = profileHintsFromQuery(req.query);
 
   try {
     if (mode === 'lichess-oauth') {
@@ -59,7 +72,10 @@ export default async function handler(req: Req, res: Res) {
         return;
       }
       const sharedGameUrl = queryParam(req.query, 'sharedGameUrl');
-      const result = await fetchStudentChessComCurrentActivity(studentId, { sharedGameUrl });
+      const result = await fetchStudentChessComCurrentActivity(studentId, {
+        sharedGameUrl,
+        hints: profileHints,
+      });
       res.status(200).json(result);
       return;
     }
@@ -70,7 +86,7 @@ export default async function handler(req: Req, res: Res) {
         return;
       }
       try {
-        const status = await fetchStudentLivePlatformStatus(studentId);
+        const status = await fetchStudentLivePlatformStatus(studentId, profileHints);
         res.status(200).json(status);
       } catch {
         res.status(200).json({
@@ -88,7 +104,7 @@ export default async function handler(req: Req, res: Res) {
         res.status(400).json({ error: 'studentId gerekli' });
         return;
       }
-      const result = await fetchStudentExternalGameAuto(studentId);
+      const result = await fetchStudentExternalGameAuto(studentId, profileHints);
       res.status(200).json(result);
       return;
     }
@@ -98,7 +114,7 @@ export default async function handler(req: Req, res: Res) {
         res.status(400).json({ error: 'studentId gerekli' });
         return;
       }
-      const result = await fetchStudentActivityAuto(studentId);
+      const result = await fetchStudentActivityAuto(studentId, profileHints);
       res.status(200).json(result);
       return;
     }

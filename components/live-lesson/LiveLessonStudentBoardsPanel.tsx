@@ -130,10 +130,13 @@ export function LiveLessonStudentBoardsPanel({
     let cancelled = false;
 
     const refresh = async () => {
-      const ids = studentIdsKey.split(',').filter(Boolean);
       const entries = await Promise.all(
-        ids.map(async (sid) => {
-          const status = await fetchStudentLivePlatformStatus(sid);
+        students.map(async (student) => {
+          const sid = normalizeStudentId(student.id);
+          const status = await fetchStudentLivePlatformStatus(sid, {
+            lichessUsername: student.lichessUsername,
+            chessComUsername: student.chessComUsername,
+          });
           return [sid, status] as const;
         }),
       );
@@ -147,7 +150,7 @@ export function LiveLessonStudentBoardsPanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [studentIdsKey]);
+  }, [studentIdsKey, students]);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0f172a]/50">

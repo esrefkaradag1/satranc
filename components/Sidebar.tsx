@@ -56,6 +56,8 @@ interface SidebarProps {
   navCategories?: NavCategory[];
   /** Belirli menü id'leri için görünen etiket override'ı */
   labelOverrides?: Partial<Record<string, string>>;
+  /** Menü öğelerinde sağda gösterilecek sayı rozeti (ör. okunmamış bildirim) */
+  badgeOverrides?: Partial<Record<string, number>>;
   /** Düz menü listesi (antrenör paneli vb.) */
   navItems?: NavItem[];
   onLogout?: () => void;
@@ -91,8 +93,12 @@ function renderNavItem(
   iconOnly: boolean,
   onExpandDesktop: () => void,
   labelOverrides?: Partial<Record<string, string>>,
+  badgeOverrides?: Partial<Record<string, number>>,
 ) {
   const label = labelOverrides?.[item.id] ?? item.label;
+  const badgeCount = badgeOverrides?.[item.id];
+  const showBadge = typeof badgeCount === 'number' && badgeCount > 0;
+  const badgeLabel = badgeCount! > 99 ? '99+' : String(badgeCount);
   const isActive = activeTab === item.id;
   const isExpanded = expandedItem === item.id;
   const hasSubItems = !!item.subItems?.length;
@@ -129,7 +135,7 @@ function renderNavItem(
           <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-indigo-400 shadow-[0_0_8px_#818cf8]" />
         )}
         <div
-          className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-200 ${
+          className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-200 relative ${
             isActive || isParentActive
               ? "bg-white/20 text-white shadow-sm backdrop-blur-sm"
               : item.iconColor && ICON_BOX_CLASS[item.iconColor]
@@ -140,12 +146,29 @@ function renderNavItem(
           {React.cloneElement(item.icon as React.ReactElement<{ className?: string }>, {
             className: "w-4 h-4",
           })}
+          {showBadge ? (
+            <span
+              className={`absolute flex items-center justify-center font-bold text-white bg-rose-500 border border-[#0f172a] shadow-sm ${
+                iconOnly
+                  ? 'top-0 right-0 min-w-[1rem] h-4 px-0.5 text-[9px] rounded-full -translate-y-1/4 translate-x-1/4'
+                  : 'top-0 right-0 min-w-[1.125rem] h-[1.125rem] px-1 text-[10px] rounded-full -translate-y-1/3 translate-x-1/3'
+              }`}
+              aria-label={`${badgeCount} okunmamış`}
+            >
+              {badgeLabel}
+            </span>
+          ) : null}
         </div>
         {!iconOnly && (
           <>
             <span className="flex-1 text-left text-sm font-semibold tracking-tight truncate">
               {label}
             </span>
+            {showBadge ? (
+              <span className="shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full bg-rose-500 text-[10px] font-bold text-white flex items-center justify-center">
+                {badgeLabel}
+              </span>
+            ) : null}
             {hasSubItems && (
               <ChevronDown
                 className={`w-4 h-4 flex-shrink-0 transition-transform duration-200 ${
@@ -189,6 +212,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab,
   navCategories,
   labelOverrides,
+  badgeOverrides,
   navItems = NAV_ITEMS,
   onLogout,
   mobileOpen = false,
@@ -412,6 +436,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                           iconOnly,
                           expandDesktop,
                           labelOverrides,
+                          badgeOverrides,
                         ),
                       )}
                     </div>
@@ -439,6 +464,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 iconOnly,
                 expandDesktop,
                 labelOverrides,
+                badgeOverrides,
               )
             )}
           </div>

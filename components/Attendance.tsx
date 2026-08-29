@@ -33,6 +33,7 @@ import { GroupLessonLogPanel } from './attendance/GroupLessonLogPanel';
 import { isoDateToTr } from '../lib/lessonLogUtils';
 import { findTrainingGroupByName, studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { normalizeClubKey } from '../lib/clubScope';
+import { dispatchNotification } from '../services/notificationDispatch';
 import {
   attendanceRecordGroupName,
   attendanceRecordKind,
@@ -832,6 +833,8 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
   const handleSave = () => {
     const statusMap = { Present: 'present' as const, Absent: 'absent' as const, Late: 'late' as const, Excused: 'excused' as const };
     const resolvedTime = sessionTime.trim() || derivedSessionTime;
+    const lessonLabel = group.trim() || branch.trim() || 'Ders';
+    const dateLabel = isoDateToTr(date) || date;
     filteredStudents.forEach((s) => {
       const st = attendance[s.id];
       addAttendanceRecord({
@@ -847,6 +850,14 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
         teacherName: teacherName || undefined,
         lessonSummary: lessonSummary.trim() || undefined,
       });
+      if (st === 'Absent') {
+        void dispatchNotification('lesson_absent', {
+          student: s,
+          lessonName: lessonLabel,
+          branchOffice: branchOffice.trim() || s.branchOffice,
+          dateLabel,
+        });
+      }
     });
     setShowStudents(false);
     setIsEditingSession(false);

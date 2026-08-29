@@ -31,3 +31,45 @@ export function openWhatsAppSend(phone: string, message: string): void {
   const url = buildWhatsAppSendUrl(phone, message);
   window.open(url, '_blank', 'noopener,noreferrer');
 }
+
+/** Şablondaki "Merhaba Veli Adı," satırından hitap adını çıkarır. */
+export function parseWhatsAppGreetingName(message: string): string | undefined {
+  const m = String(message || '').match(/^Merhaba\s+([^,\n]+)/i);
+  const name = m?.[1]?.trim();
+  return name && name.length > 1 ? name : undefined;
+}
+
+type LogPartyStudent = {
+  id?: string;
+  name?: string;
+  parentName?: string;
+  fatherName?: string;
+  motherName?: string;
+};
+
+/** Gönderim kaydında veli (alıcı) ve öğrenci adlarını çözümler. */
+export function resolveWhatsAppLogParties(
+  log: {
+    studentId?: string;
+    studentName?: string;
+    recipientName?: string;
+    message?: string;
+  },
+  students: LogPartyStudent[] = [],
+): { parentName: string; studentName: string } {
+  const student = log.studentId
+    ? students.find((s) => s.id === log.studentId)
+    : students.find((s) => s.name && log.studentName && s.name === log.studentName);
+  const studentName = log.studentName?.trim() || student?.name?.trim() || '—';
+  const parentFromStudent =
+    student?.parentName?.trim()
+    || student?.fatherName?.trim()
+    || student?.motherName?.trim();
+  const parentFromMessage = parseWhatsAppGreetingName(log.message ?? '');
+  const parentName =
+    log.recipientName?.trim()
+    || parentFromStudent
+    || parentFromMessage
+    || '—';
+  return { parentName, studentName };
+}

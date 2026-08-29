@@ -41,7 +41,7 @@ import {
 } from '../lib/agoraVirtualBackground';
 import { DrawingToolbar, type DrawingTool } from '../components/DrawingToolbar';
 import { saveStudyAsync } from '../studyStorage';
-import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES } from '../lib/chessBoardUi';
+import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES, toggleSquareMark, removeSquareMarksOnSquare } from '../lib/chessBoardUi';
 import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStableEvalDisplay } from '../hooks/useStableEvalDisplay';
 import { whitePovWinningChances } from '../lib/winningChances';
@@ -90,7 +90,7 @@ import {
   keyboardTargetAllowsReplayNav,
 } from '../lib/boardFlipShortcut';
 import { promoteVariationLines } from '../lib/studySync/moveList';
-import { triggerWhatsAppAuto } from '../services/whatsappClient';
+import { dispatchNotification } from '../services/notificationDispatch';
 import { buildPrivateLessonSessionRecord } from '../lib/privateLessonUsage';
 import { normalizeSearchText, searchIncludesText } from '../lib/searchText';
 import Analysis from './Analysis';
@@ -2574,6 +2574,22 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         isStudentJoinedLiveClass(s.id, sessionMedia, remoteStreamsByUid),
     );
   }, [students, isStudentView, studentIdProp, sessionMedia, remoteStreamsByUid]);
+
+  const studentPlatformPullHints = useCallback(
+    (targetStudentId: string) => {
+      const st = students.find((s) => normalizeStudentId(s.id) === normalizeStudentId(targetStudentId));
+      if (!st) return undefined;
+      const lichessUsername = st.lichessUsername?.trim();
+      const chessComUsername = st.chessComUsername?.trim();
+      if (!lichessUsername && !chessComUsername) return undefined;
+      return {
+        ...(lichessUsername ? { lichessUsername } : {}),
+        ...(chessComUsername ? { chessComUsername } : {}),
+      };
+    },
+    [students],
+  );
+
   const [attendanceSaving, setAttendanceSaving] = useState(false);
   const [attendanceSaveToast, setAttendanceSaveToast] = useState<string | null>(null);
 
@@ -3817,7 +3833,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       for (const studentId of invited) {
         const student = students.find((s) => s.id === studentId);
         if (!student) continue;
-        void triggerWhatsAppAuto('lesson_start', {
+        void dispatchNotification('lesson_start', {
           student,
           lessonName: String(payload.room_name),
           lessonUrl,
@@ -3951,6 +3967,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     async (targetStudentId: string, opts?: { silent?: boolean }) => {
       const sid = normalizeStudentId(targetStudentId);
       if (!sid || isStudentView) return false;
+      const hints = studentPlatformPullHints(sid);
       setPullingStudentIds((prev) => new Set(prev).add(sid));
       try {
         const existing = sessionMediaRef.current.studentBoards?.[sid];
@@ -4012,7 +4029,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             : '';
 
         if (sharedUrl) {
-          const shared = await fetchChessComLiveSnapshot(sid, sharedUrl);
+          const shared = await fetchChessComLiveSnapshot(sid, sharedUrl, hints);
           if (shared.ok && shared.snapshot) {
             const boardSnap = externalSnapshotToStudentBoard(shared.snapshot);
             publishCoachStudentBoardSnapshot(sid, { ...boardSnap, sharedBy: 'student' });
@@ -4021,7 +4038,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           }
         }
 
-        const result = await fetchStudentActivityAuto(sid);
+        const result = await fetchStudentActivityAuto(sid, hints);
         if (result.ok && result.snapshot) {
           const boardSnap = activitySnapshotToStudentBoard(result.snapshot);
           publishCoachStudentBoardSnapshot(sid, boardSnap);
@@ -4042,7 +4059,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         }
 
         if (!sharedUrl) {
-          const chesscom = await fetchChessComLiveSnapshot(sid);
+          const chesscom = await fetchChessComLiveSnapshot(sid, undefined, hints);
           if (chesscom.ok && chesscom.snapshot) {
             const boardSnap = externalSnapshotToStudentBoard(chesscom.snapshot);
             publishCoachStudentBoardSnapshot(sid, boardSnap);
@@ -4067,7 +4084,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         });
       }
     },
-    [isStudentView, publishCoachStudentBoardSnapshot, showToast],
+    [isStudentView, publishCoachStudentBoardSnapshot, showToast, studentPlatformPullHints],
   );
 
   const pullStudentPuzzleFromPlatform = useCallback(
@@ -4421,8 +4438,19 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const marks = { ...(sessionMediaRef.current.attendanceMarks ?? {}), [id]: status };
       void pushSessionMediaRemote({ attendanceMarks: marks });
       if (status === 'present') recordLiveAttendance(id);
+      if (status === 'absent') {
+        const student = students.find((s) => normalizeStudentId(s.id) === id);
+        if (student) {
+          void dispatchNotification('lesson_absent', {
+            student,
+            lessonName: effectiveRoomName,
+            branchOffice: student.branchOffice,
+            dateLabel: new Date().toLocaleDateString('tr-TR'),
+          });
+        }
+      }
     },
-    [isStudentView, pushSessionMediaRemote, recordLiveAttendance],
+    [isStudentView, pushSessionMediaRemote, recordLiveAttendance, students, effectiveRoomName],
   );
 
   const markAllLiveAttendance = useCallback(
@@ -5995,6 +6023,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (drawingToolbarWrapRef.current?.contains(t)) return;
       if (drawingToolbarDesktopRef.current?.contains(t)) return;
       if (t.closest('[data-board-chrome]')) return;
+      if (t.closest('[data-drawing-ui]')) return;
       clearAllAnnotations();
     },
     [isStudentView, clearAllAnnotations],
@@ -6115,14 +6144,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     (square: string, markType: 'circle' | 'square' = 'circle') => {
       if (isStudentView) return;
       setMarks((prev) => {
-        const current = prev[square];
-        if (current?.type === markType && current.color === drawingColor) {
-          const next = { ...prev };
-          delete next[square];
-          pushState(fen, moveHistory, arrows, next, coachSide ?? undefined);
-          return next;
-        }
-        const next = { ...prev, [square]: { color: drawingColor, type: markType } };
+        const next = toggleSquareMark(prev, square, drawingColor, markType);
         pushState(fen, moveHistory, arrows, next, coachSide ?? undefined);
         return next;
       });
@@ -6235,6 +6257,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     isStudentView,
   ]);
 
+  const prefersCoarsePointer = useMemo(
+    () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches,
+    [],
+  );
+
   const boardOptions = {
     position: boardDisplayFen,
     boardOrientation: boardOrientation as 'white' | 'black',
@@ -6276,9 +6303,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       return ok;
     },
     allowDragging:
-      (isStudentView ? playSide != null : drawingTool === 'mouse') && boardExploreMode,
-    /** Dokunmatikte hafif kaymayı sürükleme sayıp tıklamayı yutmasın */
-    dragActivationDistance: 8,
+      !prefersCoarsePointer
+      && (isStudentView ? playSide != null : drawingTool === 'mouse')
+      && boardExploreMode,
+    /** Dokunmatikte sürükleme yerine tap-to-move; yüksek eşik yanlışlıkla sürüklemeyi azaltır */
+    dragActivationDistance: prefersCoarsePointer ? 24 : 8,
     onPieceClick: ({
       piece,
       square,
@@ -6319,17 +6348,42 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           if (ok) setMoveHintSquare(null);
           return;
         }
+        try {
+          const fenPos = (hoverFen || boardDisplayFen).trim();
+          const g = new Chess(fenPos);
+          const pc = g.get(square as any);
+          if (pc) {
+            const pieceType = `${pc.color}${String(pc.type).toUpperCase()}`;
+            if (liveLessonPieceEligibleForMoveHints(square, { pieceType })) {
+              setMoveHintSquare(square);
+              return;
+            }
+          }
+        } catch { /* ignore */ }
         setMoveHintSquare(null);
         return;
+      }
+      if (mousePlay && !moveHintSquare) {
+        try {
+          const fenPos = (hoverFen || boardDisplayFen).trim();
+          const g = new Chess(fenPos);
+          const pc = g.get(square as any);
+          if (pc) {
+            const pieceType = `${pc.color}${String(pc.type).toUpperCase()}`;
+            if (liveLessonPieceEligibleForMoveHints(square, { pieceType })) {
+              setMoveHintSquare(square);
+              return;
+            }
+          }
+        } catch { /* ignore */ }
       }
       if (isStudentView) return;
       if (drawingTool === 'mouse') {
         return;
       }
       if (drawingTool === 'eraser') {
+        const nextMarks = removeSquareMarksOnSquare(marks, square);
         const sq = square.toLowerCase();
-        const nextMarks = { ...marks };
-        delete nextMarks[square];
         const nextArrows = sanitizedArrows.filter(
           (a) => a.startSquare !== sq && a.endSquare !== sq,
         );
@@ -6338,16 +6392,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         pushState(fen, moveHistory, nextArrows, nextMarks, coachSide ?? undefined);
         return;
       }
+      const nextType = drawingTool === 'square' ? 'square' : (drawingTool === 'circle' ? 'circle' : 'x');
       setMarks((prev) => {
-        const nextType = drawingTool === 'square' ? 'square' : (drawingTool === 'circle' ? 'circle' : 'x');
-        const current = prev[square];
-        if (current && current.type === nextType && current.color === drawingColor) {
-          const next = { ...prev };
-          delete next[square];
-          pushState(fen, moveHistory, arrows, next, coachSide ?? undefined);
-          return next;
-        }
-        const next = { ...prev, [square]: { color: drawingColor, type: nextType } };
+        const next = toggleSquareMark(prev, square, drawingColor, nextType);
         pushState(fen, moveHistory, arrows, next, coachSide ?? undefined);
         return next;
       });
@@ -6632,11 +6679,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     async (targetStudentId: string, opts?: { silent?: boolean }) => {
       const sid = normalizeStudentId(targetStudentId);
       if (!sid || isStudentView) return false;
+      const hints = studentPlatformPullHints(sid);
       setPullingLichessLiveIds((prev) => new Set(prev).add(sid));
       try {
-        const result = await fetchStudentExternalGameAuto(sid);
+        const result = await fetchStudentExternalGameAuto(sid, hints);
         if (!result.ok || !result.snapshot) {
-          const activity = await fetchStudentActivityAuto(sid);
+          const activity = await fetchStudentActivityAuto(sid, hints);
           if (!activity.ok || !activity.snapshot) {
             if (!opts?.silent) {
               showToast(
@@ -6673,13 +6721,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         });
       }
     },
-    [isStudentView, publishCoachStudentBoardSnapshot, showToast, followGridStudent],
+    [isStudentView, publishCoachStudentBoardSnapshot, showToast, followGridStudent, studentPlatformPullHints],
   );
 
   const pullStudentChessComLiveFromPlatform = useCallback(
     async (targetStudentId: string, opts?: { silent?: boolean }) => {
       const sid = normalizeStudentId(targetStudentId);
       if (!sid || isStudentView) return false;
+      const hints = studentPlatformPullHints(sid);
       setPullingChessComLiveIds((prev) => new Set(prev).add(sid));
       try {
         const existing = sessionMediaRef.current.studentBoards?.[sid];
@@ -6716,7 +6765,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             ? existing.gameUrl.trim()
             : '';
 
-        const result = await fetchChessComLiveSnapshot(sid, sharedUrl || undefined);
+        const result = await fetchChessComLiveSnapshot(sid, sharedUrl || undefined, hints);
         if (result.ok && result.snapshot) {
           const boardSnap = externalSnapshotToStudentBoard(result.snapshot);
           const merged = sharedUrl ? { ...boardSnap, sharedBy: 'student' as const } : boardSnap;
@@ -6746,10 +6795,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         });
       }
     },
-    [isStudentView, publishCoachStudentBoardSnapshot, showToast, followGridStudent],
+    [isStudentView, publishCoachStudentBoardSnapshot, showToast, followGridStudent, studentPlatformPullHints],
   );
-
-  /** Admin: Sınıf listesi ekranı (oda seç veya yeni oda oluştur) */
   if (showClassList) {
     return (
       <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0f172a] overflow-hidden rounded-none sm:rounded-2xl lg:rounded-3xl border-0 sm:border border-white/[0.06] animate-in fade-in duration-500 atmospheric-bg ring-0 sm:ring-1 ring-indigo-500/10 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">

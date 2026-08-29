@@ -20,6 +20,7 @@ import {
  Eye,
  RotateCcw,
  PenLine,
+ UsersRound,
 } from'lucide-react';
 import { Student } from'../types';
 import {
@@ -36,6 +37,7 @@ import { parseDuesPeriodFromTransaction } from '../lib/duesCalendarUtils';
 import { APPLICATIONS_UPDATED_EVENT, loadApplicationListMetaAsync, loadApplicationPhotoMapAsync } from'../services/applicationStorage';
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
 import { StudentLoginQuickInfo, StudentLoginQuickInfoInline } from './student/StudentLoginQuickInfo';
+import StudentParentAccessModal from './student/StudentParentAccessModal';
 import StudentAvatar from './student/StudentAvatar';
 import { uploadStudentPhotoDataUrl, isDisplayablePhotoUrl } from '../lib/studentPhotoUpload';
 import { ResponsiveTable } from './ui/ResponsiveTable';
@@ -85,6 +87,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const [newBulkGroup, setNewBulkGroup] = useState('');
  const [newBulkCoachId, setNewBulkCoachId] = useState('');
  const [signedFormsStudent, setSignedFormsStudent] = useState<Student | null>(null);
+ const [parentAccessStudent, setParentAccessStudent] = useState<Student | null>(null);
  const [applicationMeta, setApplicationMeta] = useState<{ studentId: string; signed: boolean }[]>([]);
  const [applicationPhotos, setApplicationPhotos] = useState<Record<string, string>>({});
  const syncedPhotoIdsRef = React.useRef<Set<string>>(new Set());
@@ -896,15 +899,24 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <div><span className="text-slate-500">Aidat</span><div className="mt-0.5">{formatDues(student)}</div></div>
  <p className="col-span-2 truncate text-[11px]">{student.branchOffice || '—'}{student.branch ? ` · ${student.branch}` : ''}</p>
  </div>
- <div className="mt-2.5">
+ <div className="mt-2.5 flex flex-wrap items-center gap-2">
  <StudentLoginQuickInfoInline
    student={student}
    onCopied={() => showToast('Giriş bilgileri kopyalandı.', 'success')}
  />
+ <button
+   type="button"
+   onClick={() => setParentAccessStudent(student)}
+   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-violet-500/25 bg-violet-500/10 text-[10px] font-bold text-violet-200 hover:bg-violet-500/20 transition-colors"
+ >
+   <UsersRound className="w-3.5 h-3.5" />
+   Veli bilgisi
+ </button>
  </div>
  </div>
  </div>
  <div className="flex items-center justify-end gap-1 mt-3 pt-2.5 border-t border-white/[0.05]">
+ <button type="button" title="Veli & giriş bilgileri" onClick={() => setParentAccessStudent(student)} className="p-2.5 rounded-xl text-slate-400 hover:bg-violet-500/10 hover:text-violet-300"><UsersRound className="w-4 h-4" /></button>
  <button type="button" title="Detay" onClick={() => onViewDetail?.(student.id)} className="p-2.5 rounded-xl text-slate-400 hover:bg-indigo-500/10 hover:text-indigo-300"><Eye className="w-4 h-4" /></button>
  <button type="button" onClick={() => setSignedFormsStudent(student)} title="Başvuru formu" className="p-2.5 rounded-xl text-slate-400 hover:bg-violet-500/10 hover:text-violet-300"><PenLine className="w-4 h-4" /></button>
  <button type="button" onClick={() => handleOpenModal(student)} title="Düzenle" className="p-2.5 rounded-xl text-slate-400 hover:bg-amber-500/10 hover:text-amber-300"><Edit2 className="w-4 h-4" /></button>
@@ -1011,11 +1023,21 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  {student.registrationDate ? new Date(student.registrationDate).toLocaleDateString('tr-TR') : '—'}
  </td>
  <td data-label="Giriş" className="px-2.5 py-2.5">
+ <div className="flex items-start gap-1.5 min-w-0">
  <StudentLoginQuickInfo
    student={student}
    compact
    onCopied={() => showToast('Giriş bilgileri kopyalandı.', 'success')}
  />
+ <button
+   type="button"
+   title="Veli & giriş bilgileri"
+   onClick={() => setParentAccessStudent(student)}
+   className="shrink-0 p-1.5 rounded-lg text-slate-500 hover:text-violet-300 hover:bg-violet-500/10 transition-colors mt-0.5"
+ >
+   <UsersRound className="w-4 h-4" />
+ </button>
+ </div>
  </td>
  <td data-label="Durum" className="px-2.5 py-2.5">
  <span
@@ -1031,6 +1053,14 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </td>
  <td data-label="İşlem" className="sticky right-0 z-10 px-2.5 py-2.5 bg-[#1e293b]/95 group-hover:bg-[#243044] backdrop-blur-sm shadow-[-8px_0_12px_-8px_rgba(0,0,0,0.45)]">
  <div className="flex justify-end items-center gap-0.5 opacity-80 group-hover:opacity-100 transition-opacity">
+ <button
+ type="button"
+ title="Veli & giriş bilgileri"
+ onClick={() => setParentAccessStudent(student)}
+ className="p-2 rounded-lg text-slate-400 hover:bg-violet-500/10 hover:text-violet-300 transition-colors"
+ >
+ <UsersRound className="w-4 h-4" />
+ </button>
  <button
  type="button"
  title="Detay"
@@ -1407,6 +1437,14 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   setSignedFormsStudent(null);
   refreshApplications();
  }}
+ />
+ ) : null}
+
+ {parentAccessStudent ? (
+ <StudentParentAccessModal
+ student={students.find((s) => s.id === parentAccessStudent.id) ?? parentAccessStudent}
+ onClose={() => setParentAccessStudent(null)}
+ onCopied={() => showToast('Veli ve giriş bilgileri kopyalandı.', 'success')}
  />
  ) : null}
  </div>

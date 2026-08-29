@@ -98,6 +98,21 @@ export function saveWhatsAppContactGroups(groups: WhatsAppContactGroup[]) {
   saveJson(GROUPS_KEY, groups);
 }
 
+export function mergeWhatsAppLogs(
+  serverLogs: WhatsAppMessageLog[],
+  localLogs: WhatsAppMessageLog[],
+  limit = 100,
+): WhatsAppMessageLog[] {
+  const byId = new Map<string, WhatsAppMessageLog>();
+  for (const log of [...serverLogs, ...localLogs]) {
+    if (!log?.id) continue;
+    byId.set(log.id, log);
+  }
+  return [...byId.values()]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, limit);
+}
+
 export function whatsAppStats(logs: WhatsAppMessageLog[]) {
   const now = new Date();
   const today = now.toISOString().slice(0, 10);

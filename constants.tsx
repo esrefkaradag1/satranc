@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, FileText, CheckSquare, BarChart3, 
   Wallet, MessageCircle, Video, Image, ExternalLink, Trophy,
   CalendarCheck, BookOpen, ShieldCheck, Box, CalendarDays, Grid, CreditCard, User, Building2,
-  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone, Globe
+  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone, Globe, Bell
 } from 'lucide-react';
 
 /** Menü öğesi ikon kutusu rengi: Tailwind sınıfı (bg-* veya gradient) */
@@ -297,6 +297,7 @@ export const STUDENT_NAV_CATEGORIES: NavCategory[] = [
       { id: 'summary', label: 'Özet', icon: <LayoutDashboard className="w-5 h-5" />, iconColor: 'blue' },
       { id: 'schedule', label: 'Ders Programı', icon: <CalendarDays className="w-5 h-5" />, iconColor: 'teal' },
       { id: 'messages', label: 'Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
+      { id: 'notifications', label: 'Bildirimler', icon: <Bell className="w-5 h-5" />, iconColor: 'violet' },
       { id: 'analyses', label: 'Performans Analizi', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'indigo' },
     ],
   },

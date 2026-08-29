@@ -753,6 +753,8 @@ export interface WhatsAppMessageLog {
   templateKey?: WhatsAppTemplateKey;
   studentId?: string;
   studentName?: string;
+  /** Mesajın hitap ettiği veli / alıcı adı */
+  recipientName?: string;
   branchOffice?: string;
   error?: string;
   createdAt: string;

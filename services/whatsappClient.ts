@@ -1,5 +1,5 @@
 import type { Student, WhatsAppMessageLog, WhatsAppMessageStatus, WhatsAppConfig, WhatsAppTemplate } from '../types';
-import { openWhatsAppSend } from '../lib/whatsappUtils';
+import { openWhatsAppSend, parseWhatsAppGreetingName } from '../lib/whatsappUtils';
 import {
   appendWhatsAppLog,
   loadWhatsAppAutoRules,
@@ -16,6 +16,15 @@ import { parentPhonesForStudent } from '../lib/whatsappPhones';
 
 function genId(): string {
   return Math.random().toString(36).slice(2, 11);
+}
+
+function writeWhatsAppLog(entry: Omit<WhatsAppMessageLog, 'id' | 'createdAt'> & { message: string }) {
+  appendWhatsAppLog({
+    id: genId(),
+    createdAt: new Date().toISOString(),
+    ...entry,
+    recipientName: entry.recipientName ?? parseWhatsAppGreetingName(entry.message),
+  });
 }
 
 type SendResult = { ok: boolean; mode: 'api' | 'manual' | 'failed'; error?: string };
@@ -159,6 +168,7 @@ export async function sendWhatsAppMessage(options: {
   message: string;
   studentId?: string;
   studentName?: string;
+  recipientName?: string;
   branchOffice?: string;
   templateKey?: WhatsAppMessageLog['templateKey'];
   openManualFallback?: boolean;
@@ -201,24 +211,23 @@ export async function sendWhatsAppMessage(options: {
       : 'manual'
     : 'failed';
 
-  appendWhatsAppLog({
-    id: genId(),
+  writeWhatsAppLog({
     phone,
     message,
     status,
     templateKey: options.templateKey,
     studentId: options.studentId,
     studentName: options.studentName,
+    recipientName: options.recipientName,
     branchOffice: options.branchOffice,
     error: result.error,
-    createdAt: new Date().toISOString(),
   });
 
   return result;
 }
 
 export async function sendWhatsAppBulk(
-  recipients: { phone: string; message: string; studentId?: string; studentName?: string }[],
+  recipients: { phone: string; message: string; studentId?: string; studentName?: string; recipientName?: string }[],
   options?: { delayMs?: number; branchOffice?: string },
 ): Promise<{ sent: number; failed: number; manual: number; error?: string }> {
   const config = loadWhatsAppConfig();
@@ -247,58 +256,54 @@ export async function sendWhatsAppBulk(
       const rec = recipients.find((x) => x.phone === r.phone) ?? recipients[i];
       if (r.ok && r.mode === 'api') {
         sent += 1;
-        appendWhatsAppLog({
-          id: genId(),
+        writeWhatsAppLog({
           phone: r.phone,
           message: rec?.message ?? '',
           status: 'sent',
           studentId: rec?.studentId,
           studentName: rec?.studentName,
+          recipientName: rec?.recipientName,
           branchOffice: options?.branchOffice,
-          createdAt: new Date().toISOString(),
         });
       } else if (r.mode === 'manual' && rec) {
         if (allowWeb) {
           openWhatsAppSend(rec.phone, rec.message);
           manual += 1;
-          appendWhatsAppLog({
-            id: genId(),
+          writeWhatsAppLog({
             phone: rec.phone,
             message: rec.message,
             status: 'manual',
             studentId: rec.studentId,
             studentName: rec.studentName,
+            recipientName: rec.recipientName,
             branchOffice: options?.branchOffice,
-            createdAt: new Date().toISOString(),
           });
         } else {
           failed += 1;
           if (!firstError) firstError = r.error || 'Otomatik gönderim kapalı';
-          appendWhatsAppLog({
-            id: genId(),
+          writeWhatsAppLog({
             phone: r.phone,
             message: rec?.message ?? '',
             status: 'failed',
             studentId: rec?.studentId,
             studentName: rec?.studentName,
+            recipientName: rec?.recipientName,
             branchOffice: options?.branchOffice,
             error: r.error || 'Otomatik gönderim kapalı',
-            createdAt: new Date().toISOString(),
           });
         }
       } else {
         failed += 1;
         if (!firstError && r.error) firstError = r.error;
-        appendWhatsAppLog({
-          id: genId(),
+        writeWhatsAppLog({
           phone: r.phone,
           message: rec?.message ?? '',
           status: 'failed',
           studentId: rec?.studentId,
           studentName: rec?.studentName,
+          recipientName: rec?.recipientName,
           branchOffice: options?.branchOffice,
           error: r.error || 'Toplu gönderim hatası',
-          createdAt: new Date().toISOString(),
         });
       }
     }
@@ -331,46 +336,6 @@ export type WhatsAppAutoContext = {
   lessonUrl?: string;
   branchOffice?: string;
 };
-
-export async function triggerWhatsAppAuto(
-  event: 'parent_login' | 'parent_consent' | 'lesson_start' | 'training_completed' | 'training_incomplete',
-  ctx: WhatsAppAutoContext,
-): Promise<number> {
-  const rules = loadWhatsAppAutoRules();
-  const rule = rules.find((r) => r.event === event);
-  if (!rule?.enabled) return 0;
-
-  const templates = loadWhatsAppTemplates();
-  const tpl = findTemplate(templates, rule.templateKey);
-  if (!tpl || !ctx.student) return 0;
-
-  const phones = parentPhonesForStudent(ctx.student);
-  if (phones.length === 0) return 0;
-
-  const vars = buildStudentTemplateVars(ctx.student, {
-    form_linki: ctx.formUrl ?? '',
-    ders_adi: ctx.lessonName ?? '',
-    ders_linki: ctx.lessonUrl ?? '',
-    tarih: new Date().toLocaleDateString('tr-TR'),
-    saat: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
-  });
-  const message = renderWhatsAppTemplate(tpl.body, vars);
-
-  let count = 0;
-  for (const phone of phones) {
-    const r = await sendWhatsAppMessage({
-      phone,
-      message,
-      studentId: ctx.student.id,
-      studentName: ctx.student.name,
-      branchOffice: ctx.branchOffice ?? ctx.student.branchOffice,
-      templateKey: tpl.key,
-      openManualFallback: false,
-    });
-    if (r.ok && r.mode === 'api') count += 1;
-  }
-  return count;
-}
 
 /** Veli giriş bilgileri toplu gönder */
 export async function sendParentLoginBulk(
@@ -409,6 +374,7 @@ export async function fetchWhatsAppServerSettings(): Promise<{
   };
   templates: { key: string; body: string; enabled: boolean }[];
   rules: { event: string; enabled: boolean }[];
+  deliveryRules?: { event: string; channel: string }[];
   scheduler?: { eveningHourTr: number; pollIntervalMin: number; kinds: string[] };
 } | null> {
   try {
@@ -424,6 +390,7 @@ export async function fetchWhatsAppServerSettings(): Promise<{
       },
       templates: (data.templates as { key: string; body: string; enabled: boolean }[]) ?? [],
       rules: (data.rules as { event: string; enabled: boolean }[]) ?? [],
+      deliveryRules: (data.deliveryRules as { event: string; channel: string }[]) ?? [],
       scheduler: data.scheduler as { eveningHourTr: number; pollIntervalMin: number; kinds: string[] } | undefined,
     };
   } catch {
@@ -435,6 +402,7 @@ export async function saveWhatsAppServerSettings(payload: {
   config?: Partial<WhatsAppConfig>;
   templates?: WhatsAppTemplate[];
   rules?: { event: string; enabled: boolean; templateKey?: string }[];
+  deliveryRules?: { event: string; channel: string }[];
 }): Promise<{ ok: boolean; error?: string }> {
   try {
     await callWhatsAppApi('settings-save', payload as Record<string, unknown>);

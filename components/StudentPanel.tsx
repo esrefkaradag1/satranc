@@ -37,6 +37,8 @@ import {
   Copy,
   Camera,
   KeyRound,
+  Bell,
+  MessageCircle,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { analyzeStudentHomework } from '../services/geminiService';
@@ -64,6 +66,8 @@ import { LichessOAuthConnect } from './student/LichessOAuthConnect';
 import LichessGameViewerModal from './LichessGameViewerModal';
 import ChessComGameViewerModal from './ChessComGameViewerModal';
 import StudentMessagesPanel from './StudentMessagesPanel';
+import ParentNotificationsPanel from './student/ParentNotificationsPanel';
+import { listParentPanelNotifications } from '../lib/parentPanelNotifications';
 import PlatformViewTabs, { type PlatformViewTab } from './PlatformViewTabs';
 import Sidebar from './Sidebar';
 import AccountDropdown, { type AccountDropdownItem } from './ui/AccountDropdown';
@@ -174,7 +178,32 @@ function ageFromBirthDate(iso?: string): number | null {
   return age;
 }
 
-type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages';
+const PARENT_ESSENTIAL_NAV_IDS = new Set(['notifications', 'messages']);
+
+function mergeParentEssentialNavItems(categories: typeof STUDENT_NAV_CATEGORIES) {
+  const genelSource = STUDENT_NAV_CATEGORIES.find((c) => c.title === 'Genel');
+  if (!genelSource) return categories;
+  return categories.map((cat) => {
+    if (cat.title !== 'Genel') return cat;
+    const existingIds = new Set(cat.items.map((i) => i.id));
+    const toAdd = genelSource.items.filter((i) => PARENT_ESSENTIAL_NAV_IDS.has(i.id) && !existingIds.has(i.id));
+    if (toAdd.length === 0) return cat;
+    const merged = [...cat.items];
+    for (const item of toAdd) {
+      const msgIdx = merged.findIndex((i) => i.id === 'messages');
+      if (item.id === 'notifications' && msgIdx >= 0) merged.splice(msgIdx + 1, 0, item);
+      else merged.push(item);
+    }
+    return { ...cat, items: merged };
+  });
+}
+
+function parentDisplayNameFor(student: Student): string {
+  return student.parentName?.trim() || student.fatherName?.trim() || student.motherName?.trim() || 'Veli';
+}
+
+type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages' | 'notifications';
+
 
 const STUDENT_PANEL_REFRESH_TABS = new Set<PanelTab>(['summary', 'schedule', 'payments', 'dues', 'attendance', 'profile', 'analyses', 'private-lesson']);
 
@@ -207,6 +236,7 @@ const PANEL_TAB_TO_SLUG: Record<PanelTab, string> = {
   lichess: 'lichess',
   chesscom: 'chesscom',
   messages: 'mesajlar',
+  notifications: 'bildirimler',
 };
 const PANEL_SLUG_TO_TAB: Record<string, PanelTab> = Object.fromEntries(
   Object.entries(PANEL_TAB_TO_SLUG).map(([tab, slug]) => [slug, tab as PanelTab])
@@ -304,6 +334,24 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+
+  const refreshUnreadNotificationCount = useCallback(async (knownCount?: number) => {
+    if (!studentId || viewAs !== 'parent') {
+      setUnreadNotificationCount(0);
+      return;
+    }
+    if (typeof knownCount === 'number') {
+      setUnreadNotificationCount(knownCount);
+      return;
+    }
+    try {
+      const list = await listParentPanelNotifications(studentId);
+      setUnreadNotificationCount(list.filter((n) => !n.read).length);
+    } catch {
+      setUnreadNotificationCount(0);
+    }
+  }, [studentId, viewAs]);
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(() =>
     initialPanel.tab === 'live-lesson' && initialPanel.liveRoomId ? initialPanel.liveRoomId : null
   );
@@ -812,7 +860,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       filtered = filtered
         .map((cat) => ({
           ...cat,
-          items: cat.items.filter((i) => i.id !== 'payments' && i.id !== 'dues' && i.id !== 'private-lesson'),
+          items: cat.items.filter((i) => i.id !== 'payments' && i.id !== 'dues' && i.id !== 'private-lesson' && i.id !== 'notifications'),
         }))
         .filter((cat) => cat.items.length > 0);
     }
@@ -833,10 +881,13 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             .map((i) => {
               if (i.id === 'attendance') return { ...i, label: 'Yoklama' };
               if (i.id === 'payments') return { ...i, label: 'Aidat ve Ödemeler' };
+              if (i.id === 'profile') return { ...i, label: 'Veli profili' };
+              if (i.id === 'puzzles') return { ...i, label: 'Antrenman' };
               return i;
             }),
         }))
         .filter((cat) => cat.items.length > 0);
+      filtered = mergeParentEssentialNavItems(filtered);
     }
     return filtered;
   }, [viewAs, panelPermissions, studentPrivateLessonSummary, privateLessonTransactions.length]);
@@ -902,6 +953,10 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if (viewAs !== 'parent') return;
     if (activeTab === 'dues') setActiveTab('payments');
   }, [viewAs, activeTab, setActiveTab]);
+
+  useEffect(() => {
+    void refreshUnreadNotificationCount();
+  }, [refreshUnreadNotificationCount, activeTab]);
 
   useEffect(() => {
     if (activeTab !== 'lichess') return;
@@ -1314,30 +1369,69 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       </span>
     );
 
-  const studentAccountMenuItems: AccountDropdownItem[] = [
-    {
-      id: 'summary',
-      label: 'Panelim',
-      icon: <LayoutDashboard className="w-5 h-5" />,
-      onClick: () => setActiveTab('summary'),
-    },
-    {
-      id: 'profile',
-      label: 'Profilim',
-      icon: <User className="w-5 h-5" />,
-      onClick: () => setActiveTab('profile'),
-    },
-    {
-      id: 'account',
-      label: 'Hesap bilgileri',
-      icon: <KeyRound className="w-5 h-5" />,
-      onClick: () => {
-        setLoginPhone(student.parentPhone || '');
-        setLoginPin(student.parentPin || '');
-        setShowLoginInfoModal(true);
-      },
-    },
-  ];
+  const studentAccountMenuItems: AccountDropdownItem[] = viewAs === 'parent'
+    ? [
+        {
+          id: 'notifications',
+          label: 'Bildirimler',
+          icon: <Bell className="w-5 h-5" />,
+          onClick: () => setActiveTab('notifications'),
+        },
+        {
+          id: 'messages',
+          label: 'Mesajlar',
+          icon: <MessageCircle className="w-5 h-5" />,
+          onClick: () => setActiveTab('messages'),
+        },
+        {
+          id: 'summary',
+          label: 'Özet',
+          icon: <LayoutDashboard className="w-5 h-5" />,
+          onClick: () => setActiveTab('summary'),
+        },
+        {
+          id: 'profile',
+          label: 'Veli profili',
+          icon: <User className="w-5 h-5" />,
+          onClick: () => setActiveTab('profile'),
+        },
+        {
+          id: 'account',
+          label: 'Giriş bilgileri',
+          icon: <KeyRound className="w-5 h-5" />,
+          onClick: () => {
+            setLoginPhone(student.parentPhone || '');
+            setLoginPin(student.parentPin || '');
+            setShowLoginInfoModal(true);
+          },
+        },
+      ]
+    : [
+        {
+          id: 'summary',
+          label: 'Panelim',
+          icon: <LayoutDashboard className="w-5 h-5" />,
+          onClick: () => setActiveTab('summary'),
+        },
+        {
+          id: 'profile',
+          label: 'Profilim',
+          icon: <User className="w-5 h-5" />,
+          onClick: () => setActiveTab('profile'),
+        },
+        {
+          id: 'account',
+          label: 'Hesap bilgileri',
+          icon: <KeyRound className="w-5 h-5" />,
+          onClick: () => {
+            setLoginPhone(student.parentPhone || '');
+            setLoginPin(student.parentPin || '');
+            setShowLoginInfoModal(true);
+          },
+        },
+      ];
+
+  const veliAdi = parentDisplayNameFor(student);
 
   return (
     <div className="app-ui-scale flex min-h-screen bg-[#020617] text-slate-100 min-w-0">
@@ -1345,13 +1439,18 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         activeTab={activeTab}
         setActiveTab={(id) => setActiveTab(id as PanelTab)}
         navCategories={navCategoriesForView}
-        labelOverrides={{ puzzles: 'Antreman' }}
+        labelOverrides={{ puzzles: viewAs === 'parent' ? 'Antrenman' : 'Antreman' }}
+        badgeOverrides={
+          viewAs === 'parent' && unreadNotificationCount > 0
+            ? { notifications: unreadNotificationCount }
+            : undefined
+        }
         onLogout={handleLogout}
         footerProfile={{
-          name: student.name,
-          subtitle: viewAs === 'student' ? 'Öğrenci hesabı' : `${student?.name ?? 'Öğrenci'} velisi`,
-          photoUrl: student.photoUrl,
-          initials: initials(student.name),
+          name: viewAs === 'student' ? student.name : veliAdi,
+          subtitle: viewAs === 'student' ? 'Öğrenci hesabı' : `Çocuk: ${student.name}`,
+          photoUrl: viewAs === 'student' ? student.photoUrl : undefined,
+          initials: viewAs === 'student' ? initials(student.name) : initials(veliAdi),
           menuItems: studentAccountMenuItems,
         }}
         mobileOpen={sidebarOpen}
@@ -1381,16 +1480,32 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           </div>
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             <AccountDropdown
-              name={viewAs === 'student' ? student.name : student.parentName || 'Veli'}
-              subtitle={viewAs === 'student' ? 'Öğrenci hesabı' : `Çocuğunuz: ${student.name}`}
-              photoUrl={student.photoUrl}
-              initials={initials(student.name)}
+              name={viewAs === 'student' ? student.name : veliAdi}
+              subtitle={viewAs === 'student' ? 'Öğrenci hesabı' : `Çocuk: ${student.name}`}
+              photoUrl={viewAs === 'student' ? student.photoUrl : undefined}
+              initials={viewAs === 'student' ? initials(student.name) : initials(veliAdi)}
               items={studentAccountMenuItems}
               onLogout={handleLogout}
               accent="indigo"
               showIdentity={false}
               avatarClassName="w-10 h-10 sm:w-11 sm:h-11 rounded-xl"
             />
+            {viewAs === 'parent' ? (
+              <button
+                type="button"
+                onClick={() => setActiveTab('notifications')}
+                className="relative p-2.5 rounded-xl text-slate-400 hover:text-violet-300 hover:bg-violet-500/10 transition-colors"
+                title="Bildirimler"
+                aria-label="Bildirimler"
+              >
+                <Bell className="w-5 h-5" />
+                {unreadNotificationCount > 0 ? (
+                  <span className="absolute top-1 right-1 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-rose-500 text-[10px] font-bold text-white flex items-center justify-center border border-[#020617]">
+                    {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
           </div>
         </header>
 
@@ -1425,6 +1540,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             alerts={dashboardAlerts}
             pendingHomeworkCount={pendingHomeworkCount}
             pendingStudyCount={pendingStudyCount}
+            unreadNotificationCount={unreadNotificationCount}
+            onNotificationUnreadChange={refreshUnreadNotificationCount}
           />
         )}
 
@@ -1799,6 +1916,16 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               parentName={student.parentName}
               groupName={student.group}
               viewAs={viewAs}
+            />
+          </div>
+        )}
+
+        {activeTab === 'notifications' && student && viewAs === 'parent' && (
+          <div className="animate-in fade-in duration-300">
+            <ParentNotificationsPanel
+              studentId={student.id}
+              studentName={student.name}
+              onUnreadChange={refreshUnreadNotificationCount}
             />
           </div>
         )}

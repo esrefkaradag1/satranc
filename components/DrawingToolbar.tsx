@@ -102,7 +102,10 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
     : null;
 
   return (
-    <div className={`flex shrink-0 ${isVertical ? 'flex-col items-center gap-0.5' : 'items-center gap-0.5'}`}>
+    <div
+      data-drawing-ui
+      className={`flex shrink-0 ${isVertical ? 'flex-col items-center gap-0.5' : 'items-center gap-0.5'}`}
+    >
       {/* Drawing tools */}
       {tools.map((tool) => (
         <div key={tool.id} className="relative shrink-0">
@@ -133,6 +136,7 @@ const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
       {openSubMenu && menuStyle && typeof document !== 'undefined' && createPortal(
         <div
           ref={menuRef}
+          data-drawing-ui
           style={menuStyle}
           className={`flex bg-[#1b1e23] backdrop-blur-xl p-1.5 rounded-xl shadow-2xl border border-white/10 gap-1 animate-in fade-in zoom-in-95 duration-150 ${
             isVertical ? 'flex-row flex-wrap max-w-[9.5rem]' : 'items-center'

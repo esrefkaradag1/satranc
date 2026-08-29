@@ -24,7 +24,7 @@ import { getServiceSupabase } from '../services/supabase';
 import { DEFAULT_REMINDER_DAY, REMINDER_DAY_OPTIONS } from '../lib/reminderDays';
 import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
 import { getOrCreateParentConsentInviteAsync } from '../services/applicationStorage';
-import { triggerWhatsAppAuto, sendWhatsAppMessage } from '../services/whatsappClient';
+import { dispatchNotification, triggerWhatsAppAuto } from '../services/notificationDispatch';
 import type { GroupLessonSlot, Student } from '../types';
 import {
   applyGroupDefaultsToStudent,

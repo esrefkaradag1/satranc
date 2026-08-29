@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Bell, Calendar, CalendarCheck, CalendarDays, CheckSquare, ChevronRight,
   ExternalLink, GraduationCap, Image as ImageIcon, BookOpen, ShieldCheck, Trophy,
-  User, Users, Video, Wallet, BarChart3,
+  User, Users, Video, Wallet, BarChart3, MessageCircle,
 } from 'lucide-react';
 import type { Student, Transaction } from '../../types';
 import { Dashboard3DBackground } from '../dashboard/Dashboard3DBackground';
@@ -12,6 +12,7 @@ import { LeaderboardPreview } from '../leaderboard/LeaderboardPreview';
 import type { HomeworkPuzzleAttempt } from '../../types';
 import type { ClubDisplayInfo } from '../../lib/clubDisplay';
 import { clubNameInitials } from '../../lib/clubDisplay';
+import ParentHomeFeedPanel from './ParentHomeFeedPanel';
 
 type PanelTab = string;
 
@@ -55,6 +56,8 @@ type Props = {
   alerts?: StudentDashboardAlert[];
   pendingHomeworkCount?: number;
   pendingStudyCount?: number;
+  unreadNotificationCount?: number;
+  onNotificationUnreadChange?: (count: number) => void;
 };
 
 export const StudentSummaryDashboard: React.FC<Props> = ({
@@ -76,6 +79,8 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
   alerts = [],
   pendingHomeworkCount = 0,
   pendingStudyCount = 0,
+  unreadNotificationCount = 0,
+  onNotificationUnreadChange,
 }) => {
   const firstName = student.name.split(' ')[0];
   const todayLabel = new Date().toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -117,7 +122,7 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
               <p className="text-xs sm:text-sm text-indigo-100/80 font-medium mt-1 line-clamp-2">
                 {viewAs === 'student'
                   ? 'Ödevler, ders programı ve galeriye hızlıca geç'
-                  : `${student.name} — devam ve ödeme bilgileri`}
+                  : `Çocuğunuz ${student.name} — devam, bildirim ve ödeme bilgileri`}
               </p>
             </div>
           </div>
@@ -150,6 +155,14 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
             />
           </div>
         </section>
+
+        {viewAs === 'parent' ? (
+          <ParentHomeFeedPanel
+            student={student}
+            onOpenNotifications={() => onTabChange('notifications')}
+            onUnreadChange={onNotificationUnreadChange}
+          />
+        ) : null}
 
         {viewAs === 'student' && alerts.length > 0 ? (
           <section className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] p-4 sm:p-5">
@@ -194,7 +207,17 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
         <section className="grid grid-cols-3 sm:grid-cols-6 gap-2.5 sm:gap-3">
           <QuickMenuButton icon={<Trophy className="w-5 h-5" />} label="Liderlik" color="amber" onClick={() => onTabChange('leaderboard')} />
           {viewAs === 'parent' ? (
-            <QuickMenuButton icon={<BarChart3 className="w-5 h-5" />} label="Analiz" color="indigo" onClick={() => onTabChange('analyses')} />
+            <>
+              <QuickMenuButton
+                icon={<Bell className="w-5 h-5" />}
+                label="Bildirim"
+                color="violet"
+                badge={unreadNotificationCount > 0 ? unreadNotificationCount : null}
+                onClick={() => onTabChange('notifications')}
+              />
+              <QuickMenuButton icon={<BarChart3 className="w-5 h-5" />} label="Analiz" color="indigo" onClick={() => onTabChange('analyses')} />
+              <QuickMenuButton icon={<MessageCircle className="w-5 h-5" />} label="Mesajlar" color="emerald" onClick={() => onTabChange('messages')} />
+            </>
           ) : (
             <QuickMenuButton
               icon={<CheckSquare className="w-5 h-5" />}
@@ -317,6 +340,24 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {[
+              ...(viewAs === 'parent'
+                ? [
+                    {
+                      tab: 'notifications',
+                      icon: <Bell className="w-5 h-5" />,
+                      title: 'Bildirimler',
+                      sub: unreadNotificationCount > 0 ? `${unreadNotificationCount} okunmamış` : 'Kulüp bildirimleri',
+                      color: 'text-violet-400 bg-violet-500/15',
+                    },
+                    {
+                      tab: 'messages',
+                      icon: <MessageCircle className="w-5 h-5" />,
+                      title: 'Mesajlar',
+                      sub: 'Antrenör ile iletişim',
+                      color: 'text-emerald-400 bg-emerald-500/15',
+                    },
+                  ]
+                : []),
               { tab: 'leaderboard', icon: <Trophy className="w-5 h-5" />, title: 'Lider tablosu', sub: 'Haftalık sıralama', color: 'text-amber-400 bg-amber-500/15' },
               {
                 tab: 'puzzles',
@@ -333,7 +374,7 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
               ...(viewAs === 'parent' && privateLessonSummary
                 ? [{ tab: 'private-lesson', icon: <GraduationCap className="w-5 h-5" />, title: 'Özel ders', sub: `Kalan ${privateLessonSummary.remainingLessons ?? '—'} ders`, color: 'text-amber-300 bg-amber-500/15' }]
                 : []),
-              { tab: 'profile', icon: <User className="w-5 h-5" />, title: 'Profil', sub: 'Kişisel bilgiler', color: 'text-slate-300 bg-white/10' },
+              { tab: 'profile', icon: <User className="w-5 h-5" />, title: viewAs === 'parent' ? 'Veli profili' : 'Profil', sub: viewAs === 'parent' ? 'İletişim ve giriş' : 'Kişisel bilgiler', color: 'text-slate-300 bg-white/10' },
             ].map((item) => (
               <button
                 key={item.tab}
@@ -387,7 +428,7 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
               className="bento-card w-full flex items-center gap-3 p-4 text-left hover:border-indigo-500/25 transition-colors"
             >
               <User className="w-5 h-5 text-indigo-400 shrink-0" />
-              <span className="text-sm font-medium text-slate-200">{viewAs === 'student' ? 'Hesap / Giriş bilgisi' : 'Giriş bilgisi'}</span>
+              <span className="text-sm font-medium text-slate-200">{viewAs === 'student' ? 'Hesap / Giriş bilgisi' : 'Veli giriş bilgileri'}</span>
               <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
             </button>
           </div>

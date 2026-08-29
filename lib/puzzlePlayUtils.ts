@@ -1,5 +1,7 @@
 import { Chess } from 'chess.js';
 import type { Puzzle, HomeworkAssignment } from '../types';
+import type { StudyChapter } from './studyTypes';
+import { mainlineSansFromTree, mergeMainlineMoves } from './studySync/moveList';
 
 const DEFAULT_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -1305,20 +1307,129 @@ export function stripLeadingOpponentSetup(
   };
 }
 
+/** chapter.moves + seedTree ana hattını birleştir (antrenör REC ile kaydettiğinde). */
+export function resolveStudyChapterSolutionMoves(
+  chapter: Pick<StudyChapter, 'fen' | 'moves' | 'seedTree'>,
+): string[] {
+  const legacy = (chapter.moves ?? []).filter(Boolean);
+  const seed = chapter.seedTree;
+  if (!seed?.rootId || !seed.mainline || seed.mainline.length <= 1) {
+    return legacy;
+  }
+  try {
+    const rootFen = chapter.fen?.trim() || DEFAULT_FEN;
+    const fromTree = mainlineSansFromTree(seed, rootFen);
+    return mergeMainlineMoves(legacy, fromTree);
+  } catch {
+    return legacy;
+  }
+}
+
+/** Kurulum hattı bittiğinde öğrenci sırasındaysa ve çözüm henüz eklenmemişse. */
+function inferPuzzleSetupPly(
+  rawFen: string,
+  rawMoves: string[],
+  studentColor: 'w' | 'b',
+): number {
+  if (!rawMoves.length) return 0;
+  try {
+    const game = new Chess(rawFen);
+    for (const m of rawMoves) {
+      if (!applyPuzzleMove(game, m)) return 0;
+    }
+    if (game.turn() === studentColor) return rawMoves.length;
+  } catch {
+    return 0;
+  }
+  return 0;
+}
+
+/** Çözüm hattı kurulumdan sonra başlıyorsa (ör. gösterim + hxg5). */
+function inferPuzzleSetupPlyWithSolutionSuffix(
+  rawFen: string,
+  rawMoves: string[],
+  studentColor: 'w' | 'b',
+): number {
+  try {
+    const afterAll = new Chess(rawFen);
+    for (const m of rawMoves) {
+      if (!applyPuzzleMove(afterAll, m)) return 0;
+    }
+    // Tüm hat bittiğinde öğrenci sırasındaysa bu fonksiyon devreye girmesin (kurulum beklemesi).
+    if (afterAll.turn() === studentColor) return 0;
+  } catch {
+    return 0;
+  }
+
+  for (let setupPly = rawMoves.length - 1; setupPly >= 0; setupPly -= 1) {
+    try {
+      const game = new Chess(rawFen);
+      for (let i = 0; i < setupPly; i++) {
+        if (!applyPuzzleMove(game, rawMoves[i]!)) break;
+      }
+      if (game.turn() !== studentColor) continue;
+      const rest = rawMoves.slice(setupPly);
+      if (rest.length === 0) continue;
+      if (isMoveLegalForSideToMove(game.fen(), rest[0]!)) return setupPly;
+    } catch {
+      continue;
+    }
+  }
+  return 0;
+}
+
+function splitPuzzleSetupAndSolution(
+  rawFen: string,
+  rawMoves: string[],
+  studentColor: 'w' | 'b',
+  explicitSetupPly?: number,
+): { startFen: string; solutionMoves: string[]; setupMoveSan?: string } {
+  const setupPly = explicitSetupPly != null && explicitSetupPly >= 0
+    ? explicitSetupPly
+    : inferPuzzleSetupPlyWithSolutionSuffix(rawFen, rawMoves, studentColor)
+      || inferPuzzleSetupPly(rawFen, rawMoves, studentColor);
+
+  if (setupPly <= 0) {
+    return { startFen: rawFen, solutionMoves: rawMoves };
+  }
+
+  const capped = Math.min(setupPly, rawMoves.length);
+  const game = new Chess(rawFen);
+  let setupMoveSan: string | undefined;
+  for (let i = 0; i < capped; i++) {
+    const mv = applyPuzzleMove(game, rawMoves[i]!);
+    if (!mv) break;
+    setupMoveSan = mv.san;
+  }
+  return {
+    startFen: game.fen(),
+    solutionMoves: rawMoves.slice(capped),
+    setupMoveSan,
+  };
+}
+
 /** Çalışma bölümü — Bulmaca (Hamle Bul) için öğrenci sorusu pozisyonu. */
 export function normalizeStudyChapterPuzzle(chapter: {
   fen?: string;
   moves?: string[];
   orientation?: 'white' | 'black';
+  seedTree?: StudyChapter['seedTree'];
+  puzzleSetupPly?: number;
 }): NormalizedStudyChapterPuzzle {
   const rawFen = chapter.fen?.trim() || DEFAULT_FEN;
-  const rawSolution = (chapter.moves ?? []).filter(Boolean);
+  const rawSolution = resolveStudyChapterSolutionMoves(chapter as StudyChapter).filter(Boolean);
   const fromOrientation = studentColorFromOrientation(chapter.orientation);
 
   if (fromOrientation && rawSolution.length > 0) {
-    let fen = rawFen;
-    let moves = rawSolution;
-    let setupMoveSan: string | undefined;
+    const split = splitPuzzleSetupAndSolution(
+      rawFen,
+      rawSolution,
+      fromOrientation,
+      chapter.puzzleSetupPly,
+    );
+    let fen = split.startFen;
+    let moves = split.solutionMoves;
+    let setupMoveSan = split.setupMoveSan;
 
     let turnAtFen: 'w' | 'b';
     try {
@@ -1332,7 +1443,7 @@ export function normalizeStudyChapterPuzzle(chapter: {
       if (stripped.remainingMoves.length > 0 && stripped.startFen !== fen) {
         fen = stripped.startFen;
         moves = stripped.remainingMoves;
-        setupMoveSan = stripped.setupMoveSan;
+        setupMoveSan = stripped.setupMoveSan ?? setupMoveSan;
         try {
           turnAtFen = new Chess(fen).turn();
         } catch {
@@ -1342,6 +1453,13 @@ export function normalizeStudyChapterPuzzle(chapter: {
     }
 
     const startIdx = findFirstPlayableMoveIndex(fen, moves);
+    if (startIdx > 0) {
+      const game = new Chess(fen);
+      for (let i = 0; i < startIdx; i++) {
+        if (!applyPuzzleMove(game, moves[i]!)) break;
+      }
+      fen = game.fen();
+    }
     moves = moves.slice(startIdx);
 
     if (moves.length > 0 && isMoveLegalForSideToMove(fen, moves[0]!)) {
@@ -1350,7 +1468,32 @@ export function normalizeStudyChapterPuzzle(chapter: {
         studentMoves: moves,
         studentColor: fromOrientation,
         setupMoveSan,
-        playSideToMove: true,
+        playSideToMove: false,
+      };
+    }
+
+    if (moves.length === 0) {
+      return {
+        startFen: fen,
+        studentMoves: [],
+        studentColor: fromOrientation,
+        setupMoveSan,
+        playSideToMove: false,
+      };
+    }
+
+    if (moves.length > 0) {
+      const normalized = normalizePuzzleForStudentPlay({
+        fen: rawFen,
+        solution: moves,
+        source: 'custom',
+      });
+      return {
+        startFen: normalized.startFen,
+        studentMoves: normalized.studentMoves.length > 0 ? normalized.studentMoves : moves,
+        studentColor: fromOrientation,
+        setupMoveSan: normalized.setupMoveSan ?? setupMoveSan,
+        playSideToMove: false,
       };
     }
   }

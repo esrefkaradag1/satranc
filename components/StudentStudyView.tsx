@@ -42,7 +42,7 @@ import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
   genId, migrateStudy, migrateChapter, studyDisplayEmoji,
   normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
 } from '../lib/studyUtils';
-import { applyPuzzleAutoReplies, dropMatchesSolutionMove, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares } from '../lib/puzzlePlayUtils';
+import { applyPuzzleAutoReplies, dropMatchesSolutionMove, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares, resolveStudyChapterSolutionMoves } from '../lib/puzzlePlayUtils';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
@@ -417,12 +417,30 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     initialWrite: false,
   });
 
-  /** Bulmacada paylaşılan sync ağacı çözüm hattını kirletmesin — statik bölüm tanımı kullan. */
+  /** Bulmaca: antrenörün sync ağacındaki hamleler + kayıtlı chapter/seedTree birleştirilir. */
+  const puzzleSourceChapter = useMemo((): StudyChapter | null => {
+    if (!selectedChapter) return null;
+    if (!isInteractivePuzzle) return selectedChapter;
+    const syncMoves = (legacyChapter?.moves ?? []).filter(Boolean);
+    const savedMoves = resolveStudyChapterSolutionMoves(selectedChapter);
+    const mergedMoves =
+      syncMoves.length > 0
+        ? mergeMainlineMoves(savedMoves, syncMoves)
+        : savedMoves;
+    if (mergedMoves.length === 0) return selectedChapter;
+    return {
+      ...selectedChapter,
+      fen: legacyChapter?.fen?.trim() || selectedChapter.fen,
+      moves: mergedMoves,
+      seedTree: selectedChapter.seedTree ?? legacyChapter?.seedTree,
+    };
+  }, [selectedChapter, legacyChapter, isInteractivePuzzle]);
+
   const effectiveChapter = useMemo(() => {
     if (!selectedChapter) return legacyChapter;
-    if (isInteractivePuzzle) return selectedChapter;
+    if (isInteractivePuzzle) return puzzleSourceChapter ?? selectedChapter;
     return legacyChapter ?? selectedChapter;
-  }, [selectedChapter, legacyChapter, isInteractivePuzzle]);
+  }, [selectedChapter, legacyChapter, isInteractivePuzzle, puzzleSourceChapter]);
 
   const coachPresenceUserIds = useMemo(() => {
     const ids = new Set<string>();
@@ -467,9 +485,18 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   }, [setSticky]);
 
   const puzzlePlayNorm = useMemo(() => {
-    if (!isInteractivePuzzle || !selectedChapter) return null;
-    return normalizeStudyChapterPuzzle(selectedChapter);
-  }, [isInteractivePuzzle, selectedChapter?.id, selectedChapter?.fen, selectedChapter?.moves, selectedChapter?.orientation]);
+    if (!isInteractivePuzzle || !puzzleSourceChapter) return null;
+    return normalizeStudyChapterPuzzle(puzzleSourceChapter);
+  }, [
+    isInteractivePuzzle,
+    puzzleSourceChapter?.id,
+    puzzleSourceChapter?.fen,
+    puzzleSourceChapter?.moves,
+    puzzleSourceChapter?.orientation,
+    puzzleSourceChapter?.seedTree,
+    puzzleSourceChapter?.puzzleSetupPly,
+    legacyChapter?.moves,
+  ]);
 
   const boardPgnDisplay = useMemo(() => {
     if (!selectedStudy || !effectiveChapter) return null;
@@ -969,7 +996,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (effectiveChapter?.comment?.trim()) return effectiveChapter.comment.trim();
     if (isInteractivePuzzle && puzzlePlayNorm) {
       const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
-      const colorLabel = turnCode === 'w' ? 'Beyaz' : 'Siyah';
+      const colorLabel = puzzlePlayNorm.studentColor === 'w' ? 'Beyaz' : 'Siyah';
+      if (totalMoves === 0) {
+        const atPuzzleStart = puzzlePlayNorm.startFen !== (effectiveChapter?.fen || DEFAULT_FEN);
+        return atPuzzleStart
+          ? 'Pozisyon hazır. Antrenör çözüm hamlesini kaydedene kadar bekleyin.'
+          : 'Antrenör çözüm hattını kaydedene kadar bekleyin veya antrenörünüze yazın.';
+      }
+      if (turnCode !== puzzlePlayNorm.studentColor) {
+        return `Rakip düşünüyor… Sıra ${colorLabel} tarafında.`;
+      }
       return `Sıra ${colorLabel} tarafında. Sıradaki hamleyi bulun.`;
     }
     return 'Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.';
@@ -981,6 +1017,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     isVcGameOver,
     vcOutcome,
     isComplete,
+    totalMoves,
     studyBoardFen,
   ]);
 
@@ -1095,24 +1132,39 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     return () => { cancelled = true; };
   }, [effectiveChapter?.id, totalMoves, studentPlaysColor, isLiveAnalysis, previewMode, selectedStudy?.id, studentId]);
 
-  /** Bulmacada rakip ply'lerini atla — yalnızca tek renk modunda (playSideToMove kapalı). */
+  const puzzleSolutionKey = useMemo(
+    () => `${puzzlePlayNorm?.startFen ?? ''}|${chapterMovesForUi.join('\u001f')}`,
+    [puzzlePlayNorm?.startFen, chapterMovesForUi],
+  );
+
+  /** Bulmacada rakip kurulumunu uygula; öğrenci sırasına gel. */
   useEffect(() => {
-    if (!isInteractivePuzzle || !puzzlePlayNorm || !moveListChapter || totalMoves === 0) return;
-    if (puzzlePlayNorm.playSideToMove !== false) return;
-    let idx = currentMoveIndex;
-    let fen = fenToCurrentFen(moveListChapter, idx);
-    const studentColor = puzzlePlayNorm.studentColor;
-    let guard = 0;
-    while (idx < totalMoves) {
-      const turnCode = sideToMove(fen) === 'white' ? 'w' : 'b';
-      if (turnCode === studentColor) break;
-      idx += 1;
-      fen = fenToCurrentFen(moveListChapter, idx);
-      guard += 1;
-      if (guard > 16) break;
+    if (!isInteractivePuzzle || !puzzlePlayNorm || chapterMovesForUi.length === 0) return;
+    const auto = applyPuzzleAutoReplies(
+      puzzlePlayNorm.startFen,
+      chapterMovesForUi,
+      0,
+      puzzlePlayNorm.studentColor,
+    );
+    if (auto.nextIndex > 0) {
+      setCurrentMoveIndex(auto.nextIndex);
     }
-    if (idx !== currentMoveIndex) setCurrentMoveIndex(idx);
-  }, [isInteractivePuzzle, puzzlePlayNorm, moveListChapter, totalMoves, effectiveChapter?.id, currentMoveIndex]);
+  }, [effectiveChapter?.id, isInteractivePuzzle, puzzlePlayNorm, puzzleSolutionKey, chapterMovesForUi]);
+
+  const puzzlePlayFen = useMemo(() => {
+    if (!isInteractivePuzzle || !moveListChapter) return studyBoardFen;
+    if (puzzleSetupPreviewFen && hideEngineForStudentPuzzle) {
+      return fenToCurrentFen(moveListChapter, currentMoveIndex);
+    }
+    return studyBoardFen;
+  }, [
+    isInteractivePuzzle,
+    moveListChapter,
+    studyBoardFen,
+    puzzleSetupPreviewFen,
+    hideEngineForStudentPuzzle,
+    currentMoveIndex,
+  ]);
 
   const boardGameOutcome = useMemo(() => {
     if (hideEngineForStudentPuzzle) return null;
@@ -1514,6 +1566,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       showFeedback('wrong', 'Taş oynatma kapalı');
       return false;
     }
+    if (isInteractivePuzzle && puzzlePlayNorm && totalMoves === 0) {
+      showFeedback('wrong', 'Antrenör henüz çözüm hattını kaydetmedi');
+      return false;
+    }
     setBoardArrows([]);
     setCircleMarks({});
     setOptionSquares({});
@@ -1560,19 +1616,48 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     }
 
     // ── INTERACTIVE PUZZLE ─────────────────────────────────────────────────────
-    const isInteractivePuzzle = effectiveChapter.lessonMode === 'interactive' && (effectiveChapter.interactiveType ?? 'puzzle') === 'puzzle';
-    
     if (isInteractivePuzzle && !isComplete && currentMoveIndex < totalMoves && puzzlePlayNorm) {
-      if (puzzleSetupPreviewFen && hideEngineForStudentPuzzle) return false;
-
-      const playFen = studyBoardFen;
+      const playFen = puzzlePlayFen;
       const turnCode = sideToMove(playFen) === 'white' ? 'w' : 'b';
+      if (turnCode !== puzzlePlayNorm.studentColor) {
+        showFeedback('wrong', 'Rakip hamlesi uygulanıyor…');
+        return false;
+      }
 
       const expectedSan = chapterMovesForUi[currentMoveIndex] ?? '';
       
       try {
         const match = dropMatchesSolutionMove(playFen, sourceSquare, targetSquare, expectedSan);
         if (!match.ok) {
+          const now = Date.now();
+          const thinkMs = Math.max(0, now - lastActionMs);
+          setLastActionMs(now);
+          setChapterMoveAnalysis((prev) => {
+            const next = [
+              ...prev,
+              {
+                id: `${now}-${prev.length}`,
+                moveNo: Math.floor(currentMoveIndex / 2) + 1,
+                played: `${sourceSquare}-${targetSquare}`,
+                expected: expectedSan || 'variation',
+                isCorrect: false,
+                thinkMs,
+                atIso: new Date(now).toISOString(),
+              },
+            ];
+            persistChapterPracticeLogs(next);
+            return next;
+          });
+          logStudyEvent({
+            studyId: selectedStudy?.id,
+            chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+            studentId,
+            moveIndex: currentMoveIndex,
+            expectedMove: expectedSan || 'variation',
+            playedMove: `${sourceSquare}-${targetSquare}`,
+            result: 'wrong',
+            thinkMs,
+          });
           showFeedback('wrong');
           return false;
         }
@@ -1585,20 +1670,17 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         const playedSan = result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`;
 
         setLastActionMs(now);
-        const playSideToMove = puzzlePlayNorm.playSideToMove !== false;
         let nextIdx = currentMoveIndex + 1;
         let boardFenAfter = game.fen();
 
-        if (!playSideToMove) {
-          const auto = applyPuzzleAutoReplies(
-            boardFenAfter,
-            chapterMovesForUi,
-            nextIdx,
-            puzzlePlayNorm.studentColor,
-          );
-          nextIdx = auto.nextIndex;
-          boardFenAfter = auto.fen;
-        }
+        const auto = applyPuzzleAutoReplies(
+          boardFenAfter,
+          chapterMovesForUi,
+          nextIdx,
+          puzzlePlayNorm.studentColor,
+        );
+        nextIdx = auto.nextIndex;
+        boardFenAfter = auto.fen;
         
         setChapterMoveAnalysis((prev) => {
           const next = [
@@ -1630,6 +1712,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
         setFreePlayFen(null);
         setCurrentMoveIndex(nextIdx);
+        setLastMoveSquares(lastMoveHighlightFromSan(playFen, playedSan));
 
         if (nextIdx >= totalMoves) {
           const outcome = describeGameOutcomeFromFen(boardFenAfter);
@@ -1641,6 +1724,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           );
           recordProgress(progressKey ?? '', 100);
         } else {
+          recordProgress(
+            progressKey ?? '',
+            Math.min(99, Math.round((nextIdx / Math.max(1, totalMoves)) * 100)),
+          );
           showFeedback('correct');
         }
         return true;
@@ -1669,7 +1756,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, selectedChapter, chapterMovesForUi, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs, puzzleSetupPreviewFen, hideEngineForStudentPuzzle, puzzleBoardInteraction]);
+  }, [selectedStudy, effectiveChapter, selectedChapter, chapterMovesForUi, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, puzzlePlayFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs, hideEngineForStudentPuzzle, puzzleBoardInteraction]);
 
   const puzzleBranchChoices = useMemo(() => {
     // Öğrenci bulmacasında sync ağacındaki deneme varyasyonları gösterilmez.
@@ -2121,15 +2208,22 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const canDragStudentPiece = useCallback(({ piece }: { piece?: { pieceType?: string } | string }) => {
     if (vsComputer) return true;
     const pieceType = typeof piece === 'string' ? piece : piece?.pieceType ?? '';
-    const colorChar = typeof pieceType === 'string' ? pieceType.charAt(0) : '';
+    let colorChar = typeof pieceType === 'string' ? pieceType.charAt(0) : '';
+    if (colorChar !== 'w' && colorChar !== 'b') {
+      const lower = String(pieceType).toLowerCase();
+      if (lower.startsWith('white') || lower.startsWith('w')) colorChar = 'w';
+      else if (lower.startsWith('black') || lower.startsWith('b')) colorChar = 'b';
+    }
     if (!colorChar) return boardDraggingEnabled;
     if (hideEngineForStudentPuzzle && puzzlePlayNorm) {
-      const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
-      if (colorChar !== turnCode) return false;
-      return true;
+      if (totalMoves === 0) return false;
+      const fenForTurn = puzzleSetupPreviewFen ? puzzlePlayFen : studyBoardFen;
+      const turnCode = sideToMove(fenForTurn) === 'white' ? 'w' : 'b';
+      if (turnCode !== puzzlePlayNorm.studentColor) return false;
+      return colorChar === puzzlePlayNorm.studentColor;
     }
     return canStudentDragPieceOnFen(studentPlaysColor, studyBoardFen, colorChar);
-  }, [vsComputer, studentPlaysColor, studyBoardFen, boardDraggingEnabled, hideEngineForStudentPuzzle, puzzlePlayNorm]);
+  }, [vsComputer, studentPlaysColor, studyBoardFen, puzzlePlayFen, boardDraggingEnabled, hideEngineForStudentPuzzle, puzzlePlayNorm, totalMoves, puzzleSetupPreviewFen]);
 
   if (!selectedStudyId || !selectedStudy) {
     if (previewMode && previewStudyId) {

@@ -45,6 +45,7 @@ export const PARENT_DEFAULT_PERMISSIONS = [
   'summary',
   'leaderboard',
   'messages',
+  'notifications',
   'gallery',
   'schedule',
   'puzzles',
@@ -464,10 +465,22 @@ export function getPermissionsForAuth(
 
   if (!rolesLoaded) {
     const cached = rolePermissionMap[roleId];
-    if (cached?.length) return new Set(cached);
+    if (cached?.length) {
+      const set = new Set(cached);
+      if (auth.role === 'parent') {
+        defaultPermissionsForRole('parent').forEach((k) => set.add(k));
+      }
+      return set;
+    }
     if (customRoleId && customRoleId !== systemRoleId) {
       const systemCached = rolePermissionMap[systemRoleId];
-      if (systemCached?.length) return new Set(systemCached);
+      if (systemCached?.length) {
+        const set = new Set(systemCached);
+        if (auth.role === 'parent') {
+          defaultPermissionsForRole('parent').forEach((k) => set.add(k));
+        }
+        return set;
+      }
     }
     return fallback();
   }

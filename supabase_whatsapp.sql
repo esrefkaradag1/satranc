@@ -47,6 +47,7 @@ create table if not exists public.whatsapp_message_logs (
   template_key  text,
   student_id    text,
   student_name  text,
+  recipient_name text,
   branch_office text,
   error         text,
   created_at    timestamptz not null default now()
@@ -63,6 +64,34 @@ alter table public.whatsapp_auto_rules            enable row level security;
 alter table public.whatsapp_templates             enable row level security;
 alter table public.whatsapp_training_notifications enable row level security;
 alter table public.whatsapp_message_logs          enable row level security;
+
+alter table public.whatsapp_message_logs
+  add column if not exists recipient_name text;
+
+-- 6) Bildirim kanalı: whatsapp | panel | both | off
+create table if not exists public.notification_delivery_rules (
+  event       text        primary key,
+  channel     text        not null default 'whatsapp',
+  updated_at  timestamptz not null default now()
+);
+
+-- 7) Veli paneli bildirim kutusu
+create table if not exists public.parent_panel_notifications (
+  id            text        primary key,
+  student_id    text        not null,
+  event         text        not null,
+  title         text        not null,
+  body          text        not null,
+  branch_office text,
+  read_at       timestamptz,
+  created_at    timestamptz not null default now()
+);
+
+create index if not exists parent_panel_notifications_student_idx
+  on public.parent_panel_notifications (student_id, created_at desc);
+
+alter table public.notification_delivery_rules enable row level security;
+alter table public.parent_panel_notifications enable row level security;
 
 -- (Opsiyonel) Otomatik kuralları varsayılan olarak açmak istersen aşağıyı çalıştır.
 -- Kod zaten satır yoksa training_completed/training_incomplete'i açık kabul eder.

@@ -16,7 +16,7 @@ import {
   fetchStudentLatestLichessPuzzle,
   type LichessPuzzleBoardSnapshot,
 } from './studentLichessPuzzlePull';
-import { getStudentPlatformPullProfile } from './studentPlatformPullProfile';
+import { getStudentPlatformPullProfile, type StudentPlatformPullHints } from './studentPlatformPullProfile';
 import { fetchChessComUpstream } from './chesscomUpstreamFetch.mjs';
 
 export type StudentActivityKind = 'game' | 'puzzle';
@@ -116,15 +116,18 @@ async function fetchRecentLichessPuzzle(studentId: string): Promise<StudentActiv
 }
 
 /** Canlı oyun + bulmaca — öğrencinin platformdaki güncel aktivitesi */
-export async function fetchStudentActivityAuto(studentId: string): Promise<StudentActivityAutoResult> {
-  const profile = await getStudentPlatformPullProfile(studentId);
+export async function fetchStudentActivityAuto(
+  studentId: string,
+  hints?: StudentPlatformPullHints,
+): Promise<StudentActivityAutoResult> {
+  const profile = await getStudentPlatformPullProfile(studentId, hints);
   if (!profile) {
     return { ok: false, error: 'Öğrenci profili bulunamadı' };
   }
 
   let gameResult: StudentExternalGameAutoResult = { ok: false };
   try {
-    gameResult = await fetchStudentExternalGameAuto(studentId);
+    gameResult = await fetchStudentExternalGameAuto(studentId, hints);
     if (gameResult.ok && gameResult.snapshot) {
       return {
         ok: true,

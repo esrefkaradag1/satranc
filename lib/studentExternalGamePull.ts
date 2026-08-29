@@ -7,10 +7,14 @@ import {
 import { fetchChessComPuzzleRecentStatus } from './studentChessComPuzzlePull';
 import { fetchLichessPuzzleRecentStatus } from './studentLichessPuzzlePull';
 import { fetchLichessGameSnapshot, fetchLichessOAuthLiveSnapshot } from './lichessLiveGameServer';
+import { lichessProxyRequest } from './lichessProxyThrottle.mjs';
 import {
   getStudentPlatformPullProfile,
+  type StudentPlatformPullHints,
   type StudentPlatformPullProfile,
 } from './studentPlatformPullProfile';
+
+export type { StudentPlatformPullHints };
 
 export type { StudentPlatformPullProfile };
 
@@ -72,15 +76,20 @@ async function fetchLichessOngoingByUsername(username: string): Promise<External
   const trimmed = username.trim().toLowerCase();
   if (!trimmed) return null;
   // Sadece DEVAM EDEN oyunu iste (ongoing=true). Bitmiş oyunu canlıymış gibi göstermeyelim.
-  const res = await fetch(
-    `https://lichess.org/api/games/user/${encodeURIComponent(trimmed)}?max=1&ongoing=true&lastFen=true&moves=true&sort=dateDesc`,
+  const upstream = await lichessProxyRequest(
+    `games/user/${encodeURIComponent(trimmed)}`,
     {
-      headers: { Accept: 'application/x-ndjson' },
-      signal: AbortSignal.timeout(15000),
+      max: '1',
+      ongoing: 'true',
+      lastFen: 'true',
+      moves: 'true',
+      sort: 'dateDesc',
     },
+    'application/x-ndjson',
+    process.env,
   );
-  if (!res.ok) return null;
-  const games = parseNdjson(await res.text());
+  if (upstream.status !== 200) return null;
+  const games = parseNdjson(String(upstream.body ?? ''));
   const ongoing = games.find((g) => {
     const status = String(g.status ?? '');
     return status === 'started' || status === 'created';
@@ -99,6 +108,28 @@ async function fetchLichessOngoingByUsername(username: string): Promise<External
 async function fetchChessComOngoingByUsername(username: string): Promise<ExternalGameSnapshot | null> {
   const trimmed = username.trim().toLowerCase();
   if (!trimmed) return null;
+
+  const playingRes = await fetch(
+    `https://api.chess.com/pub/player/${encodeURIComponent(trimmed)}/games/playing`,
+    {
+      headers: { Accept: 'application/json', 'User-Agent': 'SatrancEdu/1.0' },
+      signal: AbortSignal.timeout(12000),
+    },
+  );
+  if (playingRes.ok) {
+    const playingData = (await playingRes.json()) as { games?: Array<{ url?: string; uuid?: string }> };
+    const playingGame = Array.isArray(playingData.games) ? playingData.games[0] : undefined;
+    if (playingGame) {
+      const link = playingGame.url?.trim()
+        || (playingGame.uuid ? `https://www.chess.com/game/live/${playingGame.uuid}` : '');
+      const parsed = link ? parseExternalGameLink(link) : null;
+      if (parsed?.platform === 'chesscom') {
+        const snap = await fetchChessComGameSnapshotFromParsed(parsed);
+        if (snap && !snap.isFinished) return snap;
+      }
+    }
+  }
+
   const res = await fetch(
     `https://api.chess.com/pub/player/${encodeURIComponent(trimmed)}/games/to-move`,
     {
@@ -129,9 +160,12 @@ export type StudentLivePlatformStatus = {
   chesscomPuzzleRecent: boolean;
 };
 
-export async function fetchStudentLivePlatformStatus(studentId: string): Promise<StudentLivePlatformStatus> {
+export async function fetchStudentLivePlatformStatus(
+  studentId: string,
+  hints?: StudentPlatformPullHints,
+): Promise<StudentLivePlatformStatus> {
   try {
-    const profile = await getStudentPlatformPullProfile(studentId);
+    const profile = await getStudentPlatformPullProfile(studentId, hints);
     if (!profile) {
       return {
         lichessLive: false,
@@ -198,8 +232,9 @@ export async function fetchStudentLivePlatformStatus(studentId: string): Promise
 /** Bulmaca çek mantığı: öğrenci profilinden platform oyununu otomatik çeker */
 export async function fetchStudentExternalGameAuto(
   studentId: string,
+  hints?: StudentPlatformPullHints,
 ): Promise<StudentExternalGameAutoResult> {
-  const profile = await getStudentPlatformPullProfile(studentId);
+  const profile = await getStudentPlatformPullProfile(studentId, hints);
   if (!profile) {
     return { ok: false, error: 'Öğrenci profili bulunamadı' };
   }

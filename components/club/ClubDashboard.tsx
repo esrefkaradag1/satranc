@@ -31,6 +31,7 @@ import type { Club, Coach, Student, Transaction } from '../../types';
 import { canShowStudentCounts } from '../../lib/studentCountVisibility';
 import { formatTransactionDateTR, summarizeClubMonthDues } from '../../lib/duesCalendarUtils';
 import { istanbulDayKey } from '../../lib/homeworkDayUtils';
+import ClubParentAnnouncementsCard from './ClubParentAnnouncementsCard';
 
 const MONTH_NAMES = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 
@@ -278,6 +279,10 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
             ))}
           </section>
         )}
+
+        {club?.id ? (
+          <ClubParentAnnouncementsCard clubId={club.id} clubName={club.name || branch} />
+        ) : null}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
           <div className="lg:col-span-8 space-y-4 sm:space-y-6">

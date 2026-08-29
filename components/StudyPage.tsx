@@ -30,7 +30,8 @@ import {
   DEFAULT_FEN, genId, migrateChapter, migrateStudy, setFenTurn, makeBuilderGame, applyMove,
   buildPgn, parsePgnBlockToMoves, engineLevelFromDifficulty, 
   cpLossThresholdForDifficulty, chapterModeBadge, formatChapterListLabel, chapterListLabelMatches,
-  loadEditorSelection, saveEditorSelection, EMOJIS, LICHESS_PIECE, studyDisplayEmoji, describeGameOutcome
+  loadEditorSelection, saveEditorSelection, EMOJIS, LICHESS_PIECE, studyDisplayEmoji, describeGameOutcome,
+  sideToMove, fenToCurrentFen,
 } from '../lib/studyUtils';
 import { parsePgnBlockToChapter } from '../lib/pgnChapterParse';
 import { defaultChapterPgnTags, setPgnTagValue, buildStudyBoardPgnDisplay } from '../lib/studyPgnTags';
@@ -717,7 +718,7 @@ const StudyPage: React.FC = () => {
   const puzzlePlayNorm = useMemo(() => {
     if (!isInteractivePuzzleChapter || !selectedChapter) return null;
     return normalizeStudyChapterPuzzle(selectedChapter);
-  }, [isInteractivePuzzleChapter, selectedChapter?.fen, selectedChapter?.moves, selectedChapter?.orientation, selectedChapter?.id]);
+  }, [isInteractivePuzzleChapter, selectedChapter?.fen, selectedChapter?.moves, selectedChapter?.orientation, selectedChapter?.id, selectedChapter?.seedTree]);
 
   /** Antrenör düzenlerken tüm hamleler görünsün; öğrenci önizlemesi (practice) normalize edilmiş hat kullanır. */
   const usePuzzleStudentLine = isInteractivePuzzleChapter && !!puzzlePlayNorm && practiceMode;
@@ -1704,6 +1705,46 @@ const StudyPage: React.FC = () => {
     },
     [selectedStudy, selectedChapterIndex, updateChapterAtIndex],
   );
+
+  const prevRecordingRef = useRef(recording);
+  useEffect(() => {
+    const wasRecording = prevRecordingRef.current;
+    prevRecordingRef.current = recording;
+    if (!wasRecording || recording) return;
+    if (!selectedStudy || !selectedChapter || !syncState?.tree) return;
+    const exported = exportLegacyFromTree(syncState.tree, selectedChapter.fen);
+    if (!exported.moves.length) return;
+    const existing = selectedChapter.moves ?? [];
+    const same =
+      exported.moves.length === existing.length
+      && exported.moves.every((m, i) => m === existing[i]);
+    if (same) return;
+
+    const isPuzzle =
+      selectedChapter.lessonMode === 'interactive'
+      && (selectedChapter.interactiveType ?? 'puzzle') === 'puzzle';
+    let puzzleSetupPatch: Partial<StudyChapter> = {};
+    if (isPuzzle) {
+      const endFen = fenToCurrentFen(
+        { ...selectedChapter, moves: exported.moves },
+        exported.moves.length,
+      );
+      const studentColor = selectedChapter.orientation === 'black' ? 'b' : 'w';
+      const turnCode = sideToMove(endFen) === 'white' ? 'w' : 'b';
+      if (turnCode === studentColor) {
+        puzzleSetupPatch = { puzzleSetupPly: exported.moves.length };
+      } else if (selectedChapter.puzzleSetupPly == null) {
+        puzzleSetupPatch = { puzzleSetupPly: 0 };
+      }
+    }
+
+    updateChapterAtIndex(selectedChapterIndex, {
+      moves: exported.moves,
+      variations: exported.variations ?? {},
+      seedTree: syncState.tree,
+      ...puzzleSetupPatch,
+    });
+  }, [recording, selectedStudy, selectedChapter, selectedChapterIndex, syncState, updateChapterAtIndex]);
 
   // ── Members ───────────────────────────────────────────────────────────────────
   const addMember = useCallback((memberId: string) => {

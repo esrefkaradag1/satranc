@@ -25,6 +25,11 @@ export interface StudyChapter {
   variations: Record<number, string[][]>;
   /** PGN içe aktarımından gelen tam hamle ağacı (iç içe varyantlar). */
   seedTree?: StudyTree;
+  /**
+   * Bulmaca: moves[0..puzzleSetupPly-1] kurulum (öğrenciye gösterilir, çözüm sayılmaz);
+   * moves[puzzleSetupPly..] öğrencinin bulması gereken hat.
+   */
+  puzzleSetupPly?: number;
   // Çizimler: oklar ve daireler (sync için)
   arrows?: Array<{ startSquare: string; endSquare: string; color: string }>;
   circles?: Record<string, boolean>;
