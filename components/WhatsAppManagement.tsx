@@ -23,6 +23,7 @@ import {
 } from '../services/whatsappClient';
 import { studentsInTrainingGroup } from '../lib/trainingGroupUtils';
 import { normalizeClubKey } from '../lib/clubScope';
+import { activeStudentsForNotifications } from '../lib/studentNotificationUtils';
 import {
   CHANNEL_LABELS,
   NOTIFICATION_EVENT_META,
@@ -157,7 +158,9 @@ const WhatsAppManagement: React.FC = () => {
     });
   }, [logs, serverLogs, branchOffice]);
   const officeStudents = useMemo(
-    () => students.filter((s) => !branchOffice || normalizeClubKey(s.branchOffice ?? '') === normalizeClubKey(branchOffice)),
+    () => activeStudentsForNotifications(
+      students.filter((s) => !branchOffice || normalizeClubKey(s.branchOffice ?? '') === normalizeClubKey(branchOffice)),
+    ),
     [students, branchOffice],
   );
 
@@ -482,13 +485,25 @@ const WhatsAppManagement: React.FC = () => {
     }
     setSending(true);
     try {
-      const recipients: { phone: string; message: string; studentId: string; studentName: string }[] = [];
+      const recipients: {
+        phone: string;
+        message: string;
+        studentId: string;
+        studentName: string;
+        studentStatus?: Student['status'];
+      }[] = [];
       for (const id of selectedStudentIds) {
         const s = students.find((x) => x.id === id);
         if (!s) continue;
         const phone = primaryParentPhone(s);
         if (!phone) continue;
-        recipients.push({ phone, message: bulkMessage.trim(), studentId: s.id, studentName: s.name });
+        recipients.push({
+          phone,
+          message: bulkMessage.trim(),
+          studentId: s.id,
+          studentName: s.name,
+          studentStatus: s.status,
+        });
       }
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
@@ -506,15 +521,31 @@ const WhatsAppManagement: React.FC = () => {
     const tg = trainingGroups.find(
       (g) => g.name === groupName && (!groupBranch || g.discipline === groupBranch),
     );
-    const groupStudents = tg ? studentsInTrainingGroup(students, tg) : students.filter((s) => s.group === groupName);
+    const groupStudents = activeStudentsForNotifications(
+      tg ? studentsInTrainingGroup(students, tg) : students.filter((s) => s.group === groupName),
+    );
     setSending(true);
     try {
       const recipients = groupStudents
         .map((s) => {
           const phone = primaryParentPhone(s);
-          return phone ? { phone, message: groupMessage.trim(), studentId: s.id, studentName: s.name } : null;
+          return phone
+            ? {
+                phone,
+                message: groupMessage.trim(),
+                studentId: s.id,
+                studentName: s.name,
+                studentStatus: s.status,
+              }
+            : null;
         })
-        .filter(Boolean) as { phone: string; message: string; studentId: string; studentName: string }[];
+        .filter(Boolean) as {
+          phone: string;
+          message: string;
+          studentId: string;
+          studentName: string;
+          studentStatus?: Student['status'];
+        }[];
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
       showToast(`${r.sent + r.manual} veliye grup mesajı gönderildi.`, 'success');
@@ -729,7 +760,10 @@ const WhatsAppManagement: React.FC = () => {
       {view === 'bulk' && (
         <Panel title="Bireysel / Toplu Mesaj">
           <p className="text-xs text-slate-500 mb-2">
-            Veli telefonu kayıtlı öğrencileri seçin{showStudentCounts ? ` (${officeStudents.length} öğrenci)` : ''}
+            Veli telefonu kayıtlı öğrencileri seçin{showStudentCounts ? ` (${officeStudents.length} aktif öğrenci)` : ''}
+            <span className="block text-[10px] font-normal normal-case tracking-normal text-slate-500 mt-1">
+              Pasif öğrenciler mesaj ve bildirim listesine dahil edilmez.
+            </span>
           </p>
           <div className="max-h-48 overflow-y-auto space-y-1 border border-white/5 rounded-lg p-2">
             {officeStudents.map((s) => (

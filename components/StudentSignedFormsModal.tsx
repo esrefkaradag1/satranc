@@ -4,6 +4,7 @@ import { useApp } from '../AppContext';
 import type { Student } from '../types';
 import type { StudentApplication } from '../lib/applicationTypes';
 import { sendWhatsAppMessage } from '../services/whatsappClient';
+import { isStudentNotificationsEnabled } from '../lib/studentNotificationUtils';
 import {
   buildApplicationPreviewFromStudent,
   getOrCreateParentConsentInviteAsync,
@@ -104,12 +105,17 @@ const StudentSignedFormsModal: React.FC<Props> = ({ student, onClose }) => {
         const msg = parentConsentMessage(student.name, url);
 
         if (phone) {
+          if (!isStudentNotificationsEnabled(student)) {
+            showToast('Pasif öğrencilere mesaj gönderilmez.', 'warning');
+            return;
+          }
           const r = await sendWhatsAppMessage({
             phone,
             message: msg,
             studentId: student.id,
             studentName: student.name,
             branchOffice: student.branchOffice,
+            studentStatus: student.status,
             templateKey: 'parent_consent',
             openManualFallback: false,
           });

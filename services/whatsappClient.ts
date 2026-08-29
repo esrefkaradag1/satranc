@@ -13,6 +13,7 @@ import {
   renderWhatsAppTemplate,
 } from '../lib/whatsappTemplates';
 import { parentPhonesForStudent } from '../lib/whatsappPhones';
+import { isStudentNotificationsEnabled } from '../lib/studentNotificationUtils';
 
 function genId(): string {
   return Math.random().toString(36).slice(2, 11);
@@ -172,8 +173,29 @@ export async function sendWhatsAppMessage(options: {
   branchOffice?: string;
   templateKey?: WhatsAppMessageLog['templateKey'];
   openManualFallback?: boolean;
+  /** Pasif öğrenciye gönderimi engellemek için (varsayılan: engelle). */
+  studentStatus?: Student['status'];
+  allowInactiveStudent?: boolean;
 }): Promise<SendResult> {
   const { phone, message, openManualFallback } = options;
+  if (
+    options.studentStatus === 'inactive'
+    && options.allowInactiveStudent !== true
+  ) {
+    writeWhatsAppLog({
+      phone,
+      message,
+      status: 'failed',
+      templateKey: options.templateKey,
+      studentId: options.studentId,
+      studentName: options.studentName,
+      recipientName: options.recipientName,
+      branchOffice: options.branchOffice,
+      error: 'Pasif öğrenci — mesaj gönderilmedi',
+    });
+    return { ok: false, mode: 'failed', error: 'Pasif öğrenci — mesaj gönderilmedi' };
+  }
+
   let result: SendResult = { ok: false, mode: 'failed' };
   const config = loadWhatsAppConfig();
   const allowWeb = shouldOpenWhatsAppWeb(config, openManualFallback);
@@ -227,19 +249,33 @@ export async function sendWhatsAppMessage(options: {
 }
 
 export async function sendWhatsAppBulk(
-  recipients: { phone: string; message: string; studentId?: string; studentName?: string; recipientName?: string }[],
+  recipients: {
+    phone: string;
+    message: string;
+    studentId?: string;
+    studentName?: string;
+    recipientName?: string;
+    studentStatus?: Student['status'];
+  }[],
   options?: { delayMs?: number; branchOffice?: string },
 ): Promise<{ sent: number; failed: number; manual: number; error?: string }> {
   const config = loadWhatsAppConfig();
   const allowWeb = shouldOpenWhatsAppWeb(config);
+  const activeRecipients = recipients.filter(
+    (rec) => rec.studentStatus !== 'inactive' || !rec.studentId,
+  );
   let sent = 0;
   let failed = 0;
   let manual = 0;
   let firstError = '';
+  const skippedInactive = recipients.length - activeRecipients.length;
+  if (skippedInactive > 0 && !firstError) {
+    firstError = `${skippedInactive} pasif öğrenci atlandı`;
+  }
 
   if (config.enabled && (config.apiKey || config.apiBaseUrl)) {
     const data = await callWhatsAppApi('send-bulk', {
-      recipients,
+      recipients: activeRecipients,
       delayMs: options?.delayMs ?? 1500,
     });
     const results = (data.results as { phone: string; ok: boolean; mode: string; error?: string }[]) ?? [];
@@ -310,12 +346,13 @@ export async function sendWhatsAppBulk(
     return { sent, failed, manual, error: firstError || undefined };
   }
 
-  for (const rec of recipients) {
+  for (const rec of activeRecipients) {
     const r = await sendWhatsAppMessage({
       phone: rec.phone,
       message: rec.message,
       studentId: rec.studentId,
       studentName: rec.studentName,
+      studentStatus: rec.studentStatus,
       branchOffice: options?.branchOffice,
     });
     if (r.ok && r.mode === 'api') sent += 1;
@@ -346,8 +383,15 @@ export async function sendParentLoginBulk(
   const tpl = findTemplate(templates, 'parent_login');
   if (!tpl) return { sent: 0, failed: 0, manual: 0 };
 
-  const recipients: { phone: string; message: string; studentId: string; studentName: string }[] = [];
+  const recipients: {
+    phone: string;
+    message: string;
+    studentId: string;
+    studentName: string;
+    studentStatus?: Student['status'];
+  }[] = [];
   for (const student of students) {
+    if (!isStudentNotificationsEnabled(student)) continue;
     if (branchOffice && student.branchOffice !== branchOffice) continue;
     const phones = parentPhonesForStudent(student);
     if (!phones.length) continue;
@@ -356,7 +400,13 @@ export async function sendParentLoginBulk(
     });
     const message = renderWhatsAppTemplate(tpl.body, vars);
     for (const phone of phones) {
-      recipients.push({ phone, message, studentId: student.id, studentName: student.name });
+      recipients.push({
+        phone,
+        message,
+        studentId: student.id,
+        studentName: student.name,
+        studentStatus: student.status,
+      });
     }
   }
   return sendWhatsAppBulk(recipients, { branchOffice, delayMs: 1500 });

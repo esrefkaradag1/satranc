@@ -1,4 +1,5 @@
 import type { Student } from '../types';
+import { isStudentNotificationsEnabled } from '../lib/studentNotificationUtils';
 import {
   buildPanelNotificationContent,
   channelUsesPanel,
@@ -58,6 +59,7 @@ async function sendWhatsAppForEvent(
       recipientName: vars.veli_adi,
       branchOffice: ctx.branchOffice ?? ctx.student.branchOffice,
       templateKey: tpl.key,
+      studentStatus: ctx.student.status,
       openManualFallback: false,
     });
     if (r.ok && r.mode === 'api') count += 1;
@@ -83,6 +85,10 @@ export async function dispatchNotification(
   event: NotificationEvent,
   ctx: NotificationDispatchContext,
 ): Promise<DispatchResult> {
+  if (ctx.student && !isStudentNotificationsEnabled(ctx.student)) {
+    return { whatsapp: 0, panel: false, skipped: true };
+  }
+
   const channel = getDeliveryChannel(event);
   if (channel === 'off') {
     return { whatsapp: 0, panel: false, skipped: true };

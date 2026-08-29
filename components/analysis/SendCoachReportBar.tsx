@@ -8,6 +8,7 @@ import {
   getStudentParentPhone,
 } from '../../lib/coachReportShare';
 import { sendWhatsAppMessage } from '../../services/whatsappClient';
+import { isStudentNotificationsEnabled } from '../../lib/studentNotificationUtils';
 
 interface SendCoachReportBarProps {
   student: Student;
@@ -56,6 +57,10 @@ export const SendCoachReportBar: React.FC<SendCoachReportBarProps> = ({
   );
 
   const sendWhatsAppToParent = useCallback(() => {
+    if (!isStudentNotificationsEnabled(student)) {
+      showToast('Pasif öğrencilere mesaj gönderilmez.', 'warning');
+      return;
+    }
     if (!parentPhone) {
       showToast('Veli telefon numarası bulunamadı. Öğrenci profilini güncelleyin.', 'warning');
       return;
@@ -76,6 +81,7 @@ export const SendCoachReportBar: React.FC<SendCoachReportBarProps> = ({
         studentId: student.id,
         studentName: student.name,
         branchOffice: student.branchOffice,
+        studentStatus: student.status,
         openManualFallback: false,
       });
       addCoachAiReport({
