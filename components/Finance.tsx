@@ -293,7 +293,7 @@ const Finance: React.FC = () => {
                 <th className="px-6 sm:px-8 py-5">Tür</th>
                 <th className="px-6 sm:px-8 py-5">Açıklama</th>
                 <th className="px-6 sm:px-8 py-5">Durum</th>
-                <th className="px-6 sm:px-8 py-5 text-right">İşlem</th>
+                <th className="px-6 sm:px-8 py-5 text-right rt-col-actions">İşlem</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -372,8 +372,8 @@ const Finance: React.FC = () => {
                         {isIncome ? 'Tahsil edildi' : 'Ödendi'}
                       </span>
                     </td>
-                    <td data-label="İşlem" className="px-6 sm:px-8 py-4 sm:py-5 text-right">
-                      <div className="flex items-center justify-end gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                    <td data-label="İşlem" className="px-6 sm:px-8 py-4 sm:py-5 text-right rt-col-actions">
+                      <div className="rt-actions-row">
                         <button type="button" onClick={() => openEdit(transaction)} className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" title="Düzenle">
                           <Edit2 className="w-4 h-4" />
                         </button>

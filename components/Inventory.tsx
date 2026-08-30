@@ -123,7 +123,7 @@ const Inventory: React.FC = () => {
                 <th className="px-8 py-5 text-center">Stok Adedi</th>
                 <th className="px-8 py-5">Birim</th>
                 <th className="px-8 py-5">Durum</th>
-                <th className="px-8 py-5 text-right">İşlem</th>
+                <th className="px-8 py-5 text-right rt-col-actions">İşlem</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -168,7 +168,8 @@ const Inventory: React.FC = () => {
                       {item.status}
                     </span>
                   </td>
-                  <td data-label="İşlem" className="px-8 py-5 text-right">
+                  <td data-label="İşlem" className="px-8 py-5 text-right rt-col-actions">
+                    <div className="rt-actions-row">
                     <button
                       onClick={() => deleteInventoryItem(item.id)}
                       className="p-2 text-slate-400 hover:text-rose-400 transition-colors"
@@ -176,6 +177,7 @@ const Inventory: React.FC = () => {
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
+                    </div>
                   </td>
                 </tr>
               ))}

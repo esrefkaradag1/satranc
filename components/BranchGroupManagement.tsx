@@ -824,7 +824,7 @@ const BranchGroupManagement: React.FC = () => {
                               <th className="text-left py-2 pr-2">Kont.</th>
                               <th className="text-left py-2 pr-2">Öğr.</th>
                               <th className="text-left py-2 pr-2">Antrenör</th>
-                              <th className="text-right py-2">İşlem</th>
+                              <th className="text-right py-2 rt-col-actions">İşlem</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-white/[0.04]">
@@ -866,8 +866,8 @@ const BranchGroupManagement: React.FC = () => {
                                         </span>
                                       )}
                                   </td>
-                                  <td data-label="İşlem" className="py-2.5 text-right">
-                                    <div className="inline-flex gap-0.5">
+                                  <td data-label="İşlem" className="py-2.5 text-right rt-col-actions">
+                                    <div className="rt-actions-row">
                                       <button
                                         type="button"
                                         onClick={() => openAddStudents(group)}
@@ -939,7 +939,7 @@ const BranchGroupManagement: React.FC = () => {
                               <th className="text-left py-2 pr-2">Ücret</th>
                               <th className="text-left py-2 pr-2">Kont.</th>
                               <th className="text-left py-2 pr-2">Antrenör</th>
-                              <th className="text-right py-2">İşlem</th>
+                              <th className="text-right py-2 rt-col-actions">İşlem</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-white/[0.04]">
@@ -960,8 +960,8 @@ const BranchGroupManagement: React.FC = () => {
                                     ? pkg.coachIds.map((id) => coachName(id)).join(', ')
                                     : '—'}
                                 </td>
-                                <td data-label="İşlem" className="py-2.5 text-right">
-                                  <div className="inline-flex gap-0.5">
+                                <td data-label="İşlem" className="py-2.5 text-right rt-col-actions">
+                                  <div className="rt-actions-row">
                                     <button type="button" onClick={() => openEditPackage(pkg, branch)} className="p-1.5 rounded-lg text-slate-400 hover:bg-amber-500/15 hover:text-amber-300" title="Düzenle">
                                       <Pencil className="w-3.5 h-3.5" />
                                     </button>

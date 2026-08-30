@@ -393,7 +393,7 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
                   <th className="px-4 py-3 hidden md:table-cell">Şube</th>
                   <th className="px-4 py-3 hidden lg:table-cell">Tarih</th>
                   <th className="px-4 py-3">Durum</th>
-                  <th className="px-4 py-3 text-right">İşlem</th>
+                  <th className="px-4 py-3 text-right rt-col-actions">İşlem</th>
                 </tr>
               </thead>
               <tbody>
@@ -413,8 +413,8 @@ const ApplicationsAdmin: React.FC<ApplicationsAdminProps> = ({ clubId, clubName,
                         {STATUS_LABEL[app.status]}
                       </span>
                     </td>
-                    <td data-label="İşlem" className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
+                    <td data-label="İşlem" className="px-4 py-3 rt-col-actions">
+                      <div className="rt-actions-row">
                         <button type="button" onClick={() => void openDetail(app)} className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white" title="Detay">
                           <Eye className="w-4 h-4" />
                         </button>

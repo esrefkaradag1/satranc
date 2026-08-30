@@ -234,7 +234,7 @@ const StudentLessonLogModal: React.FC<Props> = ({ student, onClose, onSave }) =>
                 <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">
                   Bilgi
                 </th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right w-[5.5rem]">
+                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right w-[5.5rem] rt-col-actions">
                   İşlem
                 </th>
               </tr>
@@ -274,8 +274,8 @@ const StudentLessonLogModal: React.FC<Props> = ({ student, onClose, onSave }) =>
                           </div>
                         ) : null}
                       </td>
-                      <td data-label="İşlem" className="px-4 py-3">
-                        <div className="flex justify-end gap-1">
+                      <td data-label="İşlem" className="px-4 py-3 rt-col-actions">
+                        <div className="rt-actions-row">
                           <button
                             type="button"
                             title="Düzenle"

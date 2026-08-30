@@ -130,7 +130,7 @@ export async function fetchLichessGameSnapshot(gameId: string): Promise<External
   if (!id) return null;
 
   const fromStream = await fetchLichessSnapshotFromStream(id);
-  if (fromStream && (fromStream.moves.length > 0 || fromStream.fen.includes('/'))) {
+  if (fromStream && fromStream.moves.length > 0) {
     return fromStream;
   }
 

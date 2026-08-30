@@ -198,7 +198,7 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
         >
           <Chessboard
             options={{
-              id: `study-replay-${studyId}-${chapter?.id ?? 'x'}-${studentId}`,
+              id: `study-replay-${studyId}-${chapter?.id ?? 'x'}-${studentId}-${current?.fen ?? startFen}`,
               position: current?.fen ?? startFen,
               allowDragging: false,
               showAnimations: false,

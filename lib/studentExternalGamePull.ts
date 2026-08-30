@@ -2,6 +2,7 @@ import { fetchChessComGameSnapshotFromParsed } from './chesscomLiveGameServer';
 import { parseExternalGameLink } from './externalGameLink';
 import {
   snapshotFromPgn,
+  snapshotFromSanList,
   type ExternalGameSnapshot,
 } from './externalGameSnapshot';
 import { fetchChessComPuzzleRecentStatus } from './studentChessComPuzzlePull';
@@ -24,6 +25,8 @@ export type StudentExternalGameAutoResult = {
   method?: 'lichess-oauth' | 'lichess-username' | 'chesscom-to-move';
   error?: string;
 };
+
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 function parseNdjson(text: string): Record<string, unknown>[] {
   return text
@@ -49,6 +52,9 @@ function snapshotFromLichessNdjsonGame(game: Record<string, unknown>): ExternalG
   // games/user export'unda `moves` alanı SAN dizisidir ("d4 d5 Bf4 ..."), UCI değil.
   // lastFen=true ile mevcut konum `lastFen` alanında gelir.
   const movesSan = typeof game.moves === 'string' ? game.moves.trim() : '';
+  const initialFen =
+    (typeof game.initialFen === 'string' && game.initialFen.trim())
+    || '';
   const lastFen =
     (typeof game.lastFen === 'string' && game.lastFen.trim())
     || (typeof game.fen === 'string' && game.fen.trim())
@@ -61,13 +67,18 @@ function snapshotFromLichessNdjsonGame(game: Record<string, unknown>): ExternalG
     isFinished,
   };
   if (movesSan) {
-    const fromSan = snapshotFromPgn(movesSan, meta);
-    if (fromSan) {
-      return lastFen ? { ...fromSan, fen: lastFen } : fromSan;
+    const fromSan = snapshotFromSanList(movesSan, meta, {
+      initialFen: initialFen || undefined,
+      headFen: lastFen || undefined,
+    });
+    if (fromSan) return fromSan;
+    const fromPgn = snapshotFromPgn(movesSan, meta);
+    if (fromPgn) {
+      return lastFen ? { ...fromPgn, fen: lastFen } : fromPgn;
     }
   }
   if (lastFen) {
-    return { fen: lastFen, moves: [], baseFen: lastFen, ...meta };
+    return { fen: lastFen, moves: [], baseFen: initialFen || START_FEN, ...meta };
   }
   return null;
 }

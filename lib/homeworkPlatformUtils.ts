@@ -26,6 +26,8 @@ import {
   lichessGameDurationSeconds,
 } from './chesscomGameDuration';
 import { chessComPuzzleTimeEstimateForDay } from './platformActivityTime';
+import { isHomeworkAssignedToStudent } from '../homeworkUtils';
+import { homeworkHasPlatformGoals } from './homeworkStatsBuilders';
 
 export type PlatformDayStats = {
   games: number;
@@ -339,6 +341,26 @@ export function evaluatePlatformDayGoalsFromStats(
     puzzleFailed,
     games,
   };
+}
+
+/** Öğrencinin belirli gün için platform antrenman hedefi (Lichess/Chess.com günlük program). */
+export function getStudentPlatformTrainingForDay(
+  student: Student,
+  homeworks: HomeworkAssignment[],
+  dayIso: string,
+): { gameTarget: number; puzzleTarget: number; minAccuracy: number } | null {
+  const weekday = weekdayKeyFromIso(dayIso);
+  let best: { gameTarget: number; puzzleTarget: number; minAccuracy: number } | null = null;
+  for (const hw of homeworks) {
+    if ((hw.puzzles?.length ?? 0) > 0) continue;
+    if (!homeworkHasPlatformGoals(hw)) continue;
+    if (!isHomeworkAssignedToStudent(hw, student.id, student.group)) continue;
+    const draft = hw.studentDailyTargets?.[student.id];
+    const { gameTarget, puzzleTarget, minAccuracy } = resolveDayTargets(draft, hw, weekday);
+    if (gameTarget <= 0 && puzzleTarget <= 0) continue;
+    best = { gameTarget, puzzleTarget, minAccuracy };
+  }
+  return best;
 }
 
 /** Yalnızca Lichess/Chess.com — öğretmen Günlük Program ve öğrenci paneli aynı mantık. */

@@ -42,7 +42,7 @@ import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
   genId, migrateStudy, migrateChapter, studyDisplayEmoji,
   normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
 } from '../lib/studyUtils';
-import { applyPuzzleAutoReplies, dropMatchesSolutionMove, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares, resolveStudyChapterSolutionMoves } from '../lib/puzzlePlayUtils';
+import { applyPuzzleAutoReplies, applyPuzzleMove, dropMatchesSolutionMove, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares, resolveStudyChapterSolutionMoves } from '../lib/puzzlePlayUtils';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
@@ -64,8 +64,7 @@ import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
 import { computeThreatOverlay } from '../lib/chessThreats';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { coachIdFromMemberId, isCoachMemberId, resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
-import { fetchStudentActivityAuto } from '../lib/studentActivityPull';
-import { fetchStudentLivePlatformStatus } from '../lib/studentExternalGamePull';
+import { fetchStudentActivityAuto, fetchStudentLivePlatformStatus } from '../services/externalGameShareClient';
 
 const OFF_EVAL_BAR: EvalBarDisplay = { whitePercent: 50, label: '—', winningChances: 0, pending: false };
 const STUDY_PLATFORM_IDLE_POLL_MS = 20_000;
@@ -97,7 +96,8 @@ function fenAfterSans(startFen: string, sans: string[]): string {
   try {
     const g = makeBuilderGame(startFen);
     for (const san of sans) {
-      if (!g.move(san)) break;
+      const played = applyPuzzleMove(g, san);
+      if (!played) break;
     }
     return g.fen();
   } catch {
@@ -929,15 +929,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   }, [hideEngineForStudentPuzzle, effectiveChapter?.id, currentMoveIndex]);
 
   useEffect(() => {
-    if (!isInteractivePuzzle || !puzzlePlayNorm?.setupMoveSan || !effectiveChapter) {
-      setPuzzleSetupPreviewFen(null);
-      return;
-    }
-    const preSetupFen = effectiveChapter.fen || DEFAULT_FEN;
-    setPuzzleSetupPreviewFen(preSetupFen);
-    const timer = window.setTimeout(() => setPuzzleSetupPreviewFen(null), 650);
-    return () => window.clearTimeout(timer);
-  }, [effectiveChapter?.id, isInteractivePuzzle, puzzlePlayNorm?.setupMoveSan, effectiveChapter?.fen]);
+    // Kurulum hamlesi metinde gösterilir; tahtayı eski FEN'e kilitleme
+    // (react-chessboard position güncellemesi kaçırınca taşlar kayboluyordu).
+    setPuzzleSetupPreviewFen(null);
+  }, [effectiveChapter?.id, isInteractivePuzzle]);
 
   const studentPlaysColor = normalizeStudentPlaysColor(selectedStudy?.studentPlaysColor);
   const studentMoveEnabled = studentCanMovePieces(studentPlaysColor);
@@ -2800,9 +2795,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                 >
                 <div ref={studyBoardWheelRef} className="absolute inset-0">
                     <Chessboard
-                      key={effectiveChapter?.id || 'main'}
+                      key={`student-board-${effectiveChapter?.id || 'main'}-${studyBoardFen}`}
                       options={{
-                        id: `student-board-${effectiveChapter?.id || 'main'}`,
+                        id: `student-board-${effectiveChapter?.id || 'main'}-${studyBoardFen}`,
                         position: studyBoardFen,
                         boardOrientation: studentBoardOrientation,
                         darkSquareStyle: { backgroundColor: '#5d768e' },

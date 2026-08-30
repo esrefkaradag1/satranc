@@ -485,17 +485,18 @@ export function applyMove(game: Chess, moveStr: string): boolean {
     if (m4) return true;
   } catch {}
 
-  // Fallback: directly relocate the piece (for edited/non-standard positions)
-  if (s.length >= 4) {
+  // Yalnızca gerçek UCI (e2e4 / e7e8q). SAN (Raa2, Nbd7) taş taşıma ile bozulmasın.
+  if (/^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(s)) {
     try {
-      const from = s.slice(0, 2) as Square;
-      const to = s.slice(2, 4) as Square;
+      const from = s.slice(0, 2).toLowerCase() as Square;
+      const to = s.slice(2, 4).toLowerCase() as Square;
       const piece = game.get(from);
       if (piece) {
         game.remove(from);
         const captured = game.get(to);
         if (captured) game.remove(to);
-        game.put(piece, to);
+        const promo = s[4] ? (s[4].toLowerCase() === 'q' ? 'q' : s[4].toLowerCase() === 'r' ? 'r' : s[4].toLowerCase() === 'b' ? 'b' : 'n') : piece.type;
+        game.put(promo && piece.type === 'p' && (to[1] === '1' || to[1] === '8') ? { ...piece, type: promo as typeof piece.type } : piece, to);
         return true;
       }
     } catch {}

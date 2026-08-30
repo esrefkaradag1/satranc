@@ -1,7 +1,7 @@
 import type { StudyChapter } from './studyTypes';
 import type { StudyEvent } from '../studyEvents';
-import { DEFAULT_FEN, applyMove, makeBuilderGame } from './studyUtils';
-import { normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
+import { DEFAULT_FEN, makeBuilderGame } from './studyUtils';
+import { applyPuzzleMove, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
 import { mainlineSansFromTree } from './studySync/moveList';
 
 export type ReplayStep = {
@@ -125,13 +125,13 @@ export function reconstructVsFullMoveList(
     if (game.turn() === studentTurn) {
       const san = left[0];
       const next = makeBuilderGame(fen || DEFAULT_FEN);
-      if (!applyMove(next, san)) return null;
+      if (!applyPuzzleMove(next, san)) return null;
       return dfs(next.fen(), left.slice(1), [...path, san]);
     }
 
     for (const reply of game.moves()) {
       const next = makeBuilderGame(fen || DEFAULT_FEN);
-      if (!applyMove(next, reply)) continue;
+      if (!applyPuzzleMove(next, reply)) continue;
       const found = dfs(next.fen(), left, [...path, reply]);
       if (found) return found;
     }
@@ -213,11 +213,12 @@ function buildStepsFromMoveList(startFen: string, moves: string[]): ReplayStep[]
   moves.forEach((san, idx) => {
     const move = san.trim();
     if (!move) return;
-    if (applyMove(game, move)) {
+    const played = applyPuzzleMove(game, move);
+    if (played) {
       steps.push({
         fen: game.fen(),
         eventIndex: idx,
-        label: move,
+        label: played.san || move,
         isWrong: false,
       });
     }
@@ -229,7 +230,7 @@ function syncLineCursorToFen(startFen: string, line: string[], targetFen: string
   const g = makeBuilderGame(startFen || DEFAULT_FEN);
   if (g.fen() === targetFen) return 0;
   for (let i = 0; i < line.length; i++) {
-    if (!applyMove(g, line[i]!)) return i;
+    if (!applyPuzzleMove(g, line[i]!)) return i;
     if (g.fen() === targetFen) return i + 1;
   }
   return line.length;
@@ -263,17 +264,17 @@ function resolvePuzzlePlayedMoves(
       if (!san) continue;
 
       while (cursor < line.length && g.turn() !== studentColor) {
-        if (!applyMove(g, line[cursor]!)) break;
+        if (!applyPuzzleMove(g, line[cursor]!)) break;
         played.push(line[cursor]!);
         cursor += 1;
       }
 
-      if (!applyMove(g, san)) continue;
+      if (!applyPuzzleMove(g, san)) continue;
       played.push(san);
       cursor = syncLineCursorToFen(startFen, line, g.fen());
 
       while (cursor < line.length && g.turn() !== studentColor) {
-        if (!applyMove(g, line[cursor]!)) break;
+        if (!applyPuzzleMove(g, line[cursor]!)) break;
         played.push(line[cursor]!);
         cursor += 1;
       }
@@ -283,7 +284,7 @@ function resolvePuzzlePlayedMoves(
 
     if (solved) {
       while (cursor < line.length) {
-        if (!applyMove(g, line[cursor]!)) break;
+        if (!applyPuzzleMove(g, line[cursor]!)) break;
         played.push(line[cursor]!);
         cursor += 1;
       }
@@ -344,7 +345,7 @@ export function buildChapterReplaySteps(
       });
       return;
     }
-    if (applyMove(game, san)) {
+    if (applyPuzzleMove(game, san)) {
       steps.push({
         fen: game.fen(),
         eventIndex: idx,
@@ -481,7 +482,7 @@ export function buildReplayTableRows(
 
     return moves.map((move, plyIdx) => {
       const turnBefore = game.turn();
-      applyMove(game, move);
+      applyPuzzleMove(game, move);
       const isStudent = turnBefore === studentColor;
       let thinkMs = 0;
       let createdAt: string | null = null;

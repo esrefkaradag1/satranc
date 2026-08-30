@@ -2353,7 +2353,7 @@ const Homework: React.FC = () => {
         </>
       )}
 
-      <div className="relative z-0 grid grid-cols-1 xl:grid-cols-[260px_1fr] gap-5">
+      <div className="relative z-0 grid grid-cols-1 lg:grid-cols-[minmax(220px,260px)_minmax(0,1fr)] gap-5">
         <HomeworkTargetSelector
           target={targetFilter}
           onChange={handleTargetChange}

@@ -36,6 +36,39 @@ export function fenAtSanMoves(baseFen: string, moves: string[], ply: number | nu
   }
 }
 
+/** Lichess NDJSON `moves` alanı: boşlukla ayrılmış SAN ("e4 e5 Nf3"). */
+export function snapshotFromSanList(
+  sanText: string,
+  meta: {
+    source: ExternalGameSnapshot['source'];
+    gameId: string;
+    gameUrl: string;
+    label?: string;
+    isFinished?: boolean;
+  },
+  opts?: { initialFen?: string; headFen?: string },
+): ExternalGameSnapshot | null {
+  const trimmed = sanText.trim();
+  if (!trimmed) return null;
+  const baseFen = opts?.initialFen?.trim() || START_FEN;
+  try {
+    const game = new Chess(baseFen);
+    const sans: string[] = [];
+    for (const raw of trimmed.split(/\s+/)) {
+      const token = raw.replace(/^\d+\.+\.?/, '').trim();
+      if (!token || token === '1-0' || token === '0-1' || token === '1/2-1/2' || token === '*') continue;
+      const played = game.move(token);
+      if (!played) break;
+      sans.push(played.san);
+    }
+    if (sans.length === 0) return null;
+    const fen = opts?.headFen?.trim() || game.fen();
+    return { fen, moves: sans, baseFen, ...meta };
+  } catch {
+    return null;
+  }
+}
+
 export function snapshotFromPgn(pgn: string, meta: {
   source: ExternalGameSnapshot['source'];
   gameId: string;
@@ -182,15 +215,7 @@ export function snapshotFromLichessStreamLine(
         || status === 'timeout',
     };
   } catch {
-    if (!fenRaw) return null;
-    return {
-      fen: fenRaw,
-      moves: [],
-      baseFen: fenRaw,
-      source: 'lichess',
-      gameId: meta.gameId,
-      gameUrl: meta.gameUrl,
-      label: meta.label,
-    };
+    // Hamle listesi olmadan FEN-only snapshot üretme — üst katman PGN export dener.
+    return null;
   }
 }

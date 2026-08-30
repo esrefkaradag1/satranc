@@ -59,7 +59,7 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
   }
 
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-[#1a2332]/60 overflow-hidden">
+    <div className="rounded-xl border border-white/[0.08] bg-[#1a2332]/60 overflow-hidden min-w-0">
       <div className="px-4 sm:px-5 py-4 border-b border-white/[0.06] flex items-center gap-2">
         <List className="w-4 h-4 text-indigo-400" />
         <h3 className="text-sm font-bold text-white">Aktif Atamalar</h3>
@@ -67,19 +67,19 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
           {homeworks.length} kayıt
         </span>
       </div>
-      <ResponsiveTable minWidth={760}>
+      <ResponsiveTable minWidth={960}>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-[10px] text-slate-500 uppercase tracking-wider border-b border-white/[0.06] bg-black/20">
-              <th className="text-left py-3 px-4 font-bold">Başlık</th>
-              <th className="text-left py-3 px-3 font-bold hidden md:table-cell">Şube</th>
-              <th className="text-left py-3 px-3 font-bold">Grup</th>
-              <th className="text-center py-3 px-3 font-bold">
+              <th className="text-left py-3 px-4 font-bold min-w-[10rem]">Başlık</th>
+              <th className="text-left py-3 px-3 font-bold hidden md:table-cell min-w-[8rem]">Şube</th>
+              <th className="text-left py-3 px-3 font-bold min-w-[7rem]">Grup</th>
+              <th className="text-center py-3 px-3 font-bold min-w-[8.5rem]">
                 {variant === 'platform' ? 'Program' : 'Bulmaca'}
               </th>
-              <th className="text-center py-3 px-3 font-bold">Katılım</th>
-              <th className="text-center py-3 px-3 font-bold hidden sm:table-cell">Bitiş</th>
-              <th className="text-center py-3 px-4 font-bold">İşlem</th>
+              <th className="text-center py-3 px-3 font-bold min-w-[6.5rem]">Katılım</th>
+              <th className="text-center py-3 px-3 font-bold hidden sm:table-cell min-w-[5.5rem]">Bitiş</th>
+              <th className="text-center py-3 px-4 font-bold rt-col-actions">İşlem</th>
             </tr>
           </thead>
           <tbody>
@@ -147,28 +147,28 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
                   <td data-label="Bitiş" className="py-3 px-3 text-center text-slate-400 text-xs hidden sm:table-cell">
                     {homeworkEndDateLabel(hw)}
                   </td>
-                  <td data-label="İşlem" className="py-3 px-4">
-                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                  <td data-label="İşlem" className="py-3 px-3 sm:px-4 rt-col-actions">
+                    <div className="rt-actions-row">
                       {onExtend ? (
                         <button
                           type="button"
                           onClick={() => onExtend(hw)}
-                          className={`inline-flex items-center justify-center gap-1 px-2.5 h-9 rounded-full text-white text-[10px] font-bold shadow-lg transition-colors ${
+                          className={`inline-flex items-center justify-center gap-1 shrink-0 w-9 h-9 sm:w-auto sm:min-w-[4.25rem] sm:px-2.5 sm:h-9 rounded-full text-white text-[10px] font-bold shadow-lg transition-colors ${
                             expired
                               ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/30'
                               : 'bg-emerald-600/80 hover:bg-emerald-500 shadow-emerald-900/20'
                           }`}
                           title="Süreyi uzat"
                         >
-                          <CalendarPlus className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">{expired ? 'Uzat' : 'Uzat'}</span>
+                          <CalendarPlus className="w-3.5 h-3.5 shrink-0" />
+                          <span className="hidden md:inline">Uzat</span>
                         </button>
                       ) : null}
                       {onEditSchedule ? (
                         <button
                           type="button"
                           onClick={() => onEditSchedule(hw)}
-                          className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/30 transition-colors"
+                          className="inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/30 transition-colors"
                           title="Düzenle"
                         >
                           <Pencil className="w-4 h-4" />
@@ -177,7 +177,7 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
                       <button
                         type="button"
                         onClick={() => onOpenDetail(hw.id)}
-                        className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/30 transition-colors"
+                        className="inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-full bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/30 transition-colors"
                         title="Detay"
                       >
                         <Eye className="w-4 h-4" />

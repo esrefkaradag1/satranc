@@ -119,6 +119,8 @@ import { formatMidnightCountdown, homeworkDayKey } from '../lib/homeworkDayUtils
 import {
   mergePlatformDayStats,
   platformSyncSummary,
+  evaluatePlatformDayGoalsFromStats,
+  getStudentPlatformTrainingForDay,
   type PlatformDayStats,
 } from '../lib/homeworkPlatformUtils';
 import { homeworkWeekDaysUpToToday, syncStudentPlatformDays } from '../lib/platformStatsClientSync';
@@ -437,6 +439,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const [platformStatsFetched, setPlatformStatsFetched] = useState(false);
   const platformPollEnabledRef = useRef(false);
   const platformInitialSyncDoneRef = useRef(false);
+  const trainingNotifyDonePrevRef = useRef(false);
   const [midnightCountdown, setMidnightCountdown] = useState(() => formatMidnightCountdown());
   const [homeworkDayKeyState, setHomeworkDayKeyState] = useState(() => homeworkDayKey());
 
@@ -585,6 +588,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     setPlatformStatsFetched(false);
     platformPollEnabledRef.current = false;
     platformInitialSyncDoneRef.current = false;
+    trainingNotifyDonePrevRef.current = false;
     weekPlatformStatsRef.current = {};
     setWeekPlatformStatsByDate({});
   }, [homeworkDayKeyState, student?.id]);
@@ -1291,9 +1295,26 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     };
   }, [activeTab, student?.id, homeworkDayKeyState, refreshTodayExternalStats, viewAs]);
 
+  const todayPlatformTrainingDone = useMemo(() => {
+    if (!student) return false;
+    const training = getStudentPlatformTrainingForDay(student, assignedHomeworks, homeworkDayKeyState);
+    if (!training) return false;
+    const stats = weekPlatformStatsByDate[homeworkDayKeyState];
+    if (!stats) return false;
+    return evaluatePlatformDayGoalsFromStats(
+      training.gameTarget,
+      training.puzzleTarget,
+      training.minAccuracy,
+      stats,
+    ).done;
+  }, [student, assignedHomeworks, homeworkDayKeyState, weekPlatformStatsByDate]);
+
   useEffect(() => {
     if (!student?.id || !platformStatsFetched || loadingExternalGameCount) return;
     if (activeTab !== 'puzzles' && activeTab !== 'summary') return;
+    const wasDone = trainingNotifyDonePrevRef.current;
+    trainingNotifyDonePrevRef.current = todayPlatformTrainingDone;
+    if (!todayPlatformTrainingDone || wasDone) return;
     void requestTrainingNotifyCheck(student.id, homeworkDayKeyState);
   }, [
     student?.id,
@@ -1301,7 +1322,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     loadingExternalGameCount,
     homeworkDayKeyState,
     activeTab,
-    weekPlatformStatsByDate,
+    todayPlatformTrainingDone,
   ]);
 
   const [apiSchedule, setApiSchedule] = useState<typeof scheduleEntries>([]);

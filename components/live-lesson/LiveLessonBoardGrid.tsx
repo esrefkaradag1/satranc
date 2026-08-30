@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Chessboard } from 'react-chessboard';
 import {
   ChevronLeft,
@@ -160,6 +160,18 @@ export function LiveLessonBoardGrid({
   onlineStudentIds,
 }: Props) {
   const [replayByStudent, setReplayByStudent] = useState<Record<string, number | null>>({});
+  const prevMoveCountRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    for (const [sid, snap] of Object.entries(studentBoards)) {
+      const count = snap?.moves?.length ?? 0;
+      const prev = prevMoveCountRef.current[sid] ?? 0;
+      if (count > prev) {
+        setReplayByStudent((r) => ({ ...r, [sid]: null }));
+      }
+      prevMoveCountRef.current[sid] = count;
+    }
+  }, [studentBoards]);
 
   const gridStudents = useMemo(
     () => students.filter((s) => normalizeStudentId(s.id).length > 0),
@@ -371,7 +383,8 @@ export function LiveLessonBoardGrid({
                   <div className="flex items-center gap-0.5">
                     <button
                       type="button"
-                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10"
+                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none"
+                      disabled={moves.length === 0}
                       onClick={() => setStudentReplay(sid, 0)}
                       title="Başa dön"
                     >
@@ -379,18 +392,20 @@ export function LiveLessonBoardGrid({
                     </button>
                     <button
                       type="button"
-                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10"
+                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none"
+                      disabled={moves.length === 0}
                       onClick={() => setStudentReplay(sid, Math.max(0, displayPly - 1))}
                       title="Önceki"
                     >
                       <ChevronLeft className="w-3.5 h-3.5" />
                     </button>
                     <span className="text-[10px] font-mono tabular-nums text-slate-400 px-1 min-w-[3rem] text-center">
-                      {moves.length > 0 ? `${displayPly} / ${moves.length}` : '0 / 0'}
+                      {moves.length > 0 ? `${displayPly} / ${moves.length}` : '—'}
                     </span>
                     <button
                       type="button"
-                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10"
+                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none"
+                      disabled={moves.length === 0}
                       onClick={() => setStudentReplay(sid, Math.min(moves.length, displayPly + 1))}
                       title="Sonraki"
                     >
@@ -398,7 +413,8 @@ export function LiveLessonBoardGrid({
                     </button>
                     <button
                       type="button"
-                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10"
+                      className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none"
+                      disabled={moves.length === 0}
                       onClick={() => setStudentReplay(sid, null)}
                       title="Son konum"
                     >

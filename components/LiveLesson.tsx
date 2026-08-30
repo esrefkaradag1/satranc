@@ -3977,6 +3977,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           && existing.fen?.trim()
           && existing.updatedAt
           && !existing.shareKind
+          && (existing.moves?.length ?? 0) > 0
         ) {
           const age = Date.now() - new Date(existing.updatedAt).getTime();
           if (Number.isFinite(age) && age < 7000) {
@@ -5840,7 +5841,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
   }, [pushState, coachSide, analyseEngineFen]);
 
-  const lastCoachBoardLoadRef = useRef<{ studentId: string; updatedAt?: string } | null>(null);
+  const lastCoachBoardLoadRef = useRef<{
+    studentId: string;
+    updatedAt?: string;
+    fen?: string;
+    moveCount?: number;
+  } | null>(null);
 
   const applyStudentBoardSnapshotToCoachBoard = useCallback((snapshot: LiveStudentBoardSnapshot) => {
     const base = snapshot.baseFen?.trim() || START_FEN;
@@ -5880,7 +5886,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     setMarks({});
     setBoardDrawRevision((r) => r + 1);
     lastLocalMoveTimeRef.current = Date.now();
-    pushState(headFen, moves, [], snapshot.variations ?? {}, coachSide ?? undefined, {});
+    pushState(headFen, moves, [], {}, coachSide ?? undefined, snapshot.variations ?? {});
     analyseEngineFen(headFen);
     setSidebarTab('analiz');
     setMobileClassroomPanel('board');
@@ -6617,12 +6623,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   }, [isStudentView, gridMonitorStudents, pullStudentPuzzleFromPlatform, showToast]);
 
   useEffect(() => {
-    if (isStudentView || sidebarTab !== 'tahtalar' || !gridAutoPull) return;
+    if (isStudentView || !gridAutoPull) return;
     const id = window.setInterval(() => {
       void pullAllStudentBoardsFromPlatform({ silent: true });
     }, 3000);
     return () => window.clearInterval(id);
-  }, [isStudentView, sidebarTab, gridAutoPull, pullAllStudentBoardsFromPlatform]);
+  }, [isStudentView, gridAutoPull, pullAllStudentBoardsFromPlatform]);
 
   const gridOnlineStudentIds = useMemo(() => {
     const online = new Set<string>();
@@ -6648,7 +6654,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       const snap = snapshotOverride ?? sessionMediaRef.current.studentBoards?.[sid];
       if (snap?.fen?.trim()) {
         applyStudentBoardSnapshotToCoachBoard(snap);
-        lastCoachBoardLoadRef.current = { studentId: sid, updatedAt: snap.updatedAt };
+        lastCoachBoardLoadRef.current = {
+          studentId: sid,
+          updatedAt: snap.updatedAt,
+          fen: snap.fen,
+          moveCount: snap.moves?.length ?? 0,
+        };
       }
       setFocusedVideoTileId(`student-${sid}`);
       setParticipantMenuStudentId(sid);
@@ -6664,9 +6675,18 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     const snap = sessionMedia.studentBoards?.[sid];
     if (!snap?.fen?.trim()) return;
     const prev = lastCoachBoardLoadRef.current;
-    if (prev?.studentId === sid && prev?.updatedAt === snap.updatedAt) return;
+    const snapKey = `${snap.updatedAt ?? ''}|${snap.fen}|${snap.moves?.length ?? 0}`;
+    const prevKey = prev?.studentId === sid
+      ? `${prev.updatedAt ?? ''}|${prev.fen ?? ''}|${prev.moveCount ?? 0}`
+      : '';
+    if (prevKey === snapKey) return;
     applyStudentBoardSnapshotToCoachBoard(snap);
-    lastCoachBoardLoadRef.current = { studentId: sid, updatedAt: snap.updatedAt };
+    lastCoachBoardLoadRef.current = {
+      studentId: sid,
+      updatedAt: snap.updatedAt,
+      fen: snap.fen,
+      moveCount: snap.moves?.length ?? 0,
+    };
   }, [
     isStudentView,
     gridAutoFollow,
