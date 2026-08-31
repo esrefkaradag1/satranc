@@ -175,6 +175,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [optionSquares, setOptionSquares] = useState<Record<string, React.CSSProperties>>({});
   const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const [moveFrom, setMoveFrom] = useState<string | null>(null);
+  const [clickMoveSquares, setClickMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const [squareMarks, setSquareMarks] = useState<Partial<Record<string, SquareMarkColor>>>({});
   const [markBrush, setMarkBrush] = useState<'off' | SquareMarkColor>('off');
   const [drawArrowsEnabled, setDrawArrowsEnabled] = useState(false);
@@ -999,7 +1000,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           : 'Antrenör çözüm hattını kaydedene kadar bekleyin veya antrenörünüze yazın.';
       }
       if (turnCode !== puzzlePlayNorm.studentColor) {
-        return `Rakip düşünüyor… Sıra ${colorLabel} tarafında.`;
+        return 'Antrenörün gösterdiği rakip hamleyi görmek için «Rakip hamlesini göster»e basın; ardından sıradaki hamleyi siz bulun.';
       }
       return `Sıra ${colorLabel} tarafında. Sıradaki hamleyi bulun.`;
     }
@@ -1132,19 +1133,38 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     [puzzlePlayNorm?.startFen, chapterMovesForUi],
   );
 
-  /** Bulmacada rakip kurulumunu uygula; öğrenci sırasına gel. */
-  useEffect(() => {
-    if (!isInteractivePuzzle || !puzzlePlayNorm || chapterMovesForUi.length === 0) return;
-    const auto = applyPuzzleAutoReplies(
-      puzzlePlayNorm.startFen,
-      chapterMovesForUi,
-      0,
-      puzzlePlayNorm.studentColor,
-    );
-    if (auto.nextIndex > 0) {
-      setCurrentMoveIndex(auto.nextIndex);
+  const isStudentTurnInPuzzle = useMemo(() => {
+    if (!hideEngineForStudentPuzzle || !puzzlePlayNorm) return true;
+    const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
+    return turnCode === puzzlePlayNorm.studentColor;
+  }, [hideEngineForStudentPuzzle, puzzlePlayNorm, studyBoardFen]);
+
+  const revealOpponentLineMoves = useCallback(() => {
+    if (!puzzlePlayNorm || currentMoveIndex >= totalMoves) return;
+    let idx = currentMoveIndex;
+    const game = makeBuilderGame(studyBoardFen);
+    let lastSan: string | null = null;
+    const fenBeforeBatch = game.fen();
+    while (idx < totalMoves && game.turn() !== puzzlePlayNorm.studentColor) {
+      const san = chapterMovesForUi[idx];
+      if (!san) break;
+      const played = applyPuzzleMove(game, san);
+      if (!played) break;
+      lastSan = played.san || san;
+      idx += 1;
     }
-  }, [effectiveChapter?.id, isInteractivePuzzle, puzzlePlayNorm, puzzleSolutionKey, chapterMovesForUi]);
+    if (idx === currentMoveIndex) return;
+    setFreePlayFen(null);
+    setCurrentMoveIndex(idx);
+    if (lastSan) setLastMoveSquares(lastMoveHighlightFromSan(fenBeforeBatch, lastSan));
+    setLastActionMs(Date.now());
+  }, [
+    puzzlePlayNorm,
+    currentMoveIndex,
+    totalMoves,
+    studyBoardFen,
+    chapterMovesForUi,
+  ]);
 
   const puzzlePlayFen = useMemo(() => {
     if (!isInteractivePuzzle || !moveListChapter) return studyBoardFen;
@@ -1186,11 +1206,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     return {
       ...lastMoveSquares,
       ...optionSquares,
+      ...clickMoveSquares,
       ...squareMarksToStyles(circleMarks as any),
       ...matedKingHighlight,
       ...(boardSettings.showThreats ? computeThreatOverlay(studyBoardFen).squareStyles : {}),
     };
-  }, [lastMoveSquares, optionSquares, circleMarks, matedKingHighlight, boardSettings.showThreats, studyBoardFen]);
+  }, [lastMoveSquares, optionSquares, clickMoveSquares, circleMarks, matedKingHighlight, boardSettings.showThreats, studyBoardFen]);
 
   const studentThreatArrows = useMemo(
     () => (boardSettings.showThreats ? computeThreatOverlay(studyBoardFen).arrows : []),
@@ -1615,7 +1636,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       const playFen = puzzlePlayFen;
       const turnCode = sideToMove(playFen) === 'white' ? 'w' : 'b';
       if (turnCode !== puzzlePlayNorm.studentColor) {
-        showFeedback('wrong', 'Rakip hamlesi uygulanıyor…');
+        showFeedback('wrong', 'Önce «Rakip hamlesini göster» ile antrenör hamlesini izleyin.');
         return false;
       }
 
@@ -1753,6 +1774,59 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     }
   }, [selectedStudy, effectiveChapter, selectedChapter, chapterMovesForUi, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, puzzlePlayFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs, hideEngineForStudentPuzzle, puzzleBoardInteraction]);
 
+  const refreshClickMoveOptions = useCallback((square: string) => {
+    try {
+      const g = makeBuilderGame(studyBoardFen);
+      const moves = g.moves({ square: square as any, verbose: true }) as Array<{ to: string }>;
+      const styles: Record<string, React.CSSProperties> = {
+        [square]: { backgroundColor: 'rgba(255, 255, 0, 0.42)' },
+      };
+      for (const m of moves) {
+        styles[m.to] = {
+          background: 'radial-gradient(circle, rgba(0,0,0,.18) 20%, transparent 20%)',
+          borderRadius: '50%',
+        };
+      }
+      setClickMoveSquares(styles);
+    } catch {
+      setClickMoveSquares({});
+    }
+  }, [studyBoardFen]);
+
+  const handleStudyBoardClick = useCallback((square: string) => {
+    if (!boardDraggingEnabled || !square) return;
+    if (moveFrom) {
+      const moved = handlePieceDrop({ sourceSquare: moveFrom, targetSquare: square });
+      if (moved) {
+        setMoveFrom(null);
+        setClickMoveSquares({});
+        return;
+      }
+      try {
+        const g = makeBuilderGame(studyBoardFen);
+        const piece = g.get(square as any);
+        const turn = g.turn();
+        if (piece && piece.color === turn) {
+          setMoveFrom(square);
+          refreshClickMoveOptions(square);
+          return;
+        }
+      } catch { /* ignore */ }
+      setMoveFrom(null);
+      setClickMoveSquares({});
+      return;
+    }
+    try {
+      const g = makeBuilderGame(studyBoardFen);
+      const piece = g.get(square as any);
+      const turn = g.turn();
+      if (piece && piece.color === turn) {
+        setMoveFrom(square);
+        refreshClickMoveOptions(square);
+      }
+    } catch { /* ignore */ }
+  }, [boardDraggingEnabled, moveFrom, handlePieceDrop, studyBoardFen, refreshClickMoveOptions]);
+
   const puzzleBranchChoices = useMemo(() => {
     // Öğrenci bulmacasında sync ağacındaki deneme varyasyonları gösterilmez.
     return [];
@@ -1770,6 +1844,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setBoardArrows([]);
     setCircleMarks({});
     setOptionSquares({});
+    setClickMoveSquares({});
+    setMoveFrom(null);
     setLastMoveSquares({});
     const now = Date.now();
     setChapterStartMs(now);
@@ -2339,7 +2415,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           </button>
         </div>
       )}
-      {studentId && selectedStudy && (
+      {studentId && selectedStudy && !hideEngineForStudentPuzzle && (
         <div className="shrink-0 px-3 sm:px-4 pt-3">
           <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div className="min-w-0">
@@ -2670,7 +2746,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                  <option key={ch.id} value={i}>{i + 1}. {ch.title}</option>
                ))}
              </select>
-             {selectedStudy.syncEnabled ? (
+             {selectedStudy.syncEnabled && !isInteractivePuzzle ? (
                <button
                  type="button"
                  onClick={() => {
@@ -2697,7 +2773,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                  {sticky ? 'SYNC' : 'Serbest'}
                </button>
              ) : null}
-             {!sticky && behind > 0 && (
+             {!sticky && behind > 0 && !isInteractivePuzzle && (
                <button
                  type="button"
                  onClick={() => { void catchUp(); }}
@@ -2730,10 +2806,20 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                      <p className="text-sm sm:text-[15px] font-semibold text-white mt-1 leading-snug">
                        {scenarioText}
                      </p>
-                     {puzzlePlayNorm?.setupMoveSan ? (
+                     {puzzlePlayNorm?.setupMoveSan
+                       && puzzlePlayNorm.startFen !== (effectiveChapter?.fen?.trim() || DEFAULT_FEN) ? (
                        <p className="text-[11px] text-sky-300/90 mt-1.5 font-mono">
                          Kurulum: {puzzlePlayNorm.setupMoveSan}
                        </p>
+                     ) : null}
+                     {!isStudentTurnInPuzzle && !isComplete && currentMoveIndex < totalMoves ? (
+                       <button
+                         type="button"
+                         onClick={revealOpponentLineMoves}
+                         className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border border-amber-500/35 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 transition-colors"
+                       >
+                         Rakip hamlesini göster
+                       </button>
                      ) : null}
                    </div>
                    <div className="shrink-0 text-right">
@@ -2809,8 +2895,19 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                         onPieceDrop: ({ sourceSquare, targetSquare, piece }) => {
                           if (!sourceSquare || !targetSquare) return false;
                           const args = { sourceSquare, targetSquare, piece };
-                          return vsComputer ? handleVcDrop(args) : handlePieceDrop(args);
+                          const ok = vsComputer ? handleVcDrop(args) : handlePieceDrop(args);
+                          if (ok) {
+                            setMoveFrom(null);
+                            setClickMoveSquares({});
+                          }
+                          return ok;
                         },
+                        onSquareClick: boardDraggingEnabled
+                          ? ({ square }: { square: string }) => handleStudyBoardClick(square)
+                          : undefined,
+                        onPieceClick: boardDraggingEnabled
+                          ? ({ square }: { square: string }) => handleStudyBoardClick(square)
+                          : undefined,
                         squareStyles: studentMainMergedSquareStyles,
                         allowDrawingArrows: true,
                         arrows: (() => {
@@ -3031,7 +3128,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                       </p>
                     </div>
                   </div>
-                  {puzzlePlayNorm?.setupMoveSan ? (
+                  {puzzlePlayNorm?.setupMoveSan
+                    && puzzlePlayNorm.startFen !== (effectiveChapter?.fen?.trim() || DEFAULT_FEN) ? (
                     <p className="text-xs text-sky-300/90 rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2">
                       Rakip kurulum: <span className="font-mono font-bold">{puzzlePlayNorm.setupMoveSan}</span>
                     </p>

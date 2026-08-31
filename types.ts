@@ -58,6 +58,8 @@ export interface Student {
   motherName?: string;
   motherPhone?: string;
   motherJob?: string;
+  /** WhatsApp bildirimleri: baba, anne veya her ikisi (varsayılan: baba → anne → veli tel.) */
+  whatsappNotifyTarget?: 'father' | 'mother' | 'both';
   address?: string;
   contactNumbers?: string[];
   status?: 'active' | 'inactive';
@@ -471,6 +473,8 @@ export interface Puzzle {
   lichessId?: string;
   /** Lichess rakip kurulum hamlesi (UCI) — import sırasında kaydedilir; FEN kurulum sonrasıdır */
   lichessSetupMove?: string;
+  /** Lichess kurulum öncesi ham FEN (oynanış FEN'i puzzle.fen'de) */
+  lichessSourceFen?: string;
 }
 
 export type AssignmentType = 'group' | 'package';
@@ -726,6 +730,7 @@ export type WhatsAppSystemTemplateKey =
   | 'parent_login'
   | 'parent_consent'
   | 'lesson_start'
+  | 'lesson_present'
   | 'attendance_reminder'
   | 'training_completed'
   | 'training_partial'
@@ -764,6 +769,7 @@ export type WhatsAppAutoEvent =
   | 'parent_login'
   | 'parent_consent'
   | 'lesson_start'
+  | 'lesson_present'
   | 'training_completed'
   | 'training_partial'
   | 'training_incomplete';

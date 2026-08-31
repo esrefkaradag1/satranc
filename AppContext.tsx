@@ -324,7 +324,7 @@ const STUDENT_DB_OPTIONAL_SNAKE = new Set<string>([
   'registration_type', 'monthly_fee',
   'payment_reminder_day', 'late_payment_reminder_day', 'is_scholarship_student', 'parent_job',
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
-  'coach_id', 'branch_office', 'club_id',
+  'coach_id', 'branch_office', 'club_id', 'whatsapp_notify_target',
 ]);
 
 let _knownStudentColumns: Set<string> | null = null;
@@ -383,6 +383,7 @@ function learnStudentColumnsFromRows(rows: Record<string, unknown>[]) {
 const STUDENT_DB_OPTIONAL_NO_INFER_SKIP = new Set<string>([
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
   'coach_id',
+  'whatsapp_notify_target',
   'username', 'password', 'parent_pin',
 ]);
 

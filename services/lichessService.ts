@@ -130,10 +130,12 @@ export function csvRowToPuzzle(row: LichessPuzzleCSVRow): Puzzle {
   }
   title += ` (${row.Rating})`;
 
+  const sourceFen = row.FEN.trim();
   return {
     id: row.PuzzleId,
     lichessId: row.PuzzleId,
     fen: imported.playFen,
+    lichessSourceFen: sourceFen,
     solution: imported.solutionMoves,
     title,
     difficulty,
@@ -281,6 +283,7 @@ function lichessApiResponseToPuzzle(
     id,
     lichessId: id,
     fen: imported.playFen,
+    lichessSourceFen: fen,
     solution: imported.solutionMoves,
     title,
     difficulty: ratingToDifficulty(r),

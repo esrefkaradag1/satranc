@@ -4438,15 +4438,23 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       if (!id || isStudentView) return;
       const marks = { ...(sessionMediaRef.current.attendanceMarks ?? {}), [id]: status };
       void pushSessionMediaRemote({ attendanceMarks: marks });
-      if (status === 'present') recordLiveAttendance(id);
-      if (status === 'absent') {
-        const student = students.find((s) => normalizeStudentId(s.id) === id);
-        if (student) {
+      if (status === 'present' || status === 'late') recordLiveAttendance(id);
+      const student = students.find((s) => normalizeStudentId(s.id) === id);
+      if (student) {
+        const dateLabel = new Date().toLocaleDateString('tr-TR');
+        if (status === 'absent') {
           void dispatchNotification('lesson_absent', {
             student,
             lessonName: effectiveRoomName,
             branchOffice: student.branchOffice,
-            dateLabel: new Date().toLocaleDateString('tr-TR'),
+            dateLabel,
+          });
+        } else if (status === 'present' || status === 'late') {
+          void dispatchNotification('lesson_present', {
+            student,
+            lessonName: effectiveRoomName,
+            branchOffice: student.branchOffice,
+            dateLabel,
           });
         }
       }

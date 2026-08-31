@@ -58,6 +58,7 @@ import { LeaderboardPreview } from './leaderboard/LeaderboardPreview';
 import { StudentSummaryDashboard, type StudentDashboardAlert } from './student/StudentSummaryDashboard';
 import { StudentAttendanceHistory } from './student/StudentAttendanceHistory';
 import { StudentHomeworkPanel } from './student/StudentHomeworkPanel';
+import { StudentPuzzlePracticePanel } from './student/StudentPuzzlePracticePanel';
 import { StudentAnalysesPanel } from './student/StudentAnalysesPanel';
 import { StudentPrivateLessonPanel } from './student/StudentPrivateLessonPanel';
 import { StudentDuesCalendar } from './student/StudentDuesCalendar';
@@ -336,6 +337,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
+  const [puzzleSubTab, setPuzzleSubTab] = useState<'homework' | 'practice'>('homework');
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   const refreshUnreadNotificationCount = useCallback(async (knownCount?: number) => {
@@ -1679,7 +1681,32 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         )}
 
         {activeTab === 'puzzles' && student && (
-          <div className="animate-in fade-in duration-300">
+          <div className="animate-in fade-in duration-300 space-y-4">
+            <div className="flex flex-wrap gap-2 p-1 rounded-xl bg-slate-900/60 border border-white/5 w-full max-w-md">
+              <button
+                type="button"
+                onClick={() => setPuzzleSubTab('homework')}
+                className={`flex-1 min-w-[120px] px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
+                  puzzleSubTab === 'homework'
+                    ? 'bg-amber-600 text-white'
+                    : 'text-slate-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                Ödevler
+              </button>
+              <button
+                type="button"
+                onClick={() => setPuzzleSubTab('practice')}
+                className={`flex-1 min-w-[120px] px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
+                  puzzleSubTab === 'practice'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                Bulmaca Çöz
+              </button>
+            </div>
+            {puzzleSubTab === 'homework' ? (
             <StudentHomeworkPanel
               student={student}
               viewAs={viewAs}
@@ -1702,6 +1729,13 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               onPlayPuzzle={viewAs === 'parent' ? () => {} : setPlayingPuzzle}
               onDailyGoalsComplete={viewAs === 'parent' ? undefined : handleDailyGoalsComplete}
             />
+            ) : (
+              <StudentPuzzlePracticePanel
+                student={student}
+                pool={lichessPracticePool}
+                viewAs={viewAs}
+              />
+            )}
           </div>
         )}
 

@@ -8,6 +8,7 @@ import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
 import {
   buildChapterReplaySteps,
   buildReplayTableRows,
+  chapterReplayOrientation,
   chapterReplayStartFen,
 } from '../../lib/studyReplayUtils';
 
@@ -72,7 +73,7 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
   vsMoveHistory = [],
 }) => {
   const startFen = chapterReplayStartFen(chapter);
-  const orientation = chapter?.orientation ?? 'white';
+  const orientation = chapterReplayOrientation(chapter);
 
   const tableRows = useMemo(
     () => buildReplayTableRows(chapter, events, vsMoveHistory),

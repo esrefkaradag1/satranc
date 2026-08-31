@@ -120,6 +120,15 @@ function looksLikeUciMove(s: string): boolean {
   return /^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(s.trim());
 }
 
+/** Antrenörün tahta/REC ile kaydettiği çalışma hattı (Lichess UCI import değil). */
+export function isCoachRecordedStudyChapter(
+  chapter: Pick<StudyChapter, 'fen' | 'moves' | 'seedTree' | 'puzzleSetupPly'>,
+): boolean {
+  const moves = resolveStudyChapterSolutionMoves(chapter).filter(Boolean);
+  if (moves.length === 0) return true;
+  return !moves.every(looksLikeUciMove);
+}
+
 export function isLichessStylePuzzle(
   puzzle: Pick<Puzzle, 'source' | 'lichessThemes' | 'solution' | 'gamePgn' | 'lichessId'>,
 ): boolean {
@@ -394,11 +403,12 @@ export function lichessPlayStateFromStored(
       !isMoveLegalForSideToMove(rawFen, rawSolution[0]!) &&
       canReplayMovesFrom(rawFen, rawSolution.slice(1))
     ) {
+      const playFen = rawFen;
       return {
-        playFen: rawFen,
+        playFen,
         solutionMoves: rawSolution.slice(1),
         setupMoveSan: resolveSetupMoveSan(rawFen, setupMove, rawSolution) ?? setupSession?.setupMoveSan,
-        studentColor: safeTurnAtFen(rawFen),
+        studentColor: safeTurnAtFen(playFen),
         lichessSetupMove: setupMove,
       };
     }
@@ -667,29 +677,42 @@ function scorePlaySession(
  * puzzle.fen + solution[] → öğrencinin oynayacağı pozisyon (Lichess ile aynı mantık).
  */
 export function initCoachStyleSession(
-  puzzle: Pick<Puzzle, 'fen' | 'solution' | 'hint' | 'source' | 'lichessId' | 'lichessThemes' | 'gamePgn' | 'lichessSetupMove'>,
+  puzzle: Pick<Puzzle, 'fen' | 'solution' | 'hint' | 'source' | 'lichessId' | 'lichessThemes' | 'gamePgn' | 'lichessSetupMove' | 'lichessSourceFen'>,
 ): CoachStyleSession {
   const src = isLichessStylePuzzle(puzzle)
     ? materializeLichessPuzzleRecord({ ...puzzle, id: puzzle.lichessId ?? 'lichess' } as Puzzle)
     : puzzle;
-  const rawFen = src.fen?.trim() || DEFAULT_FEN;
+  const sourceFen = src.lichessSourceFen?.trim();
+  const storedFen = src.fen?.trim() || DEFAULT_FEN;
+  const rawFen = sourceFen || storedFen;
   const rawSolution = Array.isArray(src.solution)
     ? src.solution.map((m) => String(m).trim()).filter(Boolean)
     : [];
 
   if (rawSolution.length === 0) {
-    return sessionFromPlayState(rawFen, rawFen, []);
+    return sessionFromPlayState(rawFen, storedFen, []);
   }
 
   if (isLichessStylePuzzle(src)) {
+    if (sourceFen && sourceFen !== storedFen) {
+      const setupMove = src.lichessSetupMove?.trim();
+      const setupSan = setupMove
+        ? resolveSetupMoveSan(sourceFen, setupMove, setupMove ? [setupMove, ...rawSolution] : rawSolution)
+        : undefined;
+      return sessionFromPlayState(sourceFen, storedFen, rawSolution, setupSan);
+    }
+
     const state = lichessPlayStateFromStored(src);
     if (state.solutionMoves.length > 0) {
-      const setupMoveSan =
-        state.setupMoveSan
-        ?? (state.lichessSetupMove
-          ? resolveSetupMoveSan(rawFen, state.lichessSetupMove, rawSolution)
-          : undefined);
-      return sessionFromPlayState(rawFen, state.playFen, state.solutionMoves, setupMoveSan);
+      const playFen = state.playFen;
+      const sessionRaw = sourceFen || (playFen !== storedFen ? storedFen : rawFen);
+      const setupMoveSan = sessionRaw !== playFen
+        ? (state.setupMoveSan
+          ?? (state.lichessSetupMove
+            ? resolveSetupMoveSan(sessionRaw, state.lichessSetupMove, rawSolution)
+            : undefined))
+        : undefined;
+      return sessionFromPlayState(sessionRaw, playFen, state.solutionMoves, setupMoveSan);
     }
   }
 
@@ -1043,6 +1066,8 @@ export function materializeLichessPuzzleRecord(puzzle: Puzzle): Puzzle {
     solution: state.solutionMoves,
     hint: state.solutionMoves[0] || puzzle.hint,
     lichessSetupMove: state.lichessSetupMove ?? puzzle.lichessSetupMove,
+    lichessSourceFen: puzzle.lichessSourceFen?.trim()
+      || (puzzle.fen?.trim() && state.playFen !== puzzle.fen.trim() ? puzzle.fen.trim() : undefined),
   };
 }
 
@@ -1421,6 +1446,34 @@ export function normalizeStudyChapterPuzzle(chapter: {
   const fromOrientation = studentColorFromOrientation(chapter.orientation);
 
   if (fromOrientation && rawSolution.length > 0) {
+    const coachRecorded = isCoachRecordedStudyChapter(chapter as StudyChapter);
+    const explicitSetup = chapter.puzzleSetupPly != null && chapter.puzzleSetupPly > 0;
+
+    // Antrenör REC / SAN hattı: Lichess kurulum kırpması yapma; öğrenci hamleleri kendisi bulur.
+    if (coachRecorded) {
+      if (explicitSetup) {
+        const split = splitPuzzleSetupAndSolution(
+          rawFen,
+          rawSolution,
+          fromOrientation,
+          chapter.puzzleSetupPly,
+        );
+        return {
+          startFen: split.startFen,
+          studentMoves: split.solutionMoves,
+          studentColor: fromOrientation,
+          setupMoveSan: split.setupMoveSan,
+          playSideToMove: false,
+        };
+      }
+      return {
+        startFen: rawFen,
+        studentMoves: rawSolution,
+        studentColor: fromOrientation,
+        playSideToMove: false,
+      };
+    }
+
     const split = splitPuzzleSetupAndSolution(
       rawFen,
       rawSolution,

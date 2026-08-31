@@ -2,6 +2,7 @@ import { Chess, type Square } from 'chess.js';
 import type { Study, StudyChapter, StudentPlaysColor } from './studyTypes';
 import { formatMoveGlyphs, parseMoveGlyphs } from './studyAnnotations';
 import { defaultChapterPgnTags, formatPgnTagLines } from './studyPgnTags';
+import { applyPuzzleMove } from './puzzlePlayUtils';
 
 export const DEFAULT_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 export const STUDY_EDITOR_SELECTION_KEY = 'netchess_study_editor_selection';
@@ -511,7 +512,7 @@ export function fenToCurrentFen(chapter: StudyChapter, upTo: number): string {
     const moves = chapter.moves ?? [];
     const count = Math.min(upTo, moves.length);
     for (let i = 0; i < count; i++) {
-      if (!applyMove(game, moves[i])) break;
+      if (!applyPuzzleMove(game, moves[i]!)) break;
     }
     return game.fen();
   } catch {

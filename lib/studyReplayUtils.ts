@@ -1,7 +1,7 @@
 import type { StudyChapter } from './studyTypes';
 import type { StudyEvent } from '../studyEvents';
 import { DEFAULT_FEN, makeBuilderGame } from './studyUtils';
-import { applyPuzzleMove, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
+import { applyPuzzleMove, isCoachRecordedStudyChapter, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
 import { mainlineSansFromTree } from './studySync/moveList';
 
 export type ReplayStep = {
@@ -186,6 +186,24 @@ export function resolveFullVsMoveList(
   }
 
   const sequential = [...ordered].sort((a, b) => (a.moveIndex ?? 0) - (b.moveIndex ?? 0));
+  if (sequential.length > 1) {
+    const startFen = chapterReplayStartFen(chapter);
+    const game = makeBuilderGame(startFen);
+    const fromEvents: string[] = [];
+    let allOk = true;
+    for (const event of sequential) {
+      const san = (event.playedMove ?? '').trim();
+      if (!san) continue;
+      if (!applyPuzzleMove(game, san)) {
+        allOk = false;
+        break;
+      }
+      fromEvents.push(san);
+    }
+    if (allOk && fromEvents.length > 0) {
+      return fromEvents;
+    }
+  }
   if (
     sequential.length > 1
     && sequential.every((e, i) => (e.moveIndex ?? i) === i)
@@ -214,16 +232,24 @@ function buildStepsFromMoveList(startFen: string, moves: string[]): ReplayStep[]
     const move = san.trim();
     if (!move) return;
     const played = applyPuzzleMove(game, move);
-    if (played) {
-      steps.push({
-        fen: game.fen(),
-        eventIndex: idx,
-        label: played.san || move,
-        isWrong: false,
-      });
-    }
+    steps.push({
+      fen: game.fen(),
+      eventIndex: idx,
+      label: played ? (played.san || move) : `${move} (uygulanamadı)`,
+      isWrong: !played,
+    });
   });
   return steps;
+}
+
+/** Hamle kayıtları tahtası — öğrenci perspektifine göre yön. */
+export function chapterReplayOrientation(chapter: StudyChapter | undefined): 'white' | 'black' {
+  if (!chapter) return 'white';
+  if (chapter.lessonMode === 'interactive' && (chapter.interactiveType ?? 'puzzle') === 'puzzle') {
+    const norm = normalizeStudyChapterPuzzle(enrichChapterMoves(chapter));
+    return norm.studentColor === 'b' ? 'black' : 'white';
+  }
+  return chapter.orientation === 'black' ? 'black' : 'white';
 }
 
 function syncLineCursorToFen(startFen: string, line: string[], targetFen: string): number {
@@ -250,7 +276,23 @@ function resolvePuzzlePlayedMoves(
   const startFen = normalized.startFen;
   const studentColor = normalized.studentColor;
   const ordered = puzzleStudentEvents(events);
-  const orientation = chapter.orientation === 'black' ? 'black' : 'white';
+  const coachRecorded = isCoachRecordedStudyChapter(enriched);
+
+  if (coachRecorded) {
+    if (line.length > 0) {
+      return { startFen, moves: line, studentColor };
+    }
+    const game = makeBuilderGame(startFen || DEFAULT_FEN);
+    const played: string[] = [];
+    for (const event of ordered) {
+      if (event.result === 'wrong') continue;
+      const san = (event.playedMove ?? '').trim();
+      if (!san) continue;
+      if (!applyPuzzleMove(game, san)) continue;
+      played.push(san);
+    }
+    if (played.length > 0) return { startFen, moves: played, studentColor };
+  }
 
   if (line.length > 0 && ordered.length > 0) {
     const g = makeBuilderGame(startFen || DEFAULT_FEN);
@@ -297,7 +339,11 @@ function resolvePuzzlePlayedMoves(
     .filter((e) => e.result !== 'wrong')
     .map((e) => String(e.playedMove ?? '').trim())
     .filter(Boolean);
-  const reconstructed = reconstructVsFullMoveList(startFen, studentSans, orientation);
+  const reconstructed = reconstructVsFullMoveList(
+    startFen,
+    studentSans,
+    chapter.orientation === 'black' ? 'black' : 'white',
+  );
   if (reconstructed.length > 0) return { startFen, moves: reconstructed, studentColor };
 
   return { startFen, moves: studentSans, studentColor };

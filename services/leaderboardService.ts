@@ -38,6 +38,10 @@ import {
   normalizeScoringMode,
   sumGameResultsByMode,
 } from '../lib/leaderboardPointSettings';
+import {
+  readCachedStudentPeriodStats,
+  writeCachedStudentPeriodStats,
+} from '../lib/leaderboardPeriodCache';
 
 const PLATFORM_SNAPSHOT_CACHE_TTL_MS = 60 * 60 * 1000;
 const LEADERBOARD_STUDENT_CONCURRENCY = 4;
@@ -188,6 +192,7 @@ async function studentPeriodStats(
   losses: number;
   gameResultsByMode: GameResultsByMode;
 }> {
+  const cached = readCachedStudentPeriodStats(student.id, bounds);
   const internalCorrect = homeworkAttempts.filter(
     (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
   ).length;
@@ -245,7 +250,7 @@ async function studentPeriodStats(
 
   const totals = sumGameResultsByMode(gameResultsByMode);
 
-  return {
+  const result = {
     puzzles: externalCorrect + internalCorrect,
     puzzleWrong: externalWrong + internalWrong,
     games,
@@ -255,6 +260,25 @@ async function studentPeriodStats(
     losses: totals.losses,
     gameResultsByMode,
   };
+
+  const externalEmpty = externalCorrect === 0 && externalWrong === 0 && games === 0;
+  if (cached && externalEmpty && (cached.puzzles > 0 || cached.games > 0)) {
+    const merged = {
+      puzzles: cached.puzzles + internalCorrect,
+      puzzleWrong: cached.puzzleWrong + internalWrong,
+      games: cached.games,
+      internalPuzzles: internalCorrect,
+      wins: cached.wins,
+      draws: cached.draws,
+      losses: cached.losses,
+      gameResultsByMode: cached.gameResultsByMode,
+    };
+    writeCachedStudentPeriodStats(student.id, bounds, merged);
+    return merged;
+  }
+
+  writeCachedStudentPeriodStats(student.id, bounds, result);
+  return result;
 }
 
 async function studentPlatformSnapshot(student: Student): Promise<LeaderboardPlatformSnapshot> {

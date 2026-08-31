@@ -93,7 +93,6 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   );
   const { playFen, solutionMoves, studentColor, setupMoveSan, rawFen } = session;
   const hasSetupMove = !!setupMoveSan && !fenPositionsEqual(rawFen, playFen);
-  /** Kayda öğrenci çözüm hattı yazılır (rakip kurulum UCI'leri değil). */
   const fullSolution = solutionMoves.length > 0
     ? solutionMoves
     : (Array.isArray(playPuzzle.solution) ? playPuzzle.solution.filter(Boolean) : []);
@@ -575,7 +574,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
             <p className="text-xs text-sky-300/90 text-center mb-2 px-2">
               Başlatınca ilk hamle tahtada oynanacak.
             </p>
-          ) : setupMoveSan && sessionStarted ? (
+          ) : hasSetupMove && setupMoveSan && sessionStarted ? (
             <p className="text-xs text-sky-300/90 text-center mb-2">
               Kurulum hamlesi: <span className="font-mono font-bold">{setupMoveSan}</span>
             </p>

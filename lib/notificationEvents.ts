@@ -6,6 +6,7 @@ export type NotificationEvent =
   | 'parent_login'
   | 'parent_consent'
   | 'lesson_start'
+  | 'lesson_present'
   | 'lesson_absent'
   | 'training_completed'
   | 'training_partial'
@@ -31,6 +32,7 @@ export const NOTIFICATION_EVENTS: NotificationEvent[] = [
   'parent_login',
   'parent_consent',
   'lesson_start',
+  'lesson_present',
   'lesson_absent',
   'training_completed',
   'training_partial',
@@ -54,6 +56,11 @@ export const NOTIFICATION_EVENT_META: Record<
   lesson_start: {
     label: 'Canlı ders başladı',
     description: 'Ders odası açıldığında katılım linki',
+    category: 'ders',
+  },
+  lesson_present: {
+    label: 'Derse katıldı',
+    description: 'Yoklama "var" veya "geç" işaretlendiğinde veli bilgilendirmesi',
     category: 'ders',
   },
   lesson_absent: {
@@ -82,6 +89,7 @@ export const DEFAULT_NOTIFICATION_CHANNELS: Record<NotificationEvent, Notificati
   parent_login: 'whatsapp',
   parent_consent: 'whatsapp',
   lesson_start: 'both',
+  lesson_present: 'panel',
   lesson_absent: 'panel',
   training_completed: 'whatsapp',
   training_partial: 'whatsapp',
@@ -128,6 +136,11 @@ export function buildPanelNotificationContent(
       return {
         title: 'Canlı ders başladı',
         body: `${studentName} için canlı ders başladı${ctx.lessonName ? `: ${ctx.lessonName}` : ''}.${ctx.lessonUrl ? `\nKatılım: ${ctx.lessonUrl}` : ''}`,
+      };
+    case 'lesson_present':
+      return {
+        title: 'Derse katıldı',
+        body: `${studentName} ${date} tarihli derse katıldı${ctx.lessonName ? ` (${ctx.lessonName})` : ''}.`,
       };
     case 'lesson_absent':
       return {

@@ -857,6 +857,13 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
           branchOffice: branchOffice.trim() || s.branchOffice,
           dateLabel,
         });
+      } else if (st === 'Present' || st === 'Late') {
+        void dispatchNotification('lesson_present', {
+          student: s,
+          lessonName: lessonLabel,
+          branchOffice: branchOffice.trim() || s.branchOffice,
+          dateLabel,
+        });
       }
     });
     setShowStudents(false);

@@ -397,6 +397,8 @@ function devApiPlugin(env: Record<string, string>): Plugin {
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
+    const appBuildId = process.env.APP_BUILD_ID?.trim()
+      || `${new Date().toISOString().slice(0, 10)}-${Date.now().toString(36)}`;
     return {
       server: {
         port: 3000,
@@ -445,6 +447,7 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react(), tailwindcss(), devApiPlugin(env)],
       define: {
+        __APP_BUILD_ID__: JSON.stringify(appBuildId),
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.VITE_OPENROUTER_API_KEY': JSON.stringify(env.VITE_OPENROUTER_API_KEY),

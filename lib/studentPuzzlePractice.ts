@@ -5,8 +5,26 @@ export const PRACTICE_HOMEWORK_ID = '__lichess_practice__';
 export const DEFAULT_PUZZLE_PRACTICE_RATING = 1500;
 export const PRACTICE_ELO_K = 32;
 const STORAGE_KEY = 'netchess_student_puzzle_practice';
+const BAND_STORAGE_KEY = 'netchess_student_puzzle_band';
 const MAX_RECENT = 40;
 const MAX_HISTORY = 100;
+
+export type PracticeRatingBandId = '700-1000' | '1000-1300' | '1300-1500' | '1500-1800' | '1800+';
+
+export type PracticeRatingBand = {
+  id: PracticeRatingBandId;
+  label: string;
+  min: number;
+  max: number;
+};
+
+export const PRACTICE_RATING_BANDS: PracticeRatingBand[] = [
+  { id: '700-1000', label: '700 – 1000', min: 700, max: 1000 },
+  { id: '1000-1300', label: '1000 – 1300', min: 1000, max: 1300 },
+  { id: '1300-1500', label: '1300 – 1500', min: 1300, max: 1500 },
+  { id: '1500-1800', label: '1500 – 1800', min: 1500, max: 1800 },
+  { id: '1800+', label: '1800+', min: 1800, max: 3200 },
+];
 
 export type StudentPuzzlePracticeAttempt = {
   puzzleId: string;
@@ -78,6 +96,36 @@ export function savePracticeState(studentId: string, state: StudentPuzzlePractic
   const all = readAll();
   all[studentId] = state;
   writeAll(all);
+}
+
+export function loadPracticeRatingBand(studentId: string): PracticeRatingBandId {
+  if (!studentId.trim()) return '1000-1300';
+  try {
+    const raw = localStorage.getItem(BAND_STORAGE_KEY);
+    if (!raw) return '1000-1300';
+    const map = JSON.parse(raw) as Record<string, PracticeRatingBandId>;
+    const band = map[studentId];
+    return PRACTICE_RATING_BANDS.some((b) => b.id === band) ? band! : '1000-1300';
+  } catch {
+    return '1000-1300';
+  }
+}
+
+export function savePracticeRatingBand(studentId: string, bandId: PracticeRatingBandId) {
+  if (!studentId.trim()) return;
+  try {
+    const raw = localStorage.getItem(BAND_STORAGE_KEY);
+    const map = raw ? (JSON.parse(raw) as Record<string, PracticeRatingBandId>) : {};
+    map[studentId] = bandId;
+    localStorage.setItem(BAND_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function practiceBandForRating(rating: number): PracticeRatingBand {
+  const hit = PRACTICE_RATING_BANDS.find((b) => rating >= b.min && rating <= b.max);
+  return hit ?? PRACTICE_RATING_BANDS[2]!;
 }
 
 /** Başlık "(1095)" veya zorluk/puan kovalarından yaklaşık Lichess rating. */
@@ -154,13 +202,22 @@ export function pickNextPracticePuzzle(
   pool: Puzzle[],
   rating: number,
   recentPuzzleIds: string[] = [],
+  bandId?: PracticeRatingBandId,
 ): Puzzle | null {
   const lichess = pool.filter((p) => p.source === 'lichess' || !!p.lichessId);
   if (lichess.length === 0) return null;
 
+  const band = bandId
+    ? PRACTICE_RATING_BANDS.find((b) => b.id === bandId) ?? practiceBandForRating(rating)
+    : practiceBandForRating(rating);
+
   const recent = new Set(recentPuzzleIds);
-  const candidates = lichess.filter((p) => !recent.has(p.id));
-  const list = candidates.length > 0 ? candidates : lichess;
+  const inBand = lichess.filter((p) => {
+    const pr = estimatePuzzleRating(p);
+    return pr >= band.min && pr <= band.max;
+  });
+  const candidates = inBand.filter((p) => !recent.has(p.id));
+  const list = candidates.length > 0 ? candidates : (inBand.length > 0 ? inBand : lichess);
 
   const scored = list.map((p) => {
     const pr = estimatePuzzleRating(p);
@@ -172,8 +229,8 @@ export function pickNextPracticePuzzle(
   scored.sort((a, b) => a.score - b.score);
 
   // Rating ±250 bandını tercih et; yoksa en yakın
-  const band = scored.filter((x) => Math.abs(x.pr - rating) <= 250);
-  const pickFrom = band.length > 0 ? band : scored.slice(0, Math.min(12, scored.length));
+  const nearRating = scored.filter((x) => Math.abs(x.pr - rating) <= 250);
+  const pickFrom = nearRating.length > 0 ? nearRating : scored.slice(0, Math.min(12, scored.length));
   if (pickFrom.length === 0) return null;
   return pickFrom[Math.floor(Math.random() * Math.min(5, pickFrom.length))]!.p;
 }

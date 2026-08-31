@@ -2963,6 +2963,17 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
          <InfoField label="Baba Tel" value={formatPhone(student.fatherPhone || student.parentPhone)} icon={<Phone className="w-3 h-3" />} />
          <InfoField label="Anne Adı" value={student.motherName || '—'} />
          <InfoField label="Anne Tel" value={formatPhone(student.motherPhone)} icon={<Phone className="w-3 h-3" />} />
+         <InfoField
+           label="WhatsApp hedefi"
+           value={
+             student.whatsappNotifyTarget === 'mother'
+               ? 'Anne'
+               : student.whatsappNotifyTarget === 'both'
+                 ? 'Baba + Anne'
+                 : 'Baba'
+           }
+           icon={<Phone className="w-3 h-3" />}
+         />
        </div>
        <div className="mt-4">
          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Mesaj telefonları</div>
@@ -4220,6 +4231,24 @@ const EditStudentModal: React.FC<{
                   <div>
                     <label className={labelCls}>Anne Telefon</label>
                     <input type="text" value={fields.motherPhone || ''} onChange={e => setFields(f => ({ ...f, motherPhone: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className={labelCls}>WhatsApp bildirim hedefi</label>
+                    <select
+                      value={fields.whatsappNotifyTarget || 'father'}
+                      onChange={(e) => setFields((f) => ({
+                        ...f,
+                        whatsappNotifyTarget: e.target.value as 'father' | 'mother' | 'both',
+                      }))}
+                      className={inputCls}
+                    >
+                      <option value="father">Baba telefonu</option>
+                      <option value="mother">Anne telefonu</option>
+                      <option value="both">Her ikisi (baba + anne)</option>
+                    </select>
+                    <div className="text-[9px] text-slate-500 mt-1">
+                      Antrenman, yoklama ve sistem bildirimleri bu numaraya gider.
+                    </div>
                   </div>
                   <div>
                     <label className={labelCls}>Veli giriş telefonu</label>

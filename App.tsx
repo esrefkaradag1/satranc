@@ -26,6 +26,7 @@ import Tournaments from './components/Tournaments';
 import { Menu, Search, Bell, LayoutDashboard, User } from 'lucide-react';
 import { AppProvider, useApp } from './AppContext';
 import AdminClubSwitcher from './components/admin/AdminClubSwitcher';
+import { AdminAppUpdateModal } from './components/admin/AdminAppUpdateModal';
 import { COACH_NAV_CATEGORIES, NAV_CATEGORIES, type NavCategory } from './constants';
 import ClubPanel from './components/ClubPanel';
 import ApplicationForm from './components/ApplicationForm';
@@ -339,6 +340,7 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
 
   return (
     <div className="app-ui-scale flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
+        <AdminAppUpdateModal />
         <Sidebar
           activeTab={sidebarTab}
           setActiveTab={handleSidebarTab}
