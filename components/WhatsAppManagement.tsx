@@ -121,6 +121,7 @@ const WhatsAppManagement: React.FC = () => {
     regId?: string;
     devices?: { regId: string; phone: string; connected: boolean }[];
     error?: string;
+    regIdMismatch?: boolean;
   }>({ connected: false, state: 'pasif' });
   const [statusLoading, setStatusLoading] = useState(false);
   const [qrImage, setQrImage] = useState('');
@@ -329,7 +330,19 @@ const WhatsAppManagement: React.FC = () => {
         regId: s.regId,
         devices: s.devices,
         error: s.error,
+        regIdMismatch: s.regIdMismatch,
       });
+
+      if (s.connected && s.regId && (s.regIdMismatch || config.instanceName !== s.regId)) {
+        persistConfig({
+          ...config,
+          instanceName: s.regId,
+          devicePhone: s.phone || config.devicePhone,
+          enabled: config.enabled !== false,
+        });
+        showToast(`Aktif WhatsApp cihazı bulundu — reg_id güncellendi (${s.regId})`, 'success');
+      }
+
       const errKey = s.error || '';
       if (errKey && !s.connected && errKey !== lastStatusErrorRef.current) {
         // Sadece yeni hatalarda toast; QR beklerken spam olmasın
@@ -342,7 +355,7 @@ const WhatsAppManagement: React.FC = () => {
     } finally {
       setStatusLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, config, persistConfig]);
 
   const refreshDevices = useCallback(async () => {
     setDevicesLoading(true);

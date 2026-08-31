@@ -74,6 +74,7 @@ export async function fetchWhatsAppStatus(): Promise<{
   devices?: { regId: string; phone: string; connected: boolean }[];
   authMode?: string;
   error?: string;
+  regIdMismatch?: boolean;
 }> {
   const config = loadWhatsAppConfig();
   const res = await fetch('/api/whatsapp?action=status', {
@@ -91,6 +92,7 @@ export async function fetchWhatsAppStatus(): Promise<{
     devices?: { regId: string; phone: string; connected: boolean }[];
     authMode?: string;
     error?: string;
+    regIdMismatch?: boolean;
   };
   // Çalışan auth modunu kalıcı kaydet
   if (data.authMode && data.authMode !== config.authMode) {
@@ -107,6 +109,7 @@ export async function fetchWhatsAppStatus(): Promise<{
     devices: data.devices,
     authMode: data.authMode,
     error: data.error,
+    regIdMismatch: data.regIdMismatch,
   };
 }
 
