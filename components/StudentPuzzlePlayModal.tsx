@@ -167,13 +167,18 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       setLastMoveStyles(puzzleMoveHighlightStyles(rawFen, setupMoveSan));
       return;
     }
+    if (setupMoveSan && sessionStarted) {
+      const fenForSetup = rawFen !== playFen ? rawFen : fenBeforeSolutionMove(playFen, solutionMoves, 0);
+      setLastMoveStyles(puzzleMoveHighlightStyles(fenForSetup, setupMoveSan));
+      return;
+    }
     const setupUci = materializedPuzzle.lichessSetupMove?.trim();
     if (setupUci) {
-      setLastMoveStyles(puzzleMoveHighlightStyles(null, setupUci));
+      setLastMoveStyles(puzzleMoveHighlightStyles(rawFen !== playFen ? rawFen : null, setupUci));
       return;
     }
     setLastMoveStyles({});
-  }, [setupMoveSan, rawFen, playFen, materializedPuzzle.lichessSetupMove]);
+  }, [setupMoveSan, rawFen, playFen, materializedPuzzle.lichessSetupMove, sessionStarted, solutionMoves]);
 
   const markHintUsed = useCallback(() => {
     sessionHintUsedRef.current = true;

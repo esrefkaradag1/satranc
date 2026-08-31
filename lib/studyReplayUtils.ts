@@ -1,7 +1,7 @@
 import type { StudyChapter } from './studyTypes';
 import type { StudyEvent } from '../studyEvents';
 import { DEFAULT_FEN, makeBuilderGame } from './studyUtils';
-import { applyPuzzleMove, isCoachRecordedStudyChapter, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
+import { applyPuzzleMove, canReplayMovesFrom, isCoachRecordedStudyChapter, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
 import { mainlineSansFromTree } from './studySync/moveList';
 
 export type ReplayStep = {
@@ -62,6 +62,7 @@ function enrichChapterMoves(chapter: StudyChapter): StudyChapter {
     const rootFen = chapter.fen?.trim() || DEFAULT_FEN;
     const fromTree = mainlineSansFromTree(chapter.seedTree, rootFen);
     if (fromTree.length <= legacy.length) return chapter;
+    if (!canReplayMovesFrom(rootFen, fromTree)) return chapter;
     return { ...chapter, moves: fromTree };
   } catch {
     return chapter;
@@ -144,6 +145,29 @@ export function reconstructVsFullMoveList(
 function isComputerLoggedEvent(event: StudyEvent): boolean {
   const expected = (event.expectedMove ?? '').trim().toLowerCase();
   return expected === 'bilgisayar' || expected === 'engine' || expected === 'computer';
+}
+
+/** Öğrencinin logladığı hamle kayıtları (presence / motor satırları hariç). */
+export function orderedStudentMoveEvents(events: StudyEvent[]): StudyEvent[] {
+  return dedupeStudyEvents(events)
+    .filter((e) => !e.id.startsWith('presence-') && !isComputerLoggedEvent(e) && !!(e.playedMove ?? '').trim())
+    .sort((a, b) => {
+      const ai = typeof a.moveIndex === 'number' ? a.moveIndex : 0;
+      const bi = typeof b.moveIndex === 'number' ? b.moveIndex : 0;
+      if (ai !== bi) return ai - bi;
+      return (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0);
+    });
+}
+
+function normalizeReplaySan(san: string): string {
+  return san.replace(/[+#]/g, '').trim().toLowerCase();
+}
+
+function studentMoveMatchesEvent(playedMove: string, event: StudyEvent | undefined): boolean {
+  if (!event) return false;
+  const logged = (event.playedMove ?? '').trim();
+  if (!logged) return false;
+  return normalizeReplaySan(logged) === normalizeReplaySan(playedMove);
 }
 
 /** Presence kaynaklı vs-computer satırlarını bulmaca bölümlerinden ayıkla. */
@@ -483,24 +507,28 @@ export function buildReplayTableRows(
 
   if (isVsComputerChapter(chapter) && fullMoves.length > 0) {
     const studentOrientation = chapter?.orientation ?? 'white';
-    const studentEvents = ordered.filter((e) => {
-      if (e.id.startsWith('presence-') && isComputerLoggedEvent(e)) return false;
-      const ply = e.moveIndex;
-      if (typeof ply !== 'number') return !!(e.playedMove ?? '').trim();
-      const isWhitePly = ply % 2 === 0;
-      return studentOrientation === 'white' ? isWhitePly : !isWhitePly;
-    });
+    const studentEvents = orderedStudentMoveEvents(ordered);
     let studentEventCursor = 0;
     return fullMoves.map((move, plyIdx) => {
       const isWhitePly = plyIdx % 2 === 0;
       const isStudent = studentOrientation === 'white' ? isWhitePly : !isWhitePly;
       let thinkMs = 0;
       let createdAt: string | null = null;
-      if (isStudent && studentEventCursor < studentEvents.length) {
+      let result: ReplayTableRow['result'] = isStudent ? 'correct' : 'engine';
+      if (isStudent) {
         const ev = studentEvents[studentEventCursor];
-        thinkMs = ev?.thinkMs ?? 0;
-        createdAt = ev?.createdAt ?? null;
-        studentEventCursor += 1;
+        if (ev) {
+          thinkMs = ev.thinkMs ?? 0;
+          createdAt = ev.createdAt ?? null;
+          if (ev.result === 'wrong') {
+            result = 'wrong';
+          } else if (!studentMoveMatchesEvent(move, ev)) {
+            result = 'wrong';
+          } else {
+            result = 'correct';
+          }
+          studentEventCursor += 1;
+        }
       }
       return {
         id: `vc-full-${plyIdx}-${move}`,
@@ -510,8 +538,8 @@ export function buildReplayTableRows(
         side: isWhitePly ? 'white' : 'black',
         isStudent,
         playedMove: move,
-        expectedLabel: isStudent ? 'Öğrenci' : 'Bilgisayar',
-        result: isStudent ? 'correct' : 'engine',
+        expectedLabel: isStudent ? (studentEvents[studentEventCursor - 1]?.playedMove ?? 'Öğrenci') : 'Bilgisayar',
+        result,
         thinkMs,
         createdAt,
       };

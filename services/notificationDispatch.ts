@@ -34,7 +34,8 @@ async function sendWhatsAppForEvent(
   const autoRules = loadWhatsAppAutoRules();
   const rule = autoRules.find((r) => r.event === event);
   const templates = loadWhatsAppTemplates();
-  const tpl = findTemplate(templates, rule?.templateKey ?? event);
+  const templateKey = (rule?.templateKey ?? event) as import('../types').WhatsAppTemplateKey;
+  const tpl = findTemplate(templates, templateKey);
   if (!tpl || !ctx.student) return 0;
 
   const phones = parentPhonesForStudent(ctx.student);

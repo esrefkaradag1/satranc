@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Bell, Calendar, CalendarCheck, CalendarDays, CheckSquare, ChevronRight,
   ExternalLink, GraduationCap, Image as ImageIcon, BookOpen, ShieldCheck, Trophy,
-  User, Users, Video, Wallet, BarChart3, MessageCircle,
+  User, Users, Video, Wallet, BarChart3, MessageCircle, Target,
 } from 'lucide-react';
 import type { Student, Transaction } from '../../types';
 import { Dashboard3DBackground } from '../dashboard/Dashboard3DBackground';
@@ -360,9 +360,16 @@ export const StudentSummaryDashboard: React.FC<Props> = ({
                 : []),
               { tab: 'leaderboard', icon: <Trophy className="w-5 h-5" />, title: 'Lider tablosu', sub: 'Haftalık sıralama', color: 'text-amber-400 bg-amber-500/15' },
               {
+                tab: 'puzzle-practice',
+                icon: <Target className="w-5 h-5" />,
+                title: 'Bulmaca Çöz',
+                sub: 'Seviye ve puan',
+                color: 'text-indigo-400 bg-indigo-500/15',
+              },
+              {
                 tab: 'puzzles',
                 icon: <CheckSquare className="w-5 h-5" />,
-                title: viewAs === 'parent' ? 'Antrenman' : 'Ödevler / Bulmaca',
+                title: viewAs === 'parent' ? 'Antrenman' : 'Ödevler',
                 sub: viewAs === 'parent' ? 'Tamamlama durumu' : 'Ödevlere git',
                 color: 'text-emerald-400 bg-emerald-500/15',
               },

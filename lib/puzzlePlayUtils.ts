@@ -218,13 +218,16 @@ export function lichessImportToPlayState(
   const setup = applyPuzzleMove(setupGame, moves[0]!);
   if (setup && !setupGame.isGameOver()) {
     const rest = moves.slice(1);
-    if (rest.length > 0 && canReplayMovesFrom(setupGame.fen(), rest)) {
-      return {
-        playFen: setupGame.fen(),
-        solutionMoves: rest,
-        setupMoveSan: setup.san,
-        lichessSetupMove: moves[0],
-      };
+    if (rest.length > 0) {
+      const replayOk = canReplayMovesFrom(setupGame.fen(), rest);
+      if (replayOk || setup.color === new Chess(fen).turn()) {
+        return {
+          playFen: setupGame.fen(),
+          solutionMoves: rest,
+          setupMoveSan: setup.san,
+          lichessSetupMove: moves[0],
+        };
+      }
     }
   }
 
@@ -305,6 +308,38 @@ export function lichessPlayStateFromStored(
 
   const hint = puzzle.hint?.trim();
   const setupMove = puzzle.lichessSetupMove?.trim();
+
+  // Lichess ham kayıt: FEN kurulum öncesi, solution[0] rakip hamlesi — her zaman önce kurulumu uygula.
+  if (rawSolution.length >= 2 && isLichessPreSetupPattern(rawFen, rawSolution, puzzle)) {
+    const imported = lichessImportToPlayState(rawFen, rawSolution);
+    if (imported.playFen !== rawFen && imported.solutionMoves.length > 0) {
+      return {
+        playFen: imported.playFen,
+        solutionMoves: imported.solutionMoves,
+        setupMoveSan: imported.setupMoveSan,
+        studentColor: safeTurnAtFen(imported.playFen),
+        lichessSetupMove: imported.lichessSetupMove ?? rawSolution[0],
+      };
+    }
+  }
+
+  // Kurulum sonrası FEN + çözümde hâlâ rakip kurulum UCI'si varsa at.
+  const strippedAtFen = stripStaleLeadingSolutionMoves(rawFen, rawSolution);
+  if (
+    strippedAtFen.length > 0 &&
+    strippedAtFen.length < rawSolution.length &&
+    isMoveLegalForSideToMove(rawFen, strippedAtFen[0]!) &&
+    canReplayMovesFrom(rawFen, strippedAtFen)
+  ) {
+    return {
+      playFen: rawFen,
+      solutionMoves: strippedAtFen,
+      setupMoveSan: setupMove ? resolveSetupMoveSan(rawFen, setupMove, rawSolution) : undefined,
+      studentColor: safeTurnAtFen(rawFen),
+      lichessSetupMove: setupMove,
+    };
+  }
+
   const directOk =
     isMoveLegalForSideToMove(rawFen, rawSolution[0]!) &&
     canReplayMovesFrom(rawFen, rawSolution);
@@ -326,9 +361,10 @@ export function lichessPlayStateFromStored(
 
   // Import sonrası normalize kayıt (kurulum FEN'de uygulanmış; setup artık illegal)
   if (setupMove && directOk && !isLichessSetupStillPending(rawFen, rawSolution, setupMove)) {
+    const aligned = stripStaleLeadingSolutionMoves(rawFen, rawSolution);
     return {
       playFen: rawFen,
-      solutionMoves: rawSolution,
+      solutionMoves: aligned.length > 0 ? aligned : rawSolution,
       setupMoveSan: resolveSetupMoveSan(rawFen, setupMove, rawSolution),
       studentColor: safeTurnAtFen(rawFen),
       lichessSetupMove: setupMove,
@@ -337,6 +373,15 @@ export function lichessPlayStateFromStored(
 
   if (directOk && hint && hint === rawSolution[0]!) {
     const setupSession = rawSolution.length >= 2 ? tryLichessSetupSession(rawFen, rawSolution) : null;
+    if (setupSession && setupSession.playFen !== rawFen && setupSession.solutionMoves.length > 0) {
+      return {
+        playFen: setupSession.playFen,
+        solutionMoves: setupSession.solutionMoves,
+        setupMoveSan: setupSession.setupMoveSan,
+        studentColor: safeTurnAtFen(setupSession.playFen),
+        lichessSetupMove: rawSolution[0],
+      };
+    }
     if (!setupSession || setupSession.playFen === rawFen) {
       return {
         playFen: rawFen,
@@ -525,20 +570,21 @@ function shouldApplyLichessSetupFromRaw(
   rawSolution: string[],
 ): boolean {
   if (!isLichessStylePuzzle(puzzle) || rawSolution.length < 2) return false;
-  const hint = puzzle.hint?.trim();
-  if (hint && hint === rawSolution[0]!.trim()) return false;
+
+  if (isLichessPreSetupPattern(rawFen, rawSolution, puzzle)) return true;
 
   const setup = tryLichessSetupSession(rawFen, rawSolution);
   if (!setup || setup.playFen === rawFen) return false;
 
-  let turnAtRaw: 'w' | 'b';
-  try {
-    turnAtRaw = new Chess(rawFen).turn();
-  } catch {
+  // Kayıt zaten kurulum sonrası: ilk hamle öğrencinin ve sıra onda.
+  if (
+    isMoveLegalForSideToMove(rawFen, rawSolution[0]!) &&
+    safeTurnAtFen(rawFen) === setup.studentColor
+  ) {
     return false;
   }
 
-  return turnAtRaw !== setup.studentColor;
+  return safeTurnAtFen(rawFen) !== setup.studentColor;
 }
 
 function sessionFromPlayState(
@@ -547,13 +593,9 @@ function sessionFromPlayState(
   solutionMoves: string[],
   setupMoveSan?: string,
 ): CoachStyleSession {
-  let studentColor: 'w' | 'b' = 'w';
-  try {
-    studentColor = new Chess(playFen).turn();
-  } catch {
-    /* default */
-  }
-  return { playFen, solutionMoves, studentColor, setupMoveSan, rawFen };
+  const aligned = stripStaleLeadingSolutionMoves(playFen, solutionMoves);
+  const studentColor = safeTurnAtFen(playFen);
+  return { playFen, solutionMoves: aligned, studentColor, setupMoveSan, rawFen };
 }
 
 function buildSessionCandidates(
@@ -577,10 +619,12 @@ function buildSessionCandidates(
     ? tryLichessSetupSession(rawFen, rawSolution)
     : null;
 
+  const preSetupPattern = isLichessPreSetupPattern(rawFen, rawSolution, puzzle);
   const directOk =
     isMoveLegalForSideToMove(rawFen, rawSolution[0]!) &&
     canReplayMovesFrom(rawFen, rawSolution) &&
-    !lichessSetupFromRaw;
+    !lichessSetupFromRaw &&
+    !preSetupPattern;
 
   // 1) Kayıtlı FEN zaten oynanış pozisyonu (kurulum sonrası)
   if (directOk) {
@@ -639,6 +683,15 @@ function scorePlaySession(
     return 0;
   }
   if (start.turn() !== session.studentColor) return 0;
+
+  // Kurulum öncesi FEN + tam hat: öğrenci kaybeden taraf olmamalı.
+  if (
+    session.playFen === session.rawFen &&
+    rawSolution.length >= 2 &&
+    isLichessPreSetupPattern(session.rawFen, rawSolution, { source: 'lichess' } as Puzzle)
+  ) {
+    return 0;
+  }
   if (!canReplayMovesFrom(session.playFen, session.solutionMoves)) return 5;
 
   let score = 100 + session.solutionMoves.length * 3;
@@ -846,7 +899,7 @@ export function puzzleBoardOrientationForStudent(studentColor: 'w' | 'b'): 'whit
   return studentColor === 'b' ? 'black' : 'white';
 }
 
-function canReplayMovesFrom(fen: string, moves: string[], startIndex = 0): boolean {
+export function canReplayMovesFrom(fen: string, moves: string[], startIndex = 0): boolean {
   try {
     const g = new Chess(fen);
     for (let i = startIndex; i < moves.length; i++) {
@@ -1281,6 +1334,24 @@ export function applyPuzzleAutoReplies(
   return { fen: game.fen(), nextIndex: idx, playedSans };
 }
 
+export function fenAtPuzzleMoveIndex(
+  startFen: string,
+  moves: string[],
+  upToExclusive: number,
+): string {
+  if (upToExclusive <= 0) return startFen || DEFAULT_FEN;
+  try {
+    const game = new Chess(startFen || DEFAULT_FEN);
+    const count = Math.min(Math.max(0, upToExclusive), moves.length);
+    for (let i = 0; i < count; i++) {
+      if (!applyPuzzleMove(game, moves[i]!)) break;
+    }
+    return game.fen();
+  } catch {
+    return startFen || DEFAULT_FEN;
+  }
+}
+
 export type NormalizedStudyChapterPuzzle = {
   startFen: string;
   /** Öğrencinin sırayla bulması gereken hamleler (her iki renk dahil). */
@@ -1449,28 +1520,20 @@ export function normalizeStudyChapterPuzzle(chapter: {
     const coachRecorded = isCoachRecordedStudyChapter(chapter as StudyChapter);
     const explicitSetup = chapter.puzzleSetupPly != null && chapter.puzzleSetupPly > 0;
 
-    // Antrenör REC / SAN hattı: Lichess kurulum kırpması yapma; öğrenci hamleleri kendisi bulur.
+    // Antrenör REC / SAN hattı: kurulum hamlelerini ayır; öğrenci hattındaki her hamleyi kendisi bulur.
     if (coachRecorded) {
-      if (explicitSetup) {
-        const split = splitPuzzleSetupAndSolution(
-          rawFen,
-          rawSolution,
-          fromOrientation,
-          chapter.puzzleSetupPly,
-        );
-        return {
-          startFen: split.startFen,
-          studentMoves: split.solutionMoves,
-          studentColor: fromOrientation,
-          setupMoveSan: split.setupMoveSan,
-          playSideToMove: false,
-        };
-      }
+      const split = splitPuzzleSetupAndSolution(
+        rawFen,
+        rawSolution,
+        fromOrientation,
+        explicitSetup ? chapter.puzzleSetupPly : undefined,
+      );
       return {
-        startFen: rawFen,
-        studentMoves: rawSolution,
+        startFen: split.startFen,
+        studentMoves: split.solutionMoves,
         studentColor: fromOrientation,
-        playSideToMove: false,
+        setupMoveSan: split.setupMoveSan,
+        playSideToMove: true,
       };
     }
 

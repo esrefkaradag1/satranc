@@ -68,6 +68,8 @@ const TEMPLATE_KEY_LABELS: Record<string, string> = {
   parent_consent: 'Veli formu',
   lesson_start: 'Canlı ders',
   lesson_present: 'Derse katıldı',
+  lesson_absent: 'Derse katılmadı',
+  attendance_reminder: 'Yoklama özeti',
   training_completed: 'Antrenman tamam',
   training_partial: 'Antrenman kısmi',
   training_incomplete: 'Antrenman eksik',

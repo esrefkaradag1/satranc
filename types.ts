@@ -731,6 +731,7 @@ export type WhatsAppSystemTemplateKey =
   | 'parent_consent'
   | 'lesson_start'
   | 'lesson_present'
+  | 'lesson_absent'
   | 'attendance_reminder'
   | 'training_completed'
   | 'training_partial'
@@ -770,6 +771,7 @@ export type WhatsAppAutoEvent =
   | 'parent_consent'
   | 'lesson_start'
   | 'lesson_present'
+  | 'lesson_absent'
   | 'training_completed'
   | 'training_partial'
   | 'training_incomplete';

@@ -1,4 +1,7 @@
-import { emptyGameResultsByMode } from './leaderboardPointSettings';
+import {
+  type GameResultsByMode,
+  emptyGameResultsByMode,
+} from './leaderboardPointSettings';
 
 export type CachedStudentPeriodStats = {
   puzzles: number;
@@ -18,10 +21,12 @@ type CacheFile = {
 };
 
 const STORAGE_KEY = 'netchess_leaderboard_period_v1';
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/** Haftalık dönem boyunca sakla (8 gün tampon). */
+const CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000;
 
-function periodCacheKey(bounds: { startMs: number; endMs: number }): string {
-  return `${bounds.startMs}:${bounds.endMs}`;
+/** Dönem anahtarı — yalnızca başlangıç (endMs her gün değiştiği için dahil edilmez). */
+function periodCacheKey(bounds: { startMs: number }): string {
+  return String(bounds.startMs);
 }
 
 function readFile(): CacheFile {
@@ -32,10 +37,41 @@ function readFile(): CacheFile {
     if (!parsed || parsed.version !== 1 || typeof parsed.entries !== 'object') {
       return { version: 1, entries: {} };
     }
-    return parsed;
+    const migrated = migrateLegacyPeriodKeys(parsed.entries);
+    if (migrated !== parsed.entries) {
+      writeFile({ version: 1, entries: migrated });
+    }
+    return { version: 1, entries: migrated };
   } catch {
     return { version: 1, entries: {} };
   }
+}
+
+/** Eski anahtarlar `startMs:endMs|studentId` idi; endMs her gün değiştiği için birleştir. */
+function migrateLegacyPeriodKeys(
+  entries: Record<string, CachedStudentPeriodStats>,
+): Record<string, CachedStudentPeriodStats> {
+  let changed = false;
+  const out: Record<string, CachedStudentPeriodStats> = { ...entries };
+  for (const [key, value] of Object.entries(entries)) {
+    const pipe = key.indexOf('|');
+    if (pipe === -1) continue;
+    const periodKey = key.slice(0, pipe);
+    const studentId = key.slice(pipe + 1);
+    const colon = periodKey.indexOf(':');
+    if (colon === -1) continue;
+    const startMs = periodKey.slice(0, colon);
+    if (!startMs || !studentId) continue;
+    const newKey = entryKey(startMs, studentId);
+    if (newKey === key) continue;
+    const existing = out[newKey];
+    out[newKey] = existing
+      ? { ...mergePeriodStatsMax(existing, value), cachedAt: Math.max(existing.cachedAt, value.cachedAt) }
+      : value;
+    delete out[key];
+    changed = true;
+  }
+  return changed ? out : entries;
 }
 
 function writeFile(file: CacheFile) {
@@ -48,6 +84,35 @@ function writeFile(file: CacheFile) {
 
 function entryKey(periodKey: string, studentId: string): string {
   return `${periodKey}|${studentId}`;
+}
+
+function mergeGameResultsByMode(a: GameResultsByMode, b: GameResultsByMode): GameResultsByMode {
+  const out = emptyGameResultsByMode();
+  for (const mode of Object.keys(out) as (keyof GameResultsByMode)[]) {
+    out[mode] = {
+      wins: Math.max(a[mode].wins, b[mode].wins),
+      draws: Math.max(a[mode].draws, b[mode].draws),
+      losses: Math.max(a[mode].losses, b[mode].losses),
+    };
+  }
+  return out;
+}
+
+/** Dönem içinde puanlar geriye gitmesin — API boş dönse bile son bilinen değer korunur. */
+export function mergePeriodStatsMax(
+  prev: Omit<CachedStudentPeriodStats, 'cachedAt'>,
+  next: Omit<CachedStudentPeriodStats, 'cachedAt'>,
+): Omit<CachedStudentPeriodStats, 'cachedAt'> {
+  return {
+    puzzles: Math.max(prev.puzzles, next.puzzles),
+    puzzleWrong: Math.max(prev.puzzleWrong, next.puzzleWrong),
+    games: Math.max(prev.games, next.games),
+    internalPuzzles: Math.max(prev.internalPuzzles, next.internalPuzzles),
+    wins: Math.max(prev.wins, next.wins),
+    draws: Math.max(prev.draws, next.draws),
+    losses: Math.max(prev.losses, next.losses),
+    gameResultsByMode: mergeGameResultsByMode(prev.gameResultsByMode, next.gameResultsByMode),
+  };
 }
 
 export function readCachedStudentPeriodStats(
@@ -70,14 +135,19 @@ export function writeCachedStudentPeriodStats(
   if (!studentId.trim()) return;
   const periodKey = periodCacheKey(bounds);
   const file = readFile();
-  file.entries[entryKey(periodKey, studentId)] = {
-    ...stats,
+  const key = entryKey(periodKey, studentId);
+  const existing = file.entries[key];
+  const merged = existing
+    ? mergePeriodStatsMax(existing, stats)
+    : stats;
+  file.entries[key] = {
+    ...merged,
     cachedAt: Date.now(),
   };
   writeFile(file);
 }
 
-export function pruneLeaderboardPeriodCache(maxAgeMs = 14 * 24 * 60 * 60 * 1000) {
+export function pruneLeaderboardPeriodCache(maxAgeMs = 21 * 24 * 60 * 60 * 1000) {
   const file = readFile();
   const now = Date.now();
   let changed = false;

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, FileText, CheckSquare, BarChart3, 
   Wallet, MessageCircle, Video, Image, ExternalLink, Trophy,
   CalendarCheck, BookOpen, ShieldCheck, Box, CalendarDays, Grid, CreditCard, User, Building2,
-  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone, Globe, Bell
+  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone, Globe, Bell, Target
 } from 'lucide-react';
 
 /** Menü öğesi ikon kutusu rengi: Tailwind sınıfı (bg-* veya gradient) */
@@ -321,7 +321,8 @@ export const STUDENT_NAV_CATEGORIES: NavCategory[] = [
     items: [
       { id: 'live-lesson', label: 'Canlı Derse Katıl', icon: <Video className="w-5 h-5" />, iconColor: 'violet' },
       { id: 'study', label: 'Çalışma', icon: <BookMarked className="w-5 h-5" />, iconColor: 'teal' },
-      { id: 'puzzles', label: 'Bulmaca', icon: <Grid className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'puzzles', label: 'Ödevler', icon: <Grid className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'puzzle-practice', label: 'Bulmaca Çöz', icon: <Target className="w-5 h-5" />, iconColor: 'indigo' },
       { id: 'analyses', label: 'Analizler', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'indigo' },
       { id: 'gallery', label: 'Medya & Galeri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
     ],

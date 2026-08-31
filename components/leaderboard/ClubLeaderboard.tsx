@@ -22,8 +22,15 @@ import {
   leaderboardModeProg,
   leaderboardModeRating,
 } from '../../lib/leaderboardUtils';
-import { buildClubLeaderboard } from '../../services/leaderboardService';
-import { scheduleHourlyRefresh } from '../../lib/scheduleHourlyRefresh';
+import { buildClubLeaderboard, buildCachedClubLeaderboardPreview } from '../../services/leaderboardService';
+import { scheduleDailyLeaderboardRefresh } from '../../lib/scheduleHourlyRefresh';
+import {
+  formatLeaderboardSnapshotAge,
+  isLeaderboardSnapshotFresh,
+  leaderboardSnapshotKey,
+  readLeaderboardSnapshot,
+  writeLeaderboardSnapshot,
+} from '../../lib/leaderboardSnapshotCache';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
 import { useApp } from '../../AppContext';
 import { normalizeClubKey } from '../../lib/clubScope';
@@ -163,7 +170,8 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const [period, setPeriod] = useState<LeaderboardPeriod>('week');
   const [rankMode, setRankMode] = useState<LeaderboardRankMode>('activity');
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState('');
 
@@ -190,32 +198,73 @@ export const ClubLeaderboard: React.FC<Props> = ({
     [pointSettingsProp, resolvedClubId, clubs],
   );
 
-  const showLoadProgressCount = canShowStudentCounts(auth);
+  const cachedPreview = useMemo(
+    () => buildCachedClubLeaderboardPreview(peers, homeworkAttempts, period, rankMode, pointSettings),
+    [peers, homeworkAttempts, period, rankMode, pointSettings],
+  );
 
-  const load = useCallback(async () => {
+  const snapshotKey = useMemo(
+    () => leaderboardSnapshotKey({
+      peerIds: peers.map((p) => p.id),
+      period,
+      rankMode,
+      periodStartMs: bounds.startMs,
+      pointSettings,
+    }),
+    [peers, period, rankMode, bounds.startMs, pointSettings],
+  );
+
+  const showLoadProgressCount = canShowStudentCounts(auth);
+  const initialLoading = fetching && entries.length === 0;
+  const refreshing = fetching && entries.length > 0;
+
+  const load = useCallback(async (force = false) => {
     if (peers.length === 0) {
       setEntries([]);
+      setLastUpdatedAt(null);
       return;
     }
-    setLoading(true);
+
+    const snapshot = readLeaderboardSnapshot(snapshotKey);
+    if (snapshot?.entries.length) {
+      setEntries(snapshot.entries);
+      setLastUpdatedAt(snapshot.cachedAt);
+    } else if (cachedPreview.length > 0) {
+      setEntries(cachedPreview);
+    }
+
+    const snapshotFresh = snapshot ? isLeaderboardSnapshotFresh(snapshot.cachedAt) : false;
+    if (!force && snapshotFresh && snapshot?.entries.length) {
+      return;
+    }
+
+    setFetching(true);
     setError('');
+    setProgress({ done: 0, total: peers.length });
     try {
-      const result = await buildClubLeaderboard(peers, homeworkAttempts, period, rankMode, (done, total, partial) => {
+      const result = await buildClubLeaderboard(peers, homeworkAttempts, period, rankMode, (done, total) => {
         setProgress({ done, total });
-        if (partial?.length) setEntries(partial);
       }, pointSettings);
+      writeLeaderboardSnapshot(snapshotKey, result, peers.length);
       setEntries(result);
+      setLastUpdatedAt(Date.now());
     } catch {
       setError('Sıralama yüklenemedi. Lütfen tekrar deneyin.');
-      setEntries([]);
+      if (snapshot?.entries.length) {
+        setEntries(snapshot.entries);
+        setLastUpdatedAt(snapshot.cachedAt);
+      } else if (cachedPreview.length > 0) {
+        setEntries(cachedPreview);
+      }
     } finally {
-      setLoading(false);
+      setFetching(false);
+      setProgress({ done: 0, total: 0 });
     }
-  }, [peers, homeworkAttempts, period, rankMode, pointSettings]);
+  }, [peers, homeworkAttempts, period, rankMode, pointSettings, cachedPreview, snapshotKey]);
 
   useEffect(() => {
-    void load();
-    return scheduleHourlyRefresh(() => void load());
+    void load(false);
+    return scheduleDailyLeaderboardRefresh(() => void load(true));
   }, [load]);
 
   const top3 = entries.slice(0, 3);
@@ -282,12 +331,12 @@ export const ClubLeaderboard: React.FC<Props> = ({
             </div>
             <button
               type="button"
-              onClick={() => void load()}
-              disabled={loading}
+              onClick={() => void load(true)}
+              disabled={fetching}
               className="p-2.5 rounded-xl bg-slate-800 border border-white/10 text-slate-400 hover:text-white disabled:opacity-50"
               title="Yenile"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${fetching ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
@@ -309,20 +358,35 @@ export const ClubLeaderboard: React.FC<Props> = ({
           ))}
         </div>
 
-        {loading && (
+        {initialLoading && (
           <div className="mt-4 flex items-center gap-2 text-sm text-slate-400">
             <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
             {showLoadProgressCount && progress.total > 0
-              ? `Platform verileri alınıyor… ${progress.done}/${progress.total}`
-              : progress.total > 0
-                ? 'Platform verileri alınıyor…'
-                : 'Hesaplanıyor…'}
+              ? `Lider tablosu hazırlanıyor… ${progress.done}/${progress.total}`
+              : 'Lider tablosu hazırlanıyor…'}
           </div>
         )}
+        {refreshing && (
+          <div className="mt-4 flex items-center gap-2 text-sm text-slate-500">
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400/80" />
+            {showLoadProgressCount && progress.total > 0
+              ? `Arka planda güncelleniyor… ${progress.done}/${progress.total}`
+              : 'Arka planda güncelleniyor…'}
+            {lastUpdatedAt ? (
+              <span className="text-slate-600">· Son veri: {formatLeaderboardSnapshotAge(lastUpdatedAt)}</span>
+            ) : null}
+          </div>
+        )}
+        {!fetching && lastUpdatedAt ? (
+          <p className="mt-3 text-[11px] text-slate-500">
+            Son güncelleme: {formatLeaderboardSnapshotAge(lastUpdatedAt)}
+            {isLeaderboardSnapshotFresh(lastUpdatedAt) ? ' · Bugün hesaplandı' : ''}
+          </p>
+        ) : null}
         {error && <p className="mt-3 text-sm text-rose-400">{error}</p>}
       </div>
 
-      {!loading && ratingSummary.length > 0 && (
+      {!initialLoading && ratingSummary.length > 0 && (
         <div className="rounded-2xl bg-[#1e293b] border border-white/5 p-4">
           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
             <Zap className="w-3.5 h-3.5 text-amber-400" />
@@ -352,7 +416,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
         </div>
       )}
 
-      {!loading && entries.length === 0 && (
+      {!initialLoading && entries.length === 0 && (
         <div className="rounded-2xl border border-dashed border-white/10 p-10 text-center text-slate-500 text-sm">
           Bu dönem için henüz aktivite verisi yok.
         </div>
@@ -460,7 +524,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
             </table>
           </ResponsiveTable>
           <p className="px-4 py-3 text-[10px] text-slate-500 border-t border-white/5">
-            Sistem ödevleri + Lichess + Chess.com rating ve aktivite verileri. Saatlik otomatik yenilenir.
+            Sistem ödevleri + Lichess + Chess.com rating ve aktivite verileri. Günde bir (sabah 06:00) otomatik yenilenir; sayfa açılışında son kayıtlı tablo gösterilir.
           </p>
         </div>
       )}

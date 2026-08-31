@@ -142,7 +142,7 @@ export function csvRowToPuzzle(row: LichessPuzzleCSVRow): Puzzle {
     points: ratingToPoints(row.Rating),
     category,
     theme,
-    hint: imported.solutionMoves[0] || uciMoves[0] || '',
+    hint: imported.solutionMoves[0] || '',
     lichessSetupMove: imported.lichessSetupMove,
     lichessThemes: row.Themes,
     source: 'lichess',

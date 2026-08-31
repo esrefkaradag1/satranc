@@ -41,6 +41,7 @@ import {
 import {
   readCachedStudentPeriodStats,
   writeCachedStudentPeriodStats,
+  mergePeriodStatsMax,
 } from '../lib/leaderboardPeriodCache';
 
 const PLATFORM_SNAPSHOT_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -250,7 +251,7 @@ async function studentPeriodStats(
 
   const totals = sumGameResultsByMode(gameResultsByMode);
 
-  const result = {
+  const fresh = {
     puzzles: externalCorrect + internalCorrect,
     puzzleWrong: externalWrong + internalWrong,
     games,
@@ -261,24 +262,29 @@ async function studentPeriodStats(
     gameResultsByMode,
   };
 
+  const hasPlatformAccount = !!(lichessUsername || chessComUsername);
   const externalEmpty = externalCorrect === 0 && externalWrong === 0 && games === 0;
-  if (cached && externalEmpty && (cached.puzzles > 0 || cached.games > 0)) {
-    const merged = {
-      puzzles: cached.puzzles + internalCorrect,
-      puzzleWrong: cached.puzzleWrong + internalWrong,
+
+  if (cached && hasPlatformAccount && externalEmpty) {
+    const extPuzzles = Math.max(0, cached.puzzles - (cached.internalPuzzles ?? 0));
+    const extWrong = Math.max(0, cached.puzzleWrong - Math.max(0, (cached.internalPuzzles ?? 0) - internalCorrect));
+    const merged = mergePeriodStatsMax(cached, {
+      puzzles: extPuzzles + internalCorrect,
+      puzzleWrong: extWrong + internalWrong,
       games: cached.games,
       internalPuzzles: internalCorrect,
       wins: cached.wins,
       draws: cached.draws,
       losses: cached.losses,
       gameResultsByMode: cached.gameResultsByMode,
-    };
+    });
     writeCachedStudentPeriodStats(student.id, bounds, merged);
     return merged;
   }
 
-  writeCachedStudentPeriodStats(student.id, bounds, result);
-  return result;
+  const merged = cached ? mergePeriodStatsMax(cached, fresh) : fresh;
+  writeCachedStudentPeriodStats(student.id, bounds, merged);
+  return merged;
 }
 
 async function studentPlatformSnapshot(student: Student): Promise<LeaderboardPlatformSnapshot> {
@@ -387,5 +393,55 @@ export async function buildClubLeaderboard(
     return row;
   });
 
+  return rankLeaderboardEntries(rows, rankMode, pointSettings);
+}
+
+/** API beklerken anında gösterilecek önbellek tablosu (yalnızca aktivite modu). */
+export function buildCachedClubLeaderboardPreview(
+  peers: Student[],
+  homeworkAttempts: HomeworkPuzzleAttempt[],
+  period: LeaderboardPeriod,
+  rankMode: LeaderboardRankMode = 'activity',
+  pointSettings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
+): LeaderboardEntry[] {
+  if (rankMode !== 'activity' || peers.length === 0) return [];
+  const bounds = getPeriodBounds(period);
+  const rows = peers.map((student) => {
+    const cached = readCachedStudentPeriodStats(student.id, bounds);
+    const internalCorrect = homeworkAttempts.filter(
+      (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
+    ).length;
+    const internalWrong = homeworkAttempts.filter(
+      (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && !a.correct,
+    ).length;
+    if (!cached) {
+      return entryForStudent(
+        student,
+        internalCorrect,
+        0,
+        internalCorrect,
+        minimalPlatformSnapshot(student),
+        emptyGameResultsByMode(),
+        0,
+        0,
+        0,
+        internalWrong,
+      );
+    }
+    const extPuzzles = Math.max(0, cached.puzzles - (cached.internalPuzzles ?? 0));
+    const extWrong = Math.max(0, cached.puzzleWrong - Math.max(0, (cached.internalPuzzles ?? 0) - internalCorrect));
+    return entryForStudent(
+      student,
+      extPuzzles + internalCorrect,
+      cached.games,
+      internalCorrect,
+      minimalPlatformSnapshot(student),
+      cached.gameResultsByMode,
+      cached.wins,
+      cached.draws,
+      cached.losses,
+      extWrong + internalWrong,
+    );
+  });
   return rankLeaderboardEntries(rows, rankMode, pointSettings);
 }

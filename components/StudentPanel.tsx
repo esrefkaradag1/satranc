@@ -205,7 +205,7 @@ function parentDisplayNameFor(student: Student): string {
   return student.parentName?.trim() || student.fatherName?.trim() || student.motherName?.trim() || 'Veli';
 }
 
-type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages' | 'notifications';
+type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'puzzle-practice' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages' | 'notifications';
 
 
 const STUDENT_PANEL_REFRESH_TABS = new Set<PanelTab>(['summary', 'schedule', 'payments', 'dues', 'attendance', 'profile', 'analyses', 'private-lesson']);
@@ -225,6 +225,7 @@ const PANEL_TAB_TO_SLUG: Record<PanelTab, string> = {
   leaderboard: 'lider-tablosu',
   schedule: 'program',
   puzzles: 'bulmaca',
+  'puzzle-practice': 'bulmaca-coz',
   study: 'calisma',
   tournaments: 'turnuvalar',
   attendance: 'yoklama',
@@ -337,7 +338,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
-  const [puzzleSubTab, setPuzzleSubTab] = useState<'homework' | 'practice'>('homework');
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   const refreshUnreadNotificationCount = useCallback(async (knownCount?: number) => {
@@ -857,10 +857,19 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   const panelPermissions = authPermissions;
 
+  const effectivePanelPermissions = useMemo(() => {
+    const allowed = new Set(panelPermissions);
+    if (viewAs === 'student') {
+      allowed.add('puzzle-practice');
+    }
+    if (viewAs === 'parent' && allowed.has('dues') && !allowed.has('payments')) {
+      allowed.add('payments');
+    }
+    return allowed;
+  }, [panelPermissions, viewAs]);
+
   const navCategoriesForView = useMemo(() => {
-    const allowedForNav = viewAs === 'parent' && panelPermissions.has('dues') && !panelPermissions.has('payments')
-      ? new Set([...panelPermissions, 'payments'])
-      : panelPermissions;
+    const allowedForNav = effectivePanelPermissions;
     let filtered = filterNavByPermissions(STUDENT_NAV_CATEGORIES, allowedForNav);
     if (viewAs === 'student') {
       filtered = filtered
@@ -896,7 +905,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       filtered = mergeParentEssentialNavItems(filtered);
     }
     return filtered;
-  }, [viewAs, panelPermissions, studentPrivateLessonSummary, privateLessonTransactions.length]);
+  }, [viewAs, effectivePanelPermissions, studentPrivateLessonSummary, privateLessonTransactions.length]);
 
   const lichessPracticePool = useMemo(
     () => puzzles.filter((p) => p.source === 'lichess' || !!p.lichessId),
@@ -952,8 +961,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   useEffect(() => {
     if (!rolesLoaded) return;
-    if (!panelPermissions.has(activeTab)) setActiveTab('summary');
-  }, [viewAs, activeTab, panelPermissions, rolesLoaded, setActiveTab]);
+    if (!effectivePanelPermissions.has(activeTab)) setActiveTab('summary');
+  }, [viewAs, activeTab, effectivePanelPermissions, rolesLoaded, setActiveTab]);
 
   useEffect(() => {
     if (viewAs !== 'parent') return;
@@ -1497,7 +1506,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                 {viewAs === 'student' ? `Merhaba, ${student.name}` : 'Veli Paneli'}
               </h1>
               <p className="text-xs font-semibold text-indigo-400/95 truncate mt-0.5">
-                {viewAs === 'student' ? 'Öğrenci Paneli' : `Çocuğunuz: ${student.name}`}
+                {activeTab === 'puzzle-practice'
+                  ? 'Bulmaca Çöz — seviye ve puan'
+                  : viewAs === 'student'
+                    ? 'Öğrenci Paneli'
+                    : `Çocuğunuz: ${student.name}`}
               </p>
             </div>
           </div>
@@ -1681,32 +1694,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         )}
 
         {activeTab === 'puzzles' && student && (
-          <div className="animate-in fade-in duration-300 space-y-4">
-            <div className="flex flex-wrap gap-2 p-1 rounded-xl bg-slate-900/60 border border-white/5 w-full max-w-md">
-              <button
-                type="button"
-                onClick={() => setPuzzleSubTab('homework')}
-                className={`flex-1 min-w-[120px] px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-                  puzzleSubTab === 'homework'
-                    ? 'bg-amber-600 text-white'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                Ödevler
-              </button>
-              <button
-                type="button"
-                onClick={() => setPuzzleSubTab('practice')}
-                className={`flex-1 min-w-[120px] px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
-                  puzzleSubTab === 'practice'
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                Bulmaca Çöz
-              </button>
-            </div>
-            {puzzleSubTab === 'homework' ? (
+          <div className="animate-in fade-in duration-300">
             <StudentHomeworkPanel
               student={student}
               viewAs={viewAs}
@@ -1729,13 +1717,22 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               onPlayPuzzle={viewAs === 'parent' ? () => {} : setPlayingPuzzle}
               onDailyGoalsComplete={viewAs === 'parent' ? undefined : handleDailyGoalsComplete}
             />
-            ) : (
-              <StudentPuzzlePracticePanel
-                student={student}
-                pool={lichessPracticePool}
-                viewAs={viewAs}
-              />
-            )}
+          </div>
+        )}
+
+        {activeTab === 'puzzle-practice' && student && (
+          <div className="animate-in fade-in duration-300">
+            <StudentPuzzlePracticePanel
+              student={student}
+              pool={puzzles}
+              viewAs={viewAs}
+            />
+          </div>
+        )}
+
+        {activeTab === 'puzzle-practice' && !student && (
+          <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-10 text-center text-slate-400 text-sm">
+            Bulmaca alanı yükleniyor...
           </div>
         )}
 

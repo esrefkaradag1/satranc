@@ -25,6 +25,7 @@ import { pdfAllPagesToDataUrls } from '../services/pdfToImage';
 import { loadStudiesAsync, saveStudyAsync } from '../studyStorage';
 import { loadStudyCategoriesAsync, type StudyCategoryMeta } from '../studyCategoriesStorage';
 import { applyPuzzleMove, initCoachStyleSession, materializeLichessPuzzleRecord, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
+import { estimatePuzzleRating, PRACTICE_RATING_BANDS } from '../lib/studentPuzzlePractice';
 import type { Study } from '../lib/studyTypes';
 import { filterStudiesForCoachView } from '../lib/studyPermissions';
 import { genId, migrateStudy, migrateChapter } from '../lib/studyUtils';
@@ -150,7 +151,7 @@ function validateBoardForSave(fen: string): string | null {
 
 const ChessBoard: React.FC = () => {
   const { puzzles, addPuzzle, importPuzzles, clearPuzzles, deletePuzzle, scopedStudents: students, scopedHomeworks: homeworks, addHomework, updateHomework, deleteHomework, showToast, confirmDialog } = useApp();
-  const [activeTab, setActiveTab] = useState<'editor' | 'puzzles' | 'assign' | 'analysis'>('editor');
+  const [activeTab, setActiveTab] = useState<'editor' | 'puzzles' | 'assign' | 'analysis'>('puzzles');
   
   const [showImportModal, setShowImportModal] = useState(false);
   const [importProgress, setImportProgress] = useState<{ loading: boolean; message: string; count: number; total: number }>({ loading: false, message: '', count: 0, total: 0 });
@@ -161,6 +162,7 @@ const ChessBoard: React.FC = () => {
   const [puzzleDiffFilter, setPuzzleDiffFilter] = useState<string>('all');
   const [puzzleCatFilter, setPuzzleCatFilter] = useState<string>('all');
   const [puzzleThemeFilter, setPuzzleThemeFilter] = useState<string>('all');
+  const [puzzleRatingBandFilter, setPuzzleRatingBandFilter] = useState<string>('all');
   const [puzzleSourceFilter, setPuzzleSourceFilter] = useState<'all' | 'lichess' | 'custom'>('all');
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
   const [selectedPuzzleIds, setSelectedPuzzleIds] = useState<string[]>([]);
@@ -1122,6 +1124,13 @@ const ChessBoard: React.FC = () => {
     if (puzzleDiffFilter !== 'all' && p.difficulty !== puzzleDiffFilter) return false;
     if (puzzleCatFilter !== 'all' && p.category !== puzzleCatFilter) return false;
     if (puzzleThemeFilter !== 'all' && !puzzleHasLichessTheme(p, puzzleThemeFilter)) return false;
+    if (puzzleRatingBandFilter !== 'all') {
+      const band = PRACTICE_RATING_BANDS.find((b) => b.id === puzzleRatingBandFilter);
+      if (band) {
+        const pr = estimatePuzzleRating(p);
+        if (pr < band.min || pr > band.max) return false;
+      }
+    }
     return true;
   });
 
@@ -1291,12 +1300,7 @@ const ChessBoard: React.FC = () => {
         <h1 className="text-2xl font-black text-white tracking-tight">Bulmaca Yönetimi</h1>
       </div>
 
-      <div className="flex flex-wrap bg-slate-900/60 p-1.5 rounded-lg border border-white/5 shadow-inner w-full max-w-max">
-        <TabButton active={activeTab === 'editor'} onClick={() => setActiveTab('editor')} icon={<Edit3 className="w-4 h-4" />} label="Editör" />
-        <TabButton active={activeTab === 'puzzles'} onClick={() => setActiveTab('puzzles')} icon={<Grid className="w-4 h-4" />} label="Bulmacalar" />
-      </div>
-
-      {activeTab === 'editor' && (
+      {false && activeTab === 'editor' && (
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
           <div className="xl:col-span-7 flex flex-col gap-4">
             {playingPuzzleImage && (
@@ -1727,6 +1731,12 @@ const ChessBoard: React.FC = () => {
               <option value="fork">Çatal</option>
               <option value="pin">Şiş</option>
             </select>
+            <select value={puzzleRatingBandFilter} onChange={e => setPuzzleRatingBandFilter(e.target.value)} className="bg-slate-900/60 border border-white/10 rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 appearance-none min-w-[9rem]">
+              <option value="all">Tüm Rating</option>
+              {PRACTICE_RATING_BANDS.map((b) => (
+                <option key={b.id} value={b.id}>{b.label} ({b.title})</option>
+              ))}
+            </select>
             <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white px-5 py-3 rounded-lg text-xs font-black shadow-lg transition-all uppercase tracking-wider">
               <Download className="w-4 h-4" /> Lichess'ten Çek
             </button>
@@ -1797,11 +1807,10 @@ const ChessBoard: React.FC = () => {
                 <div className="w-24 h-24 bg-indigo-500/10 rounded-full flex items-center justify-center text-indigo-400 mx-auto mb-6"><Grid className="w-10 h-10" /></div>
                 <h3 className="text-2xl font-black text-white mb-3">{puzzles.length === 0 ? 'Henüz Bulmaca Yok' : 'Sonuç Bulunamadı'}</h3>
                 <p className="text-slate-400 text-sm max-w-sm mx-auto mb-8">
-                  {puzzles.length === 0 ? 'Lichess veritabanından binlerce bulmaca import edebilir veya editörden manuel oluşturabilirsiniz.' : 'Arama kriterlerini değiştirerek tekrar deneyin.'}
+                  {puzzles.length === 0 ? 'Lichess veritabanından binlerce bulmaca import edebilirsiniz.' : 'Arama kriterlerini değiştirerek tekrar deneyin.'}
                 </p>
                 <div className="flex gap-4 justify-center">
                   <button onClick={() => setShowImportModal(true)} className="px-8 py-4 bg-amber-600 text-white rounded-lg font-bold text-xs shadow-lg hover:bg-amber-500 transition-all uppercase tracking-widest flex items-center gap-2"><Download className="w-4 h-4" /> Lichess'ten Çek</button>
-                  <button onClick={() => setActiveTab('editor')} className="px-8 py-4 bg-indigo-600 text-white rounded-lg font-bold text-xs shadow-lg hover:bg-indigo-500 transition-all uppercase tracking-widest">Manuel Oluştur</button>
                 </div>
               </div>
             ) : (
@@ -1864,6 +1873,7 @@ const ChessBoard: React.FC = () => {
                     </button>
                   </div>
                   <div className="flex flex-wrap gap-1.5 w-full">
+                    <span className="px-2.5 py-1 bg-sky-500/20 text-sky-300 rounded-lg text-[10px] uppercase tracking-wider font-black tabular-nums">~{estimatePuzzleRating(puzzle)}</span>
                     <span className={`px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider font-black ${puzzle.difficulty === 'Kolay' ? 'bg-emerald-500/20 text-emerald-400' : puzzle.difficulty === 'Orta' ? 'bg-amber-500/20 text-amber-400' : 'bg-rose-500/20 text-rose-400'}`}>{puzzle.difficulty}</span>
                     <span className="px-2.5 py-1 bg-indigo-500/20 text-indigo-300 rounded-lg text-[10px] uppercase tracking-wider font-black">{puzzle.points}p</span>
                     {puzzle.category && <span className="px-2.5 py-1 bg-slate-700/50 text-slate-400 rounded-lg text-[10px] font-bold truncate max-w-[120px]">{puzzle.category}</span>}

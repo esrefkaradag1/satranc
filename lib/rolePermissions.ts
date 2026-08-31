@@ -49,6 +49,7 @@ export const PARENT_DEFAULT_PERMISSIONS = [
   'gallery',
   'schedule',
   'puzzles',
+  'puzzle-practice',
   'analyses',
   'private-lesson',
   'payments',
@@ -470,6 +471,9 @@ export function getPermissionsForAuth(
       if (auth.role === 'parent') {
         defaultPermissionsForRole('parent').forEach((k) => set.add(k));
       }
+      if (auth.role === 'student') {
+        set.add('puzzle-practice');
+      }
       return set;
     }
     if (customRoleId && customRoleId !== systemRoleId) {
@@ -478,6 +482,9 @@ export function getPermissionsForAuth(
         const set = new Set(systemCached);
         if (auth.role === 'parent') {
           defaultPermissionsForRole('parent').forEach((k) => set.add(k));
+        }
+        if (auth.role === 'student') {
+          set.add('puzzle-practice');
         }
         return set;
       }
@@ -492,9 +499,16 @@ export function getPermissionsForAuth(
       if (auth.role === 'parent') {
         defaultPermissionsForRole('parent').forEach((k) => set.add(k));
       }
+      if (auth.role === 'student') {
+        set.add('puzzle-practice');
+      }
       return set;
     }
-    if (!customRoleId || customRoleId === systemRoleId) return new Set(keys);
+    if (!customRoleId || customRoleId === systemRoleId) {
+      const set = new Set(keys);
+      if (auth.role === 'student') set.add('puzzle-practice');
+      return set;
+    }
   }
 
   if (customRoleId && customRoleId !== systemRoleId) {

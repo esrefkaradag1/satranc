@@ -36,10 +36,14 @@ export function loadNotificationDeliveryRules(): NotificationDeliveryRule[] {
   for (const row of stored) {
     if (row?.event && row.channel) byEvent.set(row.event, row.channel);
   }
-  return NOTIFICATION_EVENTS.map((event) => ({
-    event,
-    channel: byEvent.get(event) ?? DEFAULT_NOTIFICATION_CHANNELS[event],
-  }));
+  return NOTIFICATION_EVENTS.map((event) => {
+    let channel = byEvent.get(event) ?? DEFAULT_NOTIFICATION_CHANNELS[event];
+    // Eski kurulumda yoklama yalnızca panele gidiyordu; şablonlar eklendi.
+    if ((event === 'lesson_present' || event === 'lesson_absent') && channel === 'panel') {
+      channel = 'both';
+    }
+    return { event, channel };
+  });
 }
 
 export function saveNotificationDeliveryRules(rules: NotificationDeliveryRule[]) {

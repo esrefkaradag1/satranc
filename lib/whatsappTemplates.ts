@@ -46,6 +46,17 @@ Teşekkürler.`,
 {{kulup_adi}}`,
   },
   {
+    id: 'tpl-lesson-absent',
+    key: 'lesson_absent',
+    name: 'Derse Katılmadı',
+    enabled: true,
+    body: `Merhaba {{veli_adi}},
+
+{{ogrenci_adi}} {{tarih}} tarihli derse katılmadı: {{ders_adi}}
+
+{{kulup_adi}}`,
+  },
+  {
     id: 'tpl-lesson-start',
     key: 'lesson_start',
     name: 'Ders Başlangıcı',
@@ -122,7 +133,8 @@ export const DEFAULT_WHATSAPP_AUTO_RULES: WhatsAppAutoRule[] = [
   { event: 'parent_login', enabled: true, templateKey: 'parent_login' },
   { event: 'parent_consent', enabled: true, templateKey: 'parent_consent' },
   { event: 'lesson_start', enabled: true, templateKey: 'lesson_start' },
-  { event: 'lesson_present', enabled: false, templateKey: 'lesson_present' },
+  { event: 'lesson_present', enabled: true, templateKey: 'lesson_present' },
+  { event: 'lesson_absent', enabled: true, templateKey: 'lesson_absent' },
   { event: 'training_completed', enabled: true, templateKey: 'training_completed' },
   { event: 'training_partial', enabled: true, templateKey: 'training_partial' },
   { event: 'training_incomplete', enabled: true, templateKey: 'training_incomplete' },
