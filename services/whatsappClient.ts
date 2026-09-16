@@ -11,6 +11,7 @@ import {
   buildStudentTemplateVars,
   findTemplate,
   renderWhatsAppTemplate,
+  hasUnresolvedWhatsAppTemplateVars,
 } from '../lib/whatsappTemplates';
 import { parentPhonesForStudent } from '../lib/whatsappPhones';
 import { isStudentNotificationsEnabled } from '../lib/studentNotificationUtils';
@@ -181,6 +182,21 @@ export async function sendWhatsAppMessage(options: {
   allowInactiveStudent?: boolean;
 }): Promise<SendResult> {
   const { phone, message, openManualFallback } = options;
+  if (hasUnresolvedWhatsAppTemplateVars(message)) {
+    const err = 'Mesajdaki şablon alanları doldurulmadı ({{...}}). Gönderim iptal edildi.';
+    writeWhatsAppLog({
+      phone,
+      message,
+      status: 'failed',
+      templateKey: options.templateKey,
+      studentId: options.studentId,
+      studentName: options.studentName,
+      recipientName: options.recipientName,
+      branchOffice: options.branchOffice,
+      error: err,
+    });
+    return { ok: false, mode: 'failed', error: err };
+  }
   if (
     options.studentStatus === 'inactive'
     && options.allowInactiveStudent !== true

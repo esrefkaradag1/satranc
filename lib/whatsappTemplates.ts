@@ -144,6 +144,18 @@ export function renderWhatsAppTemplate(body: string, vars: TemplateVars): string
   return body.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? '');
 }
 
+export function hasUnresolvedWhatsAppTemplateVars(message: string): boolean {
+  return /\{\{\w+\}\}/.test(String(message ?? ''));
+}
+
+export function renderMessageForStudent(
+  body: string,
+  student: Student,
+  extra: TemplateVars = {},
+): string {
+  return renderWhatsAppTemplate(body, buildStudentTemplateVars(student, extra));
+}
+
 export function findTemplate(
   templates: WhatsAppTemplate[],
   key: WhatsAppTemplateKey,

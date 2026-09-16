@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2,
   Medal,
@@ -21,15 +21,17 @@ import {
   leaderboardModeLabel,
   leaderboardModeProg,
   leaderboardModeRating,
+  mergeLeaderboardEntryRows,
 } from '../../lib/leaderboardUtils';
 import { buildClubLeaderboard, buildCachedClubLeaderboardPreview } from '../../services/leaderboardService';
 import { scheduleDailyLeaderboardRefresh } from '../../lib/scheduleHourlyRefresh';
 import {
   formatLeaderboardSnapshotAge,
+  findBestLeaderboardSnapshot,
   isLeaderboardSnapshotFresh,
   leaderboardSnapshotKey,
-  readLeaderboardSnapshot,
   writeLeaderboardSnapshot,
+  LEADERBOARD_DAILY_REFRESH_HOUR,
 } from '../../lib/leaderboardSnapshotCache';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
 import { useApp } from '../../AppContext';
@@ -198,74 +200,203 @@ export const ClubLeaderboard: React.FC<Props> = ({
     [pointSettingsProp, resolvedClubId, clubs],
   );
 
-  const cachedPreview = useMemo(
-    () => buildCachedClubLeaderboardPreview(peers, homeworkAttempts, period, rankMode, pointSettings),
-    [peers, homeworkAttempts, period, rankMode, pointSettings],
-  );
+  const clubScope = useMemo(() => {
+    if (resolvedClubId) return `club:${resolvedClubId}`;
+    const office = (anchorStudent?.branchOffice || clubName || '').trim();
+    return office ? `office:${normalizeClubKey(office)}` : 'club:default';
+  }, [resolvedClubId, anchorStudent?.branchOffice, clubName]);
 
   const snapshotKey = useMemo(
     () => leaderboardSnapshotKey({
-      peerIds: peers.map((p) => p.id),
+      clubScope,
       period,
       rankMode,
       periodStartMs: bounds.startMs,
       pointSettings,
     }),
-    [peers, period, rankMode, bounds.startMs, pointSettings],
+    [clubScope, period, rankMode, bounds.startMs, pointSettings],
   );
 
   const showLoadProgressCount = canShowStudentCounts(auth);
   const initialLoading = fetching && entries.length === 0;
   const refreshing = fetching && entries.length > 0;
 
+  const peersRef = useRef(peers);
+  const homeworkAttemptsRef = useRef(homeworkAttempts);
+  const entriesRef = useRef(entries);
+  const snapshotKeyRef = useRef(snapshotKey);
+  const pointSettingsRef = useRef(pointSettings);
+  const periodRef = useRef(period);
+  const rankModeRef = useRef(rankMode);
+  const loadGenerationRef = useRef(0);
+  const inFlightRef = useRef(false);
+
+  useEffect(() => { peersRef.current = peers; }, [peers]);
+  useEffect(() => { homeworkAttemptsRef.current = homeworkAttempts; }, [homeworkAttempts]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+  useEffect(() => { snapshotKeyRef.current = snapshotKey; }, [snapshotKey]);
+  useEffect(() => { pointSettingsRef.current = pointSettings; }, [pointSettings]);
+  useEffect(() => { periodRef.current = period; }, [period]);
+  useEffect(() => { rankModeRef.current = rankMode; }, [rankMode]);
+
+  const restoreCachedTable = useCallback(() => {
+    const currentPeers = peersRef.current;
+    const key = snapshotKeyRef.current;
+    const mode = rankModeRef.current;
+    const settings = pointSettingsRef.current;
+    const currentPeriod = periodRef.current;
+    const boundsNow = getPeriodBounds(currentPeriod);
+
+    const snapshot = findBestLeaderboardSnapshot({
+      preferredKey: key,
+      period: currentPeriod,
+      rankMode: mode,
+      periodStartMs: boundsNow.startMs,
+    });
+
+    if (snapshot?.entries.length) {
+      // Peer listesi büyüdüyse yeni öğrencileri 0 ile ekle; eski skorları koru
+      if (currentPeers.length > 0) {
+        const preview = buildCachedClubLeaderboardPreview(
+          currentPeers,
+          homeworkAttemptsRef.current,
+          currentPeriod,
+          mode,
+          settings,
+        );
+        const merged = preview.length
+          ? mergeLeaderboardEntryRows(snapshot.entries, preview, mode, settings)
+          : snapshot.entries;
+        setEntries(merged);
+      } else {
+        setEntries(snapshot.entries);
+      }
+      setLastUpdatedAt(snapshot.cachedAt);
+      return snapshot;
+    }
+
+    if (currentPeers.length === 0) {
+      setEntries([]);
+      setLastUpdatedAt(null);
+      return null;
+    }
+
+    const preview = buildCachedClubLeaderboardPreview(
+      currentPeers,
+      homeworkAttemptsRef.current,
+      currentPeriod,
+      mode,
+      settings,
+    );
+    if (preview.length > 0) {
+      setEntries((prev) => {
+        if (prev.length === 0) return preview;
+        return mergeLeaderboardEntryRows(prev, preview, mode, settings);
+      });
+    }
+    return null;
+  }, []);
+
   const load = useCallback(async (force = false) => {
-    if (peers.length === 0) {
+    const currentPeers = peersRef.current;
+    if (currentPeers.length === 0) {
       setEntries([]);
       setLastUpdatedAt(null);
       return;
     }
 
-    const snapshot = readLeaderboardSnapshot(snapshotKey);
-    if (snapshot?.entries.length) {
-      setEntries(snapshot.entries);
-      setLastUpdatedAt(snapshot.cachedAt);
-    } else if (cachedPreview.length > 0) {
-      setEntries(cachedPreview);
-    }
-
+    const snapshot = restoreCachedTable();
     const snapshotFresh = snapshot ? isLeaderboardSnapshotFresh(snapshot.cachedAt) : false;
+
+    // Sabah 06:00 sonrası bugün hesaplandıysa API'ye gitme (manuel force hariç)
     if (!force && snapshotFresh && snapshot?.entries.length) {
       return;
     }
+    if (inFlightRef.current && !force) {
+      return;
+    }
 
+    const key = snapshotKeyRef.current;
+    const mode = rankModeRef.current;
+    const settings = pointSettingsRef.current;
+    const currentPeriod = periodRef.current;
+    const baseline = snapshot?.entries?.length
+      ? snapshot.entries
+      : entriesRef.current;
+
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    inFlightRef.current = true;
     setFetching(true);
     setError('');
-    setProgress({ done: 0, total: peers.length });
+    setProgress({ done: 0, total: currentPeers.length });
     try {
-      const result = await buildClubLeaderboard(peers, homeworkAttempts, period, rankMode, (done, total) => {
-        setProgress({ done, total });
-      }, pointSettings);
-      writeLeaderboardSnapshot(snapshotKey, result, peers.length);
-      setEntries(result);
+      const result = await buildClubLeaderboard(
+        currentPeers,
+        homeworkAttemptsRef.current,
+        currentPeriod,
+        mode,
+        (done, total) => {
+          if (generation !== loadGenerationRef.current) return;
+          setProgress({ done, total });
+        },
+        settings,
+      );
+      if (generation !== loadGenerationRef.current) return;
+
+      // Mevcut tablo + API: yalnızca artışlar uygulanır (sıfırlama yok)
+      const merged = baseline.length > 0
+        ? mergeLeaderboardEntryRows(baseline, result, mode, settings)
+        : mergeLeaderboardEntryRows(entriesRef.current, result, mode, settings);
+
+      writeLeaderboardSnapshot(key, merged, currentPeers.length);
+      setEntries(merged);
       setLastUpdatedAt(Date.now());
     } catch {
+      if (generation !== loadGenerationRef.current) return;
       setError('Sıralama yüklenemedi. Lütfen tekrar deneyin.');
       if (snapshot?.entries.length) {
         setEntries(snapshot.entries);
         setLastUpdatedAt(snapshot.cachedAt);
-      } else if (cachedPreview.length > 0) {
-        setEntries(cachedPreview);
       }
     } finally {
-      setFetching(false);
-      setProgress({ done: 0, total: 0 });
+      if (generation === loadGenerationRef.current) {
+        inFlightRef.current = false;
+        setFetching(false);
+        setProgress({ done: 0, total: 0 });
+      }
     }
-  }, [peers, homeworkAttempts, period, rankMode, pointSettings, cachedPreview, snapshotKey]);
+  }, [restoreCachedTable]);
 
+  // Dönem / mod / kulüp değişince: önce cache göster, gerekirse sabah yenilemesi
   useEffect(() => {
+    restoreCachedTable();
     void load(false);
     return scheduleDailyLeaderboardRefresh(() => void load(true));
-  }, [load]);
+  }, [snapshotKey, load, restoreCachedTable]);
+
+  // Öğrenci listesi sonradan dolunca (Supabase): cache skorlarını koruyarak yeni satırları ekle — API yok
+  useEffect(() => {
+    if (peers.length === 0) return;
+    restoreCachedTable();
+  }, [peers, restoreCachedTable]);
+
+  // Ödev çözülünce sadece yerel puanı yukarı birleştir — API tetikleme
+  useEffect(() => {
+    if (rankMode !== 'activity' || peers.length === 0) return;
+    const preview = buildCachedClubLeaderboardPreview(
+      peers,
+      homeworkAttempts,
+      period,
+      rankMode,
+      pointSettings,
+    );
+    if (preview.length === 0) return;
+    setEntries((prev) => {
+      if (prev.length === 0) return preview;
+      return mergeLeaderboardEntryRows(prev, preview, rankMode, pointSettings);
+    });
+  }, [homeworkAttempts, peers, period, rankMode, pointSettings]);
 
   const top3 = entries.slice(0, 3);
   const highlightId = highlightStudentId || anchorStudent?.id;
@@ -334,7 +465,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
               onClick={() => void load(true)}
               disabled={fetching}
               className="p-2.5 rounded-xl bg-slate-800 border border-white/10 text-slate-400 hover:text-white disabled:opacity-50"
-              title="Yenile"
+              title={`Yenile (günde bir sabah ${String(LEADERBOARD_DAILY_REFRESH_HOUR).padStart(2, '0')}:00; mevcut puanlar korunur)`}
             >
               <RefreshCw className={`w-4 h-4 ${fetching ? 'animate-spin' : ''}`} />
             </button>
@@ -524,7 +655,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
             </table>
           </ResponsiveTable>
           <p className="px-4 py-3 text-[10px] text-slate-500 border-t border-white/5">
-            Sistem ödevleri + Lichess + Chess.com rating ve aktivite verileri. Günde bir (sabah 06:00) otomatik yenilenir; sayfa açılışında son kayıtlı tablo gösterilir.
+            Sistem ödevleri + Lichess + Chess.com. Sayfa açılışında son kayıtlı tablo gösterilir; API yalnızca sabah 06:00 sonrası bir kez yeniler ve yeni veriyi mevcut puanların üzerine ekler (sıfırlamaz).
           </p>
         </div>
       )}

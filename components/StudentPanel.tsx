@@ -1587,7 +1587,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             anchorStudent={student}
             homeworkAttempts={homeworkAttempts}
             highlightStudentId={studentId}
-            compact
           />
         )}
 

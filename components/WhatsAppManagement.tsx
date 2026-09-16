@@ -12,7 +12,7 @@ import {
   loadWhatsAppAutoRules, saveWhatsAppAutoRules, loadWhatsAppLogs, loadWhatsAppContactGroups,
   saveWhatsAppContactGroups, whatsAppStats, mergeWhatsAppLogs, DEFAULT_WHATSAPP_CONFIG,
 } from '../lib/whatsappStorage';
-import { renderWhatsAppTemplate, buildStudentTemplateVars, createCustomWhatsAppTemplate, isSystemWhatsAppTemplate } from '../lib/whatsappTemplates';
+import { renderWhatsAppTemplate, buildStudentTemplateVars, createCustomWhatsAppTemplate, isSystemWhatsAppTemplate, hasUnresolvedWhatsAppTemplateVars, renderMessageForStudent } from '../lib/whatsappTemplates';
 import { primaryParentPhone } from '../lib/whatsappPhones';
 import { isValidWhatsAppPhone, resolveWhatsAppLogParties } from '../lib/whatsappUtils';
 import {
@@ -93,6 +93,24 @@ function statusTone(status: WhatsAppMessageLog['status']): string {
   if (status === 'manual') return 'text-amber-200 bg-amber-500/10 border-amber-500/25';
   if (status === 'failed') return 'text-rose-300 bg-rose-500/10 border-rose-500/25';
   return 'text-slate-300 bg-slate-700/40 border-white/10';
+}
+
+function phoneTailDigits(phone: string): string {
+  return String(phone ?? '').replace(/\D/g, '').slice(-10);
+}
+
+function findStudentByPhone(students: Student[], phone: string): Student | undefined {
+  const tail = phoneTailDigits(phone);
+  if (tail.length < 10) return undefined;
+  return students.find((student) => {
+    const phones = [
+      student.parentPhone,
+      student.fatherPhone,
+      student.motherPhone,
+      ...(student.contactNumbers ?? []),
+    ];
+    return phones.some((p) => phoneTailDigits(String(p ?? '')) === tail);
+  });
 }
 
 const WhatsAppManagement: React.FC = () => {
@@ -473,9 +491,39 @@ const WhatsAppManagement: React.FC = () => {
       showToast('Numara ve mesaj girin.', 'warning');
       return;
     }
+    const templateBody = manualMessage.trim();
+    if (hasUnresolvedWhatsAppTemplateVars(templateBody)) {
+      const unmatched = phones.filter((phone) => !findStudentByPhone(students, phone));
+      if (unmatched.length > 0) {
+        showToast(
+          'Şablondaki {{...}} alanları için numarayı kayıtlı veli telefonuyla eşleştirin veya metni elle doldurun.',
+          'warning',
+        );
+        return;
+      }
+    }
     setSending(true);
     try {
-      const recipients = phones.map((phone) => ({ phone, message: manualMessage.trim() }));
+      const recipients = phones.map((phone) => {
+        const student = findStudentByPhone(students, phone);
+        const message = student
+          ? renderMessageForStudent(templateBody, student, {
+            giris_linki: `${window.location.origin}${window.location.pathname}#/`,
+          })
+          : templateBody;
+        return {
+          phone,
+          message,
+          studentId: student?.id,
+          studentName: student?.name,
+          studentStatus: student?.status,
+        };
+      });
+      const unresolved = recipients.filter((r) => hasUnresolvedWhatsAppTemplateVars(r.message));
+      if (unresolved.length > 0) {
+        showToast('Mesajdaki şablon alanları doldurulamadı. Metni kontrol edin.', 'warning');
+        return;
+      }
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
       if (!config.enabled) {
@@ -515,11 +563,21 @@ const WhatsAppManagement: React.FC = () => {
         if (!phone) continue;
         recipients.push({
           phone,
-          message: bulkMessage.trim(),
+          message: renderMessageForStudent(bulkMessage.trim(), s, {
+            giris_linki: `${window.location.origin}${window.location.pathname}#/`,
+          }),
           studentId: s.id,
           studentName: s.name,
           studentStatus: s.status,
         });
+      }
+      const unresolved = recipients.filter((r) => hasUnresolvedWhatsAppTemplateVars(r.message));
+      if (unresolved.length > 0) {
+        showToast(
+          `${unresolved.length} mesajda doldurulmamış şablon alanı var (ör. form_linki). Metni düzenleyin veya ilgili modülden gönderin.`,
+          'warning',
+        );
+        return;
       }
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
@@ -548,7 +606,9 @@ const WhatsAppManagement: React.FC = () => {
           return phone
             ? {
                 phone,
-                message: groupMessage.trim(),
+                message: renderMessageForStudent(groupMessage.trim(), s, {
+                  giris_linki: `${window.location.origin}${window.location.pathname}#/`,
+                }),
                 studentId: s.id,
                 studentName: s.name,
                 studentStatus: s.status,
@@ -562,6 +622,14 @@ const WhatsAppManagement: React.FC = () => {
           studentName: string;
           studentStatus?: Student['status'];
         }[];
+      const unresolved = recipients.filter((r) => hasUnresolvedWhatsAppTemplateVars(r.message));
+      if (unresolved.length > 0) {
+        showToast(
+          'Grup mesajında doldurulmamış şablon alanı var. Metni düzenleyin veya öğrenciye özel alanları kaldırın.',
+          'warning',
+        );
+        return;
+      }
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
       showToast(`${r.sent + r.manual} veliye grup mesajı gönderildi.`, 'success');
@@ -845,7 +913,7 @@ const WhatsAppManagement: React.FC = () => {
       {view === 'templates' && (
         <Panel
           title="Mesaj Şablonları"
-          subtitle="Metinleri kaydedin; manuel ve toplu gönderimde şablondan yükleyin."
+          subtitle="Metinleri kaydedin; toplu/grup gönderimde {{değişkenler}} öğrenciye göre otomatik doldurulur."
           wide
           action={(
             <button

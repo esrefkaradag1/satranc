@@ -4416,6 +4416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setTrainingGroups((prev) => {
       if (prev.some((g) => g.name === name && g.branchOffice === office && g.discipline === discipline)) {
+        showToast(`Bu branşta "${name}" adlı grup zaten var.`, 'warning');
         return prev;
       }
       const next = [...prev, full];
@@ -4433,11 +4434,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (full.lessonSlots?.length) {
       void persistTrainingGroupLessons(full);
     }
-  }, [addActivityLog, syncGroupNames, auth, clubs, persistTrainingGroupLessons]);
+  }, [addActivityLog, syncGroupNames, auth, clubs, persistTrainingGroupLessons, showToast]);
 
   const updateTrainingGroup = useCallback((id: string, group: Partial<TrainingGroup>) => {
+    const existing = trainingGroups.find((g) => g.id === id);
+    if (!existing) return;
+
+    const nextName = (group.name ?? existing.name).trim();
+    const nextOffice = (group.branchOffice ?? existing.branchOffice).trim();
+    const nextDiscipline = (group.discipline ?? existing.discipline).trim();
+    const duplicate = trainingGroups.some(
+      (g) =>
+        g.id !== id
+        && g.name.trim().toLocaleLowerCase('tr-TR') === nextName.toLocaleLowerCase('tr-TR')
+        && normalizeClubKey(g.branchOffice) === normalizeClubKey(nextOffice)
+        && g.discipline.trim().toLocaleLowerCase('tr-TR') === nextDiscipline.toLocaleLowerCase('tr-TR'),
+    );
+    if (duplicate) {
+      showToast(`Bu branşta "${nextName}" adlı grup zaten var.`, 'warning');
+      return;
+    }
+
+    const oldName = existing.name.trim();
+    const nameChanged = nextName !== oldName;
+
     setTrainingGroups((prev) => {
-      const next = prev.map((g) => (g.id === id ? { ...g, ...group } : g));
+      const next = prev.map((g) => (g.id === id ? { ...g, ...group, name: nextName, branchOffice: nextOffice, discipline: nextDiscipline } : g));
       syncGroupNames(next);
       const updated = next.find((g) => g.id === id);
       const sb = getServiceSupabase();
@@ -4450,31 +4472,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return next;
     });
-  }, [syncGroupNames, auth, clubs, persistTrainingGroupLessons]);
 
-  const removeTrainingGroup = useCallback((id: string) => {
-    setTrainingGroups((prev) => {
-      const found = prev.find((g) => g.id === id);
-      const next = prev.filter((g) => g.id !== id);
-      if (found) {
-        addActivityLog({ user: CURRENT_USER, action: 'Grup Tanımı Silindi', target: found.name, type: 'warning' });
-        syncGroupNames(next);
-        void removeTrainingGroupLessons(id);
+    if (nameChanged) {
+      setStudents((prev) => {
+        const linked = prev.filter(
+          (s) => s.trainingGroupId === id || (s.group || '').trim() === oldName,
+        );
+        if (linked.length === 0) return prev;
+        const ids = new Set(linked.map((s) => s.id));
         const sb = getServiceSupabase();
         if (sb) {
-          void sb.from('training_groups').delete().eq('id', id).then(({ error }) => {
-            if (error) {
-              console.error('Supabase training_groups delete error:', error);
-              showToast('Grup veritabanından silinemedi. training_groups tablosunu kontrol edin.', 'warning');
-            }
-          });
-        } else {
-          showToast('Grup yalnızca bu cihazdan silindi. Supabase yazma anahtarı tanımlı değil.', 'warning');
+          for (const s of linked) {
+            void studentUpdateWithRetry(sb, s.id, { group: nextName, trainingGroupId: id } as Record<string, unknown>);
+          }
         }
+        return prev.map((s) => (ids.has(s.id) ? { ...s, group: nextName, trainingGroupId: id } : s));
+      });
+    }
+  }, [trainingGroups, syncGroupNames, auth, clubs, persistTrainingGroupLessons, showToast]);
+
+  const removeTrainingGroup = useCallback((id: string) => {
+    const found = trainingGroups.find((g) => g.id === id);
+    if (!found) return;
+    const groupName = found.name.trim();
+
+    // Gruba bağlı tüm öğrencilerden (aktif + dondurulmuş) grup bağını kaldır
+    setStudents((prev) => {
+      const linked = prev.filter(
+        (s) => s.trainingGroupId === id || (s.group || '').trim() === groupName,
+      );
+      if (linked.length === 0) return prev;
+      const ids = new Set(linked.map((s) => s.id));
+      const sb = getServiceSupabase();
+      if (sb) {
+        for (const s of linked) {
+          void studentUpdateWithRetry(sb, s.id, { group: '', trainingGroupId: null } as Record<string, unknown>);
+        }
+      }
+      return prev.map((s) =>
+        ids.has(s.id) ? { ...s, group: '', trainingGroupId: undefined } : s,
+      );
+    });
+
+    setTrainingGroups((prev) => {
+      const next = prev.filter((g) => g.id !== id);
+      addActivityLog({ user: CURRENT_USER, action: 'Grup Tanımı Silindi', target: found.name, type: 'warning' });
+      syncGroupNames(next);
+      void removeTrainingGroupLessons(id);
+      const sb = getServiceSupabase();
+      if (sb) {
+        void sb.from('training_groups').delete().eq('id', id).then(({ error }) => {
+          if (error) {
+            console.error('Supabase training_groups delete error:', error);
+            showToast('Grup veritabanından silinemedi. training_groups tablosunu kontrol edin.', 'warning');
+          }
+        });
+      } else {
+        showToast('Grup yalnızca bu cihazdan silindi. Supabase yazma anahtarı tanımlı değil.', 'warning');
       }
       return next;
     });
-  }, [addActivityLog, syncGroupNames, removeTrainingGroupLessons, showToast]);
+  }, [trainingGroups, addActivityLog, syncGroupNames, removeTrainingGroupLessons, showToast]);
 
   const addLessonPackage = useCallback((pkg: Omit<LessonPackage, 'id'>) => {
     const name = pkg.name.trim();

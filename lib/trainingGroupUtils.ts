@@ -410,6 +410,16 @@ export function studentsInTrainingGroup(students: Student[], group: TrainingGrou
   );
 }
 
+/** Aktif (dondurulmamış) öğrenciler — silme/kontenjan için */
+export function activeStudentsInTrainingGroup(students: Student[], group: TrainingGroup): Student[] {
+  return studentsInTrainingGroup(students, group).filter((s) => s.status !== 'inactive');
+}
+
+/** Bu gruba bağlı tüm öğrenciler (aktif + pasif) — grup silinince bağ koparmak için */
+export function studentIdsLinkedToTrainingGroup(students: Student[], group: TrainingGroup): string[] {
+  return studentsInTrainingGroup(students, group).map((s) => s.id);
+}
+
 /** Branş–grup tanımlarından şube listesi (eski şube listesiyle birleşik) */
 export function mergeBranchOffices(
   legacyOffices: string[],

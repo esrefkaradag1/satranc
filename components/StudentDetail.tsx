@@ -3592,7 +3592,16 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
          <button
            type="button"
            onClick={() => {
-             updateStudent(student.id, { status: statusModalValue });
+             if (statusModalValue === 'inactive') {
+               updateStudent(student.id, {
+                 status: 'inactive',
+                 group: '',
+                 trainingGroupId: undefined,
+               });
+               showToast('Öğrenci donduruldu; grup bağı kaldırıldı.', 'success');
+             } else {
+               updateStudent(student.id, { status: 'active' });
+             }
              setShowStatusModal(false);
            }}
            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm"

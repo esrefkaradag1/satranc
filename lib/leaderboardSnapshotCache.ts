@@ -1,7 +1,8 @@
 import type { LeaderboardEntry, LeaderboardPeriod, LeaderboardRankMode } from './leaderboardUtils';
 import type { LeaderboardPointSettings } from './leaderboardPointSettings';
 
-const STORAGE_KEY = 'netchess_leaderboard_snapshot_v1';
+const STORAGE_KEY = 'netchess_leaderboard_snapshot_v2';
+const LEGACY_STORAGE_KEY = 'netchess_leaderboard_snapshot_v1';
 /** Günlük otomatik yenileme saati (yerel saat). */
 export const LEADERBOARD_DAILY_REFRESH_HOUR = 6;
 
@@ -12,7 +13,7 @@ type SnapshotRecord = {
 };
 
 type SnapshotFile = {
-  version: 1;
+  version: 2;
   snapshots: Record<string, SnapshotRecord>;
 };
 
@@ -24,17 +25,46 @@ function simpleHash(input: string): string {
   return Math.abs(h).toString(36);
 }
 
+function entriesHaveActivity(entries: LeaderboardEntry[] | undefined): boolean {
+  return !!entries?.some((e) => (e.puzzles ?? 0) > 0 || (e.games ?? 0) > 0 || (e.score ?? 0) > 0);
+}
+
 function readFile(): SnapshotFile {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { version: 1, snapshots: {} };
-    const parsed = JSON.parse(raw) as SnapshotFile;
-    if (!parsed || parsed.version !== 1 || typeof parsed.snapshots !== 'object') {
-      return { version: 1, snapshots: {} };
+    if (raw) {
+      const parsed = JSON.parse(raw) as SnapshotFile;
+      if (parsed && parsed.version === 2 && typeof parsed.snapshots === 'object') {
+        return parsed;
+      }
     }
-    return parsed;
   } catch {
-    return { version: 1, snapshots: {} };
+    /* ignore */
+  }
+
+  // Eski v1 anahtarlarını mümkün olduğunca aktar
+  try {
+    const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!legacyRaw) return { version: 2, snapshots: {} };
+    const legacy = JSON.parse(legacyRaw) as { snapshots?: Record<string, SnapshotRecord> };
+    const snapshots: Record<string, SnapshotRecord> = {};
+    for (const [key, value] of Object.entries(legacy.snapshots ?? {})) {
+      if (!value?.entries?.length) continue;
+      // v1: periodStart|period|rankMode|settingsHash|peerHash
+      const parts = key.split('|');
+      if (parts.length >= 4) {
+        const migratedKey = `legacy|${parts[0]}|${parts[1]}|${parts[2]}|${parts[3]}`;
+        const existing = snapshots[migratedKey];
+        if (!existing || (value.cachedAt ?? 0) >= (existing.cachedAt ?? 0)) {
+          snapshots[migratedKey] = value;
+        }
+      }
+    }
+    const file: SnapshotFile = { version: 2, snapshots };
+    writeFile(file);
+    return file;
+  } catch {
+    return { version: 2, snapshots: {} };
   }
 }
 
@@ -46,16 +76,20 @@ function writeFile(file: SnapshotFile) {
   }
 }
 
+/**
+ * Snapshot anahtarı — öğrenci listesi hash'i YOK.
+ * Peer listesi büyüdükçe / değiştikçe önbellek kaybolmasın.
+ */
 export function leaderboardSnapshotKey(opts: {
-  peerIds: string[];
+  clubScope: string;
   period: LeaderboardPeriod;
   rankMode: LeaderboardRankMode;
   periodStartMs: number;
   pointSettings: LeaderboardPointSettings;
 }): string {
-  const peers = [...opts.peerIds].sort().join(',');
+  const club = (opts.clubScope || 'club').trim().toLocaleLowerCase('tr-TR') || 'club';
   const settingsKey = simpleHash(JSON.stringify(opts.pointSettings));
-  return `${opts.periodStartMs}|${opts.period}|${opts.rankMode}|${settingsKey}|${simpleHash(peers)}`;
+  return `${club}|${opts.periodStartMs}|${opts.period}|${opts.rankMode}|${settingsKey}`;
 }
 
 /** Son günlük yenileme eşiği (bugün 06:00 veya henüz gelmediyse dün 06:00). */
@@ -85,6 +119,38 @@ export function readLeaderboardSnapshot(key: string): SnapshotRecord | null {
   return hit;
 }
 
+/** Aynı dönem+mod için en güncel snapshot (kulüp anahtarı farklı olsa bile). */
+export function findBestLeaderboardSnapshot(opts: {
+  preferredKey: string;
+  period: LeaderboardPeriod;
+  rankMode: LeaderboardRankMode;
+  periodStartMs: number;
+}): SnapshotRecord | null {
+  const preferred = readLeaderboardSnapshot(opts.preferredKey);
+  if (preferred?.entries.length) return preferred;
+
+  const file = readFile();
+  let best: SnapshotRecord | null = null;
+  for (const [key, value] of Object.entries(file.snapshots)) {
+    if (!value?.entries?.length) continue;
+    const parts = key.split('|');
+    // club|periodStart|period|rankMode|settings  OR  legacy|periodStart|period|rankMode|settings
+    const startIdx = key.startsWith('legacy|') ? 1 : 1;
+    const periodStart = parts[startIdx];
+    const period = parts[startIdx + 1];
+    const rankMode = parts[startIdx + 2];
+    if (periodStart !== String(opts.periodStartMs) || period !== opts.period || rankMode !== opts.rankMode) {
+      continue;
+    }
+    if (!best || value.cachedAt > best.cachedAt) best = value;
+  }
+  return best;
+}
+
+/**
+ * Snapshot yaz. Gelen tablo tamamen boş/sıfırsa ve eski kayıt anlamlıysa eskiyi koru.
+ * (Caller zaten merge etmiş olmalı; bu ek güvenlik.)
+ */
 export function writeLeaderboardSnapshot(
   key: string,
   entries: LeaderboardEntry[],
@@ -92,10 +158,21 @@ export function writeLeaderboardSnapshot(
 ) {
   if (!key || entries.length === 0) return;
   const file = readFile();
+  const existing = file.snapshots[key];
+
+  if (!entriesHaveActivity(entries) && entriesHaveActivity(existing?.entries) && existing) {
+    file.snapshots[key] = {
+      ...existing,
+      peerCount: Math.max(existing.peerCount, peerCount),
+    };
+    writeFile(file);
+    return;
+  }
+
   file.snapshots[key] = {
     entries,
     cachedAt: Date.now(),
-    peerCount,
+    peerCount: Math.max(peerCount, existing?.peerCount ?? 0),
   };
   const keys = Object.keys(file.snapshots);
   if (keys.length > 40) {

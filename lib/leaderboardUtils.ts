@@ -11,6 +11,7 @@ import {
   emptyGameResultsByMode,
   normalizeScoringMode,
 } from './leaderboardPointSettings';
+import { mergePeriodStatsMax } from './leaderboardPeriodCache';
 
 export type { LeaderboardPointSettings, GameResultsByMode } from './leaderboardPointSettings';
 export {
@@ -259,4 +260,99 @@ export function entryForStudent(
     gameResultsByMode,
     platform,
   };
+}
+
+type LeaderboardEntryRow = Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>;
+
+function pickModeRating(
+  a: LeaderboardPlatformSnapshot['rapid'],
+  b: LeaderboardPlatformSnapshot['rapid'],
+) {
+  const ratingA = a?.rating ?? 0;
+  const ratingB = b?.rating ?? 0;
+  if (ratingB > ratingA) return b;
+  if (ratingA > ratingB) return a;
+  const gamesA = a?.games ?? 0;
+  const gamesB = b?.games ?? 0;
+  return gamesB >= gamesA ? b : a;
+}
+
+function mergePlatformSnapshots(
+  prev: LeaderboardPlatformSnapshot,
+  next: LeaderboardPlatformSnapshot,
+): LeaderboardPlatformSnapshot {
+  const rank = (p: LeaderboardPlatformSnapshot) =>
+    p.primaryPlatform === 'both' ? 3 : p.primaryPlatform === 'lichess' || p.primaryPlatform === 'chesscom' ? 2 : 1;
+  const base = rank(next) >= rank(prev) ? next : prev;
+  const other = base === next ? prev : next;
+  const ukd = Math.max(base.ukd ?? 0, other.ukd ?? 0);
+  const fideElo = Math.max(base.fideElo ?? 0, other.fideElo ?? 0);
+  return {
+    ...base,
+    lichessUsername: base.lichessUsername || other.lichessUsername,
+    chessComUsername: base.chessComUsername || other.chessComUsername,
+    rapid: pickModeRating(base.rapid, other.rapid),
+    blitz: pickModeRating(base.blitz, other.blitz),
+    bullet: pickModeRating(base.bullet, other.bullet),
+    classical: pickModeRating(base.classical, other.classical),
+    puzzle: pickModeRating(base.puzzle, other.puzzle),
+    ukd: ukd > 0 ? ukd : undefined,
+    fideElo: fideElo > 0 ? fideElo : undefined,
+  };
+}
+
+function mergeLeaderboardEntryRow(prev: LeaderboardEntryRow, next: LeaderboardEntryRow): LeaderboardEntryRow {
+  const merged = mergePeriodStatsMax(
+    {
+      puzzles: prev.puzzles,
+      puzzleWrong: prev.puzzleWrong ?? 0,
+      games: prev.games,
+      internalPuzzles: prev.internalPuzzles,
+      wins: prev.wins,
+      draws: prev.draws,
+      losses: prev.losses,
+      gameResultsByMode: prev.gameResultsByMode,
+    },
+    {
+      puzzles: next.puzzles,
+      puzzleWrong: next.puzzleWrong ?? 0,
+      games: next.games,
+      internalPuzzles: next.internalPuzzles,
+      wins: next.wins,
+      draws: next.draws,
+      losses: next.losses,
+      gameResultsByMode: next.gameResultsByMode,
+    },
+  );
+  return {
+    ...prev,
+    name: next.name || prev.name,
+    initials: next.initials || prev.initials,
+    group: next.group || prev.group,
+    puzzles: merged.puzzles,
+    puzzleWrong: merged.puzzleWrong,
+    games: merged.games,
+    internalPuzzles: merged.internalPuzzles,
+    wins: merged.wins,
+    draws: merged.draws,
+    losses: merged.losses,
+    gameResultsByMode: merged.gameResultsByMode,
+    platform: mergePlatformSnapshots(prev.platform, next.platform),
+  };
+}
+
+/** API yenilemesinde mevcut tabloyu düşürmeden birleştir. */
+export function mergeLeaderboardEntryRows(
+  prev: LeaderboardEntryRow[],
+  next: LeaderboardEntryRow[],
+  rankMode: LeaderboardRankMode = 'activity',
+  pointSettings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
+): LeaderboardEntry[] {
+  const byId = new Map<string, LeaderboardEntryRow>();
+  for (const row of prev) byId.set(row.studentId, row);
+  for (const row of next) {
+    const existing = byId.get(row.studentId);
+    byId.set(row.studentId, existing ? mergeLeaderboardEntryRow(existing, row) : row);
+  }
+  return rankLeaderboardEntries([...byId.values()], rankMode, pointSettings);
 }

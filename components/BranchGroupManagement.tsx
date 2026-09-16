@@ -7,7 +7,7 @@ import { useApp } from '../AppContext';
 import type { DisciplineBranch, GroupLessonSlot, LessonPackage, TrainingGroup } from '../types';
 import {
   WEEKDAY_OPTIONS, applyGroupDefaultsToStudent, emptyLessonSlot, formatLessonSchedule, getGroupMonthlyFee,
-  studentsInTrainingGroup,
+  activeStudentsInTrainingGroup, studentsInTrainingGroup,
 } from '../lib/trainingGroupUtils';
 import { coachesForClub } from '../lib/orgScope';
 import { normalizeClubKey } from '../lib/clubScope';
@@ -145,11 +145,13 @@ const BranchGroupManagement: React.FC = () => {
     });
   }, [clubs, branchOfficeRecords, isClubUser]);
 
-  const countStudentsInGroup = (group: TrainingGroup) => studentsInTrainingGroup(students, group).length;
+  const countStudentsInGroup = (group: TrainingGroup) => activeStudentsInTrainingGroup(students, group).length;
+  const countFrozenInGroup = (group: TrainingGroup) =>
+    studentsInTrainingGroup(students, group).filter((s) => s.status === 'inactive').length;
 
   const enrolledInModalGroup = useMemo(() => {
     if (!studentModalGroup) return new Set<string>();
-    return new Set(studentsInTrainingGroup(students, studentModalGroup).map((s) => s.id));
+    return new Set(activeStudentsInTrainingGroup(students, studentModalGroup).map((s) => s.id));
   }, [students, studentModalGroup]);
 
   const modalStudentOptions = useMemo(() => {
@@ -365,10 +367,23 @@ const BranchGroupManagement: React.FC = () => {
     if (!groupParentBranch) return;
     const name = groupForm.name.trim();
     if (!name) return;
+    const office = groupParentBranch.branchOffice;
+    const discipline = groupParentBranch.name;
+    const duplicate = trainingGroups.some(
+      (g) =>
+        g.name.trim().toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR')
+        && normalizeClubKey(g.branchOffice) === normalizeClubKey(office)
+        && g.discipline.trim().toLocaleLowerCase('tr-TR') === discipline.trim().toLocaleLowerCase('tr-TR')
+        && (!editingGroup || g.id !== editingGroup.id),
+    );
+    if (duplicate) {
+      showToast(`Bu branşta "${name}" adlı grup zaten var.`, 'warning');
+      return;
+    }
     const payload = {
       name,
-      branchOffice: groupParentBranch.branchOffice,
-      discipline: groupParentBranch.name,
+      branchOffice: office,
+      discipline,
       monthlyFee: groupForm.monthlyFee.trim() ? Number(groupForm.monthlyFee) : undefined,
       capacity: Number(groupForm.capacity) || 0,
       lessonSlots: groupForm.lessonSlots.filter((s) => s.dayLabel && s.startTime),
@@ -376,8 +391,10 @@ const BranchGroupManagement: React.FC = () => {
     };
     if (editingGroup) {
       updateTrainingGroup(editingGroup.id, payload);
+      showToast('Grup güncellendi.', 'success');
     } else {
       addTrainingGroup(payload);
+      showToast('Grup eklendi.', 'success');
     }
     setShowGroupModal(false);
   };
@@ -830,6 +847,7 @@ const BranchGroupManagement: React.FC = () => {
                           <tbody className="divide-y divide-white/[0.04]">
                             {branchGroups.map((group, gIdx) => {
                               const enrolled = countStudentsInGroup(group);
+                              const frozen = countFrozenInGroup(group);
                               const fee = getGroupMonthlyFee(group, disciplineBranches);
                               return (
                                 <tr key={group.id} className="hover:bg-white/[0.02]">
@@ -854,7 +872,7 @@ const BranchGroupManagement: React.FC = () => {
                                       title="Gruba öğrenci ekle"
                                       className="px-1.5 py-0.5 rounded-md bg-teal-500/10 text-teal-300 text-[11px] font-bold hover:bg-teal-500/20 tabular-nums"
                                     >
-                                      {enrolled}/{group.capacity}
+                                      {enrolled}/{group.capacity || '∞'}{frozen > 0 ? ` · ${frozen} donuk` : ''}
                                     </button>
                                   </td>
                                   <td data-label="Antrenör" className="py-2.5 pr-2 text-slate-400 text-[11px] max-w-[120px] truncate">
@@ -882,14 +900,20 @@ const BranchGroupManagement: React.FC = () => {
                                       <button
                                         type="button"
                                         onClick={async () => {
-                                          const count = countStudentsInGroup(group);
-                                          if (count > 0) {
-                                            showToast(`${group.name} grubunda ${count} öğrenci var. Önce öğrencileri taşıyın.`, 'warning');
+                                          const activeCount = countStudentsInGroup(group);
+                                          const frozenCount = countFrozenInGroup(group);
+                                          if (activeCount > 0) {
+                                            showToast(
+                                              `${group.name} grubunda ${activeCount} aktif öğrenci var. Önce aktif öğrencileri taşıyın.`,
+                                              'warning',
+                                            );
                                             return;
                                           }
                                           const ok = await confirmDialog({
                                             title: 'Grubu sil',
-                                            message: `"${group.name}" grubunu silmek istediğinize emin misiniz?`,
+                                            message: frozenCount > 0
+                                              ? `"${group.name}" grubunda ${frozenCount} dondurulmuş öğrenci var. Grup silinince bu öğrencilerden grup bağı kaldırılacak. Devam edilsin mi?`
+                                              : `"${group.name}" grubunu silmek istediğinize emin misiniz?`,
                                             confirmLabel: 'Sil',
                                             variant: 'danger',
                                           });
