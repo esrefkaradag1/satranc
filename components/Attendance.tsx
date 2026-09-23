@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { coachesForClub } from '../lib/orgScope';
+import { displayablePhotoUrl } from '../lib/studentPhotoUpload';
 import {
   fetchLichessUser,
   fetchLichessRecentGames,
@@ -197,16 +198,26 @@ const StudentPhoto: React.FC<{
   textClass?: string;
   onZoom?: (photo: { url: string; name: string }) => void;
 }> = ({ name, photoUrl, sizeClass = 'w-9 h-9', textClass = 'text-[10px]', onZoom }) => {
+  const [broken, setBroken] = useState(false);
   const initials = name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
-  if (photoUrl) {
+  const resolved = broken ? undefined : displayablePhotoUrl(photoUrl);
+  if (resolved) {
     return (
       <button
         type="button"
-        onClick={() => onZoom?.({ url: photoUrl, name })}
+        onClick={() => onZoom?.({ url: resolved, name })}
         className={`${sizeClass} rounded-lg border border-white/10 cursor-zoom-in hover:ring-2 hover:ring-indigo-500/40 transition-all overflow-hidden shrink-0 p-0`}
         title={`${name} — büyütmek için tıklayın`}
       >
-        <img src={photoUrl} alt={name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+        <img
+          src={resolved}
+          alt={name}
+          className="w-full h-full object-cover"
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          decoding="async"
+          onError={() => setBroken(true)}
+        />
       </button>
     );
   }
@@ -599,7 +610,7 @@ const Attendance: React.FC = () => {
     if (!listFetched) return [];
     const dateNorm = listDate.slice(0, 10);
     const byDate = attendanceRecords.filter((r) => r.date && r.date.slice(0, 10) === dateNorm);
-    const studentMap = new Map<string, { id: string; name: string; group?: string }>(students.map((s) => [s.id, s]));
+    const studentMap = new Map<string, Student>(students.map((s) => [s.id, s]));
     const rows = new Map<string, {
       key: string;
       date: string;

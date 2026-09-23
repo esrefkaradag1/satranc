@@ -4,6 +4,7 @@ import {
   getExpectedDuesForYear,
   isMonthBeforeRegistration,
   isMonthDuesWaived,
+  monthKey,
 } from './trainingGroupUtils';
 import { filterDuesTransactions } from './transactionUtils';
 
@@ -82,6 +83,8 @@ export type DuesMonthCell = {
   amountLabel: string;
   paidLabel: string | null;
   remainingLabel: string | null;
+  /** Ay için girilen aidat notu (pasif dönem, eksik hafta vb.) */
+  note: string | null;
   inactive: boolean;
 };
 
@@ -200,6 +203,7 @@ export function getDuesMonthCell(
     amountLabel,
     paidLabel,
     remainingLabel,
+    note: student.duesOverrideNotes?.[monthKey(calendarYear, monthNum)]?.trim() || null,
     inactive: inactiveMonth,
   };
 }

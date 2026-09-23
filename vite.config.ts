@@ -48,6 +48,7 @@ const DEV_GET_ROUTES = new Set([
   '/api/whatsapp',
   '/api/chesscom-member-stats',
   '/api/chesscom-recent-puzzles',
+  '/api/chesscom-puzzle-chart',
   '/api/chesscom-games',
   '/api/lichess-oauth-status',
   '/api/lichess-oauth-account',
@@ -150,6 +151,32 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                   } else {
                     result = { status: 200, body: await upstream.json() };
                   }
+                }
+              } else if (route === '/api/chesscom-puzzle-chart') {
+                const username = parsed.searchParams.get('username')?.trim().toLowerCase() ?? '';
+                const profileUrl = username
+                  ? `https://www.chess.com/member/${encodeURIComponent(username)}/stats/puzzles`
+                  : undefined;
+                if (!username) {
+                  result = { status: 200, body: { dailyStats: [], unavailable: true } };
+                } else {
+                  const upstream = await fetch(
+                    `https://www.chess.com/callback/tactics/stats/${encodeURIComponent(username)}/chart`,
+                    {
+                      headers: {
+                        Accept: 'application/json',
+                        'User-Agent': 'NetChessAcademy/1.0',
+                        Referer: profileUrl,
+                      },
+                      signal: AbortSignal.timeout(12000),
+                    },
+                  );
+                  result = upstream.ok
+                    ? { status: 200, body: await upstream.json() }
+                    : {
+                        status: 200,
+                        body: { dailyStats: [], unavailable: true, upstreamStatus: upstream.status },
+                      };
                 }
               } else if (route === '/api/chesscom-games') {
                 const username = parsed.searchParams.get('username')?.trim().toLowerCase() ?? '';

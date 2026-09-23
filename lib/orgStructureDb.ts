@@ -138,6 +138,67 @@ export function clubIdForOfficeRecord(
   return partial?.id;
 }
 
+/**
+ * Kulüp/şube adından kulüp kimliği çözer.
+ *
+ * Antrenör kayıtlarında `branch` çoğu kez kulübün kısa adıdır ("AFYON SATRANÇ"),
+ * öğrenciler ise kulübün tam adıyla ("AFYON SATRANÇ SPOR KULÜBÜ") kayıtlıdır.
+ * Bu durumda ad eşleşmesi tutmaz ve antrenör paneli boş kalır; sırayla
+ * tam ad → şube kaydı → tekil kısmi ad eşleşmesi denenir.
+ */
+export function resolveClubIdForBranchName(
+  branchName: string | undefined | null,
+  records: BranchOfficeRecord[] = [],
+  clubs: { id: string; name: string }[] = [],
+): string | undefined {
+  const trimmed = (branchName || '').trim();
+  if (!trimmed) return undefined;
+  const key = normalizeClubKey(trimmed);
+
+  const exact = clubs.find((c) => normalizeClubKey(c.name) === key);
+  if (exact) return exact.id;
+
+  // Aynı adlı şube kaydı üzerinden (kulübü hâlâ mevcutsa)
+  const office = records.find((r) => normalizeClubKey(r.name) === key && r.clubId?.trim());
+  if (office?.clubId && (clubs.length === 0 || clubs.some((c) => c.id === office.clubId))) {
+    return office.clubId;
+  }
+
+  // Kısmi ad eşleşmesi — yalnızca tek aday varsa (yanlış kulübe düşmemek için)
+  const partial = clubs.filter((c) => {
+    const ck = normalizeClubKey(c.name);
+    if (!ck || ck === key) return false;
+    return ck.includes(key) || key.includes(ck);
+  });
+  return partial.length === 1 ? partial[0].id : undefined;
+}
+
+/**
+ * Antrenör oturumu için kulüp kapsamı: kulüp kimliği + kullanılacak şube adı.
+ *
+ * Şube adı yalnızca kayıtlı şube gerçekten bu kulübe bağlıysa korunur; aksi
+ * halde (ör. kulüp adı değişmiş, şube kaydı eski kulüpte kalmış) kulübün
+ * kayıtlı adına sabitlenir.
+ */
+export function resolveCoachAuthScope(
+  coachBranch: string | undefined | null,
+  coachClubId: string | undefined | null,
+  records: BranchOfficeRecord[] = [],
+  clubs: { id: string; name: string }[] = [],
+): { clubId?: string; branch: string } {
+  const branch = (coachBranch || '').trim();
+  const clubId = coachClubId?.trim() || resolveClubIdForBranchName(branch, records, clubs);
+  if (!clubId) return { clubId: undefined, branch };
+
+  const branchKey = normalizeClubKey(branch);
+  const club = clubs.find((c) => c.id === clubId);
+  const officeInClub =
+    (!!branch && records.some((r) => normalizeClubKey(r.name) === branchKey && r.clubId?.trim() === clubId))
+    || (!!club && normalizeClubKey(club.name) === branchKey);
+
+  return { clubId, branch: officeInClub ? branch : (club?.name.trim() || branch) };
+}
+
 function officeDisplayName(
   record: BranchOfficeRecord,
   clubs: { id: string; name: string }[] = [],

@@ -125,6 +125,9 @@ export const StudentDuesCalendar: React.FC<Props> = ({
                 {cell.remainingLabel ? (
                   <div className="mt-1 text-center text-[10px] text-rose-300/90">{cell.remainingLabel}</div>
                 ) : null}
+                {cell.note ? (
+                  <div className="mt-1 text-center text-[9px] text-slate-500 leading-tight">{cell.note}</div>
+                ) : null}
               </div>
             );
           })}

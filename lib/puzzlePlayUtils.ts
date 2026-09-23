@@ -1,7 +1,7 @@
-import { Chess } from 'chess.js';
+import { Chess, type Square } from 'chess.js';
 import type { Puzzle, HomeworkAssignment } from '../types';
 import type { StudyChapter } from './studyTypes';
-import { mainlineSansFromTree, mergeMainlineMoves } from './studySync/moveList';
+import { mainlineSansFromTree } from './studySync/moveList';
 
 const DEFAULT_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -130,7 +130,7 @@ export function isCoachRecordedStudyChapter(
 }
 
 export function isLichessStylePuzzle(
-  puzzle: Pick<Puzzle, 'source' | 'lichessThemes' | 'solution' | 'gamePgn' | 'lichessId'>,
+  puzzle: Pick<Puzzle, 'source' | 'lichessThemes' | 'gamePgn' | 'lichessId'> & { solution?: string[] },
 ): boolean {
   if (puzzle.source === 'lichess') return true;
   if (puzzle.lichessThemes) return true;
@@ -167,7 +167,7 @@ export function isMoveLegalForSideToMove(fen: string, moveStr: string): boolean 
     const probe = resolveExpectedMoveSquares(fen, moveStr);
     if (!probe) return false;
     const g = new Chess(fen);
-    const piece = g.get(probe.from as `${string}${number}`);
+    const piece = g.get(probe.from as Square);
     if (!piece || piece.color !== g.turn()) return false;
     if (looksLikeCastlingUci(moveStr) && piece.type !== 'k') return false;
     return applyPuzzleMove(new Chess(fen), moveStr) != null;
@@ -938,7 +938,7 @@ function resolveWorkingSolution(fen: string, moves: string[]): string[] {
 function isLichessPreSetupPattern(
   rawFen: string,
   rawSolution: string[],
-  puzzle: Pick<Puzzle, 'source' | 'lichessThemes' | 'solution' | 'gamePgn' | 'lichessId'>,
+  puzzle: Pick<Puzzle, 'source' | 'lichessThemes' | 'gamePgn' | 'lichessId'>,
 ): boolean {
   if (puzzle.source === 'custom') return false;
   if (!isLichessStylePuzzle(puzzle) || rawSolution.length < 2) return false;
@@ -958,7 +958,7 @@ function isLichessPreSetupPattern(
 function tryDirectStudentLine(
   rawFen: string,
   rawSolution: string[],
-  puzzle: Pick<Puzzle, 'source' | 'lichessThemes' | 'solution' | 'gamePgn' | 'lichessId'>,
+  puzzle: Pick<Puzzle, 'source' | 'lichessThemes' | 'gamePgn' | 'lichessId'>,
 ): NormalizedPuzzlePlay | null {
   const turnAtStart = new Chess(rawFen).turn();
 
@@ -969,7 +969,7 @@ function tryDirectStudentLine(
   for (let i = 0; i < rawSolution.length; i++) {
     const probe = resolveExpectedMoveSquares(rawFen, rawSolution[i]!);
     if (!probe) continue;
-    const piece = new Chess(rawFen).get(probe.from as `${string}${number}`);
+    const piece = new Chess(rawFen).get(probe.from as Square);
     if (!piece || piece.color !== turnAtStart) continue;
     if (!canReplayMovesFrom(rawFen, rawSolution, i)) continue;
 
@@ -1403,19 +1403,26 @@ export function stripLeadingOpponentSetup(
   };
 }
 
-/** chapter.moves + seedTree ana hattını birleştir (antrenör REC ile kaydettiğinde). */
+/**
+ * Hamle Bul çözüm hattı.
+ * Kayıtlı `chapter.moves` varsa o esas alınır — seedTree eski/silinmiş hamleleri
+ * geri getirmesin (antrenör düzelttikten sonra öğrencide ilk hamlenin kalması budur).
+ * moves boşsa seedTree ana hattına düşülür.
+ */
 export function resolveStudyChapterSolutionMoves(
   chapter: Pick<StudyChapter, 'fen' | 'moves' | 'seedTree'>,
 ): string[] {
   const legacy = (chapter.moves ?? []).filter(Boolean);
+  if (legacy.length > 0) return legacy;
+
   const seed = chapter.seedTree;
-  if (!seed?.rootId || !seed.mainline || seed.mainline.length <= 1) {
+  // `seed.mainline` bozuk kaydedilmiş olabilir (ör. ["root"]); düğüm zinciri esastır.
+  if (!seed?.rootId || !seed.nodes?.[seed.rootId]) {
     return legacy;
   }
   try {
     const rootFen = chapter.fen?.trim() || DEFAULT_FEN;
-    const fromTree = mainlineSansFromTree(seed, rootFen);
-    return mergeMainlineMoves(legacy, fromTree);
+    return mainlineSansFromTree(seed, rootFen);
   } catch {
     return legacy;
   }
@@ -1440,7 +1447,13 @@ function inferPuzzleSetupPly(
   return 0;
 }
 
-/** Çözüm hattı kurulumdan sonra başlıyorsa (ör. gösterim + hxg5). */
+/**
+ * Çözüm hattı kurulumdan sonra başlıyorsa (ör. gösterim + hxg5).
+ *
+ * En KISA kurulum öneki seçilir: öğrenci, hattın kendi sırasının geldiği ilk
+ * noktadan itibaren tüm hamleleri kendisi bulur. (Aksi halde antrenörün
+ * kaydettiği hat kurulum sayılıp öğrenciye yalnızca son hamle kalıyordu.)
+ */
 function inferPuzzleSetupPlyWithSolutionSuffix(
   rawFen: string,
   rawMoves: string[],
@@ -1457,7 +1470,7 @@ function inferPuzzleSetupPlyWithSolutionSuffix(
     return 0;
   }
 
-  for (let setupPly = rawMoves.length - 1; setupPly >= 0; setupPly -= 1) {
+  for (let setupPly = 0; setupPly < rawMoves.length; setupPly += 1) {
     try {
       const game = new Chess(rawFen);
       for (let i = 0; i < setupPly; i++) {
@@ -1471,6 +1484,23 @@ function inferPuzzleSetupPlyWithSolutionSuffix(
       continue;
     }
   }
+  return 0;
+}
+
+/**
+ * Antrenör REC sonrası yazılacak puzzleSetupPly.
+ *
+ * Hamle Bul'da öğrenci kayıtlı hattın tamamını sırayla bulur.
+ * Eski kural (sıra öğrencideyse tüm hat = kurulum) ara hamleleri yutup
+ * tahtayı son pozisyona getiriyordu — bu yüzden burada 0 döner.
+ * Bilinçli kurulum: önceki puzzleSetupPly korunur (StudyPage).
+ */
+export function inferStudyPuzzleSetupPly(
+  _rawFen: string,
+  rawMoves: string[],
+  _studentColor: 'w' | 'b',
+): number {
+  if (!rawMoves.length) return 0;
   return 0;
 }
 
@@ -1518,15 +1548,26 @@ export function normalizeStudyChapterPuzzle(chapter: {
 
   if (fromOrientation && rawSolution.length > 0) {
     const coachRecorded = isCoachRecordedStudyChapter(chapter as StudyChapter);
-    const explicitSetup = chapter.puzzleSetupPly != null && chapter.puzzleSetupPly > 0;
 
-    // Antrenör REC / SAN hattı: kurulum hamlelerini ayır; öğrenci hattındaki her hamleyi kendisi bulur.
+    // Antrenör REC / SAN: öğrenci kayıtlı hattın tamamını bulur.
+    // Otomatik "kurulum çıkarımı" KULLANILMAZ — eski puzzleSetupPly=len-1
+    // kayıtları ara hamleleri yutup yalnızca son hamleyi bırakıyordu.
     if (coachRecorded) {
+      const ply = chapter.puzzleSetupPly;
+      let setupPly = 0;
+      if (ply != null && ply >= rawSolution.length) {
+        // Bilinçli: henüz çözüm yok, yalnızca kurulum pozisyonu
+        setupPly = rawSolution.length;
+      } else if (ply != null && ply > 0 && ply <= rawSolution.length - 2) {
+        // En az 2 çözüm hamlesi kalan açık kurulum öneki
+        setupPly = ply;
+      }
+      // ply === length-1 → eski hata; 0 kabul edilerek tüm hat öğrenciye verilir
       const split = splitPuzzleSetupAndSolution(
         rawFen,
         rawSolution,
         fromOrientation,
-        explicitSetup ? chapter.puzzleSetupPly : undefined,
+        setupPly,
       );
       return {
         startFen: split.startFen,
@@ -1641,7 +1682,7 @@ export function normalizeStudyChapterPuzzle(chapter: {
         points: 0,
         difficulty: '',
         theme: '',
-      } as Puzzle)
+      } as unknown as Puzzle)
     : normalized;
   return {
     startFen: repaired.startFen,

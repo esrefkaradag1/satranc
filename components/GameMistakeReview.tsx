@@ -159,7 +159,7 @@ export const GameMistakeReview: React.FC<GameMistakeReviewProps> = ({
 
       if (!result.ok) {
         setError(
-          result.reason === 'parse'
+          ('reason' in result ? result.reason : 'empty') === 'parse'
             ? 'Oyun PGN formatı okunamadı. Chess.com saat notları temizlense de hamle listesi çıkarılamadı.'
             : 'PGN içinde analiz edilecek hamle bulunamadı.',
         );

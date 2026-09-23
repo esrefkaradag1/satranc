@@ -3,7 +3,7 @@ import {
   exchangeLichessOAuthCode,
   getLichessOAuthRedirectUriServer,
   saveStudentLichessOAuth,
-} from '../lib/lichessOAuthServer';
+} from '../lichessOAuthServer';
 
 type Req = {
   method?: string;
@@ -58,7 +58,7 @@ export default async function handler(req: Req, res: Res) {
 
   const exchanged = await exchangeLichessOAuthCode({ code, codeVerifier, redirectUri });
   if (!exchanged.ok) {
-    res.status(400).json({ error: exchanged.error });
+    res.status(400).json({ error: 'error' in exchanged ? exchanged.error : 'unknown' });
     return;
   }
 

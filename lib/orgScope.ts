@@ -59,6 +59,31 @@ export function filterStudentsByCoach(
   return students.filter((s) => idSet.has(s.id));
 }
 
+/**
+ * Aynı e-posta/telefon ile birden fazla antrenör kaydı varsa (kulüp adı
+ * değişince oluşan kopyalar) fiilen kullanılan kaydı seçer: öğrenci/grup
+ * ataması olan, kulüp adıyla uyumlu ve rol/kulüp bağı tanımlı kayıt önceliklidir.
+ */
+export function pickPrimaryCoachRecord(
+  candidates: Coach[],
+  students: Student[] = [],
+  trainingGroups: TrainingGroup[] = [],
+  clubs: { id: string; name: string }[] = [],
+): Coach | undefined {
+  if (candidates.length <= 1) return candidates[0];
+  const clubNameKeys = new Set(clubs.map((c) => normalizeClubKey(c.name)));
+  const score = (coach: Coach): number => {
+    let total = 0;
+    if (filterStudentsByCoach(students, coach.id, trainingGroups).length > 0) total += 4;
+    if (trainingGroups.some((g) => (g.coachIds ?? []).some((id) => id?.trim() === coach.id))) total += 3;
+    if (clubNameKeys.has(normalizeClubKey(coach.branch))) total += 2;
+    if (coach.clubId?.trim()) total += 1;
+    if (coach.roleId?.trim()) total += 1;
+    return total;
+  };
+  return [...candidates].sort((a, b) => score(b) - score(a))[0];
+}
+
 export function filterTrainingGroupsByCoach(
   trainingGroups: TrainingGroup[],
   coachId: string,

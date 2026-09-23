@@ -742,7 +742,11 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
   ];
 
   return (
-    <div className="app-ui-scale flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0">
+    <div className={`flex min-h-screen transition-colors duration-500 dark bg-[#020617] text-slate-100 min-w-0 app-ui-scale${
+      activeTab === 'study' || activeTab === 'lessons' || activeTab === 'puzzles' || activeTab === 'homework' || activeTab === 'analysis'
+        ? ' app-ui-scale--precise'
+        : ''
+    }`}>
       <Sidebar
         activeTab={sidebarTab}
         setActiveTab={setActiveTab}

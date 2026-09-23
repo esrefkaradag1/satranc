@@ -106,6 +106,7 @@ import {
   countPerPuzzleResults,
   studentTotalThinkSeconds,
   studentHasPlatformActivityInHomeworkRange,
+  homeworkPlatformDaysForParticipation,
   type StudentHwStat,
 } from '../lib/homeworkAnalysisUtils';
 
@@ -820,7 +821,7 @@ const Homework: React.FC = () => {
     return () => { cancelled = true; };
   }, [panelTab, programAnalysisView, programSelectedHw?.id, viewDate, targetStudentIds, getAssignees, applyPlatformStatsPatch]);
 
-  // DB önbelleğini yükle: geçmiş günlerin verisi API'den gelmese de gösterilir.
+  // DB önbelleği: listedeki her programın start→bugün aralığı (detaya girmeden katılım için).
   useEffect(() => {
     if (panelTab !== 'program') return;
     const assignees = programPlatformSyncAssignees;
@@ -828,8 +829,14 @@ const Homework: React.FC = () => {
 
     const ids = assignees.map((s) => s.id);
     const today = homeworkDayKey();
+    const days = new Set<string>([today, viewDate]);
+    for (const hw of programHomeworks) {
+      for (const day of homeworkPlatformDaysForParticipation(hw, today)) {
+        days.add(day);
+      }
+    }
+    // Haftanın kalan günleri (detay takvimi)
     const monday = mondayOfWeek();
-    const days = new Set<string>([viewDate]);
     for (let d = 1; d <= 7; d++) {
       const iso = isoDateForWeekday(monday, d);
       if (iso <= today) days.add(iso);
@@ -848,11 +855,34 @@ const Homework: React.FC = () => {
     return () => { cancelled = true; };
   }, [
     panelTab,
+    programHomeworks,
     programPlatformSyncAssigneeIdsKey,
     programPlatformSyncAssignees,
     viewDate,
     applyPlatformStatsPatch,
     applyPlatformTimePatch,
+  ]);
+
+  /** Liste görünümünde bugünkü platform verisini sessizce çek — detaya girmeden katılım güncellenir */
+  useEffect(() => {
+    if (panelTab !== 'program' || programAnalysisView !== 'list') return;
+    if (programPlatformSyncAssignees.length === 0) return;
+    if (loadingDailyPlatformStats || dailyPlatformRefreshInFlightRef.current) return;
+    const today = homeworkDayKey();
+    let cancelled = false;
+    void syncStudentsPlatformDays(programPlatformSyncAssignees, [today], [today], { force: true })
+      .then(({ byStudent: patch }) => {
+        if (cancelled || Object.keys(patch).length === 0) return;
+        applyPlatformStatsPatch(patch);
+      });
+    return () => { cancelled = true; };
+  }, [
+    panelTab,
+    programAnalysisView,
+    programPlatformSyncAssigneeIdsKey,
+    programPlatformSyncAssignees,
+    applyPlatformStatsPatch,
+    loadingDailyPlatformStats,
   ]);
 
   /** Detay ekranı açılınca seçili gün için platform verisini sessizce çek (geçmiş günlerde önbellek varsa API yok) */

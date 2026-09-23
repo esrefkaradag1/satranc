@@ -36,13 +36,13 @@ import {
 import { parsePgnBlockToChapter } from '../lib/pgnChapterParse';
 import { defaultChapterPgnTags, setPgnTagValue, buildStudyBoardPgnDisplay } from '../lib/studyPgnTags';
 import { chapterFromParsedPgnBlock, splitLichessStudyPgnBlocks } from '../lib/studyChapterImport';
-import { normalizeStudyChapterPuzzle } from '../lib/puzzlePlayUtils';
+import { inferStudyPuzzleSetupPly, normalizeStudyChapterPuzzle } from '../lib/puzzlePlayUtils';
 import { loadStudyEvents, type StudyEvent } from '../studyEvents';
 import { mergePracticeLogEntries, practiceLogsForChapter } from '../lib/studyAnalysisEvents';
 import { useApp } from '../AppContext';
 import { resolveStudyMembers, toCoachMemberId } from '../lib/studyMemberUtils';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
-import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, squareMarksToStyles, SQUARE_MARK_BUTTON_PREVIEW, COLOR_VALUES, type SquareMarkColor } from '../lib/chessBoardUi';
+import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, squareMarksToStyles, SQUARE_MARK_BUTTON_PREVIEW, COLOR_VALUES, type SquareMarkColor, chessboardDomId } from '../lib/chessBoardUi';
 import { useStudyCall } from '../hooks/useStudyCall';
 import { DrawingToolbar, type DrawingTool } from './DrawingToolbar';
 import { useStudyChapterSync } from '../hooks/useStudyChapterSync';
@@ -204,6 +204,11 @@ const StudyPage: React.FC = () => {
     return saved;
   }, []);
   const { scopedStudents: students, coaches, auth, showToast, confirmDialog } = useApp();
+  // Varlık senkronu için kullanıcı kimliği (öğrenci/veli oturumu)
+  const authUserId =
+    auth?.role === 'student' || auth?.role === 'parent'
+      ? auth.user?.id ?? auth.studentId
+      : undefined;
   const currentUserName = useMemo(() => {
     if (auth?.role === 'admin') return 'Admin';
     if (auth?.role === 'coach') return 'Antrenör';
@@ -959,14 +964,14 @@ const StudyPage: React.FC = () => {
 
   // --- Presence & Global Sync (Chapter Sync) ---
   useEffect(() => {
-    if (!selectedStudyId || !auth?.user?.id) return;
+    if (!selectedStudyId || !authUserId) return;
     
     // Subscribe to presence updates for this study
     const unsub = subscribeStudyPresence({
       studyId: selectedStudyId,
       onRow: (row) => {
         // If someone else is driving (coach/admin) and we are sticky, follow their chapter
-        if (row.user_id !== auth.user?.id && row.chapter_id && sticky) {
+        if (row.user_id !== authUserId && row.chapter_id && sticky) {
           // Identify if the user is a coach (optional, but good if we can)
           // For now, if we see a chapter change and we are in sync mode, we check if it's different
           const chapterIdx = selectedStudy?.chapters?.findIndex(c => c.id === row.chapter_id);
@@ -978,16 +983,16 @@ const StudyPage: React.FC = () => {
     });
 
     return () => unsub();
-  }, [selectedStudyId, auth?.user?.id, sticky, selectedChapterIndex, selectedStudy?.chapters]);
+  }, [selectedStudyId, authUserId, sticky, selectedChapterIndex, selectedStudy?.chapters]);
 
   // Upsert our own presence periodically
   useEffect(() => {
-    if (!selectedStudyId || !auth?.user?.id || !selectedChapter) return;
+    if (!selectedStudyId || !authUserId || !selectedChapter) return;
     
     const interval = setInterval(() => {
       void upsertPresence({
         studyId: selectedStudyId,
-        userId: auth.user!.id,
+        userId: authUserId,
         chapterId: selectedChapter.id,
         path: syncState ? serializePath(syncState.currentPath) : null,
         sticky: !!sticky,
@@ -995,19 +1000,19 @@ const StudyPage: React.FC = () => {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [selectedStudyId, auth?.user?.id, selectedChapter, syncState, sticky]);
+  }, [selectedStudyId, authUserId, selectedChapter, syncState, sticky]);
 
   // Bölüm değişince öğrenci anında takip edebilsin
   useEffect(() => {
-    if (!selectedStudyId || !auth?.user?.id || !selectedChapter) return;
+    if (!selectedStudyId || !authUserId || !selectedChapter) return;
     void upsertPresence({
       studyId: selectedStudyId,
-      userId: auth.user!.id,
+      userId: authUserId,
       chapterId: selectedChapter.id,
       path: syncState ? serializePath(syncState.currentPath) : null,
       sticky: !!sticky,
     });
-  }, [selectedStudyId, auth?.user?.id, selectedChapter?.id, sticky]);
+  }, [selectedStudyId, authUserId, selectedChapter?.id, sticky]);
 
   const members = useMemo(() => {
     if (!selectedStudy) return [];
@@ -1555,10 +1560,10 @@ const StudyPage: React.FC = () => {
     setMoveFrom(null);
 
     void setSticky(true);
-    if (auth?.user?.id) {
+    if (authUserId) {
       void upsertPresence({
         studyId: selectedStudy.id,
-        userId: auth.user.id,
+        userId: authUserId,
         chapterId: ch.id,
         path: null,
         sticky: true,
@@ -1574,7 +1579,7 @@ const StudyPage: React.FC = () => {
     viewingStudentVcHistory,
     showToast,
     updateAndSaveStudy,
-    auth?.user?.id,
+    authUserId,
     setSticky,
   ]);
 
@@ -1725,16 +1730,21 @@ const StudyPage: React.FC = () => {
       && (selectedChapter.interactiveType ?? 'puzzle') === 'puzzle';
     let puzzleSetupPatch: Partial<StudyChapter> = {};
     if (isPuzzle) {
-      const endFen = fenToCurrentFen(
-        { ...selectedChapter, moves: exported.moves },
-        exported.moves.length,
-      );
-      const studentColor = selectedChapter.orientation === 'black' ? 'b' : 'w';
-      const turnCode = sideToMove(endFen) === 'white' ? 'w' : 'b';
-      if (turnCode === studentColor) {
-        puzzleSetupPatch = { puzzleSetupPly: exported.moves.length };
-      } else if (selectedChapter.puzzleSetupPly == null) {
-        puzzleSetupPatch = { puzzleSetupPly: 0 };
+      // Hamle Bul: kayıtlı hattın tamamı öğrencinin bulacağı çözümdür (ply=0).
+      // Eski "sıra öğrencide → tüm hat kurulum" kuralı ara hamleleri yutuyordu.
+      // Bilinçli kurulum öneki varsa ve üzerine çözüm eklenmişse önceki ply korunur.
+      const prevSetup = selectedChapter.puzzleSetupPly;
+      if (prevSetup != null && prevSetup > 0 && exported.moves.length > prevSetup) {
+        puzzleSetupPatch = { puzzleSetupPly: prevSetup };
+      } else {
+        const studentColor = selectedChapter.orientation === 'black' ? 'b' : 'w';
+        puzzleSetupPatch = {
+          puzzleSetupPly: inferStudyPuzzleSetupPly(
+            selectedChapter.fen?.trim() || DEFAULT_FEN,
+            exported.moves,
+            studentColor,
+          ),
+        };
       }
     }
 
@@ -2399,7 +2409,7 @@ const StudyPage: React.FC = () => {
     // Drawing tool (square, circle, x)
     setCircleMarks(prev => {
       const currentMark = prev[square];
-      const nextType = drawingTool === 'square' ? 'square' : (drawingTool === 'circle' ? 'circle' : 'x');
+      const nextType: 'square' | 'circle' | 'x' = drawingTool === 'square' ? 'square' : (drawingTool === 'circle' ? 'circle' : 'x');
       
       // If same mark exists, toggle off
       if (currentMark && typeof currentMark === 'object' && currentMark.type === nextType && currentMark.color === drawingColor) {
@@ -4451,9 +4461,9 @@ const StudyPage: React.FC = () => {
                     }}
                   >
                     <Chessboard
-                      key={selectedChapter?.id || 'main'}
+                      key={chessboardDomId('study-board', selectedChapter?.id || 'main')}
                       options={{
-                        id: `study-board-${selectedChapter?.id || 'main'}`,
+                        id: chessboardDomId('study-board', selectedChapter?.id || 'main'),
                         position: chessboardPosition,
                         boardOrientation,
                         darkSquareStyle: { backgroundColor: '#5d768e' },
@@ -4478,7 +4488,7 @@ const StudyPage: React.FC = () => {
                         allowDrawingArrows:
                           canEditStudy &&
                           (drawingTool === 'mouse' || drawingTool === 'arrow' || arrowCtrlShortcutHeld),
-                        arePiecesDraggable: drawingTool === 'mouse',
+                        allowDragging: drawingTool === 'mouse',
                         clearArrowsOnClick: false,
                         clearArrowsOnPositionChange: false,
                         arrows: (() => {
@@ -4551,8 +4561,8 @@ const StudyPage: React.FC = () => {
                           /** Boş clear olayı — mevcut çok renkli okları silme */
                           if (filtered.length === 0) return;
                           const currentArrows = boardArrows || [];
-                          const prevByKey = new Map(
-                            currentArrows.map((a) => [`${a.startSquare}-${a.endSquare}`, a] as const),
+                          const prevByKey = new Map<string, (typeof currentArrows)[number]>(
+                            currentArrows.map((a) => [`${a.startSquare}-${a.endSquare}`, a]),
                           );
                           const merged: Array<{ startSquare: string; endSquare: string; color: string }> = [];
                           const mergedSeen = new Set<string>();
@@ -5631,7 +5641,6 @@ const StudyPage: React.FC = () => {
                           options={{
                             position: ncFen,
                             boardOrientation: ncOrientation,
-                            arePiecesDraggable: false,
                             allowDragging: false,
                             darkSquareStyle: { backgroundColor: '#5d768e' },
                             lightSquareStyle: { backgroundColor: '#c1c9d2' },

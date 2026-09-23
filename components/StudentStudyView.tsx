@@ -27,7 +27,7 @@ import { logStudyEvent, loadStudyEvents } from '../studyEvents';
 import { appendStudyPracticeLogs } from '../studyPracticeLogs';
 import { studyEventsToMoveAnalysis, mergePracticeLogEntries } from '../lib/studyAnalysisEvents';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
-import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, squareMarksToStyles, SQUARE_MARK_BUTTON_PREVIEW, type SquareMarkColor } from '../lib/chessBoardUi';
+import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, squareMarksToStyles, SQUARE_MARK_BUTTON_PREVIEW, type SquareMarkColor, chessboardDomId } from '../lib/chessBoardUi';
 import { useStudyCall } from '../hooks/useStudyCall';
 import { useApp } from '../AppContext';
 import { canExportStudy } from '../lib/studyPermissions';
@@ -47,6 +47,7 @@ import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
 import { StudyBoardPgnHeader } from './study/StudyBoardPgnHeader';
+import { StudyGamebookGuide, type GamebookFloorAction } from './study/StudyGamebookGuide';
 import { buildStudyBoardPgnDisplay } from '../lib/studyPgnTags';
 import { loadStudyPresence, subscribeStudyPresence, upsertPresence } from '../services/studyActions';
 import { serializePath } from '../lib/studySync/types';
@@ -160,6 +161,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [progress, setProgress] = useState<Record<string, number>>(loadProgress);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoReplyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pieceDropRef = useRef<(args: { sourceSquare: string; targetSquare: string | null; piece?: any }) => boolean>(() => false);
   const [platformActivityLoading, setPlatformActivityLoading] = useState(false);
   const [platformActivityError, setPlatformActivityError] = useState<string | null>(null);
   const [platformActivitySummary, setPlatformActivitySummary] = useState<string | null>(null);
@@ -1354,79 +1356,152 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       setBoardArrows([]);
       setCircleMarks({});
       setOptionSquares({});
+      setClickMoveSquares({});
+      setMoveFrom(null);
 
-      const g0 = makeBuilderGame(studyBoardFen);
-      const legalVerbose = g0.moves({ verbose: true }) as Array<{ from: string; to: string; san: string; lan?: string }>;
-      if (!legalVerbose || legalVerbose.length === 0) {
-        setLaHint('Hamle yok.');
-        return;
-      }
+      const fenForHint =
+        hideEngineForStudentPuzzle && puzzlePlayNorm ? puzzlePlayFen : studyBoardFen;
 
       let highlightFrom: string | null = null;
       let highlightTo: string | null = null;
       let hintText = '';
+      let hintSan = '';
 
       if (effectiveChapter.interactiveType === 'liveAnalysis') {
-        const g = makeBuilderGame(studyBoardFen);
+        const g = makeBuilderGame(fenForHint);
+        const legalVerbose = g.moves({ verbose: true }) as Array<{ from: string; to: string; san: string }>;
+        if (!legalVerbose.length) {
+          setLaHint('Hamle yok.');
+          return;
+        }
         const bestSan = await getBestMoveAsync(g, 8);
         if (!bestSan) {
           setLaHint('İpucu bulunamadı.');
           return;
         }
-        const gBest = makeBuilderGame(studyBoardFen);
+        const gBest = makeBuilderGame(fenForHint);
         const bestApplied = gBest.move(bestSan);
-        highlightFrom = (bestApplied as any)?.from ?? null;
-        highlightTo = (bestApplied as any)?.to ?? null;
-        hintText = `İpucu: En iyi hamle (${bestSan})`;
+        highlightFrom = bestApplied?.from ?? null;
+        highlightTo = bestApplied?.to ?? null;
+        hintSan = bestApplied?.san ?? bestSan;
+        hintText = `İpucu: En iyi hamle (${hintSan})`;
       } else {
-        const expectedSan = chapterMovesForUi[currentMoveIndex];
-        if (!expectedSan) {
+        const expectedRaw = chapterMovesForUi[currentMoveIndex];
+        if (!expectedRaw) {
           setLaHint('Beklenen hamle yok.');
           return;
         }
-        const found = legalVerbose.find(m => m.san === expectedSan || (m.lan && m.lan === expectedSan));
-        if (!found) {
-          setLaHint(`Bu pozisyonda "${expectedSan}" oynanamıyor. Antrenörünüze bildirin.`);
+        const squares = resolveExpectedMoveSquares(fenForHint, expectedRaw);
+        if (!squares) {
+          setLaHint(`Bu pozisyonda "${expectedRaw}" oynanamıyor. Antrenörünüze bildirin.`);
           return;
         }
-        highlightFrom = found.from;
-        highlightTo = found.to;
-        hintText = `İpucu: Beklenen hamle (${expectedSan})`;
+        highlightFrom = squares.from;
+        highlightTo = squares.to;
+        hintSan = squares.san;
+        hintText = `İpucu: ${squares.from.toUpperCase()} → ${squares.to.toUpperCase()} (${hintSan})`;
       }
 
-      const maxArrows = 28;
-      const trimmed = legalVerbose.slice(0, maxArrows);
+      if (!highlightFrom || !highlightTo) {
+        setLaHint('İpucu bulunamadı.');
+        return;
+      }
 
-      setBoardArrows(
-        trimmed.map((m) => ({
-          startSquare: m.from,
-          endSquare: m.to,
-          color:
-            highlightFrom && highlightTo && m.from === highlightFrom && m.to === highlightTo
-              ? '#6366f1' // en iyi hamle (indigo)
-              : 'rgba(99,102,241,0.55)', // diğerleri (indigo muted)
-        })),
-      );
-
-      const circles: Record<string, boolean> = {};
-      for (const m of trimmed) circles[m.to] = true;
-      setCircleMarks(circles);
-
+      // Yalnızca beklenen hamle — tüm yasal hamle okları öğrenciyi yanıltıyordu
+      setBoardArrows([
+        {
+          startSquare: highlightFrom,
+          endSquare: highlightTo,
+          color: 'rgba(45, 212, 191, 0.95)',
+        },
+      ]);
+      setOptionSquares({
+        [highlightFrom]: {
+          backgroundColor: 'rgba(45, 212, 191, 0.42)',
+          boxShadow: 'inset 0 0 0 3px rgba(45, 212, 191, 0.85)',
+        },
+        [highlightTo]: {
+          backgroundColor: 'rgba(52, 211, 153, 0.5)',
+          boxShadow: 'inset 0 0 0 3px rgba(16, 185, 129, 0.95)',
+        },
+      });
+      setCircleMarks({ [highlightTo]: true });
+      setMoveFrom(highlightFrom);
       setLaHint(hintText);
     } catch {
       setLaHint('İpucu alınamadı.');
     } finally {
       setLaHintThinking(false);
     }
-  }, [effectiveChapter, studyBoardFen, currentMoveIndex, chapterMovesForUi]);
+  }, [
+    effectiveChapter,
+    studyBoardFen,
+    puzzlePlayFen,
+    hideEngineForStudentPuzzle,
+    puzzlePlayNorm,
+    currentMoveIndex,
+    chapterMovesForUi,
+  ]);
 
   const showSolution = useCallback(async () => {
     if (!effectiveChapter || isLiveAnalysis) return;
-    const expectedSan = chapterMovesForUi[currentMoveIndex];
-    if (!expectedSan) return;
-    setLaHint(`Çözüm: ${expectedSan}`);
-    await requestHint();
-  }, [effectiveChapter, currentMoveIndex, isLiveAnalysis, requestHint]);
+    const fenForHint =
+      hideEngineForStudentPuzzle && puzzlePlayNorm ? puzzlePlayFen : studyBoardFen;
+    const expectedRaw = chapterMovesForUi[currentMoveIndex];
+    if (!expectedRaw) {
+      setLaHint('Çözüm hamlesi yok.');
+      return;
+    }
+    const squares = resolveExpectedMoveSquares(fenForHint, expectedRaw);
+    if (!squares) {
+      setLaHint(`Çözüm uygulanamadı (${expectedRaw}).`);
+      await requestHint();
+      return;
+    }
+
+    setBoardArrows([
+      {
+        startSquare: squares.from,
+        endSquare: squares.to,
+        color: 'rgba(52, 211, 153, 0.95)',
+      },
+    ]);
+    setOptionSquares({
+      [squares.from]: {
+        backgroundColor: 'rgba(45, 212, 191, 0.42)',
+        boxShadow: 'inset 0 0 0 3px rgba(45, 212, 191, 0.85)',
+      },
+      [squares.to]: {
+        backgroundColor: 'rgba(52, 211, 153, 0.5)',
+        boxShadow: 'inset 0 0 0 3px rgba(16, 185, 129, 0.95)',
+      },
+    });
+    setCircleMarks({ [squares.to]: true });
+    setLaHint(`Çözüm uygulanıyor: ${squares.san}`);
+
+    window.setTimeout(() => {
+      const ok = pieceDropRef.current({
+        sourceSquare: squares.from,
+        targetSquare: squares.to,
+      });
+      if (!ok) {
+        setMoveFrom(squares.from);
+        setLaHint(
+          `Çözüm: ${squares.san} — önce ${squares.from.toUpperCase()} taşını, sonra ${squares.to.toUpperCase()} karesini tıklayın`,
+        );
+      }
+    }, 60);
+  }, [
+    effectiveChapter,
+    isLiveAnalysis,
+    hideEngineForStudentPuzzle,
+    puzzlePlayNorm,
+    puzzlePlayFen,
+    studyBoardFen,
+    chapterMovesForUi,
+    currentMoveIndex,
+    requestHint,
+  ]);
 
   const persistChapterPracticeLogs = useCallback((entries: ChapterMoveAnalysisItem[]) => {
     if (previewMode || !studentId || !selectedStudy?.id || !effectiveChapter?.id) return;
@@ -1619,6 +1694,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setBoardArrows([]);
     setCircleMarks({});
     setOptionSquares({});
+    setClickMoveSquares({});
+    setMoveFrom(null);
 
     // ── LIVE ANALYSIS ────────────────────────────────────────────────────────
     if (isLiveAnalysis) {
@@ -1804,6 +1881,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       return false;
     }
   }, [selectedStudy, effectiveChapter, selectedChapter, chapterMovesForUi, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, puzzlePlayFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs, hideEngineForStudentPuzzle, puzzleBoardInteraction, isCoachHamleBul]);
+  pieceDropRef.current = handlePieceDrop;
 
   const boardFenForInteraction = useMemo(() => {
     if (hideEngineForStudentPuzzle && puzzlePlayNorm) return puzzlePlayFen;
@@ -2433,20 +2511,20 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const activeStudy = selectedStudy;
 
   return (
-    <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0d0f12] text-slate-200 overflow-hidden font-sans">
+    <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0b1220] text-slate-200 overflow-hidden font-sans">
       {previewMode && (
-        <div className="shrink-0 flex items-center justify-between gap-3 px-3 sm:px-4 py-2 border-b border-indigo-500/30 bg-indigo-500/10">
+        <div className="shrink-0 flex items-center justify-between gap-3 px-3 sm:px-4 py-2 border-b border-teal-500/25 bg-teal-500/10">
           <div className="flex items-center gap-2 min-w-0">
-            <Eye className="w-4 h-4 text-indigo-300 shrink-0" />
+            <Eye className="w-4 h-4 text-teal-300 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[10px] font-black text-indigo-300 uppercase tracking-widest leading-none">Öğrenci önizlemesi</p>
+              <p className="text-[10px] font-black text-teal-300 uppercase tracking-widest leading-none">Öğrenci önizlemesi</p>
               <p className="text-xs text-slate-300 truncate">{activeStudy.title}</p>
             </div>
           </div>
           <button
             type="button"
             onClick={() => onExitPreview?.()}
-            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-bold text-white transition-colors"
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             Düzenlemeye dön
@@ -2488,22 +2566,22 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           </div>
         </div>
       )}
-      <div className="flex flex-col lg:flex-row gap-0 lg:gap-4 flex-1 min-h-0 min-w-0 p-2 sm:p-4 pb-16 lg:pb-4">
+      <div className="flex flex-col lg:flex-row gap-2 lg:gap-3 flex-1 min-h-0 min-w-0 p-2 sm:p-3 pb-16 lg:pb-3">
         
         {/* ── LEFT: CHAPTERS / MEMBERS + CHAT ── */}
-        <div className="hidden lg:flex w-72 shrink-0 flex-col min-h-0 rounded-sm bg-[#0f172a] border border-[rgba(255,255,255,0.05)] overflow-hidden">
+        <div className="hidden lg:flex w-[17.5rem] shrink-0 flex-col min-h-0 rounded-2xl bg-[#111827]/95 border border-white/[0.07] overflow-hidden shadow-xl shadow-black/20">
           <button
             onClick={() => (previewMode ? onExitPreview?.() : setSelectedStudyId(null))}
-            className="flex items-center gap-2 p-3 text-xs font-bold text-[#999] hover:text-[#bababa] border-b border-[rgba(255,255,255,0.05)] uppercase tracking-wider bg-[#1e293b]"
+            className="flex items-center gap-2 px-3.5 py-3 text-xs font-bold text-slate-400 hover:text-white border-b border-white/[0.06] tracking-wide bg-[#0f172a]/80 transition-colors"
           >
-            <ArrowLeft className="w-4 h-4" /> {previewMode ? 'Düzenlemeye dön' : 'Tüm Çalışmalar'}
+            <ArrowLeft className="w-4 h-4" /> {previewMode ? 'Düzenlemeye dön' : 'Tüm çalışmalar'}
           </button>
-          <div className="px-2 py-2 border-b border-[rgba(255,255,255,0.05)] bg-[#0f172a] flex items-center gap-2">
+          <div className="px-2.5 py-2 border-b border-white/[0.06] flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => setLeftTab('chapters')}
-              className={`flex-1 py-2 rounded-sm text-[10px] font-black uppercase tracking-wider border ${
-                leftTab === 'chapters' ? 'bg-[#1e293b] text-[#bababa] border-[rgba(255,255,255,0.05)]' : 'bg-transparent text-[#999] border-transparent hover:border-[rgba(255,255,255,0.05)]'
+              className={`flex-1 py-2 rounded-xl text-[11px] font-bold tracking-wide transition-colors ${
+                leftTab === 'chapters' ? 'bg-teal-600/25 text-teal-200 border border-teal-500/30' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04]'
               }`}
             >
               Bölümler ({selectedStudy.chapters.length})
@@ -2511,8 +2589,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             <button
               type="button"
               onClick={() => setLeftTab('members')}
-              className={`flex-1 py-2 rounded-sm text-[10px] font-black uppercase tracking-wider border ${
-                leftTab === 'members' ? 'bg-[#1e293b] text-[#bababa] border-[rgba(255,255,255,0.05)]' : 'bg-transparent text-[#999] border-transparent hover:border-[rgba(255,255,255,0.05)]'
+              className={`flex-1 py-2 rounded-xl text-[11px] font-bold tracking-wide transition-colors ${
+                leftTab === 'members' ? 'bg-teal-600/25 text-teal-200 border border-teal-500/30' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04]'
               }`}
             >
               Üyeler ({selectedStudy.memberIds.length})
@@ -2520,20 +2598,20 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           </div>
 
           {leftTab === 'chapters' && (
-            <div className="p-2 border-b border-[rgba(255,255,255,0.05)] bg-[#0f172a]">
+            <div className="p-2.5 border-b border-white/[0.06]">
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#777]" />
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
                 <input
                   value={chapterSearch}
                   onChange={(e) => setChapterSearch(e.target.value)}
                   placeholder="Bölüm ara..."
-                  className="w-full bg-[#1e1d1b] border border-[#444] rounded px-7 py-2 text-xs text-white outline-none focus:border-[#6366f1]/50"
+                  className="w-full bg-slate-950/70 border border-white/10 rounded-xl pl-8 pr-3 py-2 text-xs text-white outline-none focus:border-teal-500/40 placeholder:text-slate-600"
                 />
               </div>
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-2 space-y-0.5 bg-[#0f172a]">
+          <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-2 space-y-1 min-h-0">
             {leftTab === 'chapters' ? (
               filteredChapters.map(({ ch, idx }) => {
                 const titleOverride =
@@ -2547,16 +2625,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   key={ch.id}
                   title={`${ch.id}`}
                   onClick={() => { selectChapterIndex(idx); }}
-                  className={`w-full flex items-center gap-2 p-2.5 rounded-sm text-left text-xs transition-colors ${
+                  className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-xl text-left text-xs transition-all ${
                     selectedChapterIndex === idx
-                      ? 'bg-[#6366f1]/20 text-[#6366f1]'
-                      : 'text-[#bababa] hover:bg-[rgba(255,255,255,0.05)]'
+                      ? 'bg-teal-600/20 text-teal-100 ring-1 ring-teal-500/35 shadow-sm shadow-teal-900/20'
+                      : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
                   }`}
                 >
-                  <span className={`w-5 h-5 rounded-sm flex items-center justify-center font-bold text-[10px] ${
-                    selectedChapterIndex === idx ? 'bg-[#6366f1] text-white' : 'bg-[rgba(255,255,255,0.05)] text-[#999]'
+                  <span className={`w-6 h-6 rounded-lg flex items-center justify-center font-black text-[10px] shrink-0 ${
+                    selectedChapterIndex === idx ? 'bg-teal-500 text-white' : 'bg-white/[0.06] text-slate-500'
                   }`}>{idx + 1}</span>
-                  <span className="flex-1 truncate font-medium">{line}</span>
+                  <span className="flex-1 truncate font-semibold leading-snug">{line}</span>
                 </button>
                 );
               })
@@ -2684,16 +2762,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           </div>
 
           {canUseChat && (
-            <div className="border-t border-[rgba(255,255,255,0.05)] bg-[#0f172a] flex flex-col min-h-[180px] max-h-[34vh]">
-              <div className="px-3 py-2 border-b border-[rgba(255,255,255,0.05)] text-[10px] font-black uppercase tracking-wider text-[#999] flex items-center justify-between">
-                <span>Sohbet</span>
-                <span className="text-[#666]">{(selectedStudy.chatMessages ?? []).length}</span>
+            <div className="border-t border-white/[0.06] flex flex-col min-h-[140px] max-h-[28vh] shrink-0">
+              <div className="px-3 py-2 border-b border-white/[0.06] text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                <span className="inline-flex items-center gap-1.5"><MessageCircle className="w-3 h-3" /> Sohbet</span>
+                <span className="text-slate-600 tabular-nums">{(selectedStudy.chatMessages ?? []).length}</span>
               </div>
-              <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1 bg-[#1e1d1b]">
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-2.5 space-y-1.5 bg-slate-950/40">
                 {(selectedStudy.chatMessages ?? []).slice(-80).map((m) => (
                   <div key={m.id} className="text-[11px] leading-snug">
-                    <span className="text-indigo-400 font-bold">{m.user.replace(/\(Canlı Analiz\)/gi, '').trim()}:</span>{' '}
-                    <span className="text-slate-200 whitespace-pre-wrap break-words">
+                    <span className="text-teal-400 font-bold">{m.user.replace(/\(Canlı Analiz\)/gi, '').trim()}:</span>{' '}
+                    <span className="text-slate-300 whitespace-pre-wrap break-words">
                       {m.text
                         .replace(/\[LIVE_NOTE\]/gi, '')
                         .replace(/\[CHAPTER:[^\]]+\]/gi, '')
@@ -2706,18 +2784,18 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
               </div>
               <form
                 onSubmit={(e) => { e.preventDefault(); sendChat(); }}
-                className="p-2 border-t border-[rgba(255,255,255,0.05)] flex gap-2 bg-[#0f172a]"
+                className="p-2 border-t border-white/[0.06] flex gap-2"
               >
                 <input
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   placeholder="Mesaj yaz..."
-                  className="flex-1 bg-[#1e1d1b] border border-[#444] rounded px-2 py-2 text-xs text-white outline-none focus:border-[#6366f1]/50"
+                  className="flex-1 bg-slate-950/70 border border-white/10 rounded-xl px-2.5 py-2 text-xs text-white outline-none focus:border-teal-500/40"
                 />
                 <button
                   type="submit"
                   disabled={!chatInput.trim()}
-                  className="px-3 py-2 rounded bg-[#6366f1] hover:bg-[#2563eb] disabled:opacity-40 text-white text-xs font-black uppercase tracking-wider"
+                  className="px-3 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-xs font-bold transition-colors"
                 >
                   Gönder
                 </button>
@@ -2725,20 +2803,20 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             </div>
           )}
 
-          <div className="p-3 border-t border-[rgba(255,255,255,0.05)] bg-[#1e293b] shrink-0">
-             <div className="flex items-center justify-between mb-2">
+          <div className="p-2.5 border-t border-white/[0.06] bg-[#0f172a]/60 shrink-0">
+             <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2">
-                   <Video className="w-4 h-4 text-[#6366f1]" />
-                   <span className="text-[10px] font-bold text-[#999] uppercase tracking-wider">Canlı Yayın</span>
+                   <Video className="w-3.5 h-3.5 text-teal-400" />
+                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Canlı yayın</span>
                 </div>
                 {showCallPanel && (
-                  <button onClick={() => setShowCallPanel(false)} className="text-[10px] text-[#999] hover:text-[#bababa] font-bold">KAPAT</button>
+                  <button onClick={() => setShowCallPanel(false)} className="text-[10px] text-slate-500 hover:text-slate-300 font-bold">Kapat</button>
                 )}
              </div>
              {!showCallPanel ? (
-               <button onClick={() => setShowCallPanel(true)} className="w-full py-2 rounded bg-[#6366f1]/20 hover:bg-[#6366f1]/30 text-[#6366f1] text-[10px] font-bold uppercase tracking-wider transition-colors">KATIL</button>
+               <button onClick={() => setShowCallPanel(true)} className="w-full py-2 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 text-teal-300 text-[11px] font-bold tracking-wide transition-colors border border-teal-500/20">Katıl</button>
              ) : (
-               <div className="mt-2">
+               <div className="mt-1">
                  <StudyCallPanel
                    role="student"
                    onClose={() => setShowCallPanel(false)}
@@ -2757,26 +2835,26 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         </div>
 
         {/* ── CENTER: BOARD ── */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0 rounded-sm bg-[#1e293b] border border-[rgba(255,255,255,0.05)] overflow-hidden">
-          <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-[rgba(255,255,255,0.05)] bg-[#0f172a] flex flex-wrap items-center justify-between gap-2">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 rounded-2xl bg-[#111827]/90 border border-white/[0.07] overflow-hidden shadow-xl shadow-black/20">
+          <div className="px-3 sm:px-4 py-2.5 border-b border-white/[0.06] bg-[#0f172a]/70 flex flex-wrap items-center justify-between gap-2">
              <div className="flex items-center gap-2 min-w-0 flex-1">
                 <button
                   type="button"
                   onClick={() => setSelectedStudyId(null)}
-                  className="lg:hidden shrink-0 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5"
+                  className="lg:hidden shrink-0 p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5"
                   aria-label="Tüm çalışmalar"
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
                 <span className="text-lg shrink-0">{studyDisplayEmoji(activeStudy)}</span>
-               <h2 className="font-bold text-[#bababa] tracking-tight text-xs sm:text-sm truncate min-w-0">
+               <h2 className="font-bold text-slate-200 tracking-tight text-xs sm:text-sm truncate min-w-0">
                  <span className="truncate">{activeStudy.title}</span>
-                 <span className="mx-1 sm:mx-2 text-[#555]">/</span>
-                 <span className="text-[#6366f1] truncate">{effectiveChapter?.title ?? selectedChapter?.title}</span>
+                 <span className="mx-1 sm:mx-2 text-slate-600">/</span>
+                 <span className="text-teal-300 truncate">{effectiveChapter?.title ?? selectedChapter?.title}</span>
                </h2>
              </div>
              <select
-               className="lg:hidden w-full sm:w-auto max-w-full text-xs bg-slate-800 border border-white/10 rounded-lg px-2 py-1.5 text-slate-200"
+               className="lg:hidden w-full sm:w-auto max-w-full text-xs bg-slate-800 border border-white/10 rounded-xl px-2 py-1.5 text-slate-200"
                value={selectedChapterIndex}
                onChange={(e) => { selectChapterIndex(Number(e.target.value)); }}
              >
@@ -2801,9 +2879,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                      }
                    })();
                  }}
-                 className={`shrink-0 px-2.5 py-1 rounded-sm text-[10px] font-bold uppercase tracking-wider border transition-colors ${
+                 className={`shrink-0 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-colors ${
                    sticky
-                     ? 'text-indigo-200 bg-indigo-500/15 border-indigo-500/30'
+                     ? 'text-teal-200 bg-teal-500/15 border-teal-500/30'
                      : 'text-slate-400 bg-white/5 border-white/10 hover:text-slate-200'
                  }`}
                  title={sticky ? 'Serbest çalış (bölüm seçimi kilidi kalkar)' : 'Antrenörü takip et (SYNC)'}
@@ -2815,7 +2893,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                <button
                  type="button"
                  onClick={() => { void catchUp(); }}
-                 className="px-3 py-1 rounded-sm text-[10px] font-bold uppercase tracking-wider text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition-colors"
+                 className="px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition-colors"
                  title="Canlı konuma yetiş"
                >
                  Geride: {behind}
@@ -2825,7 +2903,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                <span
                  className={`shrink-0 text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full border ${
                    studentMoveEnabled
-                     ? 'text-indigo-200 bg-indigo-500/10 border-indigo-500/25'
+                     ? 'text-teal-200 bg-teal-500/10 border-teal-500/25'
                      : 'text-slate-400 bg-white/5 border-white/10'
                  }`}
                  title="Antrenörün belirlediği taş oynatma izni"
@@ -2835,40 +2913,33 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
              )}
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 sm:p-6 lg:p-8 flex flex-col items-center justify-start gap-4 sm:gap-6 custom-scrollbar overflow-x-hidden">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-5 lg:p-6 flex flex-col items-center justify-start gap-3 sm:gap-4 custom-scrollbar overflow-x-hidden">
              {hideEngineForStudentPuzzle ? (
-               <div className="w-full max-w-full sm:max-w-[min(66vh,66vw)] rounded-2xl border border-violet-500/25 bg-gradient-to-br from-violet-500/15 via-indigo-500/10 to-transparent px-3.5 py-3 sm:px-4 sm:py-3.5">
-                 <div className="flex items-start justify-between gap-3">
-                   <div className="min-w-0">
-                     <p className="text-[10px] font-black uppercase tracking-[0.16em] text-violet-300/90">Hamle bul</p>
-                     <p className="text-sm sm:text-[15px] font-semibold text-white mt-1 leading-snug">
-                       {scenarioText}
-                     </p>
-                     {puzzlePlayNorm?.setupMoveSan
-                       && puzzlePlayNorm.startFen !== (effectiveChapter?.fen?.trim() || DEFAULT_FEN) ? (
-                       <p className="text-[11px] text-sky-300/90 mt-1.5 font-mono">
-                         Kurulum: {puzzlePlayNorm.setupMoveSan}
-                       </p>
-                     ) : null}
-                     {!isCoachHamleBul && !isStudentTurnInPuzzle && !isComplete && currentMoveIndex < totalMoves ? (
-                       <button
-                         type="button"
-                         onClick={revealOpponentLineMoves}
-                         className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border border-amber-500/35 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 transition-colors"
-                       >
-                         Rakip hamlesini göster
-                       </button>
-                     ) : null}
-                   </div>
-                   <div className="shrink-0 text-right">
+               <div className="w-full max-w-full sm:max-w-[min(66vh,66vw)] flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-teal-500/20 bg-gradient-to-r from-teal-500/10 via-slate-900/40 to-transparent px-3.5 py-2.5">
+                 <div className="min-w-0 flex items-center gap-2.5">
+                   <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-lg bg-teal-500/20 text-teal-200 text-[10px] font-black uppercase tracking-wider">
+                     Hamle bul
+                   </span>
+                   <p className="text-sm font-semibold text-white truncate">
+                     {sideToMove(studyBoardFen) === 'white' ? 'Beyaz' : 'Siyah'} sırası · Taşı sürükle
+                   </p>
+                 </div>
+                 <div className="shrink-0 flex items-center gap-3">
+                   <div className="text-right">
                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">İlerleme</p>
-                     <p className="text-sm font-black tabular-nums text-violet-200 mt-0.5">
+                     <p className="text-sm font-black tabular-nums text-teal-200 leading-none mt-0.5">
                        {Math.min(currentMoveIndex, totalMoves)}/{totalMoves || '—'}
                      </p>
-                     <p className="text-[10px] text-slate-500 mt-1">
-                       {sideToMove(studyBoardFen) === 'white' ? 'Beyaz' : 'Siyah'} oynar
-                     </p>
                    </div>
+                   {!isCoachHamleBul && !isStudentTurnInPuzzle && !isComplete && currentMoveIndex < totalMoves ? (
+                     <button
+                       type="button"
+                       onClick={revealOpponentLineMoves}
+                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold border border-amber-500/35 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 transition-colors"
+                     >
+                       Rakip hamlesini göster
+                     </button>
+                   ) : null}
                  </div>
                </div>
              ) : null}
@@ -2905,7 +2976,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                 ) : null}
                 <ChessBoardFrame
                   boardOrientation={studentBoardOrientation}
-                  boardClassName="rounded-sm overflow-hidden ring-1 ring-[rgba(255,255,255,0.05)]"
+                  boardClassName="rounded-sm overflow-visible ring-1 ring-[rgba(255,255,255,0.05)]"
                   evalBar={
                     showEvalBar ? (
                       <ChessEvalBar
@@ -2917,11 +2988,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                     ) : undefined
                   }
                 >
-                <div ref={studyBoardWheelRef} className="absolute inset-0">
+                <div ref={studyBoardWheelRef} className="absolute inset-0 overflow-visible">
                     <Chessboard
-                      key={`student-board-${effectiveChapter?.id || 'main'}-${studyBoardFen}`}
+                      key={chessboardDomId('student-board', effectiveChapter?.id || 'main', currentMoveIndex)}
                       options={{
-                        id: `student-board-${effectiveChapter?.id || 'main'}-${studyBoardFen}`,
+                        id: chessboardDomId('student-board', effectiveChapter?.id || 'main'),
                         position: studyBoardFen,
                         boardOrientation: studentBoardOrientation,
                         darkSquareStyle: { backgroundColor: '#5d768e' },
@@ -3050,14 +3121,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                 ) : null}
              </div>
 
-             <div className="w-full flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 bg-[#0f172a] p-2 rounded-sm border border-[rgba(255,255,255,0.05)]">
+             <div className="w-full flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 bg-slate-950/50 p-1.5 rounded-2xl border border-white/[0.06]">
                 <div className="flex items-center justify-center gap-0.5">
-                  <button type="button" title="Tahtayı çevir (F)" onClick={() => setStudentBoardOrientation(o => o === 'white' ? 'black' : 'white')} className="p-2.5 sm:p-2 rounded-sm hover:bg-[rgba(255,255,255,0.05)] text-[#999] hover:text-[#bababa] transition-colors"><FlipHorizontal className="w-4 h-4" /></button>
-                  <div className="w-px h-5 bg-[rgba(255,255,255,0.05)] mx-0.5" />
+                  <button type="button" title="Tahtayı çevir (F)" onClick={() => setStudentBoardOrientation(o => o === 'white' ? 'black' : 'white')} className="p-2.5 sm:p-2 rounded-xl hover:bg-white/[0.06] text-slate-500 hover:text-slate-200 transition-colors"><FlipHorizontal className="w-4 h-4" /></button>
+                  <div className="w-px h-5 bg-white/[0.06] mx-0.5" />
                   <button 
                      disabled={vsComputer && !isVcGameOver} 
                      onClick={() => goToMove(0)} 
-                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     className={`p-2.5 sm:p-2 rounded-xl text-slate-500 transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-white/[0.06] hover:text-slate-200'}`}
                      title={vsComputer && isVcGameOver ? 'Başa git (inceleme)' : 'Başa git'}
                    >
                      <SkipBack className="w-4 h-4" />
@@ -3065,30 +3136,30 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                    <button 
                      disabled={vsComputer && !isVcGameOver} 
                      onClick={() => goToMove(currentMoveIndex - 1)} 
-                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     className={`p-2.5 sm:p-2 rounded-xl text-slate-500 transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-white/[0.06] hover:text-slate-200'}`}
                    >
                      <ChevronLeft className="w-4 h-4" />
                    </button>
                    <button 
                      disabled={vsComputer && !isVcGameOver} 
                      onClick={() => goToMove(currentMoveIndex + 1)} 
-                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     className={`p-2.5 sm:p-2 rounded-xl text-slate-500 transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-white/[0.06] hover:text-slate-200'}`}
                    >
                      <ChevronRight className="w-4 h-4" />
                    </button>
                    <button 
                      disabled={vsComputer && !isVcGameOver} 
                      onClick={() => goToMove(navMaxPly)} 
-                     className={`p-2.5 sm:p-2 rounded-sm text-[#999] transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[rgba(255,255,255,0.05)] hover:text-[#bababa]'}`}
+                     className={`p-2.5 sm:p-2 rounded-xl text-slate-500 transition-colors ${vsComputer && !isVcGameOver ? 'opacity-30 cursor-not-allowed' : 'hover:bg-white/[0.06] hover:text-slate-200'}`}
                    >
                      <SkipForward className="w-4 h-4" />
                    </button>
-                  <div className="w-px h-5 bg-[rgba(255,255,255,0.05)] mx-0.5" />
+                  <div className="w-px h-5 bg-white/[0.06] mx-0.5" />
                   <button
                     type="button"
                     title={vsComputer ? 'Tekrar oyna' : 'Başa dön'}
                     onClick={() => (vsComputer ? restartVcGame() : goToMove(0))}
-                    className="p-2.5 sm:p-2 rounded-sm hover:bg-[rgba(255,255,255,0.05)] text-[#999] hover:text-[#bababa] transition-colors"
+                    className="p-2.5 sm:p-2 rounded-xl hover:bg-white/[0.06] text-slate-500 hover:text-slate-200 transition-colors"
                   >
                     <RotateCcw className="w-4 h-4" />
                   </button>
@@ -3125,7 +3196,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         </div>
 
         {/* ── RIGHT ── */}
-        <div className="hidden lg:flex w-80 shrink-0 flex-col min-h-0 rounded-sm bg-[#0f172a] border border-[rgba(255,255,255,0.05)] overflow-hidden">
+        <div className="hidden lg:flex w-[22rem] shrink-0 flex-col min-h-0 rounded-2xl bg-[#111827]/95 border border-white/[0.07] overflow-hidden shadow-xl shadow-black/20">
           {!hideEngineForStudentPuzzle && (!vsComputer || isVcGameOver) && (
             <EngineAnalysis
               fen={studyBoardFen}
@@ -3143,25 +3214,21 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             />
           )}
 
-          <div className="flex-1 overflow-y-auto bg-[#1e293b] border-t border-[rgba(255,255,255,0.05)]">
+          <div className={`${hideEngineForStudentPuzzle ? 'shrink-0' : 'flex-1 min-h-0'} overflow-y-auto bg-[#0f172a]/40 border-t border-white/[0.06]`}>
             {!vsComputer ? (
               hideEngineForStudentPuzzle ? (
-                <div className="p-4 space-y-3 border-b border-white/5">
-                  <div className="rounded-2xl border border-violet-500/20 bg-violet-500/10 px-3.5 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300/90">Hamle bul</p>
-                    <p className="text-sm font-semibold text-white mt-1.5 leading-snug">{scenarioText}</p>
-                  </div>
+                <div className="p-4 space-y-3">
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-xl border border-white/8 bg-slate-950/40 px-3 py-2.5">
+                    <div className="rounded-2xl border border-white/[0.07] bg-slate-950/50 px-3 py-2.5">
                       <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">İlerleme</p>
-                      <p className="text-base font-black tabular-nums text-white mt-0.5">
+                      <p className="text-lg font-black tabular-nums text-white mt-0.5 leading-none">
                         {Math.min(currentMoveIndex, totalMoves)}
                         <span className="text-slate-500 font-semibold text-sm"> / {totalMoves || 0}</span>
                       </p>
                     </div>
-                    <div className="rounded-xl border border-white/8 bg-slate-950/40 px-3 py-2.5">
+                    <div className="rounded-2xl border border-white/[0.07] bg-slate-950/50 px-3 py-2.5">
                       <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Sıra</p>
-                      <p className="text-base font-black text-white mt-0.5">
+                      <p className="text-lg font-black text-teal-200 mt-0.5 leading-none">
                         {sideToMove(studyBoardFen) === 'white' ? 'Beyaz' : 'Siyah'}
                       </p>
                     </div>
@@ -3169,12 +3236,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                   {puzzlePlayNorm?.setupMoveSan
                     && puzzlePlayNorm.startFen !== (effectiveChapter?.fen?.trim() || DEFAULT_FEN) ? (
                     <p className="text-xs text-sky-300/90 rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2">
-                      Rakip kurulum: <span className="font-mono font-bold">{puzzlePlayNorm.setupMoveSan}</span>
+                      Kurulum: <span className="font-mono font-bold">{puzzlePlayNorm.setupMoveSan}</span>
                     </p>
                   ) : null}
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Çözüm hamleleri gizli. Taşları sürükleyin; ipucu ve çözüm için alttaki butonları kullanın.
-                  </p>
                 </div>
               ) : (
                 <StudyMoveTree
@@ -3349,103 +3413,132 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           </div>
 
           {(isInteractive || isLiveAnalysis) && (
-            <div className="border-t border-white/5 bg-[#0f172a] p-4 flex flex-col gap-4">
-              <div className="relative flex items-end gap-3 group">
-                <div className={`flex-1 relative p-4 rounded-2xl border shadow-2xl transition-all duration-300 ${
-                  feedback === 'correct' ? 'bg-emerald-500/10 border-emerald-500/30' :
-                  feedback === 'solved' ? 'bg-indigo-500/10 border-indigo-500/30' :
-                  feedback === 'wrong' ? 'bg-rose-500/10 border-rose-500/30' :
-                  'bg-[#1e293b] border-white/5'
-                }`}>
-                  <p className={`text-sm font-medium leading-relaxed ${
-                    feedback === 'correct' ? 'text-emerald-400' :
-                    feedback === 'solved' ? 'text-indigo-400' :
-                    feedback === 'wrong' ? 'text-rose-400' :
-                    'text-slate-200'
-                  }`}>
-                    {feedbackText || (laHint && `${laHint}`) || scenarioText || (feedback === 'correct' ? 'İyi hamle!' : feedback === 'solved' ? 'Tebrikler! Bu dersi tamamladınız.' : (feedback === 'wrong' ? 'Yanlış hamle, tekrar dene.' : 'Burada hangi hamleyi yapardınız?'))}
-                  </p>
-                  
-                  <div className={`absolute -right-2 bottom-4 w-4 h-4 rotate-45 border-r border-b transition-colors duration-300 ${
-                    feedback === 'correct' ? 'bg-[#152926] border-emerald-500/30' :
-                    feedback === 'solved' ? 'bg-[#1a1c3d] border-indigo-500/30' :
-                    feedback === 'wrong' ? 'bg-[#2d1b1e] border-rose-500/30' :
-                    'bg-[#1e293b] border-white/5'
-                  }`} />
-                </div>
+            <div className={`${hideEngineForStudentPuzzle ? 'flex-1 min-h-0 overflow-y-auto' : ''} border-t border-white/[0.06] bg-gradient-to-b from-teal-950/20 to-transparent p-4 flex flex-col gap-3`}>
+              {(() => {
+                const turn = sideToMove(studyBoardFen) === 'white' ? 'white' as const : 'black' as const;
+                const guideComment =
+                  feedbackText
+                  || (laHint && String(laHint))
+                  || scenarioText
+                  || (feedback === 'correct'
+                    ? 'İyi hamle!'
+                    : feedback === 'solved'
+                      ? 'Tebrikler! Bu dersi tamamladınız.'
+                      : feedback === 'wrong'
+                        ? 'Yanlış hamle, tekrar dene.'
+                        : 'Burada hangi hamleyi yapardınız?');
 
-                <div className="w-12 h-12 shrink-0 text-indigo-500 animate-bounce-slow">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
-                    <circle cx="9" cy="10" r="1" fill="currentColor" />
-                    <circle cx="15" cy="10" r="1" fill="currentColor" />
-                    <path d="M8 15s1.5 2 4 2 4-2 4-2" />
-                    <path d="M2 12h2M20 12h2M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M19.07 4.93l-1.41 1.41M6.34 17.66l-1.41 1.41" />
-                  </svg>
-                </div>
-              </div>
+                const guideMode =
+                  feedback === 'wrong' ? 'bad' as const
+                  : feedback === 'solved' ? 'end' as const
+                  : feedback === 'correct' ? 'good' as const
+                  : 'play' as const;
 
-              <div className="flex gap-2">
-                {feedback === 'solved' ? (
-                  <div className="flex flex-col gap-2 w-full">
-                    {selectedChapterIndex < (selectedStudy?.chapters.length ?? 1) - 1 ? (
-                      <button
-                        type="button"
-                        onClick={goNextChapter}
-                        className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
-                      >
-                        Sonraki bölüm
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
+                const actions: GamebookFloorAction[] = [];
+                if (feedback === 'solved') {
+                  if (selectedChapterIndex < (selectedStudy?.chapters.length ?? 1) - 1) {
+                    actions.push({
+                      id: 'next',
+                      label: 'Sonraki bölüm',
+                      onClick: goNextChapter,
+                      variant: 'primary',
+                      icon: 'play',
+                    });
+                  }
+                  actions.push({
+                    id: 'retry',
+                    label: 'Tekrar oyna',
+                    onClick: restartPuzzleChapter,
+                    variant: 'neutral',
+                    icon: 'retry',
+                  });
+                } else if (feedback === 'wrong') {
+                  actions.push({
+                    id: 'retry-bad',
+                    label: 'Tekrar dene',
+                    onClick: () => {
+                      setFeedback(null);
+                      setFeedbackText(null);
+                      restartPuzzleChapter();
+                    },
+                    variant: 'danger',
+                    icon: 'retry',
+                  });
+                } else if (puzzleBranchChoices.length === 0) {
+                  // play: aksiyon yok — şah + talimat floor'da
+                }
+
+                if (puzzleBranchChoices.length > 0 && feedback !== 'solved') {
+                  return (
+                    <div className="space-y-3">
+                      <StudyGamebookGuide
+                        comment={guideComment}
+                        feedback={guideMode}
+                        turnColor={turn}
+                        instruction={
+                          turn === 'white'
+                            ? 'Beyaz için en iyi hamleyi bulunuz'
+                            : 'Siyah için en iyi hamleyi bulunuz'
+                        }
+                      />
+                      <div className="flex flex-col gap-2">
+                        {puzzleBranchChoices.map((choice) => (
+                          <button
+                            key={choice.nodeId}
+                            type="button"
+                            onClick={() => handlePuzzleBranchPick(choice.san)}
+                            className={`w-full py-3 px-4 rounded-xl text-sm font-bold transition-all border active:scale-[0.98] ${
+                              choice.isCorrect
+                                ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/35'
+                                : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                            }`}
+                          >
+                            {choice.san}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    <StudyGamebookGuide
+                      comment={guideComment}
+                      feedback={guideMode}
+                      turnColor={turn}
+                      instruction={
+                        turn === 'white'
+                          ? 'Beyaz için en iyi hamleyi bulunuz'
+                          : 'Siyah için en iyi hamleyi bulunuz'
+                      }
+                      actions={actions}
+                      hint={null}
+                    />
+                    {feedback !== 'solved' && feedback !== 'wrong' && puzzleBranchChoices.length === 0 ? (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { void requestHint(); }}
+                          disabled={laHintThinking || laAnalyzing || laReplyThinking}
+                          className="flex-1 py-2.5 px-3 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 rounded-xl text-xs font-bold transition-all border border-amber-500/25 disabled:opacity-40"
+                        >
+                          {laHintThinking ? 'Hazırlanıyor...' : 'İpucu göster'}
+                        </button>
+                        {isInteractive && !isLiveAnalysis && (
+                          <button
+                            type="button"
+                            onClick={() => { void showSolution(); }}
+                            className="flex-1 py-2.5 px-3 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 rounded-xl text-xs font-bold transition-all border border-emerald-500/30"
+                          >
+                            Çözümü uygula
+                          </button>
+                        )}
+                      </div>
                     ) : null}
-                    <button
-                      type="button"
-                      onClick={restartPuzzleChapter}
-                      className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white/5 hover:bg-white/10 text-slate-200 rounded-xl font-bold transition-all border border-white/10 active:scale-95"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                      Tekrar oyna
-                    </button>
                   </div>
-                ) : puzzleBranchChoices.length > 0 ? (
-                  <div className="flex flex-col gap-2 w-full">
-                    {puzzleBranchChoices.map((choice) => (
-                      <button
-                        key={choice.nodeId}
-                        type="button"
-                        onClick={() => handlePuzzleBranchPick(choice.san)}
-                        className={`w-full py-3 px-4 rounded-xl text-sm font-bold transition-all border active:scale-[0.98] ${
-                          choice.isCorrect
-                            ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/35'
-                            : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
-                        }`}
-                      >
-                        {choice.san}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => { void requestHint(); }}
-                      disabled={laHintThinking || laAnalyzing || laReplyThinking}
-                      className="flex-1 py-2.5 px-4 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl text-xs font-bold transition-all border border-white/5 disabled:opacity-40"
-                    >
-                      {laHintThinking ? 'HAZIRLANIYOR...' : 'İPUCU GÖSTER'}
-                    </button>
-                    {isInteractive && !isLiveAnalysis && (
-                      <button
-                        type="button"
-                        onClick={() => { void showSolution(); }}
-                        className="flex-1 py-2.5 px-4 bg-white/5 hover:bg-white/10 text-slate-400 rounded-xl text-xs font-bold transition-all border border-white/5"
-                      >
-                        ÇÖZÜMÜ GÖSTER
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
+                );
+              })()}
 
               {isLiveAnalysis && (
                 <div className="space-y-2 mt-2 pt-4 border-t border-white/5">
@@ -3490,13 +3583,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             </div>
           )}
 
-          <div className="p-3 border-t border-[rgba(255,255,255,0.05)] bg-[#1e293b] shrink-0">
+          <div className="p-3 border-t border-white/[0.06] bg-[#0f172a]/80 shrink-0">
             <button
               onClick={goNextChapter}
               disabled={selectedChapterIndex >= (selectedStudy.chapters.length - 1)}
-              className="w-full py-3 rounded bg-[#6366f1] hover:bg-[#4f46e5] disabled:opacity-30 text-black text-xs font-black uppercase tracking-wider transition-colors"
+              className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-30 text-white text-xs font-black uppercase tracking-wider transition-colors shadow-lg shadow-teal-900/30"
             >
-              Sonraki Bölüm
+              Sonraki bölüm
             </button>
           </div>
         </div>

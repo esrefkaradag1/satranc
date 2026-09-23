@@ -16,6 +16,7 @@ import {
   filterTransactionsForAdminClub,
   filterCoachesForAdminClub,
   filterOrgRecordsForAdminClub,
+  pickPrimaryCoachRecord,
 } from './lib/orgScope';
 import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, LessonPackage, TrainingGroup, AppRole } from './types';
 import { MOCK_STUDENTS } from './constants';
@@ -44,11 +45,15 @@ import {
   lessonPackageToDb,
   clubIdForOrgRecord,
   resolveClubIdFromAuth,
+  resolveClubIdForBranchName,
+  resolveCoachAuthScope,
 } from './lib/orgStructureDb';
 import { resolveAuthClubId, syncSupabaseClubContext } from './lib/supabaseClubContext';
 import { normalizeClubKey } from './lib/clubScope';
 import { normalizeLeaderboardPointSettings } from './lib/leaderboardPointSettings';
 import { normalizeStudentPersonNames } from './lib/personNameUtils';
+import { freezePastDuesForFeeChange } from './lib/trainingGroupUtils';
+import { resolvePublicStorageUrl } from './lib/studentPhotoUpload';
 import {
   lessonsFromTrainingGroup,
   mergeTrainingGroupLessons,
@@ -324,6 +329,7 @@ const STUDENT_DB_OPTIONAL_SNAKE = new Set<string>([
   'registration_type', 'monthly_fee',
   'payment_reminder_day', 'late_payment_reminder_day', 'is_scholarship_student', 'parent_job',
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
+  'dues_freeze_started_at',
   'coach_id', 'branch_office', 'club_id', 'whatsapp_notify_target',
 ]);
 
@@ -382,6 +388,7 @@ function learnStudentColumnsFromRows(rows: Record<string, unknown>[]) {
 /** Satır şemasında yok diye otomatik atlanmayacak opsiyonel kolonlar */
 const STUDENT_DB_OPTIONAL_NO_INFER_SKIP = new Set<string>([
   'lesson_log', 'training_group_id', 'lesson_schedule', 'dues_overrides', 'dues_override_notes',
+  'dues_freeze_started_at',
   'coach_id',
   'whatsapp_notify_target',
   'username', 'password', 'parent_pin',
@@ -938,6 +945,11 @@ function dbToStudent(row: Record<string, unknown>): Student {
     }
     if (k === 'training_group_id') {
       out.trainingGroupId = v;
+      continue;
+    }
+    if (k === 'photo_url' || k === 'photoUrl') {
+      const raw = v != null && String(v).trim() ? String(v) : undefined;
+      out.photoUrl = raw ? (resolvePublicStorageUrl(raw) ?? raw) : undefined;
       continue;
     }
     if (k === 'lichess_access_token') continue;
@@ -2095,6 +2107,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     else localStorage.removeItem(AUTH_STORAGE_KEY);
   }, [auth]);
 
+
   const loginAdmin = useCallback((password: string): boolean => {
     if (password !== ADMIN_PASSWORD) return false;
     setAuth({ role: 'admin' });
@@ -2108,7 +2121,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pwd = password.trim();
     if (!pwd) return false;
 
-    const coach = coaches.find((c) => {
+    const candidates = coaches.filter((c) => {
       const email = (c.email || '').trim().toLowerCase();
       const phone = (c.phone || '').replace(/\D/g, '');
       const name = (c.name || '').trim().toLowerCase();
@@ -2121,14 +2134,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const expected = (c.password && c.password.trim()) ? c.password.trim() : COACH_PASSWORD;
       return pwd === expected;
     });
+    // Aynı e-posta/telefonla birden fazla kayıt olabilir (eski kopyalar):
+    // grubu/öğrencisi olan, kulüple uyumlu kayıt seçilir.
+    const coach = pickPrimaryCoachRecord(candidates, students, trainingGroups, clubs);
 
     if (coach) {
-      const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(coach.branch || ''));
+      // Antrenörün `branch` değeri kulübün kısa adı olabilir ("AFYON SATRANÇ" ↔
+      // "AFYON SATRANÇ SPOR KULÜBÜ"); kapsam boş kalmasın diye kulüp kimliğine
+      // çözülür ve şube adı kulübün kayıtlı adına sabitlenir.
+      const scope = resolveCoachAuthScope(coach.branch, coach.clubId, branchOfficeRecords, clubs);
       setAuth({
         role: 'coach',
         coachId: coach.id,
-        branch: coach.branch || 'Merkez',
-        clubId: coach.clubId ?? club?.id,
+        coachName: coach.name || undefined,
+        branch: scope.branch || 'Merkez',
+        clubId: scope.clubId,
         roleId: coach.roleId,
       });
       return true;
@@ -2145,7 +2165,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return false;
-  }, [coaches, clubs]);
+  }, [coaches, clubs, branchOfficeRecords, students, trainingGroups]);
 
   const loginClub = useCallback(async (username: string, password: string): Promise<boolean> => {
     const idRaw = username.trim();
@@ -2189,7 +2209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!student) return false;
       if (student.status === 'inactive') return 'inactive';
       if (student.parentPin && student.parentPin === trimmedPin) {
-        setAuth({ role: 'parent', studentId: student.id });
+        setAuth({ role: 'parent', studentId: student.id, user: { id: student.id } });
         return true;
       }
       const last4 = trimmedPin.replace(/\D/g, '').slice(-4);
@@ -2211,7 +2231,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const applyApiLogin = (apiResult: { studentId: string; student: Student }) => {
       if (apiResult.student.status === 'inactive') return 'inactive' as const;
-      setAuth({ role: 'parent', studentId: apiResult.studentId });
+      setAuth({ role: 'parent', studentId: apiResult.studentId, user: { id: apiResult.studentId } });
       setStudents((prev) => {
         const idx = prev.findIndex((s) => s.id === apiResult.studentId);
         if (idx >= 0) {
@@ -2280,13 +2300,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const student = findStudentForLogin(list, idRaw);
       if (!student || !verifyStudentLoginPin(student, trimmedPin)) return false;
       if (student.status === 'inactive') return 'inactive';
-      setAuth({ role: 'student', studentId: student.id });
+      setAuth({ role: 'student', studentId: student.id, user: { id: student.id } });
       return true;
     };
 
     const applyApiLogin = (apiResult: { studentId: string; student: Student }) => {
       if (apiResult.student.status === 'inactive') return 'inactive' as const;
-      setAuth({ role: 'student', studentId: apiResult.studentId });
+      setAuth({ role: 'student', studentId: apiResult.studentId, user: { id: apiResult.studentId } });
       setStudents((prev) => {
         const idx = prev.findIndex((s) => s.id === apiResult.studentId);
         if (idx >= 0) {
@@ -2403,7 +2423,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     if (auth) void refreshRoles();
-  }, [auth?.role, auth?.coachId, auth?.clubId, refreshRoles]);
+  }, [
+    auth?.role,
+    auth?.role === 'coach' ? auth.coachId : undefined,
+    auth?.role === 'coach' || auth?.role === 'club' ? auth.clubId : undefined,
+    refreshRoles,
+  ]);
 
   useEffect(() => {
     if (!hydrated.current || useSupabase) return;
@@ -2707,31 +2732,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [auth, clubs]);
 
-  /** Antrenör oturumunda roleId / clubId eksikse tamamla */
+  /**
+   * Antrenör oturumunda roleId / clubId eksikse veya şube adı kulübün kayıtlı
+   * adıyla uyuşmuyorsa (eski kısa ad) kapsamı tamamla — yoksa panel boş kalır.
+   */
   useEffect(() => {
     if (auth?.role !== 'coach' || coaches.length === 0) return;
     const coach =
       (auth.coachId ? coaches.find((c) => c.id === auth.coachId) : undefined) ??
       (auth.branch ? coaches.find((c) => (c.branch || '').trim() === auth.branch.trim()) : undefined);
     if (!coach) return;
-    const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(coach.branch || ''));
-    const needsRoleId = coach.roleId && auth.roleId !== coach.roleId;
-    const needsClubId = !auth.clubId && (coach.clubId || club?.id);
-    if (!needsRoleId && !needsClubId) return;
+    const scope = resolveCoachAuthScope(
+      coach.branch || auth.branch,
+      auth.clubId || coach.clubId,
+      branchOfficeRecords,
+      clubs,
+    );
+    const needsRoleId = !!coach.roleId && auth.roleId !== coach.roleId;
+    const needsCoachId = !auth.coachId;
+    const needsClubId = !!scope.clubId && auth.clubId !== scope.clubId;
+    const needsBranch = !!scope.branch && normalizeClubKey(auth.branch) !== normalizeClubKey(scope.branch);
+    const needsCoachName = !!coach.name && auth.coachName !== coach.name;
+    if (!needsRoleId && !needsCoachId && !needsClubId && !needsBranch && !needsCoachName) return;
     setAuth({
       ...auth,
       coachId: auth.coachId ?? coach.id,
       roleId: coach.roleId ?? auth.roleId,
-      clubId: auth.clubId ?? coach.clubId ?? club?.id,
+      clubId: scope.clubId ?? auth.clubId,
+      branch: scope.branch || auth.branch,
+      coachName: coach.name || auth.coachName,
     });
-  }, [auth, coaches, clubs]);
+  }, [auth, coaches, clubs, branchOfficeRecords]);
 
   /** Supabase RLS kulüp bağlamı (katı mod için; RPC yoksa sessizce atlanır) */
   useEffect(() => {
     if (!useSupabase || !supabase) return;
-    const clubId = resolveAuthClubId(auth, coaches, clubs);
+    const clubId = resolveAuthClubId(auth, coaches, clubs, branchOfficeRecords);
     void syncSupabaseClubContext(supabase, clubId);
-  }, [useSupabase, auth, coaches, clubs]);
+  }, [useSupabase, auth, coaches, clubs, branchOfficeRecords]);
 
   /** Branş–grup tanımları değişince eski disciplines/groups listelerini güncelle */
   useEffect(() => {
@@ -3210,7 +3248,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const payload = performanceAnalysisToDb(updated as unknown as Record<string, unknown>);
         sb.from('performance_analyses').update(payload).eq('id', id).then(({ error }) => {
           if (error) console.error('Supabase performance_analyses update error:', error);
-        }).catch((err) => console.error('Supabase performance_analyses update error:', err));
+        }).then(undefined, (err) => console.error('Supabase performance_analyses update error:', err));
       }
       return next;
     });
@@ -3243,7 +3281,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .then(({ error }) => {
             if (error) console.warn('[Supabase] coach_ai_reports insert:', error.message);
           })
-          .catch(() => {});
+          .then(undefined, () => {});
       }
     },
     [students, addActivityLog]
@@ -3259,7 +3297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then(({ error }) => {
           if (error) console.warn('[Supabase] coach_ai_reports delete:', error.message);
         })
-        .catch(() => {});
+        .then(undefined, () => {});
     }
   }, []);
 
@@ -3272,7 +3310,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (sb) {
       sb.from('tournaments').insert(tournamentToDb(full)).then(({ error }) => {
         if (error) console.error('Supabase tournaments insert error:', error);
-      }).catch((err) => console.error('Supabase tournaments insert throw:', err));
+      }).then(undefined, (err) => console.error('Supabase tournaments insert throw:', err));
     }
   }, [addActivityLog]);
 
@@ -3285,7 +3323,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const merged = { ...current, ...patch };
         sb.from('tournaments').update(tournamentToDb(merged)).eq('id', id).then(({ error }) => {
           if (error) console.error('Supabase tournaments update error:', error);
-        }).catch((err) => console.error('Supabase tournaments update throw:', err));
+        }).then(undefined, (err) => console.error('Supabase tournaments update throw:', err));
       }
     }
   }, [tournaments]);
@@ -3300,7 +3338,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (sb) {
       sb.from('tournaments').delete().eq('id', id).then(({ error }) => {
         if (error) console.error('Supabase tournaments delete error:', error);
-      }).catch((err) => console.error('Supabase tournaments delete throw:', err));
+      }).then(undefined, (err) => console.error('Supabase tournaments delete throw:', err));
     }
   }, [addActivityLog]);
 
@@ -3346,10 +3384,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       persistLessonLogLocal(id, updatedFields.lessonLog);
     }
     const normalizedFields = normalizeStudentPersonNames(updatedFields);
-    setStudents(prev => prev.map(s => s.id === id ? { ...s, ...normalizedFields } : s));
+    // Aidat ücreti değişiyorsa geçmiş aylar eski ücretle donar; ödenmiş aylar
+    // yeni grup ücretine göre "kısmi" görünmesin.
+    const currentStudent = students.find(s => s.id === id);
+    const duesFreeze = currentStudent
+      ? freezePastDuesForFeeChange(currentStudent, normalizedFields, trainingGroups, disciplineBranches)
+      : null;
+    const fieldsToPersist = duesFreeze ? { ...normalizedFields, ...duesFreeze } : normalizedFields;
+    setStudents(prev => prev.map(s => s.id === id ? { ...s, ...fieldsToPersist } : s));
     const sb = getServiceSupabase();
     if (sb) {
-      const result = await studentUpdateWithRetry(sb, id, normalizedFields as Record<string, unknown>);
+      const result = await studentUpdateWithRetry(sb, id, fieldsToPersist as Record<string, unknown>);
       if (updatedFields.lessonLog !== undefined) {
         if (result.ok) {
           showToast('Ders günlüğü kaydedildi.', 'success');
@@ -3365,7 +3410,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else if (updatedFields.lessonLog !== undefined) {
       showToast('Ders günlüğü kaydedildi.', 'success');
     }
-  }, [showToast, auth, scopedStudents]);
+  }, [showToast, auth, scopedStudents, students, trainingGroups, disciplineBranches]);
 
   const deleteStudent = useCallback(async (id: string) => {
     if (!isStudentIdInScope(auth, id, scopedStudents)) {
@@ -4166,7 +4211,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (sb) {
       sb.from('clubs').insert(clubToDb(full)).then(({ error }) => {
         if (error) console.error('Supabase clubs insert error:', error);
-      }).catch((err) => console.error('Supabase clubs insert throw:', err));
+      }).then(undefined, (err) => console.error('Supabase clubs insert throw:', err));
     }
   }, [addActivityLog]);
   const updateClub = useCallback((id: string, patch: Partial<Club>) => {
@@ -4187,7 +4232,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (Object.keys(payload).length > 0) {
         sb.from('clubs').update(payload).eq('id', id).then(({ error }) => {
           if (error) console.error('Supabase clubs update error:', error);
-        }).catch((err) => console.error('Supabase clubs update throw:', err));
+        }).then(undefined, (err) => console.error('Supabase clubs update throw:', err));
       }
     }
   }, [addActivityLog]);
@@ -4199,7 +4244,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (sb) {
       sb.from('clubs').delete().eq('id', id).then(({ error }) => {
         if (error) console.error('Supabase clubs delete error:', error);
-      }).catch((err) => console.error('Supabase clubs delete throw:', err));
+      }).then(undefined, (err) => console.error('Supabase clubs delete throw:', err));
     }
   }, [clubs, addActivityLog]);
 

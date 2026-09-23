@@ -41,7 +41,7 @@ export function variationBranchRootId(tree: StudyTree, nodeId: NodeId): NodeId |
     const parentId = node?.parentId;
     if (!parentId) break;
     const parentIdx = tree.mainline.indexOf(parentId);
-    const mainChildId = parentIdx >= 0 ? tree.mainline[parentIdx + 1] : parent.children?.[0];
+    const mainChildId = parentIdx >= 0 ? tree.mainline[parentIdx + 1] : tree.nodes[parentId]?.children?.[0];
     if (mainSet.has(parentId) && cur !== mainChildId) return cur;
     cur = parentId;
   }

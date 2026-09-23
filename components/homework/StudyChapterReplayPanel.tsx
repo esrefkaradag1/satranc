@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, SkipForward } from 'l
 import type { StudyChapter } from '../../lib/studyTypes';
 import type { StudyEvent } from '../../studyEvents';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
-import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
+import { CHESSBOARD_NO_NOTATION, CHESSBOARD_ANIMATION, chessboardDomId } from '../../lib/chessBoardUi';
 import {
   buildChapterReplaySteps,
   buildReplayTableRows,
@@ -199,9 +199,10 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
         >
           <Chessboard
             options={{
-              id: `study-replay-${studyId}-${chapter?.id ?? 'x'}-${studentId}-${current?.fen ?? startFen}`,
+              id: chessboardDomId('study-replay', studyId, chapter?.id ?? 'x', studentId, stepIndex),
               position: current?.fen ?? startFen,
               allowDragging: false,
+              ...CHESSBOARD_ANIMATION,
               showAnimations: false,
               animationDurationInMs: 0,
               boardOrientation: orientation,
@@ -294,7 +295,7 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
                             ? 'border-sky-500/30 bg-sky-500/15 text-sky-300'
                             : 'border-amber-500/30 bg-amber-500/15 text-amber-300'
                         }`}>
-                          {row.isStudent ? 'Öğrenci' : 'Bilgisayar'}
+                          {row.isStudent ? 'Öğrenci' : (row.result === 'engine' ? 'Rakip' : 'Bilgisayar')}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-white font-semibold">{row.playedMove}</td>
@@ -313,7 +314,7 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
                             : row.result === 'solution'
                               ? 'Çözüm'
                               : row.result === 'engine'
-                                ? 'Motor'
+                                ? 'Hat'
                                 : 'Doğru'}
                         </span>
                       </td>

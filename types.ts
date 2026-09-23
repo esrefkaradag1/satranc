@@ -84,6 +84,8 @@ export interface Student {
   duesOverrides?: Record<string, number>;
   /** Ay bazlı aidat notu: "2026-01" -> "Eksik hafta" */
   duesOverrideNotes?: Record<string, string>;
+  /** Öğrenci pasife alındığı (donduruldu) tarih: "2026-08-05"; aktife alınınca boşaltılır */
+  duesFreezeStartedAt?: string;
 }
 
 /** Grup ders slotu: gün + saat */
@@ -147,9 +149,9 @@ export interface StudentLessonLogEntry {
 /** Giriş yapan kullanıcı: admin, antrenör, veli, öğrenci veya kulüp */
 export type AuthUser =
   | { role: 'admin' }
-  | { role: 'coach'; coachId?: string; branch?: string; clubId?: string; roleId?: string }
-  | { role: 'parent'; studentId: string }
-  | { role: 'student'; studentId: string }
+  | { role: 'coach'; coachId?: string; branch?: string; clubId?: string; roleId?: string; coachName?: string }
+  | { role: 'parent'; studentId: string; user?: { id: string } }
+  | { role: 'student'; studentId: string; user?: { id: string } }
   | { role: 'club'; branch: string; clubId?: string; roleId?: string };
 
 /** Rol paneli türü */
@@ -221,7 +223,7 @@ export interface MainSiteHeroSlide {
 export interface MainSitePageBlock {
   title: string;
   body: string;
-  items?: { title: string; body: string }[];
+  items?: { title: string; body: string; tag?: string }[];
 }
 
 export interface MainSiteContent {
@@ -514,7 +516,7 @@ export interface HomeworkAssignment {
   groupName?: string;
   startDate?: string;
   endDate?: string;
-  /** Oluşturulma zamanı (ISO) — yeni programda aynı gün platform aktivitesi katılım sayılmaz */
+  /** Oluşturulma zamanı (ISO) — startDate yoksa platform katılım aralığı buradan başlar */
   createdAt?: string;
   timeLimitMinutes?: number;
   hintCount?: number;

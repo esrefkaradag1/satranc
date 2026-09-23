@@ -69,7 +69,7 @@ export function isEpochMsInPeriod(ms: number, bounds: PeriodBounds): boolean {
 }
 
 /** Lichess aktivite satırından bulmaca istatistiği (güncel API: score.win/loss = adet). */
-export function parseLichessActivityPuzzles(row: LichessActivity): {
+export function parseLichessActivityPuzzles(row: Pick<LichessActivity, 'puzzles'>): {
   total: number;
   passed: number;
   failed: number;

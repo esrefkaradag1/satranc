@@ -41,7 +41,7 @@ import {
 } from '../lib/agoraVirtualBackground';
 import { DrawingToolbar, type DrawingTool } from '../components/DrawingToolbar';
 import { saveStudyAsync } from '../studyStorage';
-import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES, toggleSquareMark, removeSquareMarksOnSquare } from '../lib/chessBoardUi';
+import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES, toggleSquareMark, removeSquareMarksOnSquare, chessboardDomId } from '../lib/chessBoardUi';
 import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStableEvalDisplay } from '../hooks/useStableEvalDisplay';
 import { whitePovWinningChances } from '../lib/winningChances';
@@ -1574,7 +1574,7 @@ function parseSessionMedia(raw: unknown): SessionMediaState {
       .filter(Boolean);
   }
   const parseIdList = (
-    key: 'pendingStudentIds' | 'admittedStudentIds' | 'handRaisedStudentIds' | 'independentBoardStudentIds',
+    key: 'pendingStudentIds' | 'admittedStudentIds' | 'handRaisedStudentIds' | 'independentBoardStudentIds' | 'rosterStudentIds',
   ): string[] | undefined => {
     const raw = o[key];
     if (!Array.isArray(raw)) return undefined;
@@ -6440,8 +6440,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       /** Kütüphane clearArrows boş dizi yollar — mevcut çok renkli okları koru */
       if (next.length === 0) return;
 
-      const prevByKey = new Map(
-        sanitizedArrows.map((a) => [`${a.startSquare}-${a.endSquare}`, a] as const),
+      const prevByKey = new Map<string, ArrowItem>(
+        sanitizedArrows.map((a) => [`${a.startSquare}-${a.endSquare}`, a]),
       );
       const merged: ArrowItem[] = [];
       const seen = new Set<string>();
@@ -7668,7 +7668,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                     <Chessboard
                       key={`${effectiveRoomId}-${boardDrawRevision}`}
                       options={{
-                        id: `live-lesson-board-${effectiveRoomId}-${boardDrawRevision}`,
+                        id: chessboardDomId('live-lesson-board', effectiveRoomId, boardDrawRevision),
                         ...boardOptions,
                       }}
                     />
@@ -8976,9 +8976,9 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               <div className="p-3 flex flex-col gap-3 h-full min-h-0 overflow-y-auto custom-scrollbar">
                 <div className="flex gap-1 p-1 rounded-xl bg-slate-800/50 border border-white/10">
                   {([
-                    ['library' as const, 'Çalışmalar'],
-                    ['pgn' as const, 'PGN'],
-                    ['position' as const, 'Konum'],
+                    ['library', 'Çalışmalar'] as const,
+                    ['pgn', 'PGN'] as const,
+                    ['position', 'Konum'] as const,
                   ]).map(([k, lab]) => (
                     <button
                       key={k}

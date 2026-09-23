@@ -79,7 +79,7 @@ export async function fetchLichessPlayingGames(token: string): Promise<LichessPl
         isMyTurn: row.isMyTurn === true,
       } satisfies LichessPlayingGame;
     })
-    .filter((x): x is LichessPlayingGame => x != null);
+    .filter((x) => x != null);
 }
 
 /** account/playing FEN'inden acil fallback snapshot (hamle listesi olmayabilir) */

@@ -1,26 +1,27 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AuthUser, Coach } from '../types';
 import { normalizeClubKey } from './clubScope';
-import { resolveClubIdFromAuth } from './orgStructureDb';
+import { resolveClubIdForBranchName, resolveClubIdFromAuth, type BranchOfficeRecord } from './orgStructureDb';
 
 /** Giriş yapan kullanıcı için Supabase RLS oturum bağlamındaki kulüp kimliği */
 export function resolveAuthClubId(
   auth: AuthUser | null,
   coaches: Coach[],
   clubs: { id: string; name: string }[],
+  branchOfficeRecords: BranchOfficeRecord[] = [],
 ): string | null {
   if (!auth) return null;
   if (auth.role === 'admin') return null;
   if (auth.role === 'club') return resolveClubIdFromAuth(auth, clubs) ?? null;
   if (auth.role === 'coach') {
+    if (auth.clubId?.trim()) return auth.clubId.trim();
     const coach =
       (auth.coachId ? coaches.find((c) => c.id === auth.coachId) : undefined) ??
       (auth.branch ? coaches.find((c) => normalizeClubKey(c.branch) === normalizeClubKey(auth.branch!)) : undefined);
+    if (coach?.clubId?.trim()) return coach.clubId.trim();
     const branch = coach?.branch?.trim() || auth.branch?.trim();
-    if (branch && clubs.length) {
-      const club = clubs.find((c) => normalizeClubKey(c.name) === normalizeClubKey(branch));
-      if (club) return club.id;
-    }
+    // Kulüp adı ile şube adı birebir tutmayabilir (kısa ad / tam ad)
+    return resolveClubIdForBranchName(branch, branchOfficeRecords, clubs) ?? null;
   }
   return null;
 }

@@ -132,3 +132,23 @@ export function isoDateForWeekday(monday: Date, weekday: number): string {
   d.setDate(d.getDate() + weekday - 1);
   return homeworkDayKey(d);
 }
+
+/** start..end (ISO gün) dahil gün listesi; maxDays ile sınırlanır (en yeni günler). */
+export function enumerateIsoDaysInclusive(
+  startIso: string,
+  endIso: string,
+  maxDays = 90,
+): string[] {
+  const start = startIso.slice(0, 10);
+  const end = endIso.slice(0, 10);
+  if (!start || !end || start > end) return [];
+  const out: string[] = [];
+  let cur = start;
+  while (cur <= end) {
+    out.push(cur);
+    cur = shiftIstanbulDayKey(cur, 1);
+    if (out.length > 400) break;
+  }
+  if (out.length <= maxDays) return out;
+  return out.slice(out.length - maxDays);
+}

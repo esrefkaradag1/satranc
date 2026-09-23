@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Chessboard } from 'react-chessboard';
-import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
+import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, chessboardDomId } from '../lib/chessBoardUi';
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
-import { Chess } from 'chess.js';
-import { X, CheckCircle2, XCircle, Lightbulb, ListChecks, ChevronRight, RotateCcw, Play } from 'lucide-react';
+import { Chess, type Square } from 'chess.js';
+import { X, CheckCircle2, Lightbulb, ListChecks, ChevronRight, RotateCcw, Play } from 'lucide-react';
 import type { Puzzle } from '../types';
 import { fetchPuzzleById } from '../services/lichessService';
 import {
@@ -23,6 +23,7 @@ import {
   puzzleBoardOrientationForStudent,
   puzzleMoveHighlightStyles,
 } from '../lib/puzzlePlayUtils';
+import { StudyGamebookGuide } from './study/StudyGamebookGuide';
 
 export interface HomeworkAttemptRecord {
   studentId: string;
@@ -400,7 +401,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       if (game.turn() !== studentColor) return false;
 
       const copy = makeGameFromFen(game.fen());
-      const piece = copy.get(sourceSquare as `${string}${number}`);
+      const piece = copy.get(sourceSquare as Square);
       if (!piece || piece.color !== copy.turn() || piece.color !== studentColor) return false;
 
       if (ply >= solutionMoves.length) {
@@ -526,6 +527,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   }, [currentPly, solutionMoves, game.fen(), studentColor, studentMoveIndex]);
 
   const boardOptions = {
+    id: chessboardDomId('puzzle-play', playPuzzle?.id),
     position: game.fen(),
     boardOrientation: puzzleModalBoardOrientation,
     squareStyles: lastMoveSquares,
@@ -657,30 +659,44 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
               </p>
             </div>
           )}
+          {status === 'playing' && sessionStarted && isStudentTurn ? (
+            <div className="mt-4">
+              <StudyGamebookGuide
+                comment="Burada hangi hamleyi yapardınız?"
+                feedback="play"
+                turnColor={studentColor === 'w' ? 'white' : 'black'}
+                instruction={
+                  studentColor === 'w'
+                    ? 'Beyaz için en iyi hamleyi bulunuz'
+                    : 'Siyah için en iyi hamleyi bulunuz'
+                }
+              />
+            </div>
+          ) : null}
           {status === 'wrong' && (
-            <div className="mt-4 p-4 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400">
-              <div className="flex items-start gap-3">
-                <XCircle className="w-8 h-8 shrink-0 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <p className="font-black text-lg">Olmadı!</p>
-                  <p className="text-sm opacity-90 mt-1">Başka bir şey dene.</p>
-                  {homeworkId && studentId && (
-                    <p className="text-xs text-rose-400/80 mt-2">
-                      {submitted
-                        ? 'Deneme kaydedildi; antrenör Ödev Takibinde görecektir.'
-                        : 'Kapatınca deneme kaydedilir (ipucu dahil).'}
-                    </p>
-                  )}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2 mt-4">
-                <button
-                  type="button"
-                  onClick={tryAgain}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 font-bold text-sm hover:bg-indigo-600/50 transition-colors"
-                >
-                  <RotateCcw className="w-4 h-4" /> Tekrar dene
-                </button>
+            <div className="mt-4 space-y-3">
+              <StudyGamebookGuide
+                comment={
+                  homeworkId && studentId
+                    ? submitted
+                      ? 'Olmadı! Başka bir şey dene. Deneme kaydedildi; antrenör Ödev Takibinde görecektir.'
+                      : 'Olmadı! Başka bir şey dene. Kapatınca deneme kaydedilir (ipucu dahil).'
+                    : 'Olmadı! Başka bir şey dene.'
+                }
+                feedback="bad"
+                turnColor={studentColor === 'w' ? 'white' : 'black'}
+                actions={[
+                  {
+                    id: 'retry',
+                    label: 'Tekrar dene',
+                    onClick: tryAgain,
+                    variant: 'danger',
+                    icon: 'retry',
+                  },
+                ]}
+                hint={hintRevealed ? (hintDisplayLabel ? `Beklenen hamle: ${hintDisplayLabel}` : 'Bu pozisyonda geçerli ipucu yok.') : null}
+              />
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={revealHint}
@@ -696,20 +712,8 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
                   <ListChecks className="w-4 h-4" /> Çözümü Göster
                 </button>
               </div>
-              {hintRevealed && (
-                <p className="mt-3 pt-3 border-t border-rose-500/20 text-sm">
-                  {hintDisplayLabel ? (
-                    <>
-                      <span className="text-slate-400">Beklenen hamle: </span>
-                      <span className="font-mono font-bold text-amber-300">{hintDisplayLabel}</span>
-                    </>
-                  ) : (
-                    <span className="text-slate-500">Bu pozisyonda geçerli ipucu yok. Antrenörden bulmacayı Lichess&apos;ten yeniden çekmesini isteyin.</span>
-                  )}
-                </p>
-              )}
               {solutionRevealed && (
-                <div className="mt-3 pt-3 border-t border-rose-500/20">
+                <div className="p-3 rounded-xl border border-rose-500/20 bg-rose-500/10">
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Çözüm (kalan hamleleriniz)</p>
                   {remainingStudentMoves.length > 0 ? (
                     <p className="text-sm font-mono text-slate-300 break-all">
@@ -728,25 +732,32 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
             </div>
           )}
           {status === 'solved' && (
-            <div className="mt-4 flex items-center gap-3 p-4 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
-              <CheckCircle2 className="w-6 h-6 shrink-0" />
-              <div className="flex-1">
-                <p className="font-bold">Tebrikler!</p>
-                <p className="text-sm opacity-90">+{playPuzzle.points} puan</p>
-                {homeworkId && studentId && (
-                  <p className="text-xs text-emerald-400/80 mt-2">Deneme kaydedildi; antrenör Ödev Takibinde görecektir.</p>
-                )}
-              </div>
-              {nextPuzzle && onPlayNext ? (
-                <button
-                  type="button"
-                  onClick={handlePlayNext}
-                  className="shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm"
-                >
-                  Sonraki soru
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              ) : null}
+            <div className="mt-4">
+              <StudyGamebookGuide
+                comment={`Tebrikler! Bu dersi tamamladınız. +${playPuzzle.points} puan${
+                  homeworkId && studentId ? '\nDeneme kaydedildi; antrenör Ödev Takibinde görecektir.' : ''
+                }`}
+                feedback="end"
+                turnColor={studentColor === 'w' ? 'white' : 'black'}
+                actions={[
+                  ...(nextPuzzle && onPlayNext
+                    ? [{
+                        id: 'next',
+                        label: 'Sonraki soru',
+                        onClick: handlePlayNext,
+                        variant: 'primary' as const,
+                        icon: 'play' as const,
+                      }]
+                    : []),
+                  {
+                    id: 'retry',
+                    label: 'Tekrar oyna',
+                    onClick: tryAgain,
+                    variant: 'neutral',
+                    icon: 'retry',
+                  },
+                ]}
+              />
             </div>
           )}
         </div>

@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import type { Student } from '../../types';
 import type { LiveStudentBoardSnapshot } from '../LiveLesson';
-import { CHESSBOARD_NO_NOTATION } from '../../lib/chessBoardUi';
+import { CHESSBOARD_NO_NOTATION, chessboardDomId } from '../../lib/chessBoardUi';
 import { applyMove, makeBuilderGame } from '../../lib/studyUtils';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -365,7 +365,7 @@ export function LiveLessonBoardGrid({
                   <div className="w-full max-w-[min(100%,240px)] aspect-square rounded-md overflow-hidden border border-white/10 shadow-lg pointer-events-none">
                     <Chessboard
                       options={{
-                        id: `live-grid-${sid}`,
+                        id: chessboardDomId('live-grid', sid),
                         position: fen,
                         allowDragging: false,
                         showAnimations: false,

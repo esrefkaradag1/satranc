@@ -50,7 +50,7 @@ export function buildClubDefaultOrgStructure(
 }
 
 /** Başvuru formu ve öğrenci kaydı için varsayılan şube / branş / grup seti (merkez/admin) */
-export function buildDefaultOrgStructure(primaryOffice = DEFAULT_APPLICATION_OFFICES[0]): DefaultOrgStructure {
+export function buildDefaultOrgStructure(primaryOffice: string = DEFAULT_APPLICATION_OFFICES[0]): DefaultOrgStructure {
   const offices: BranchOfficeRecord[] = DEFAULT_APPLICATION_OFFICES.map((name) => ({
     id: newId(),
     name,

@@ -20,9 +20,21 @@
   .app-ui-scale {
     zoom: 0.9;
   }
+  /*
+   * CSS zoom, react-chessboard sürükleme ofsetini bozar (imleç ≠ taş).
+   * Tahta varken zoom kapatılır — pointer koordinatları doğru kalır.
+   */
+  .app-ui-scale:has([data-chess-pointer-root]),
+  .app-ui-scale.app-ui-scale--precise {
+    zoom: 1;
+  }
   @supports not (zoom: 0.9) {
     .app-ui-scale {
       font-size: 90%;
+    }
+    .app-ui-scale:has([data-chess-pointer-root]),
+    .app-ui-scale.app-ui-scale--precise {
+      font-size: 100%;
     }
   }
 
@@ -465,4 +477,76 @@
 
 .ll-media-btn-off {
   @apply bg-rose-950/50 text-rose-200 border-rose-800/40 hover:bg-rose-900/55;
+}
+
+/* SatrançEdu gamebook maskot — şeffaf PNG + idle hareket */
+@keyframes study-gamebook-mascot-idle {
+  0%, 100% {
+    transform: translateY(0) rotate(-2deg) scale(1);
+  }
+  25% {
+    transform: translateY(-7px) rotate(2deg) scale(1.03);
+  }
+  50% {
+    transform: translateY(-2px) rotate(-1deg) scale(1.01);
+  }
+  75% {
+    transform: translateY(-9px) rotate(3deg) scale(1.04);
+  }
+}
+
+@keyframes study-gamebook-mascot-shadow {
+  0%, 100% { transform: scaleX(1); opacity: 0.35; }
+  25%, 75% { transform: scaleX(0.72); opacity: 0.18; }
+  50% { transform: scaleX(0.9); opacity: 0.28; }
+}
+
+.study-gamebook-mascot-wrap {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 7rem;
+  height: 7rem;
+}
+
+@media (min-width: 640px) {
+  .study-gamebook-mascot-wrap {
+    width: 7.5rem;
+    height: 7.5rem;
+  }
+}
+
+.study-gamebook-mascot-wrap::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0.15rem;
+  width: 52%;
+  height: 0.55rem;
+  margin-left: -26%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(13, 148, 136, 0.45), transparent 70%);
+  filter: blur(2px);
+  pointer-events: none;
+  animation: study-gamebook-mascot-shadow 2.4s ease-in-out infinite;
+}
+
+.study-gamebook-mascot {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: bottom center;
+  user-select: none;
+  -webkit-user-drag: none;
+  background: transparent;
+  animation: study-gamebook-mascot-idle 2.4s ease-in-out infinite;
+  will-change: transform;
+  filter: drop-shadow(0 6px 14px rgba(13, 148, 136, 0.28));
+}
+
+/* react-chessboard SVG ok uçları (marker) taşmasın diye kesilmesin */
+[data-chess-pointer-root] svg {
+  overflow: visible !important;
 }

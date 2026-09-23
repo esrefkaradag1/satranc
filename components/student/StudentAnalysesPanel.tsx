@@ -359,10 +359,10 @@ export const StudentAnalysesPanel: React.FC<Props> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-white uppercase tracking-[0.18em]">
-                    {viewAs === 'parent' ? 'Performans Özeti' : 'Kapsamli Platform + Odev Analizi'}
+                    Kapsamli Platform + Odev Analizi
                   </h3>
                   <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">
-                    {viewAs === 'parent' ? 'veli gorunumu' : 'ogrenci gorunumu'}
+                    ogrenci gorunumu
                   </p>
                 </div>
               </div>

@@ -1,6 +1,6 @@
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../types';
 import { resolveHomeworkAssignees } from '../homeworkUtils';
-import { homeworkDayKey } from './homeworkDayUtils';
+import { homeworkDayKey, enumerateIsoDaysInclusive } from './homeworkDayUtils';
 import { studentInitials } from './homeworkPanelUtils';
 
 /** Tek bulmaca denemesi için makul üst sınır (2 saat). */
@@ -179,7 +179,7 @@ export function homeworkParticipation(
   opts?: {
     /** @deprecated Yerine hasPlatformActivityInRange kullanın — tüm programlara bugünü yazar. */
     isStudentActive?: (studentId: string) => boolean;
-    /** Platform aktivitesi bu ödevin tarih aralığında mı? (oluşturma günü hariç tutulabilir) */
+    /** Platform aktivitesi bu ödevin start–end tarih aralığında mı? */
     hasPlatformActivityInRange?: (
       studentId: string,
       range: { startDay: string | null; endDay: string | null; createdDay: string | null },
@@ -187,9 +187,10 @@ export function homeworkParticipation(
   },
 ): { started: number; total: number } {
   const assignees = getHomeworkAssignees(hw, students);
-  const startDay = (hw.startDate || '').trim().slice(0, 10) || null;
-  const endDay = (hw.endDate || hw.dueDate || '').trim().slice(0, 10) || null;
   const createdDay = hw.createdAt?.trim().slice(0, 10) || null;
+  // startDate yoksa oluşturma günü — aksi halde platform katılımı hep 0/N kalır
+  const startDay = (hw.startDate || '').trim().slice(0, 10) || createdDay;
+  const endDay = (hw.endDate || hw.dueDate || '').trim().slice(0, 10) || null;
   const range = { startDay, endDay, createdDay };
 
   const started = assignees.filter((s) => {
@@ -204,28 +205,39 @@ export function homeworkParticipation(
   return { started, total: assignees.length };
 }
 
-/** Platform katılımı: ödev tarih aralığındaki aktivite; oluşturma / başlangıç günü sayılmaz (yeni programda sahte katılım olmasın). */
+/** Platform katılımı: ödev tarih aralığındaki (start–end) oyun/bulmaca aktivitesi. */
 export function studentHasPlatformActivityInHomeworkRange(
   byDay: Record<string, { games?: number; puzzleSolved?: number } | undefined> | undefined,
   range: { startDay: string | null; endDay: string | null; createdDay: string | null },
   today = homeworkDayKey(),
 ): boolean {
   if (!byDay) return false;
-  const { startDay, endDay, createdDay } = range;
-  // Başlangıç tarihi yoksa platform aktivitesini bu ödeve yazma (global "bugün aktif" sahte katılım üretir)
-  if (!startDay) return false;
-
-  // Oluşturma günü veya (createdAt yoksa) bugün başlayan programın ilk günü listede sayılmaz
-  const skipDay = createdDay || (startDay === today ? startDay : null);
+  const startDay = range.startDay || range.createdDay;
+  // Başlangıç yoksa yalnızca bugünü say (liste sahte katılım üretmesin)
+  const effectiveStart = startDay || today;
+  const endDay = range.endDay;
 
   for (const [day, stats] of Object.entries(byDay)) {
     if (!stats) continue;
-    if (day < startDay) continue;
+    if (day < effectiveStart) continue;
     if (endDay && day > endDay) continue;
-    if (skipDay && day === skipDay) continue;
     if ((stats.games ?? 0) > 0 || (stats.puzzleSolved ?? 0) > 0) return true;
   }
   return false;
+}
+
+/** Liste katılımı için ödevden yüklenmesi gereken platform günleri. */
+export function homeworkPlatformDaysForParticipation(
+  hw: { startDate?: string; endDate?: string; dueDate?: string; createdAt?: string },
+  today = homeworkDayKey(),
+  maxDays = 90,
+): string[] {
+  const createdDay = hw.createdAt?.trim().slice(0, 10) || null;
+  const startDay = (hw.startDate || '').trim().slice(0, 10) || createdDay || today;
+  const endRaw = (hw.endDate || hw.dueDate || '').trim().slice(0, 10) || today;
+  const endDay = endRaw > today ? today : endRaw;
+  if (startDay > endDay) return [today];
+  return enumerateIsoDaysInclusive(startDay, endDay, maxDays);
 }
 
 export function homeworkStatusFromAttempts(

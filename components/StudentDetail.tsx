@@ -986,6 +986,10 @@ const StudentDetail: React.FC<{
   const [showSaleModal, setShowSaleModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [statusModalValue, setStatusModalValue] = useState<'active' | 'inactive'>('active');
+  const [statusModalGroup, setStatusModalGroup] = useState('');
+  /** Aktife alırken: dondurma (pasif) başlangıç tarihi ve borç sayılmayacak aylar */
+  const [statusFreezeStart, setStatusFreezeStart] = useState('');
+  const [statusWaivedMonths, setStatusWaivedMonths] = useState<string[]>([]);
   const [saleType, setSaleType] = useState<'aylik-paket' | 'ozel-ders'>('aylik-paket');
   const [saleDownPayment, setSaleDownPayment] = useState('');
   const [saleInstallmentCount, setSaleInstallmentCount] = useState(4);
@@ -1806,6 +1810,79 @@ const StudentDetail: React.FC<{
     return map;
   }, [calendarYear, studentTransactions]);
 
+  /**
+   * Pasif dönemde kalan aylar: dondurma tarihinden bugüne kadar olan aylar.
+   * Aktife alırken bu ayların borç sayılıp sayılmayacağı seçilir.
+   */
+  const freezePeriodMonths = useMemo(() => {
+    if (!student || student.registrationType === 'package') return [];
+    const start = statusFreezeStart.trim();
+    if (start.length < 7) return [];
+    const startYear = Number(start.slice(0, 4));
+    const startMonth = Number(start.slice(5, 7));
+    const startDay = Number(start.slice(8, 10)) || 1;
+    if (!Number.isFinite(startYear) || !Number.isFinite(startMonth) || startMonth < 1 || startMonth > 12) return [];
+
+    const now = new Date();
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth() + 1;
+    const paidByYear = new Map<number, Record<number, number>>();
+    const paidFor = (year: number, month: number) => {
+      if (!paidByYear.has(year)) {
+        const map: Record<number, number> = {};
+        filterDuesTransactions(studentTransactions).forEach((t) => {
+          const period = parseDuesPeriodFromTransaction(t);
+          if (!period || period.year !== year) return;
+          map[period.month] = (map[period.month] || 0) + (t.amount || 0);
+        });
+        paidByYear.set(year, map);
+      }
+      return paidByYear.get(year)?.[month] ?? 0;
+    };
+
+    const out: {
+      key: string;
+      label: string;
+      expected: number;
+      paid: number;
+      /** Ayın pasif geçen gün sayısı ve toplam gün sayısı */
+      passiveDays: number;
+      daysInMonth: number;
+      /** Ayın yarısından fazlası pasif geçti mi (varsayılan işaret) */
+      mostlyPassive: boolean;
+    }[] = [];
+    let year = startYear;
+    let month = startMonth;
+    for (let i = 0; i < 36; i++) {
+      if (year > nowYear || (year === nowYear && month > nowMonth)) break;
+      if (!isMonthBeforeRegistration(student, year, month)) {
+        const daysInMonth = new Date(year, month, 0).getDate();
+        const firstPassiveDay = year === startYear && month === startMonth ? startDay : 1;
+        const lastPassiveDay = year === nowYear && month === nowMonth ? now.getDate() : daysInMonth;
+        const passiveDays = Math.max(0, lastPassiveDay - firstPassiveDay + 1);
+        out.push({
+          key: monthKey(year, month),
+          label: `${MONTHS_TR[month - 1]} ${year}`,
+          expected: getExpectedDueForMonth(student, year, month, trainingGroups, disciplineBranches).expected,
+          paid: paidFor(year, month),
+          passiveDays,
+          daysInMonth,
+          mostlyPassive: passiveDays * 2 > daysInMonth,
+        });
+      }
+      month += 1;
+      if (month > 12) { month = 1; year += 1; }
+    }
+    return out;
+  }, [student, statusFreezeStart, studentTransactions, trainingGroups, disciplineBranches]);
+
+  // Varsayılan: yarısından fazlası pasif geçen ve ödemesi olmayan aylar borç sayılmaz
+  useEffect(() => {
+    setStatusWaivedMonths(
+      freezePeriodMonths.filter((m) => m.mostlyPassive && m.paid <= 0 && m.expected > 0).map((m) => m.key),
+    );
+  }, [freezePeriodMonths]);
+
  if (!student || !derived) {
  return (
  <div className="space-y-6">
@@ -1929,7 +2006,7 @@ const StudentDetail: React.FC<{
 {/* Actions */}
      <div className="mt-3 sm:mt-6 grid grid-cols-4 sm:flex sm:flex-wrap gap-1.5 sm:gap-2.5">
        <ActionPill tone="outline" icon={<Edit2 className="w-4 h-4" />} label="Düzenle" onClick={() => setShowEditModal(true)} />
-       <ActionPill tone="outline" icon={<Power className="w-4 h-4" />} label="Durum" onClick={() => { setStatusModalValue(student.status === 'inactive' ? 'inactive' : 'active'); setShowStatusModal(true); }} />
+       <ActionPill tone="outline" icon={<Power className="w-4 h-4" />} label="Durum" onClick={() => { setStatusModalValue(student.status === 'inactive' ? 'inactive' : 'active'); setStatusModalGroup((student.group ?? '').trim()); setStatusFreezeStart(student.status === 'inactive' ? (student.duesFreezeStartedAt ?? '').slice(0, 10) : ''); setShowStatusModal(true); }} />
       <ActionPill tone="emerald" icon={<ShoppingCart className="w-4 h-4" />} label="Paket/Ders" onClick={() => openSaleModal('aylik-paket')} />
        <ActionPill
          tone="rose"
@@ -2301,6 +2378,9 @@ const StudentDetail: React.FC<{
        )}
        {cell.remainingLabel && cell.state === 'Dondu' && (
          <div className="mt-1 text-center text-[10px] text-slate-500">{cell.remainingLabel}</div>
+       )}
+       {cell.note && (
+         <div className="mt-1 text-center text-[9px] text-slate-500 leading-tight">{cell.note}</div>
        )}
      </button>
    </div>
@@ -3577,7 +3657,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
            <X className="w-5 h-5" />
          </button>
        </div>
-       <div className="p-5 space-y-4">
+       <div className="modal-scroll-body p-5 space-y-4">
          <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Durum</label>
            <select
@@ -3589,6 +3669,93 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
              <option value="inactive">Pasif</option>
            </select>
          </div>
+         {statusModalValue === 'active' && student.registrationType !== 'package' ? (
+           <div>
+             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Grup *</label>
+             <select
+               value={statusModalGroup}
+               onChange={(e) => setStatusModalGroup(e.target.value)}
+               className="w-full px-4 py-2.5 rounded-xl border border-slate-600 bg-slate-800 text-white font-medium [color-scheme:dark]"
+             >
+               <option value="">Grup seçiniz</option>
+               {trainingGroupNamesForSelection(
+                 trainingGroups,
+                 student.branchOffice,
+                 student.branch,
+                 (student.group ?? '').trim() || undefined,
+               ).map((name) => (
+                 <option key={name} value={name}>{name}</option>
+               ))}
+             </select>
+             <p className="mt-1.5 text-[10px] text-slate-500">
+               Dondurulurken grup bağı kaldırıldığı için aktife alırken grup seçilmelidir.
+               Yeni grup ücreti bu aydan itibaren geçerli olur; geçmiş aylar eski ücretiyle korunur.
+             </p>
+           </div>
+         ) : null}
+
+         {statusModalValue === 'active'
+           && student.status === 'inactive'
+           && student.registrationType !== 'package'
+           && !student.isScholarshipStudent ? (
+           <div className="rounded-xl border border-slate-700/60 bg-slate-900/40 p-3 space-y-3">
+             <div>
+               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                 Dondurma başlangıcı
+               </label>
+               <input
+                 type="date"
+                 value={statusFreezeStart}
+                 max={todayIsoDate()}
+                 onChange={(e) => setStatusFreezeStart(e.target.value)}
+                 className="w-full px-4 py-2.5 rounded-xl border border-slate-600 bg-slate-800 text-white font-medium [color-scheme:dark]"
+               />
+               <p className="mt-1.5 text-[10px] text-slate-500">
+                 {student.duesFreezeStartedAt
+                   ? 'Öğrencinin pasife alındığı tarih. Gerekirse düzeltebilirsiniz.'
+                   : 'Bu öğrenci için dondurma tarihi kayıtlı değil; pasif dönemi belirlemek için tarihi giriniz.'}
+               </p>
+             </div>
+
+             {freezePeriodMonths.length > 0 ? (
+               <div className="space-y-2">
+                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                   Pasif dönem ayları — borç sayılmayacaklar
+                 </div>
+                 {freezePeriodMonths.map((m) => {
+                   const checked = statusWaivedMonths.includes(m.key);
+                   return (
+                     <label
+                       key={m.key}
+                       className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/60 cursor-pointer"
+                     >
+                       <input
+                         type="checkbox"
+                         checked={checked}
+                         onChange={(e) =>
+                           setStatusWaivedMonths((prev) =>
+                             e.target.checked ? [...new Set([...prev, m.key])] : prev.filter((k) => k !== m.key),
+                           )
+                         }
+                         className="w-4 h-4 accent-indigo-500"
+                       />
+                       <span className="flex-1 min-w-0 text-xs font-bold text-white">{m.label}</span>
+                       <span className="text-[10px] text-slate-400 shrink-0">
+                         ₺{Number(m.expected).toLocaleString('tr-TR')}
+                         {m.paid > 0 ? ` · Tahsil ₺${Number(m.paid).toLocaleString('tr-TR')}` : ''}
+                         {` · ${m.passiveDays}/${m.daysInMonth} gün pasif`}
+                       </span>
+                     </label>
+                   );
+                 })}
+                 <p className="text-[10px] text-slate-500">
+                   İşaretli aylar için beklenen aidat ₺0 yazılır ve borç hesabına girmez.
+                   Yarısından fazlası pasif geçen ve tahsilatı olmayan aylar varsayılan olarak işaretlenir.
+                 </p>
+               </div>
+             ) : null}
+           </div>
+         ) : null}
          <button
            type="button"
            onClick={() => {
@@ -3597,11 +3764,69 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
                  status: 'inactive',
                  group: '',
                  trainingGroupId: undefined,
+                 duesFreezeStartedAt: student.duesFreezeStartedAt || todayIsoDate(),
                });
                showToast('Öğrenci donduruldu; grup bağı kaldırıldı.', 'success');
-             } else {
-               updateStudent(student.id, { status: 'active' });
+               setShowStatusModal(false);
+               return;
              }
+
+             if (student.registrationType === 'package') {
+               updateStudent(student.id, { status: 'active', duesFreezeStartedAt: '' });
+               setShowStatusModal(false);
+               return;
+             }
+
+             // Pasif dönemde borç sayılmayacak aylar: beklenen aidat ₺0
+             const waivedKeys = statusWaivedMonths.filter((k) => freezePeriodMonths.some((m) => m.key === k));
+             const duesOverrides = { ...(student.duesOverrides ?? {}) };
+             const duesOverrideNotes = { ...(student.duesOverrideNotes ?? {}) };
+             if (waivedKeys.length > 0) {
+               const freezeNote = `Pasif dönem (${formatDateTR(statusFreezeStart)} – ${formatDateTR(todayIsoDate())})`;
+               for (const key of waivedKeys) {
+                 duesOverrides[key] = 0;
+                 duesOverrideNotes[key] = freezeNote;
+               }
+             }
+             const duesPatch = waivedKeys.length > 0 ? { duesOverrides, duesOverrideNotes } : {};
+
+             const groupName = statusModalGroup.trim();
+             if (!groupName) {
+               showToast('Öğrenciyi aktife almak için grup seçiniz.', 'error');
+               return;
+             }
+             const tg = findTrainingGroupByName(trainingGroups, groupName, {
+               branchOffice: student.branchOffice,
+               discipline: student.branch,
+             });
+             if (!tg) {
+               showToast('Seçilen grup bulunamadı.', 'error');
+               return;
+             }
+             const defaults = applyGroupDefaultsToStudent(tg, disciplineBranches);
+             const groupChanged = (student.group ?? '').trim() !== tg.name || student.trainingGroupId !== tg.id;
+             updateStudent(student.id, {
+               status: 'active',
+               group: defaults.group,
+               trainingGroupId: defaults.trainingGroupId,
+               branch: defaults.branch || student.branch,
+               branchOffice: defaults.branchOffice || student.branchOffice,
+               duesFreezeStartedAt: '',
+               ...duesPatch,
+               ...(groupChanged
+                 ? {
+                     monthlyFee: defaults.monthlyFee,
+                     lessonSchedule: defaults.lessonSchedule,
+                     lessonScheduleCustom: false,
+                   }
+                 : {}),
+             });
+             showToast(
+               waivedKeys.length > 0
+                 ? `Öğrenci aktife alındı · ${tg.name} · ${waivedKeys.length} pasif ay borç sayılmadı`
+                 : `Öğrenci aktife alındı · ${tg.name}`,
+               'success',
+             );
              setShowStatusModal(false);
            }}
            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm"

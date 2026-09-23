@@ -308,8 +308,9 @@ function parseSequence(
       lastNodeId = added.nodeId;
       currentParentId = added.nodeId;
 
-      if (pos.i < tokens.length && tokens[pos.i].type === 'comment') {
-        const rawComment = tokens[pos.i].value;
+      const nextToken = pos.i < tokens.length ? tokens[pos.i] : undefined;
+      if (nextToken?.type === 'comment') {
+        const rawComment = nextToken.value;
         const diagramShapes = parseLichessDiagramShapes(rawComment);
         if (diagramShapes.length) tree = attachShapes(tree, lastNodeId, diagramShapes);
         const clean = stripLichessDiagramTags(rawComment);

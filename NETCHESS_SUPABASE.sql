@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS public.students (
   training_group_id text,
   lesson_schedule jsonb DEFAULT '[]'::jsonb,
   dues_overrides jsonb DEFAULT '{}'::jsonb,
-  dues_override_notes jsonb DEFAULT '{}'::jsonb
+  dues_override_notes jsonb DEFAULT '{}'::jsonb,
+  dues_freeze_started_at text
 );
 
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS group_name text;
@@ -92,6 +93,7 @@ ALTER TABLE public.students ADD COLUMN IF NOT EXISTS training_group_id text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS lesson_schedule jsonb DEFAULT '[]'::jsonb;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS dues_overrides jsonb DEFAULT '{}'::jsonb;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS dues_override_notes jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS dues_freeze_started_at text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS has_sibling_discount boolean;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS sibling_discount_type text;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS sibling_discount_percent numeric;

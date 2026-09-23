@@ -17,6 +17,10 @@ server/generated
 !.env.example
 backups/
 
+# Geçici inceleme/sorun giderme çıktıları
+scratch/
+supabase/.temp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

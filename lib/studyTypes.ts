@@ -32,7 +32,7 @@ export interface StudyChapter {
   puzzleSetupPly?: number;
   // Çizimler: oklar ve daireler (sync için)
   arrows?: Array<{ startSquare: string; endSquare: string; color: string }>;
-  circles?: Record<string, boolean>;
+  circles?: Record<string, { color: SquareMarkColor; type: 'square' | 'circle' | 'x' }>;
 }
 
 export interface StudyChatMessage {

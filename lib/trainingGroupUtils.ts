@@ -301,6 +301,62 @@ export function getExpectedDuesForYear(
   return total;
 }
 
+/**
+ * Aidat ücreti değiştiğinde (grup değişimi, pasiften aktife dönüş, elle ücret
+ * düzenleme) geçmiş aylar eski ücretle dondurulur.
+ *
+ * Aksi halde eski ücretiyle tam ödenmiş aylar yeni ücrete göre yeniden
+ * hesaplanıp "Kısmi" görünür (ör. Temmuz'da ₺5.400 ödeyen öğrenci ₺6.000'lik
+ * gruba geçince Temmuz kısmi ödeme sayılır).
+ *
+ * Yeni ücret içinde bulunulan aydan itibaren geçerlidir; yalnızca elle
+ * girilmemiş (override'sız) geçmiş aylar donar.
+ */
+export function freezePastDuesForFeeChange(
+  current: Student,
+  patch: Partial<Student>,
+  trainingGroups: TrainingGroup[],
+  disciplineBranches: DisciplineBranch[],
+  ref: Date = new Date(),
+  monthsBack = 24,
+): Pick<Student, 'duesOverrides' | 'duesOverrideNotes'> | null {
+  const next = { ...current, ...patch } as Student;
+  if (current.registrationType === 'package' || next.registrationType === 'package') return null;
+  // Burs durumu değişimi ayrı bir karar; geçmişe dokunulmaz.
+  if (current.isScholarshipStudent || next.isScholarshipStudent) return null;
+
+  const oldFee = applySiblingDiscount(
+    getBaseMonthlyFeeForStudent(current, trainingGroups, disciplineBranches),
+    current,
+  ).finalFee;
+  const newFee = applySiblingDiscount(
+    getBaseMonthlyFeeForStudent(next, trainingGroups, disciplineBranches),
+    next,
+  ).finalFee;
+  if (oldFee <= 0 || oldFee === newFee) return null;
+
+  // patch içinde gelen override'lar (ör. pasif dönem muafiyeti) korunur.
+  const overrides = { ...(next.duesOverrides ?? {}) };
+  const notes = { ...(next.duesOverrideNotes ?? {}) };
+  const note = `Ücret değişimi öncesi tutar (₺${oldFee.toLocaleString('tr-TR')})`;
+  let changed = false;
+
+  for (let i = 1; i <= monthsBack; i++) {
+    const d = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    if (isMonthBeforeRegistration(current, year, month)) break;
+    const key = monthKey(year, month);
+    if (overrides[key] != null) continue;
+    overrides[key] = oldFee;
+    notes[key] = note;
+    changed = true;
+  }
+
+  if (!changed) return null;
+  return { duesOverrides: overrides, duesOverrideNotes: notes };
+}
+
 export function applyGroupDefaultsToStudent(
   group: TrainingGroup,
   disciplineBranches: DisciplineBranch[]

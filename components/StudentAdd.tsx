@@ -25,6 +25,7 @@ import { DEFAULT_REMINDER_DAY, REMINDER_DAY_OPTIONS } from '../lib/reminderDays'
 import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
 import { getOrCreateParentConsentInviteAsync } from '../services/applicationStorage';
 import { dispatchNotification, triggerWhatsAppAuto } from '../services/notificationDispatch';
+import { sendWhatsAppMessage } from '../services/whatsappClient';
 import type { GroupLessonSlot, Student } from '../types';
 import {
   applyGroupDefaultsToStudent,

@@ -122,6 +122,7 @@ export function ChessBoardFrame({
 
   return (
     <div
+      data-chess-pointer-root
       className={`w-full min-w-0 ${className}`}
       style={{
         display: 'grid',

@@ -377,7 +377,7 @@ const ApplicationApproveModal: React.FC<Props> = ({
               ? auth.coachId
               : PLACEHOLDER_COACH,
     }));
-  }, [app, form.registrationType, form.group, form.branchOffice, form.branch, scopedLessonPackages, scopedTrainingGroups, scopedDisciplineBranches, auth?.coachId, auth?.role]);
+  }, [app, form.registrationType, form.group, form.branchOffice, form.branch, scopedLessonPackages, scopedTrainingGroups, scopedDisciplineBranches, auth?.role === 'coach' ? auth.coachId : undefined, auth?.role]);
 
   const errors = useMemo(() => {
     const e: Record<string, string> = {};

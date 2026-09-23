@@ -14,6 +14,7 @@ import { DEFAULT_FEN, applyMove, makeBuilderGame } from '../studyUtils';
 import type { NodeId, StudyNode, StudyTree } from './types';
 import {
   buildInitialTree,
+  effectiveMainlineIds,
   genNodeId,
   promoteBranchToMainline,
   rebuildMainlineFromTree,
@@ -35,8 +36,9 @@ function followFirstLineSans(tree: StudyTree, startId: NodeId, mainSet: Set<Node
 
 function mainlineSansFromTree(tree: StudyTree, rootFen: string): string[] {
   const out: string[] = [];
-  for (let i = 1; i < tree.mainline.length; i++) {
-    const id = tree.mainline[i]!;
+  const mainline = effectiveMainlineIds(tree);
+  for (let i = 1; i < mainline.length; i++) {
+    const id = mainline[i]!;
     const n = tree.nodes[id];
     const label = (n?.san || '').trim();
     if (!label) continue;
@@ -47,7 +49,7 @@ function mainlineSansFromTree(tree: StudyTree, rootFen: string): string[] {
 
 function buildLegacyVariationsFromTree(tree: StudyTree): Record<number, string[][]> {
   const variations: Record<number, string[][]> = {};
-  const mainline = tree.mainline ?? [];
+  const mainline = effectiveMainlineIds(tree);
   const mainSet = new Set(mainline);
 
   for (let i = 0; i < mainline.length; i++) {

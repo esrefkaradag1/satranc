@@ -50,7 +50,8 @@ const BranchGroupManagement: React.FC = () => {
   } = useApp();
 
   const isClubUser = auth?.role === 'club';
-  const clubBranch = activeClubBranch ?? auth?.branch ?? '';
+  const authBranch = auth?.role === 'coach' || auth?.role === 'club' ? auth.branch : undefined;
+  const clubBranch = activeClubBranch ?? authBranch ?? '';
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [newOfficeName, setNewOfficeName] = useState('');

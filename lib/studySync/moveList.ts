@@ -4,6 +4,7 @@ import type { StudyTree } from './types';
 import type { StudyChapterState } from './types';
 import { DEFAULT_FEN, applyMove, makeBuilderGame } from '../studyUtils';
 import { promoteVariationLegacy } from './treeModel';
+import { effectiveMainlineIds } from './apply';
 
 /** Sync ağacındaki güncel yolun FEN'i — hamle listesini yeniden oynatmaktan güvenilir. */
 export function fenAtSyncPath(state: StudyChapterState | null | undefined): string | null {
@@ -284,8 +285,9 @@ export function findVariationBranchNodeId(
 
 export function mainlineSansFromTree(tree: StudyTree, rootFen: string): string[] {
   const out: string[] = [];
-  for (let i = 1; i < tree.mainline.length; i++) {
-    const id = tree.mainline[i]!;
+  const mainline = effectiveMainlineIds(tree);
+  for (let i = 1; i < mainline.length; i++) {
+    const id = mainline[i]!;
     const n = tree.nodes[id];
     const label = (n?.san || '').trim();
     if (!label) continue;

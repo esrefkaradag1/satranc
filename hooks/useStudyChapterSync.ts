@@ -12,14 +12,17 @@ import {
   mergeVariationRecords,
 } from '../lib/studySync/moveList';
 import { exportLegacyFromTree, buildTreeFromLegacy } from '../lib/studySync/treeModel';
+import { effectiveMainlineIds } from '../lib/studySync/apply';
 import { loadStudyActions, loadStudySnapshot, subscribeStudyActions, appendStudyAction, upsertPresence, upsertStudySnapshot } from '../services/studyActions';
 
 function treeMainlinePlyCount(tree: StudyTree | null | undefined): number {
-  return Math.max(0, (tree?.mainline?.length ?? 0) - 1);
+  // Saklanan mainline bozuk olabilir; children[0] zinciri esas alınır.
+  return Math.max(0, effectiveMainlineIds(tree).length - 1);
 }
 
 function pathFromTree(tree: StudyTree): NodeId[] {
-  return tree.mainline?.length ? tree.mainline.slice() : [tree.rootId];
+  const mainline = effectiveMainlineIds(tree);
+  return mainline.length ? mainline.slice() : [tree.rootId];
 }
 
 /** Etkileşimli bulmaca: Lichess gibi kökten başla; ders/okuma: ana hattın sonu. */
@@ -56,7 +59,7 @@ function treeToLegacyChapter(state: StudyChapterState, fallback: StudyChapter | 
   const tree = state.tree;
   const root = tree.nodes[tree.rootId];
   if (!root) return fallback;
-  const mainline = tree.mainline;
+  const mainline = effectiveMainlineIds(tree);
   const moves: string[] = [];
   const moveComments: Record<number, string> = {};
   const moveAnnotations: Record<number, string | string[]> = {};

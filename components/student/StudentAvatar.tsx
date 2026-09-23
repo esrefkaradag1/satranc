@@ -1,6 +1,6 @@
-import React from 'react';
-import type { Student } from '../types';
-import { isDisplayablePhotoUrl } from '../../lib/studentPhotoUpload';
+import React, { useState } from 'react';
+import type { Student } from '../../types';
+import { displayablePhotoUrl, isDisplayablePhotoUrl } from '../../lib/studentPhotoUpload';
 
 function studentInitials(name: string): string {
   return name
@@ -18,9 +18,11 @@ type Props = {
 };
 
 const StudentAvatar: React.FC<Props> = ({ student, applicationPhotos, className = 'w-10 h-10' }) => {
-  const photoUrl =
-    (isDisplayablePhotoUrl(student.photoUrl) ? student.photoUrl : undefined) ||
-    applicationPhotos?.[student.id];
+  const [broken, setBroken] = useState(false);
+  const raw =
+    (isDisplayablePhotoUrl(student.photoUrl) ? student.photoUrl : undefined)
+    || applicationPhotos?.[student.id];
+  const photoUrl = broken ? undefined : displayablePhotoUrl(raw);
 
   if (photoUrl) {
     return (
@@ -29,6 +31,9 @@ const StudentAvatar: React.FC<Props> = ({ student, applicationPhotos, className 
         alt={student.name}
         className={`${className} rounded-lg object-cover border border-indigo-500/20 shrink-0`}
         referrerPolicy="no-referrer"
+        loading="lazy"
+        decoding="async"
+        onError={() => setBroken(true)}
       />
     );
   }

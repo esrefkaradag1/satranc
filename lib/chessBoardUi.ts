@@ -38,11 +38,44 @@ export function pvLineToEvalBarPawns(
 
 export { formatEngineEvalLabel, winningChancesToBarPercent };
 
-/** react-chessboard: taş hareket geçişleri (Lichess benzeri) */
+/** react-chessboard: taş hareket geçişleri (Lichess benzeri) + görünür ok uçları */
+export const CHESSBOARD_ARROW_OPTIONS = {
+  /** Küçük pay → ok hedefe daha yakın biter, uç daha net görünür */
+  arrowLengthReducerDenominator: 6,
+  sameTargetArrowLengthReducerDenominator: 3.5,
+  arrowWidthDenominator: 4.2,
+  activeArrowWidthMultiplier: 0.95,
+  opacity: 0.88,
+  activeOpacity: 0.72,
+  /** Taş gövdesinden başlasın (chess.com hissi) */
+  arrowStartOffset: 0.32,
+} as const;
+
 export const CHESSBOARD_ANIMATION = {
   showAnimations: true as const,
   animationDurationInMs: 280,
+  arrowOptions: CHESSBOARD_ARROW_OPTIONS,
 };
+
+/**
+ * react-chessboard SVG ok uçları `markerEnd=url(#id-…)` ile bağlanır.
+ * FEN gibi boşluk/özel karakter içeren id'ler HTML'de geçersizdir → ok gövdesi çizilir, uç görünmez.
+ */
+export function chessboardDomId(
+  ...parts: Array<string | number | null | undefined>
+): string {
+  const raw = parts
+    .filter((p) => p != null && String(p).trim().length > 0)
+    .map((p) => String(p).trim())
+    .join('-');
+  const cleaned = raw
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^-+|-+$/g, '');
+  if (!cleaned) return 'chessboard';
+  return /^[0-9]/.test(cleaned) ? `b-${cleaned}` : cleaned;
+}
 
 /** Kare içi a/h notasyonu kapalı — dış koordinatlar ChessBoardFrame ile gösterilir */
 export const CHESSBOARD_NO_NOTATION = {

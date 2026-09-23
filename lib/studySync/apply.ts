@@ -63,13 +63,12 @@ export function addChildNode(tree: StudyTree, parentId: NodeId, san: string, pre
   const nextParent: StudyNode = { ...parent, children: [...parent.children, childId] };
   nextNodes[parentId] = nextParent;
 
-  // mainline extension heuristic: first child of each node is mainline; add to mainline if parent is last mainline
-  let nextMainline = tree.mainline;
-  if (tree.mainline.length && tree.mainline[tree.mainline.length - 1] === parentId) {
-    nextMainline = [...tree.mainline, childId];
-  }
-
-  return { nextTree: { ...tree, nodes: nextNodes, mainline: nextMainline }, childId };
+  // Ana hat her zaman children[0] zinciridir; saklanan dizi bozulmuşsa da onarılır.
+  const nextTree: StudyTree = { ...tree, nodes: nextNodes, mainline: [] };
+  return {
+    nextTree: { ...nextTree, mainline: rebuildMainlineFromTree(nextTree) },
+    childId,
+  };
 }
 
 export function deleteSubtree(tree: StudyTree, nodeId: NodeId): StudyTree {
@@ -145,6 +144,17 @@ export function setNodeShapes(tree: StudyTree, nodeId: NodeId, shapes: any[]): S
 }
 
 /** İlk çocuk zincirini ana hat olarak yeniden oluşturur */
+/**
+ * Okuma tarafında güvenli ana hat: saklanan `tree.mainline` bozuk olabildiği için
+ * (ör. eski snapshot'larda ["root"] kalmış) children[0] zinciri kaynak kabul edilir.
+ */
+export function effectiveMainlineIds(tree: StudyTree | null | undefined): NodeId[] {
+  if (!tree?.rootId || !tree.nodes?.[tree.rootId]) return tree?.mainline ?? [];
+  const rebuilt = rebuildMainlineFromTree(tree);
+  const stored = tree.mainline ?? [];
+  return rebuilt.length >= stored.length ? rebuilt : stored;
+}
+
 export function rebuildMainlineFromTree(tree: StudyTree): NodeId[] {
   const line: NodeId[] = [tree.rootId];
   let cur: NodeId = tree.rootId;

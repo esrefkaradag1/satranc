@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { ShieldCheck, History, UserCheck, AlertTriangle, Search, Filter } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { maskStudentCount } from '../lib/studentCountVisibility';
+import { ResponsiveTable } from './ui/ResponsiveTable';
 
 function formatLogTime(iso: string): { time: string; date: string } {
   try {
@@ -192,7 +193,7 @@ const Security: React.FC = () => {
  );
 };
 
-const SecurityStatCard = ({ icon, label, value, sub, color }: { icon: React.ReactElement; label: string; value: string; sub: string; color: string }) => {
+const SecurityStatCard = ({ icon, label, value, sub, color }: { icon: React.ReactElement<{ size?: number; strokeWidth?: number }>; label: string; value: string; sub: string; color: string }) => {
  const colorClasses: Record<string, string> = {
  emerald: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
  rose: 'bg-rose-500/10 text-rose-500 border-rose-500/20',

@@ -303,9 +303,7 @@ function resolvePuzzlePlayedMoves(
   const coachRecorded = isCoachRecordedStudyChapter(enriched);
 
   if (coachRecorded) {
-    if (line.length > 0) {
-      return { startFen, moves: line, studentColor };
-    }
+    // Öğrencinin gerçekten oynadığı (doğru) hamleler — antrenör hattından uydurma "motor" ply basma.
     const game = makeBuilderGame(startFen || DEFAULT_FEN);
     const played: string[] = [];
     for (const event of ordered) {
@@ -316,6 +314,7 @@ function resolvePuzzlePlayedMoves(
       played.push(san);
     }
     if (played.length > 0) return { startFen, moves: played, studentColor };
+    if (line.length > 0) return { startFen, moves: line, studentColor };
   }
 
   if (line.length > 0 && ordered.length > 0) {
@@ -550,6 +549,7 @@ export function buildReplayTableRows(
     const { startFen, moves, studentColor } = resolvePuzzlePlayedMoves(chapter, events);
     if (moves.length === 0) return [];
 
+    const coachRecorded = isCoachRecordedStudyChapter(enrichChapterMoves(chapter));
     const studentEvents = puzzleStudentEvents(events).filter((e) => e.result !== 'wrong');
     let studentEventCursor = 0;
     const game = makeBuilderGame(startFen || DEFAULT_FEN);
@@ -557,18 +557,26 @@ export function buildReplayTableRows(
     return moves.map((move, plyIdx) => {
       const turnBefore = game.turn();
       applyPuzzleMove(game, move);
-      const isStudent = turnBefore === studentColor;
+      // Antrenör Hamle Bul: öğrenci her ply'yi bulur — "Bilgisayar/Motor" deme.
+      // Lichess tarzı: yalnızca öğrenci rengi öğrenci; karşı hamle rakip hattı.
+      const isStudent = coachRecorded ? true : turnBefore === studentColor;
+      const isOpponentLine = !coachRecorded && turnBefore !== studentColor;
       let thinkMs = 0;
       let createdAt: string | null = null;
-      let result: ReplayTableRow['result'] = isStudent ? 'correct' : 'engine';
-      let expectedLabel = isStudent ? 'Bulmaca' : 'Karşı hamle';
+      let result: ReplayTableRow['result'] = isOpponentLine ? 'engine' : 'correct';
+      let expectedLabel = isOpponentLine ? 'Rakip' : 'Bulmaca';
       if (isStudent && studentEventCursor < studentEvents.length) {
         const ev = studentEvents[studentEventCursor];
-        thinkMs = ev?.thinkMs ?? 0;
-        createdAt = ev?.createdAt ?? null;
-        expectedLabel = ev?.expectedMove || 'Bulmaca';
-        if (ev?.result === 'solution') result = 'solution';
-        studentEventCursor += 1;
+        const logged = (ev?.playedMove ?? '').trim();
+        // Antrenör hattında olay sırası ply ile uyuşmuyorsa (eski bug: yalnızca siyah
+        // hamleleri loglanmış) yanlış satıra düşünme süresi yazma.
+        if (!coachRecorded || !logged || studentMoveMatchesEvent(move, ev)) {
+          thinkMs = ev?.thinkMs ?? 0;
+          createdAt = ev?.createdAt ?? null;
+          expectedLabel = ev?.expectedMove || expectedLabel;
+          if (ev?.result === 'solution') result = 'solution';
+          studentEventCursor += 1;
+        }
       }
       return {
         id: `puzzle-full-${plyIdx}-${move}`,

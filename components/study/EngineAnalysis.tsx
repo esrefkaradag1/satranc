@@ -31,7 +31,7 @@ function EvalSparkline({ scores }: { scores: number[] }) {
     })
     .join(' ');
   return (
-    <svg width={width} height={height} className="shrink-0" aria-hidden title="Değerlendirme kararsızlığı">
+    <svg width={width} height={height} className="shrink-0" aria-hidden aria-label="Değerlendirme kararsızlığı">
       <line x1={0} y1={midY} x2={width} y2={midY} stroke="currentColor" strokeWidth={0.5} className="text-white/15" strokeDasharray="2 2" />
       <polyline fill="none" stroke="currentColor" strokeWidth={1.5} points={pts} className="text-indigo-400/90" />
     </svg>
@@ -870,7 +870,6 @@ export const EngineAnalysis: React.FC<EngineAnalysisProps> = ({
                 id: 'engine-line-preview-hover',
                 position: linePreview.fen,
                 boardOrientation,
-                arePiecesDraggable: false,
                 allowDragging: false,
                 darkSquareStyle: { backgroundColor: '#5d768e' },
                 lightSquareStyle: { backgroundColor: '#c1c9d2' },

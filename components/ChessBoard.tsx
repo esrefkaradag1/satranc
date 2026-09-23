@@ -24,15 +24,17 @@ import {
 import { pdfAllPagesToDataUrls } from '../services/pdfToImage';
 import { loadStudiesAsync, saveStudyAsync } from '../studyStorage';
 import { loadStudyCategoriesAsync, type StudyCategoryMeta } from '../studyCategoriesStorage';
-import { applyPuzzleMove, initCoachStyleSession, materializeLichessPuzzleRecord, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
+import { materializeLichessPuzzleRecord, puzzlePlayPreviewState } from '../lib/puzzlePlayUtils';
 import { estimatePuzzleRating, PRACTICE_RATING_BANDS } from '../lib/studentPuzzlePractice';
 import type { Study } from '../lib/studyTypes';
+import type { Puzzle } from '../types';
 import { filterStudiesForCoachView } from '../lib/studyPermissions';
 import { genId, migrateStudy, migrateChapter } from '../lib/studyUtils';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION } from '../lib/chessBoardUi';
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
+import StudentPuzzlePlayModal from './StudentPuzzlePlayModal';
 
 /** SAN hamlesini Unicode taş sembollü metne çevirir (♔♕♖♗♘ / ♚♛♜♝♞) */
 function sanToSymbol(san: string): string {
@@ -643,6 +645,8 @@ const ChessBoard: React.FC = () => {
   };
 
   const [playingPuzzleImage, setPlayingPuzzleImage] = useState<string | null>(null);
+  /** Hemen Oyna — öğrenci oynatma modalı (çözüm hattı + çözülecek taraf) */
+  const [coachPlayPuzzle, setCoachPlayPuzzle] = useState<Puzzle | null>(null);
   const [puzzlePositionLoading, setPuzzlePositionLoading] = useState(false);
 
   // Editör: Görsel / PDF ile bulmaca yükleme (tahtaya FEN çıkarıp yükle)
@@ -657,21 +661,9 @@ const ChessBoard: React.FC = () => {
   const [editorExtractedBoards, setEditorExtractedBoards] = useState<ImageBoardResult[] | null>(null);
   const [editorSelectedBoardIndex, setEditorSelectedBoardIndex] = useState(0);
 
-  const playPuzzle = async (puzzle: any) => {
-    setActiveTab('editor');
-    setTool('cursor');
-    setPuzzlePlayMode('computer');
-    setVsComputer(true);
-    setSolutionFeedback(null);
-    setPuzzleTitle(puzzle.title);
-    setDifficulty(puzzle.difficulty as any);
-    setPoints(puzzle.points);
-    setTheme(puzzle.theme || '');
-    setHint(puzzle.hint || '');
-    setPlayingPuzzleImage(puzzle.imageData || null);
-
+  const playPuzzle = async (puzzle: Puzzle) => {
     let fenToUse = puzzle.fen?.trim() || DEFAULT_START_FEN;
-    let solutionForPlay: string[] = Array.isArray(puzzle.solution) ? puzzle.solution : [];
+    let solutionForPlay: string[] = Array.isArray(puzzle.solution) ? [...puzzle.solution] : [];
     const isDefaultStart = fenToUse === DEFAULT_START_FEN;
 
     if (puzzle.imageData && isDefaultStart) {
@@ -689,25 +681,12 @@ const ChessBoard: React.FC = () => {
       }
     }
 
-    const session = initCoachStyleSession(
-      materializeLichessPuzzleRecord({ ...puzzle, fen: fenToUse, solution: solutionForPlay } as Puzzle),
-    );
-    setSolutionMoves(session.solutionMoves);
-    if (session.solutionMoves[0]) setHint(session.solutionMoves[0]);
-
-    try {
-      const c = new Chess(session.playFen);
-      setGame(c);
-      setGameInitialFen(session.playFen);
-      setBrowseIndex(null);
-      setOptionSquares({});
-      setLastMoveSquares({});
-      setMoveFrom(null);
-      // İlk kaydedilen hamle FEN'deki sıraya göre: beyaz sıra ise history[0]=beyaz, siyah sıra ise history[0]=siyah
-      setRecordedHistoryStartsWithWhite(c.turn() === 'w');
-    } catch {
-      showToast("Bulmaca yüklenemedi! FEN geçersiz olabilir.", 'error');
-    }
+    // Öğrenci paneliyle aynı: çözüm hattı + setup + çözülecek taraf (Stockfish değil)
+    setCoachPlayPuzzle(materializeLichessPuzzleRecord({
+      ...puzzle,
+      fen: fenToUse,
+      solution: solutionForPlay,
+    }));
   };
 
   const editorUploadSelectedDataUrl = editorPdfPages.length > 0
@@ -1294,6 +1273,7 @@ const ChessBoard: React.FC = () => {
   });
 
   return (
+    <>
     <div className="space-y-8 animate-in fade-in duration-700">
       <div className="flex items-center gap-3 mb-6 px-2">
         <div className="bg-indigo-600/20 p-2 rounded-lg text-indigo-400 shadow-inner border border-indigo-500/20"><Grid className="w-6 h-6" /></div>
@@ -2089,7 +2069,14 @@ const ChessBoard: React.FC = () => {
                               {selected && <Check className="w-3 h-3 text-white" />}
                             </div>
                             <div className="w-10 h-10 rounded-lg overflow-hidden border border-white/10 flex-shrink-0">
-                              <ChessBoardFrame hideCoordinates boardOrientation="white" className="w-full h-full"><Chessboard options={{ position: p.fen, darkSquareStyle: { backgroundColor: '#779952' }, lightSquareStyle: { backgroundColor: '#edeed1' }, ...CHESSBOARD_ANIMATION, ...CHESSBOARD_NO_NOTATION, allowDragging: false }} /></ChessBoardFrame>
+                              {(() => {
+                                const preview = puzzlePlayPreviewState(p);
+                                return (
+                                  <ChessBoardFrame hideCoordinates boardOrientation={preview.orientation} className="w-full h-full">
+                                    <Chessboard options={{ position: preview.fen, darkSquareStyle: { backgroundColor: '#779952' }, lightSquareStyle: { backgroundColor: '#edeed1' }, ...CHESSBOARD_ANIMATION, ...CHESSBOARD_NO_NOTATION, allowDragging: false }} />
+                                  </ChessBoardFrame>
+                                );
+                              })()}
                             </div>
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-bold text-white truncate">{p.title}</p>
@@ -2260,7 +2247,14 @@ const ChessBoard: React.FC = () => {
                               {hwPuzzles.map(p => (
                                 <div key={p.id} className="bg-black/30 rounded-lg p-2.5 border border-white/5">
                                   <div className="aspect-square rounded-lg overflow-hidden mb-2 border border-white/10">
-                                    <ChessBoardFrame hideCoordinates boardOrientation="white" className="w-full h-full"><Chessboard options={{ position: p.fen, darkSquareStyle: { backgroundColor: '#779952' }, lightSquareStyle: { backgroundColor: '#edeed1' }, ...CHESSBOARD_ANIMATION, ...CHESSBOARD_NO_NOTATION, allowDragging: false }} /></ChessBoardFrame>
+                                    {(() => {
+                                      const preview = puzzlePlayPreviewState(p);
+                                      return (
+                                        <ChessBoardFrame hideCoordinates boardOrientation={preview.orientation} className="w-full h-full">
+                                          <Chessboard options={{ position: preview.fen, darkSquareStyle: { backgroundColor: '#779952' }, lightSquareStyle: { backgroundColor: '#edeed1' }, ...CHESSBOARD_ANIMATION, ...CHESSBOARD_NO_NOTATION, allowDragging: false }} />
+                                        </ChessBoardFrame>
+                                      );
+                                    })()}
                                   </div>
                                   <p className="text-[10px] font-bold text-white truncate">{p.title}</p>
                                   <div className="flex gap-1 mt-1">
@@ -2497,6 +2491,13 @@ const ChessBoard: React.FC = () => {
         </div>
       )}
     </div>
+      {coachPlayPuzzle && (
+        <StudentPuzzlePlayModal
+          puzzle={coachPlayPuzzle}
+          onClose={() => setCoachPlayPuzzle(null)}
+        />
+      )}
+    </>
   );
 };
 

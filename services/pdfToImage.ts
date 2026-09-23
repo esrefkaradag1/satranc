@@ -3,7 +3,6 @@
  * Worker Vite'ın ?url suffix'i ile ayrı yüklenir.
  */
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
-// @ts-expect-error - Vite ?url ile worker dosyasının URL'sini döndürür
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 GlobalWorkerOptions.workerSrc = workerUrl;

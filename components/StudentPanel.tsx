@@ -1465,8 +1465,10 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   const veliAdi = parentDisplayNameFor(student);
 
+  const chessPointerTabs = activeTab === 'study' || activeTab === 'live-lesson' || activeTab === 'puzzle-practice' || activeTab === 'puzzles';
+
   return (
-    <div className="app-ui-scale flex min-h-screen bg-[#020617] text-slate-100 min-w-0">
+    <div className={`flex min-h-screen bg-[#020617] text-slate-100 min-w-0 ${chessPointerTabs ? 'app-ui-scale app-ui-scale--precise' : 'app-ui-scale'}`}>
       <Sidebar
         activeTab={activeTab}
         setActiveTab={(id) => setActiveTab(id as PanelTab)}

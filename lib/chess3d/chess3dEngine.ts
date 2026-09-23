@@ -376,7 +376,7 @@ export class Chess3DEngine {
 
   private applyTextureMaterial(mesh: THREE.Mesh, name: string, tex: THREE.Texture) {
     if (name.includes('Floor') || name.includes('Tables_Side')) {
-      mesh.material = new THREE.MeshStandardMaterial({ color: 0xffffff, map: tex, clearcoat: 0 });
+      mesh.material = new THREE.MeshStandardMaterial({ color: 0xffffff, map: tex, clearcoat: 0 } as THREE.MeshStandardMaterialParameters);
     } else if (isPieceNodeName(name) || isSquareNodeName(name)) {
       mesh.material = new THREE.MeshStandardMaterial({
         color: 0xffffff,
@@ -384,7 +384,7 @@ export class Chess3DEngine {
         roughness: isSquareNodeName(name) ? 1 : 0,
         metalness: isSquareNodeName(name) ? 0 : 0.4,
         clearcoat: 1,
-      });
+      } as THREE.MeshStandardMaterialParameters);
     } else if (
       name.includes('obj') ||
       name.includes('Leg') ||
@@ -397,7 +397,7 @@ export class Chess3DEngine {
         roughness: name.includes('Chair') || name.includes('Leg') ? 0.7 : 0.05,
         metalness: 0,
         clearcoat: 0.05,
-      });
+      } as THREE.MeshStandardMaterialParameters);
     } else {
       mesh.material = new THREE.MeshStandardMaterial({ color: 0xffffff, map: tex, roughness: 1 });
     }

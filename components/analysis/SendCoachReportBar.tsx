@@ -91,7 +91,7 @@ export const SendCoachReportBar: React.FC<SendCoachReportBarProps> = ({
         summary,
         eksiklikler,
         hamleler,
-        skillSnapshot: skillSnapshot as CoachAiReportSkillSnapshot | undefined,
+        skillSnapshot: skillSnapshot as NonNullable<CoachAiReport['skillSnapshot']> | undefined,
         publishedToParent: true,
       });
       if (r.ok && r.mode === 'api') {

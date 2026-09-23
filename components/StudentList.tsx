@@ -71,7 +71,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const [filterBranchOffice, setFilterBranchOffice] = useState(FILTER_ALL_OFFICES);
  const [filterBranch, setFilterBranch] = useState(FILTER_ALL_BRANCHES);
  const [filterGroup, setFilterGroup] = useState(FILTER_ALL_GROUPS);
- const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
+ /** Varsayılan: yalnızca aktifler — pasifleri aradan ayıklamak zor olmasın. */
+ const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('active');
  const [filterScholarship, setFilterScholarship] = useState<'all' | 'yes' | 'no'>('all');
  const [filterPackage, setFilterPackage] = useState<'all' | 'yes'>('all');
  const [filterCoach, setFilterCoach] = useState('Tüm Antrenörler');

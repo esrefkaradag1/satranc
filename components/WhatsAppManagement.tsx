@@ -284,7 +284,7 @@ const WhatsAppManagement: React.FC = () => {
           const byEvent = new Map(prev.map((r) => [r.event, r]));
           for (const r of remote.rules) {
             const existing = byEvent.get(r.event as typeof prev[number]['event']);
-            if (existing) byEvent.set(r.event, { ...existing, enabled: r.enabled });
+            if (existing) byEvent.set(r.event as typeof prev[number]['event'], { ...existing, enabled: r.enabled });
             else {
               byEvent.set(r.event as typeof prev[number]['event'], {
                 event: r.event as typeof prev[number]['event'],
