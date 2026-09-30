@@ -1549,9 +1549,10 @@ export function normalizeStudyChapterPuzzle(chapter: {
   if (fromOrientation && rawSolution.length > 0) {
     const coachRecorded = isCoachRecordedStudyChapter(chapter as StudyChapter);
 
-    // Antrenör REC / SAN: öğrenci kayıtlı hattın tamamını bulur.
-    // Otomatik "kurulum çıkarımı" KULLANILMAZ — eski puzzleSetupPly=len-1
-    // kayıtları ara hamleleri yutup yalnızca son hamleyi bırakıyordu.
+    // Antrenör REC / SAN: hat olduğu gibi kalır. Öğrenci yalnızca orientation
+    // rengini bulur; karşı renk hamleleri bu hatta kalır ve öğrenci ekranında
+    // bilgisayar oynatır. Otomatik "kurulum çıkarımı" KULLANILMAZ — eski
+    // puzzleSetupPly=len-1 kayıtları ara hamleleri yutup yalnızca son hamleyi bırakıyordu.
     if (coachRecorded) {
       const ply = chapter.puzzleSetupPly;
       let setupPly = 0;
@@ -1574,7 +1575,7 @@ export function normalizeStudyChapterPuzzle(chapter: {
         studentMoves: split.solutionMoves,
         studentColor: fromOrientation,
         setupMoveSan: split.setupMoveSan,
-        playSideToMove: true,
+        playSideToMove: false,
       };
     }
 

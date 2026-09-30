@@ -1,7 +1,7 @@
 import type { StudyChapter } from './studyTypes';
 import type { StudyEvent } from '../studyEvents';
 import { DEFAULT_FEN, makeBuilderGame } from './studyUtils';
-import { applyPuzzleMove, canReplayMovesFrom, isCoachRecordedStudyChapter, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
+import { applyPuzzleMove, canReplayMovesFrom, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
 import { mainlineSansFromTree } from './studySync/moveList';
 
 export type ReplayStep = {
@@ -300,22 +300,6 @@ function resolvePuzzlePlayedMoves(
   const startFen = normalized.startFen;
   const studentColor = normalized.studentColor;
   const ordered = puzzleStudentEvents(events);
-  const coachRecorded = isCoachRecordedStudyChapter(enriched);
-
-  if (coachRecorded) {
-    // Öğrencinin gerçekten oynadığı (doğru) hamleler — antrenör hattından uydurma "motor" ply basma.
-    const game = makeBuilderGame(startFen || DEFAULT_FEN);
-    const played: string[] = [];
-    for (const event of ordered) {
-      if (event.result === 'wrong') continue;
-      const san = (event.playedMove ?? '').trim();
-      if (!san) continue;
-      if (!applyPuzzleMove(game, san)) continue;
-      played.push(san);
-    }
-    if (played.length > 0) return { startFen, moves: played, studentColor };
-    if (line.length > 0) return { startFen, moves: line, studentColor };
-  }
 
   if (line.length > 0 && ordered.length > 0) {
     const g = makeBuilderGame(startFen || DEFAULT_FEN);
@@ -549,7 +533,6 @@ export function buildReplayTableRows(
     const { startFen, moves, studentColor } = resolvePuzzlePlayedMoves(chapter, events);
     if (moves.length === 0) return [];
 
-    const coachRecorded = isCoachRecordedStudyChapter(enrichChapterMoves(chapter));
     const studentEvents = puzzleStudentEvents(events).filter((e) => e.result !== 'wrong');
     let studentEventCursor = 0;
     const game = makeBuilderGame(startFen || DEFAULT_FEN);
@@ -557,10 +540,9 @@ export function buildReplayTableRows(
     return moves.map((move, plyIdx) => {
       const turnBefore = game.turn();
       applyPuzzleMove(game, move);
-      // Antrenör Hamle Bul: öğrenci her ply'yi bulur — "Bilgisayar/Motor" deme.
-      // Lichess tarzı: yalnızca öğrenci rengi öğrenci; karşı hamle rakip hattı.
-      const isStudent = coachRecorded ? true : turnBefore === studentColor;
-      const isOpponentLine = !coachRecorded && turnBefore !== studentColor;
+      // Öğrenci yalnızca kendi rengini bulur; karşı renk antrenör hattından bilgisayar oynar.
+      const isStudent = turnBefore === studentColor;
+      const isOpponentLine = turnBefore !== studentColor;
       let thinkMs = 0;
       let createdAt: string | null = null;
       let result: ReplayTableRow['result'] = isOpponentLine ? 'engine' : 'correct';
@@ -570,7 +552,7 @@ export function buildReplayTableRows(
         const logged = (ev?.playedMove ?? '').trim();
         // Antrenör hattında olay sırası ply ile uyuşmuyorsa (eski bug: yalnızca siyah
         // hamleleri loglanmış) yanlış satıra düşünme süresi yazma.
-        if (!coachRecorded || !logged || studentMoveMatchesEvent(move, ev)) {
+        if (!logged || studentMoveMatchesEvent(move, ev)) {
           thinkMs = ev?.thinkMs ?? 0;
           createdAt = ev?.createdAt ?? null;
           expectedLabel = ev?.expectedMove || expectedLabel;

@@ -42,7 +42,7 @@ import { DEFAULT_FEN, makeBuilderGame, applyMove, sideToMove,
   genId, migrateStudy, migrateChapter, studyDisplayEmoji,
   normalizeStudentPlaysColor, canStudentDragPieceOnFen, studentCanMovePieces, studentPlaysColorLabel,
 } from '../lib/studyUtils';
-import { applyPuzzleAutoReplies, applyPuzzleMove, dropMatchesSolutionMove, fenAtPuzzleMoveIndex, isCoachRecordedStudyChapter, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares, resolveStudyChapterSolutionMoves } from '../lib/puzzlePlayUtils';
+import { applyPuzzleMove, dropMatchesSolutionMove, fenAtPuzzleMoveIndex, normalizeStudyChapterPuzzle, resolveExpectedMoveSquares, resolveStudyChapterSolutionMoves } from '../lib/puzzlePlayUtils';
 import { StudyMoveTree } from './study/StudyMoveTree';
 import { EngineAnalysis } from './study/EngineAnalysis';
 import { StudyBottomTools } from './study/StudyBottomTools';
@@ -505,12 +505,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     puzzleSourceChapter?.puzzleSetupPly,
     legacyChapter?.moves,
   ]);
-
-  /** Antrenör REC ile kaydedilen Hamle Bul — Lichess bulmacası değil; rakip hamle otomatik oynanmaz. */
-  const isCoachHamleBul = useMemo(() => {
-    if (!isInteractivePuzzle || !puzzleSourceChapter) return false;
-    return isCoachRecordedStudyChapter(puzzleSourceChapter);
-  }, [isInteractivePuzzle, puzzleSourceChapter]);
 
   const boardPgnDisplay = useMemo(() => {
     if (!selectedStudy || !effectiveChapter) return null;
@@ -1009,21 +1003,18 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (effectiveChapter?.comment?.trim()) return effectiveChapter.comment.trim();
     if (isInteractivePuzzle && puzzlePlayNorm) {
       const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
-      const colorLabel = turnCode === 'w' ? 'Beyaz' : 'Siyah';
       if (totalMoves === 0) {
         const atPuzzleStart = puzzlePlayNorm.startFen !== (effectiveChapter?.fen || DEFAULT_FEN);
         return atPuzzleStart
           ? 'Pozisyon hazır. Antrenör çözüm hamlesini kaydedene kadar bekleyin.'
           : 'Antrenör çözüm hattını kaydedene kadar bekleyin veya antrenörünüze yazın.';
       }
-      if (isCoachHamleBul) {
-        return `Sıra ${colorLabel} tarafında. Antrenörün gösterdiği sıradaki hamleyi bulun.`;
-      }
-      if (turnCode !== puzzlePlayNorm.studentColor) {
-        return 'Antrenörün gösterdiği rakip hamleyi görmek için «Rakip hamlesini göster»e basın; ardından sıradaki hamleyi siz bulun.';
-      }
       const studentLabel = puzzlePlayNorm.studentColor === 'w' ? 'Beyaz' : 'Siyah';
-      return `Sıra ${studentLabel} tarafında. Sıradaki hamleyi bulun.`;
+      const opponentLabel = puzzlePlayNorm.studentColor === 'w' ? 'Siyah' : 'Beyaz';
+      if (turnCode !== puzzlePlayNorm.studentColor) {
+        return `${opponentLabel} hamlesini bilgisayar, antrenörün kaydettiği hatta göre oynuyor.`;
+      }
+      return `Sıra ${studentLabel} tarafında. Yalnızca ${studentLabel.toLowerCase()} taşları oynatın; ${opponentLabel.toLowerCase()} hamlesini bilgisayar yapacak.`;
     }
     return 'Bu pozisyonda en iyi devam yolunu bulun. Hamleleri tahtada sürükleyerek oynayın.';
   }, [
@@ -1035,7 +1026,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     vcOutcome,
     isComplete,
     totalMoves,
-    isCoachHamleBul,
     studyBoardFen,
   ]);
 
@@ -1157,37 +1147,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const isStudentTurnInPuzzle = useMemo(() => {
     if (!hideEngineForStudentPuzzle || !puzzlePlayNorm) return true;
-    if (isCoachHamleBul) return currentMoveIndex < totalMoves;
+    if (currentMoveIndex >= totalMoves) return false;
     const turnCode = sideToMove(studyBoardFen) === 'white' ? 'w' : 'b';
     return turnCode === puzzlePlayNorm.studentColor;
-  }, [hideEngineForStudentPuzzle, puzzlePlayNorm, studyBoardFen, isCoachHamleBul, currentMoveIndex, totalMoves]);
-
-  const revealOpponentLineMoves = useCallback(() => {
-    if (!puzzlePlayNorm || currentMoveIndex >= totalMoves) return;
-    let idx = currentMoveIndex;
-    const game = makeBuilderGame(studyBoardFen);
-    let lastSan: string | null = null;
-    const fenBeforeBatch = game.fen();
-    while (idx < totalMoves && game.turn() !== puzzlePlayNorm.studentColor) {
-      const san = chapterMovesForUi[idx];
-      if (!san) break;
-      const played = applyPuzzleMove(game, san);
-      if (!played) break;
-      lastSan = played.san || san;
-      idx += 1;
-    }
-    if (idx === currentMoveIndex) return;
-    setFreePlayFen(null);
-    setCurrentMoveIndex(idx);
-    if (lastSan) setLastMoveSquares(lastMoveHighlightFromSan(fenBeforeBatch, lastSan));
-    setLastActionMs(Date.now());
-  }, [
-    puzzlePlayNorm,
-    currentMoveIndex,
-    totalMoves,
-    studyBoardFen,
-    chapterMovesForUi,
-  ]);
+  }, [hideEngineForStudentPuzzle, puzzlePlayNorm, studyBoardFen, currentMoveIndex, totalMoves]);
 
   const puzzlePlayFen = useMemo(() => {
     if (!isInteractivePuzzle || !puzzlePlayNorm) return studyBoardFen;
@@ -1299,6 +1262,70 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (f === 'correct') feedbackTimer.current = setTimeout(() => { setFeedback(null); setFeedbackText(null); }, 1200);
     else if (f === 'wrong') feedbackTimer.current = setTimeout(() => { setFeedback(null); setFeedbackText(null); }, 3500);
   }, []);
+
+  /** Hamle bul: karşı rengi öğrenci oynatmaz; antrenörün kaydettiği hamleyi bilgisayar uygular. */
+  useEffect(() => {
+    if (!hideEngineForStudentPuzzle || !puzzlePlayNorm || isComplete) return;
+    if (currentMoveIndex >= totalMoves || totalMoves === 0) return;
+
+    const fenBefore = fenAtPuzzleMoveIndex(
+      puzzlePlayNorm.startFen,
+      chapterMovesForUi,
+      currentMoveIndex,
+    );
+    const turnCode = sideToMove(fenBefore) === 'white' ? 'w' : 'b';
+    if (turnCode === puzzlePlayNorm.studentColor) return;
+
+    const san = chapterMovesForUi[currentMoveIndex];
+    if (!san) return;
+
+    let cancelled = false;
+    if (autoReplyTimer.current) clearTimeout(autoReplyTimer.current);
+    autoReplyTimer.current = setTimeout(() => {
+      if (cancelled) return;
+      const game = makeBuilderGame(fenBefore);
+      const played = applyPuzzleMove(game, san);
+      if (!played) {
+        setLaHint('Kayıtlı rakip hamlesi bu pozisyonda oynanamadı. Antrenörünüze bildirin.');
+        return;
+      }
+      const nextIdx = currentMoveIndex + 1;
+      setFreePlayFen(null);
+      setCurrentMoveIndex(nextIdx);
+      setLastMoveSquares(lastMoveHighlightFromSan(fenBefore, played.san || san));
+      setLastActionMs(Date.now());
+      setBoardArrows([]);
+      setCircleMarks({});
+      setOptionSquares({});
+      setClickMoveSquares({});
+      setMoveFrom(null);
+      if (nextIdx >= totalMoves) {
+        const outcome = describeGameOutcomeFromFen(game.fen());
+        showFeedback(
+          'solved',
+          outcome
+            ? `${outcome.title}! ${outcome.subtitle}`
+            : 'Tebrikler! Bu bölümü tamamladınız.',
+        );
+        recordProgress(progressKey ?? '', 100);
+      }
+    }, 520);
+
+    return () => {
+      cancelled = true;
+      if (autoReplyTimer.current) clearTimeout(autoReplyTimer.current);
+    };
+  }, [
+    hideEngineForStudentPuzzle,
+    puzzlePlayNorm,
+    isComplete,
+    currentMoveIndex,
+    totalMoves,
+    chapterMovesForUi,
+    showFeedback,
+    recordProgress,
+    progressKey,
+  ]);
 
   const getBestMoveWithTimeout = useCallback(async (
     fen: string,
@@ -1742,8 +1769,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (isInteractivePuzzle && !isComplete && currentMoveIndex < totalMoves && puzzlePlayNorm) {
       const playFen = puzzlePlayFen;
       const turnCode = sideToMove(playFen) === 'white' ? 'w' : 'b';
-      if (!isCoachHamleBul && turnCode !== puzzlePlayNorm.studentColor) {
-        showFeedback('wrong', 'Önce «Rakip hamlesini göster» ile antrenör hamlesini izleyin.');
+      if (turnCode !== puzzlePlayNorm.studentColor) {
+        setLaHint('Bu rengi bilgisayar oynatır. Sıra size gelince kendi taşınızı oynatın.');
         return false;
       }
 
@@ -1793,19 +1820,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         const playedSan = result.san ?? result.lan ?? `${sourceSquare}-${targetSquare}`;
 
         setLastActionMs(now);
-        let nextIdx = currentMoveIndex + 1;
-        let boardFenAfter = game.fen();
-
-        if (!isCoachHamleBul) {
-          const auto = applyPuzzleAutoReplies(
-            boardFenAfter,
-            chapterMovesForUi,
-            nextIdx,
-            puzzlePlayNorm.studentColor,
-          );
-          nextIdx = auto.nextIndex;
-          boardFenAfter = auto.fen;
-        }
+        const nextIdx = currentMoveIndex + 1;
+        const boardFenAfter = game.fen();
         setChapterMoveAnalysis((prev) => {
           const next = [
             ...prev,
@@ -1880,7 +1896,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       return false;
     }
-  }, [selectedStudy, effectiveChapter, selectedChapter, chapterMovesForUi, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, puzzlePlayFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs, hideEngineForStudentPuzzle, puzzleBoardInteraction, isCoachHamleBul]);
+  }, [selectedStudy, effectiveChapter, selectedChapter, chapterMovesForUi, currentMoveIndex, totalMoves, isComplete, isInteractive, isLiveAnalysis, showFeedback, recordProgress, effectiveStudentTurnCode, lastActionMs, studentId, studyBoardFen, puzzlePlayFen, estimateMoveQuality, pushLiveSessionMove, progressKey, studentMoveEnabled, puzzlePlayNorm, isInteractivePuzzle, persistChapterPracticeLogs, hideEngineForStudentPuzzle, puzzleBoardInteraction]);
   pieceDropRef.current = handlePieceDrop;
 
   const boardFenForInteraction = useMemo(() => {
@@ -1909,6 +1925,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const handleStudyBoardClick = useCallback((square: string) => {
     if (!boardDraggingEnabled || !square) return;
+    const studentColor = hideEngineForStudentPuzzle && puzzlePlayNorm
+      ? puzzlePlayNorm.studentColor
+      : null;
+    const canSelectPiece = (piece: { color?: string } | null | undefined, turn: string) => {
+      if (!piece || piece.color !== turn) return false;
+      if (studentColor && (turn !== studentColor || piece.color !== studentColor)) return false;
+      return true;
+    };
     if (moveFrom) {
       const moved = handlePieceDrop({ sourceSquare: moveFrom, targetSquare: square });
       if (moved) {
@@ -1920,7 +1944,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         const g = makeBuilderGame(boardFenForInteraction);
         const piece = g.get(square as any);
         const turn = g.turn();
-        if (piece && piece.color === turn) {
+        if (canSelectPiece(piece, turn)) {
           setMoveFrom(square);
           refreshClickMoveOptions(square);
           return;
@@ -1934,12 +1958,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       const g = makeBuilderGame(boardFenForInteraction);
       const piece = g.get(square as any);
       const turn = g.turn();
-      if (piece && piece.color === turn) {
+      if (canSelectPiece(piece, turn)) {
         setMoveFrom(square);
         refreshClickMoveOptions(square);
       }
     } catch { /* ignore */ }
-  }, [boardDraggingEnabled, moveFrom, handlePieceDrop, boardFenForInteraction, refreshClickMoveOptions]);
+  }, [boardDraggingEnabled, moveFrom, handlePieceDrop, boardFenForInteraction, refreshClickMoveOptions, hideEngineForStudentPuzzle, puzzlePlayNorm]);
 
   const puzzleBranchChoices = useMemo(() => {
     // Öğrenci bulmacasında sync ağacındaki deneme varyasyonları gösterilmez.
@@ -2405,12 +2429,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       if (currentMoveIndex >= totalMoves) return false;
       const fenForTurn = puzzleSetupPreviewFen ? puzzlePlayFen : studyBoardFen;
       const turnCode = sideToMove(fenForTurn) === 'white' ? 'w' : 'b';
-      if (isCoachHamleBul) return colorChar === turnCode;
       if (turnCode !== puzzlePlayNorm.studentColor) return false;
       return colorChar === puzzlePlayNorm.studentColor;
     }
     return canStudentDragPieceOnFen(studentPlaysColor, studyBoardFen, colorChar);
-  }, [vsComputer, studentPlaysColor, studyBoardFen, puzzlePlayFen, boardDraggingEnabled, hideEngineForStudentPuzzle, puzzlePlayNorm, totalMoves, puzzleSetupPreviewFen, isCoachHamleBul, currentMoveIndex]);
+  }, [vsComputer, studentPlaysColor, studyBoardFen, puzzlePlayFen, boardDraggingEnabled, hideEngineForStudentPuzzle, puzzlePlayNorm, totalMoves, puzzleSetupPreviewFen, currentMoveIndex]);
 
   if (!selectedStudyId || !selectedStudy) {
     if (previewMode && previewStudyId) {
@@ -2921,7 +2944,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                      Hamle bul
                    </span>
                    <p className="text-sm font-semibold text-white truncate">
-                     {sideToMove(studyBoardFen) === 'white' ? 'Beyaz' : 'Siyah'} sırası · Taşı sürükle
+                     {isStudentTurnInPuzzle
+                       ? `${puzzlePlayNorm?.studentColor === 'b' ? 'Siyah' : 'Beyaz'} sırası · Kendi taşını sürükle`
+                       : `${sideToMove(studyBoardFen) === 'white' ? 'Beyaz' : 'Siyah'} sırası · Bilgisayar oynuyor`}
                    </p>
                  </div>
                  <div className="shrink-0 flex items-center gap-3">
@@ -2931,15 +2956,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                        {Math.min(currentMoveIndex, totalMoves)}/{totalMoves || '—'}
                      </p>
                    </div>
-                   {!isCoachHamleBul && !isStudentTurnInPuzzle && !isComplete && currentMoveIndex < totalMoves ? (
-                     <button
-                       type="button"
-                       onClick={revealOpponentLineMoves}
-                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold border border-amber-500/35 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 transition-colors"
-                     >
-                       Rakip hamlesini göster
-                     </button>
-                   ) : null}
                  </div>
                </div>
              ) : null}
@@ -3416,6 +3432,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             <div className={`${hideEngineForStudentPuzzle ? 'flex-1 min-h-0 overflow-y-auto' : ''} border-t border-white/[0.06] bg-gradient-to-b from-teal-950/20 to-transparent p-4 flex flex-col gap-3`}>
               {(() => {
                 const turn = sideToMove(studyBoardFen) === 'white' ? 'white' as const : 'black' as const;
+                const computerPlaysReply = hideEngineForStudentPuzzle && !isStudentTurnInPuzzle && !isComplete;
+                const puzzleMoveInstruction = computerPlaysReply
+                  ? 'Rakip hamleyi bilgisayar, antrenörün kaydettiği hatta göre oynuyor'
+                  : turn === 'white'
+                    ? 'Beyaz için en iyi hamleyi bulunuz'
+                    : 'Siyah için en iyi hamleyi bulunuz';
+                const puzzleStatusTitle = computerPlaysReply ? 'Bilgisayar oynuyor' : undefined;
                 const guideComment =
                   feedbackText
                   || (laHint && String(laHint))
@@ -3475,11 +3498,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                         comment={guideComment}
                         feedback={guideMode}
                         turnColor={turn}
-                        instruction={
-                          turn === 'white'
-                            ? 'Beyaz için en iyi hamleyi bulunuz'
-                            : 'Siyah için en iyi hamleyi bulunuz'
-                        }
+                        instruction={puzzleMoveInstruction}
+                        statusTitle={puzzleStatusTitle}
                       />
                       <div className="flex flex-col gap-2">
                         {puzzleBranchChoices.map((choice) => (
@@ -3507,11 +3527,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                       comment={guideComment}
                       feedback={guideMode}
                       turnColor={turn}
-                      instruction={
-                        turn === 'white'
-                          ? 'Beyaz için en iyi hamleyi bulunuz'
-                          : 'Siyah için en iyi hamleyi bulunuz'
-                      }
+                      instruction={puzzleMoveInstruction}
+                      statusTitle={puzzleStatusTitle}
                       actions={actions}
                       hint={null}
                     />
@@ -3520,7 +3537,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                         <button
                           type="button"
                           onClick={() => { void requestHint(); }}
-                          disabled={laHintThinking || laAnalyzing || laReplyThinking}
+                          disabled={computerPlaysReply || laHintThinking || laAnalyzing || laReplyThinking}
                           className="flex-1 py-2.5 px-3 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 rounded-xl text-xs font-bold transition-all border border-amber-500/25 disabled:opacity-40"
                         >
                           {laHintThinking ? 'Hazırlanıyor...' : 'İpucu göster'}
@@ -3529,7 +3546,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                           <button
                             type="button"
                             onClick={() => { void showSolution(); }}
-                            className="flex-1 py-2.5 px-3 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 rounded-xl text-xs font-bold transition-all border border-emerald-500/30"
+                            disabled={computerPlaysReply}
+                            className="flex-1 py-2.5 px-3 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 rounded-xl text-xs font-bold transition-all border border-emerald-500/30 disabled:opacity-40"
                           >
                             Çözümü uygula
                           </button>

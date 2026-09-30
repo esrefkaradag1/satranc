@@ -19,6 +19,8 @@ type Props = {
   turnColor?: 'white' | 'black';
   /** play altındaki kısa talimat */
   instruction?: string;
+  /** play floor başlığı; verilmezse «Sıra sizde» */
+  statusTitle?: string;
   /** Floor butonları (Tekrar dene / Sonraki / Analiz) */
   actions?: GamebookFloorAction[];
   /** İpucu satırı (balon altında) */
@@ -53,6 +55,7 @@ export const StudyGamebookGuide: React.FC<Props> = ({
   feedback = 'play',
   turnColor = 'white',
   instruction,
+  statusTitle,
   actions = [],
   hint,
   className = '',
@@ -123,7 +126,7 @@ export const StudyGamebookGuide: React.FC<Props> = ({
               ) : null}
               <div className="min-w-0">
                 <p className="text-sm font-black text-white tracking-tight">
-                  {feedback === 'good' ? 'İyi hamle!' : 'Sıra sizde'}
+                  {feedback === 'good' ? 'İyi hamle!' : (statusTitle ?? 'Sıra sizde')}
                 </p>
                 <p className="text-xs text-slate-400 mt-0.5 leading-snug">
                   {instruction
