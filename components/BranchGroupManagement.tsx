@@ -42,6 +42,7 @@ const BranchGroupManagement: React.FC = () => {
     removeLessonPackage,
     scopedCoaches: coaches,
     updateStudent,
+    hasAuthPermission,
     auth,
     activeClubBranch,
     clubs,
@@ -52,6 +53,7 @@ const BranchGroupManagement: React.FC = () => {
   const isClubUser = auth?.role === 'club';
   const authBranch = auth?.role === 'coach' || auth?.role === 'club' ? auth.branch : undefined;
   const clubBranch = activeClubBranch ?? authBranch ?? '';
+  const canSeeDues = hasAuthPermission('finance');
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [newOfficeName, setNewOfficeName] = useState('');
@@ -837,7 +839,7 @@ const BranchGroupManagement: React.FC = () => {
                             <tr className="text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-white/[0.06]">
                               <th className="text-left py-2 pr-2">#</th>
                               <th className="text-left py-2 pr-2">Grup</th>
-                              <th className="text-left py-2 pr-2">Ücret</th>
+                              {canSeeDues && <th className="text-left py-2 pr-2">Ücret</th>}
                               <th className="text-left py-2 pr-2">Program</th>
                               <th className="text-left py-2 pr-2">Kont.</th>
                               <th className="text-left py-2 pr-2">Öğr.</th>
@@ -854,11 +856,13 @@ const BranchGroupManagement: React.FC = () => {
                                 <tr key={group.id} className="hover:bg-white/[0.02]">
                                   <td data-label="#" className="py-2.5 pr-2 text-slate-500 text-xs tabular-nums">{gIdx + 1}</td>
                                   <td data-label="Grup" className="py-2.5 pr-2 font-semibold text-white text-sm">{group.name}</td>
+                                  {canSeeDues && (
                                   <td data-label="Ücret" className="py-2.5 pr-2">
                                     <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 text-[11px] font-bold tabular-nums">
                                       ₺{Number(fee).toLocaleString('tr-TR')}
                                     </span>
                                   </td>
+                                  )}
                                   <td data-label="Program" className="py-2.5 pr-2 text-slate-400 text-[11px] max-w-[180px]">
                                     <span className="inline-flex items-center gap-1 truncate" title={formatLessonSchedule(group.lessonSlots)}>
                                       <Clock className="w-3 h-3 text-slate-500 shrink-0" />
@@ -961,7 +965,7 @@ const BranchGroupManagement: React.FC = () => {
                               <th className="text-left py-2 pr-2">Paket</th>
                               <th className="text-left py-2 pr-2">Ders</th>
                               <th className="text-left py-2 pr-2">Süre</th>
-                              <th className="text-left py-2 pr-2">Ücret</th>
+                              {canSeeDues && <th className="text-left py-2 pr-2">Ücret</th>}
                               <th className="text-left py-2 pr-2">Kont.</th>
                               <th className="text-left py-2 pr-2">Antrenör</th>
                               <th className="text-right py-2 rt-col-actions">İşlem</th>
@@ -974,11 +978,13 @@ const BranchGroupManagement: React.FC = () => {
                                 <td data-label="Paket" className="py-2.5 pr-2 font-semibold text-white text-sm">{pkg.name}</td>
                                 <td data-label="Ders" className="py-2.5 pr-2 text-slate-300 text-[11px] tabular-nums">{pkg.lessonCount}</td>
                                 <td data-label="Süre" className="py-2.5 pr-2 text-slate-300 text-[11px] tabular-nums">{pkg.validityDays}g</td>
+                                {canSeeDues && (
                                 <td data-label="Ücret" className="py-2.5 pr-2">
                                   <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 text-[11px] font-bold tabular-nums">
                                     ₺{Number(pkg.packageFee).toLocaleString('tr-TR')}
                                   </span>
                                 </td>
+                                )}
                                 <td data-label="Kont." className="py-2.5 pr-2 text-slate-300 text-[11px] tabular-nums">{pkg.capacity}</td>
                                 <td data-label="Antrenör" className="py-2.5 pr-2 text-slate-400 text-[11px] max-w-[120px] truncate">
                                   {pkg.coachIds?.length
@@ -1041,18 +1047,22 @@ const BranchGroupManagement: React.FC = () => {
               className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
               placeholder="ÖZEL DERS 4 SAAT"
             />
-            <label className="block text-xs font-bold text-slate-400 uppercase">Aylık Ücret (₺)</label>
-            <input
-              type="number"
-              min={0}
-              value={branchForm.monthlyFee}
-              onChange={(e) => setBranchForm((f) => ({ ...f, monthlyFee: e.target.value }))}
-              className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
-              placeholder="4000"
-            />
-            <p className="text-xs text-slate-500 rounded-lg bg-slate-800/60 border border-slate-700/60 px-3 py-2">
-              Özel ders branşları için aylık ücreti burada tanımlayın. Grup ücreti ayrıca grup eklerken belirlenebilir.
-            </p>
+            {canSeeDues && (
+              <>
+                <label className="block text-xs font-bold text-slate-400 uppercase">Aylık Ücret (₺)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={branchForm.monthlyFee}
+                  onChange={(e) => setBranchForm((f) => ({ ...f, monthlyFee: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                  placeholder="4000"
+                />
+                <p className="text-xs text-slate-500 rounded-lg bg-slate-800/60 border border-slate-700/60 px-3 py-2">
+                  Özel ders branşları için aylık ücreti burada tanımlayın. Grup ücreti ayrıca grup eklerken belirlenebilir.
+                </p>
+              </>
+            )}
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setShowBranchModal(false)} className="flex-1 py-2.5 rounded-lg bg-slate-800 text-slate-300 font-bold text-sm">İptal</button>
               <button type="button" onClick={saveBranch} className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white font-bold text-sm">Kaydet</button>
@@ -1280,17 +1290,19 @@ const BranchGroupManagement: React.FC = () => {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Paket Ücreti (₺) *</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={packageForm.packageFee}
-                    onChange={(e) => setPackageForm((f) => ({ ...f, packageFee: e.target.value }))}
-                    className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
-                    placeholder="0.00"
-                  />
-                </div>
+                {canSeeDues && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Paket Ücreti (₺) *</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={packageForm.packageFee}
+                      onChange={(e) => setPackageForm((f) => ({ ...f, packageFee: e.target.value }))}
+                      className="w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                      placeholder="0.00"
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Kontenjan *</label>
                   <input
@@ -1357,18 +1369,20 @@ const BranchGroupManagement: React.FC = () => {
               className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
             />
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Grup Ücreti (₺)</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={groupForm.monthlyFee}
-                  onChange={(e) => setGroupForm((f) => ({ ...f, monthlyFee: e.target.value }))}
-                  placeholder={`Branş: ₺${groupParentBranch.monthlyFee}`}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
-                />
-                <p className="text-[10px] text-slate-500 mt-1">Boş bırakılırsa branş ücreti kullanılır.</p>
-              </div>
+              {canSeeDues && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Grup Ücreti (₺)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={groupForm.monthlyFee}
+                    onChange={(e) => setGroupForm((f) => ({ ...f, monthlyFee: e.target.value }))}
+                    placeholder={`Branş: ₺${groupParentBranch.monthlyFee}`}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">Boş bırakılırsa branş ücreti kullanılır.</p>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Kontenjan</label>
                 <input

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   MessageCircle, Send, Users, FileText, Settings, QrCode, Home, Phone,
   UserCheck, BookOpen, Trash2, Plus, Pencil, Check, X, Loader2, RefreshCw,
-  KeyRound, Image, Contact,
+  KeyRound, Image, Contact, ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { canShowStudentCounts } from '../lib/studentCountVisibility';
@@ -11,14 +11,16 @@ import {
   loadWhatsAppConfig, saveWhatsAppConfig, loadWhatsAppTemplates, saveWhatsAppTemplates,
   loadWhatsAppAutoRules, saveWhatsAppAutoRules, loadWhatsAppLogs, loadWhatsAppContactGroups,
   saveWhatsAppContactGroups, whatsAppStats, mergeWhatsAppLogs, DEFAULT_WHATSAPP_CONFIG,
+  loadWhatsAppDeliveryCache, applyWhatsAppDeliveryCache,
+  type WhatsAppDeliveryCacheEntry,
 } from '../lib/whatsappStorage';
 import { renderWhatsAppTemplate, buildStudentTemplateVars, createCustomWhatsAppTemplate, isSystemWhatsAppTemplate, hasUnresolvedWhatsAppTemplateVars, renderMessageForStudent } from '../lib/whatsappTemplates';
 import { primaryParentPhone } from '../lib/whatsappPhones';
 import { isValidWhatsAppPhone, resolveWhatsAppLogParties } from '../lib/whatsappUtils';
 import {
   fetchWhatsAppStatus, fetchWhatsAppQr, fetchWhatsAppDevices, fetchWhatsAppPairCode,
-  waitWhatsAppDeviceLogin,
-  sendWhatsAppBulk, sendParentLoginBulk,
+  waitWhatsAppDeviceLogin, resetWhatsAppDevice, fetchWhatsAppAccount,
+  sendWhatsAppBulk, sendParentLoginBulk, checkWhatsAppDelivery,
   fetchWhatsAppServerSettings, saveWhatsAppServerSettings, fetchWhatsAppServerLogs,
 } from '../services/whatsappClient';
 import { studentsInTrainingGroup } from '../lib/trainingGroupUtils';
@@ -95,6 +97,22 @@ function statusTone(status: WhatsAppMessageLog['status']): string {
   return 'text-slate-300 bg-slate-700/40 border-white/10';
 }
 
+/** Sağlayıcı raporuna göre gerçek teslim durumu etiketi */
+function deliveryLabel(state: WhatsAppMessageLog['deliveryState']): string {
+  if (state === 'delivered') return 'İletildi';
+  if (state === 'queued') return 'Kuyrukta';
+  if (state === 'failed') return 'Başarısız';
+  if (state === 'unknown') return 'Belirsiz';
+  return '';
+}
+
+function deliveryTone(state: WhatsAppMessageLog['deliveryState']): string {
+  if (state === 'delivered') return 'text-emerald-200 bg-emerald-500/15 border-emerald-500/30';
+  if (state === 'queued') return 'text-amber-200 bg-amber-500/15 border-amber-500/30';
+  if (state === 'failed') return 'text-rose-200 bg-rose-500/15 border-rose-500/30';
+  return 'text-slate-300 bg-slate-700/40 border-white/10';
+}
+
 function phoneTailDigits(phone: string): string {
   return String(phone ?? '').replace(/\D/g, '').slice(-10);
 }
@@ -133,7 +151,9 @@ const WhatsAppManagement: React.FC = () => {
   const [contactGroups, setContactGroups] = useState(loadWhatsAppContactGroups);
   const [logs, setLogs] = useState(loadWhatsAppLogs);
   const [serverLogs, setServerLogs] = useState<WhatsAppMessageLog[]>([]);
+  const [deliveryCache, setDeliveryCache] = useState<Record<string, WhatsAppDeliveryCacheEntry>>(loadWhatsAppDeliveryCache);
   const [serverLogsLoading, setServerLogsLoading] = useState(false);
+  const [deliveryChecking, setDeliveryChecking] = useState(false);
   const [serverSyncNote, setServerSyncNote] = useState('');
   const [apiStatus, setApiStatus] = useState<{
     connected: boolean;
@@ -151,7 +171,20 @@ const WhatsAppManagement: React.FC = () => {
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [pairCodeBusy, setPairCodeBusy] = useState(false);
   const [pairCode, setPairCode] = useState('');
+  const [deviceResetting, setDeviceResetting] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [resetInfo, setResetInfo] = useState<{
+    mode: 'code' | 'qr';
+    pairCode?: string;
+    phone?: string;
+    oldRegId?: string;
+  } | null>(null);
+  const [deviceWatch, setDeviceWatch] = useState('');
+  const [account, setAccount] = useState<{ wpCredit?: number; wpEnabled?: boolean; name?: string } | null>(null);
+  /** API Key sunucuda kayıtlı mı? (bu tarayıcıda localStorage'da olmasa bile uçlar çalışır) */
+  const [serverApiKeySet, setServerApiKeySet] = useState(false);
   const lastStatusErrorRef = React.useRef('');
+  const deliveryTimerRef = React.useRef<number | undefined>(undefined);
 
   const [manualPhones, setManualPhones] = useState('');
   const [manualMessage, setManualMessage] = useState('');
@@ -165,20 +198,22 @@ const WhatsAppManagement: React.FC = () => {
   const [newContactName, setNewContactName] = useState('');
   const [newContactPhones, setNewContactPhones] = useState('');
 
-  const stats = useMemo(() => {
-    const merged = mergeWhatsAppLogs(serverLogs, logs, 2000);
-    return whatsAppStats(merged);
-  }, [logs, serverLogs]);
+  /** Şube filtresi uygulanmamış tüm kayıtlar (istatistik ve boş liste uyarısı için) */
+  const allMergedLogs = useMemo(
+    () => applyWhatsAppDeliveryCache(mergeWhatsAppLogs(serverLogs, logs, 2000), deliveryCache),
+    [logs, serverLogs, deliveryCache],
+  );
+
+  const stats = useMemo(() => whatsAppStats(allMergedLogs), [allMergedLogs]);
 
   const mergedLogs = useMemo(() => {
-    const merged = mergeWhatsAppLogs(serverLogs, logs, 2000);
-    if (!branchOffice) return merged;
+    if (!branchOffice) return allMergedLogs;
     const officeKey = normalizeClubKey(branchOffice);
-    return merged.filter((log) => {
+    return allMergedLogs.filter((log) => {
       if (!log.branchOffice) return true;
       return normalizeClubKey(log.branchOffice) === officeKey;
     });
-  }, [logs, serverLogs, branchOffice]);
+  }, [allMergedLogs, branchOffice]);
   const officeStudents = useMemo(
     () => activeStudentsForNotifications(
       students.filter((s) => !branchOffice || normalizeClubKey(s.branchOffice ?? '') === normalizeClubKey(branchOffice)),
@@ -186,14 +221,37 @@ const WhatsAppManagement: React.FC = () => {
     [students, branchOffice],
   );
 
-  const persistConfig = useCallback((next: typeof config) => {
+  /**
+   * Ayarları yerelde + sunucuda kaydet.
+   * `enabled` sunucuya YALNIZCA `opts.enabled` açıkça verildiğinde gönderilir;
+   * aksi halde sunucudaki değer korunur. Böylece panelde başka bir alanı
+   * düzeltmek (ör. telefon veya reg_id) otomatik gönderimi sessizce kapatmaz.
+   */
+  const persistConfig = useCallback((next: typeof config, opts?: { enabled?: boolean }) => {
     setConfig(next);
     saveWhatsAppConfig(next);
-    void saveWhatsAppServerSettings({ config: next }).then((r) => {
+    const { enabled: _localEnabled, ...withoutEnabled } = next;
+    const serverConfig: Partial<typeof config> = opts?.enabled === true ? next : withoutEnabled;
+    void saveWhatsAppServerSettings({ config: serverConfig }).then((r) => {
       if (!r.ok && r.error) setServerSyncNote(r.error);
       else setServerSyncNote('Sunucu ayarları güncellendi');
     });
   }, []);
+
+  /** Cihazı yapılandırmaya bağla (en son localStorage değerleri üzerine yazar). */
+  const bindDevice = useCallback((regId: string, phone?: string) => {
+    if (!regId) return;
+    const current = loadWhatsAppConfig();
+    persistConfig(
+      {
+        ...current,
+        instanceName: regId,
+        devicePhone: phone || current.devicePhone,
+        authMode: undefined,
+      },
+      { enabled: true },
+    );
+  }, [persistConfig]);
 
   const persistTemplates = useCallback((next: WhatsAppTemplate[]) => {
     setTemplates(next);
@@ -246,6 +304,88 @@ const WhatsAppManagement: React.FC = () => {
     setLogs(loadWhatsAppLogs());
     void refreshServerLogs();
   }, [view, refreshServerLogs]);
+
+  /**
+   * Sağlayıcıdan gerçek teslim durumunu sor.
+   * 'Gönderildi' yalnızca isteğin kabul edildiğini gösterir; bu kontrol
+   * "kuyrukta kaldı / iletildi / başarısız" ayrımını ortaya çıkarır.
+   */
+  const runDeliveryCheck = useCallback(async () => {
+    setDeliveryChecking(true);
+    try {
+      const pending = mergeWhatsAppLogs(serverLogs, loadWhatsAppLogs(), 300)
+        .filter((log) => (log.status === 'sent' || log.status === 'queued') && log.deliveryState !== 'delivered')
+        .slice(0, 60)
+        .map((log) => ({ id: log.id, phone: log.phone, message: log.message, reportId: log.providerReportId }));
+      if (!pending.length) {
+        showToast('Kontrol edilecek gönderim bulunamadı.', 'warning');
+        return;
+      }
+      const res = await checkWhatsAppDelivery(pending);
+      setLogs(loadWhatsAppLogs());
+      setDeliveryCache(loadWhatsAppDeliveryCache());
+      void refreshServerLogs();
+      if (res.error) {
+        showToast(`Teslim durumu alınamadı: ${res.error}`, 'warning');
+        return;
+      }
+      const delivered = res.updated.filter((u) => u.deliveryState === 'delivered').length;
+      const queued = res.updated.filter((u) => u.deliveryState === 'queued').length;
+      const failed = res.updated.filter((u) => u.deliveryState === 'failed').length;
+      if (queued > 0) {
+        showToast(
+          `${delivered} iletildi · ${queued} kuyrukta bekliyor — WaMessage'te cihazı QR ile yeniden bağlayın.`,
+          'warning',
+        );
+      } else if (failed > 0) {
+        showToast(`${delivered} iletildi · ${failed} başarısız.`, 'warning');
+      } else {
+        showToast(`${delivered} mesaj iletildi.`, 'success');
+      }
+    } finally {
+      setDeliveryChecking(false);
+    }
+  }, [refreshServerLogs, serverLogs, showToast]);
+
+  /**
+   * Gönderimden hemen sonra sağlayıcı raporu henüz "kuyrukta" olur; bu yüzden
+   * teslim kontrolü geciktirilerek yapılır. Böylece "Gönderildi" rozeti kısa
+   * süre sonra İLETİLDİ / KUYRUKTA olarak netleşir ve mesaj gitmediği halde
+   * gönderilmiş gibi görünmez.
+   */
+  const scheduleDeliveryCheck = useCallback((delayMs = 60000) => {
+    if (deliveryTimerRef.current) window.clearTimeout(deliveryTimerRef.current);
+    deliveryTimerRef.current = window.setTimeout(() => {
+      deliveryTimerRef.current = undefined;
+      void runDeliveryCheck();
+    }, delayMs);
+  }, [runDeliveryCheck]);
+
+  useEffect(() => () => {
+    if (deliveryTimerRef.current) window.clearTimeout(deliveryTimerRef.current);
+  }, []);
+
+  /** Kalan WP kredisi / hesap durumu (kredi biterse gönderim yapılamaz). */
+  const refreshAccount = useCallback(async () => {
+    setAccount(await fetchWhatsAppAccount());
+  }, []);
+
+  useEffect(() => { void refreshAccount(); }, [refreshAccount]);
+
+  // Günlük görünümü açıldığında bekleyen kayıtlar için bir kez otomatik kontrol et
+  const deliveryCheckGuardRef = React.useRef('');
+  useEffect(() => {
+    if (view !== 'logs') {
+      deliveryCheckGuardRef.current = '';
+      return;
+    }
+    if (deliveryCheckGuardRef.current === 'logs') return;
+    deliveryCheckGuardRef.current = 'logs';
+    const hasPending = loadWhatsAppLogs().some(
+      (log) => (log.status === 'sent' || log.status === 'queued') && log.deliveryState !== 'delivered',
+    );
+    if (hasPending) void runDeliveryCheck();
+  }, [view, runDeliveryCheck]);
 
   useEffect(() => {
     let cancelled = false;
@@ -320,6 +460,7 @@ const WhatsAppManagement: React.FC = () => {
         saveNotificationDeliveryRules(derived);
       }
       if (remote.config) {
+        setServerApiKeySet(Boolean(remote.config.apiKeySet));
         setConfig((prev) => {
           const next = {
             ...prev,
@@ -355,13 +496,16 @@ const WhatsAppManagement: React.FC = () => {
       });
 
       if (s.connected && s.regId && (s.regIdMismatch || config.instanceName !== s.regId)) {
-        persistConfig({
-          ...config,
-          instanceName: s.regId,
-          devicePhone: s.phone || config.devicePhone,
-          enabled: config.enabled !== false,
-        });
+        bindDevice(s.regId, s.phone);
         showToast(`Aktif WhatsApp cihazı bulundu — reg_id güncellendi (${s.regId})`, 'success');
+      } else if (s.phone && !config.devicePhone) {
+        // Sunucu cihazın telefonunu biliyor — QR/kod için yerelde de kaydet
+        const current = loadWhatsAppConfig();
+        if (current.devicePhone !== s.phone) {
+          const merged = { ...current, devicePhone: s.phone };
+          setConfig(merged);
+          saveWhatsAppConfig(merged);
+        }
       }
 
       const errKey = s.error || '';
@@ -376,7 +520,7 @@ const WhatsAppManagement: React.FC = () => {
     } finally {
       setStatusLoading(false);
     }
-  }, [showToast, config, persistConfig]);
+  }, [showToast, config, persistConfig, bindDevice]);
 
   const refreshDevices = useCallback(async () => {
     setDevicesLoading(true);
@@ -414,14 +558,16 @@ const WhatsAppManagement: React.FC = () => {
     config.enabled,
   ]);
 
+  /**
+   * API çağrıları için anahtar hazır mı?
+   * Anahtar sunucudaki whatsapp_config'te kayıtlıysa (başka tarayıcı/cihaz),
+   * yerel alan boş olsa bile cihaz bağlama uçları kullanılabilir olmalı.
+   */
+  const canUseApi = Boolean(config.apiKey?.trim()) || serverApiKeySet;
+
   const loadQr = async () => {
-    if (!config.apiKey?.trim()) {
+    if (!canUseApi) {
       showToast('Önce API Key kaydedin.', 'warning');
-      setView('api');
-      return;
-    }
-    if (!config.devicePhone?.trim()) {
-      showToast('Gönderici telefonu girin (905xxxxxxxxx).', 'warning');
       setView('api');
       return;
     }
@@ -430,15 +576,11 @@ const WhatsAppManagement: React.FC = () => {
     setView('qr');
     setQrImage('');
     try {
-      const res = await fetchWhatsAppQr(config.devicePhone);
+      // Telefon yerelde yoksa sunucu bağlı cihazın numarasını kullanır.
+      const res = await fetchWhatsAppQr(config.devicePhone || undefined);
       setQrImage(res.base64 || '');
       if (res.regId) {
-        persistConfig({
-          ...config,
-          instanceName: res.regId,
-          devicePhone: res.phone || config.devicePhone,
-          enabled: true,
-        });
+        bindDevice(res.regId, res.phone);
       }
       showToast('QR hazır — 30 sn içinde WhatsApp’tan okutun.', 'success');
       // Paralel: device/check (~30 sn bekleyebilir)
@@ -468,20 +610,108 @@ const WhatsAppManagement: React.FC = () => {
   };
 
   const requestPairCode = async () => {
-    if (!config.apiKey || !config.devicePhone) {
-      showToast('API Key ve gönderici telefon gerekli.', 'warning');
+    if (!canUseApi) {
+      showToast('Önce API Key kaydedin.', 'warning');
       return;
     }
     setPairCodeBusy(true);
     try {
-      const r = await fetchWhatsAppPairCode(config.devicePhone);
+      const r = await fetchWhatsAppPairCode(config.devicePhone || undefined);
       setPairCode(r.code || '');
-      if (r.regId) persistConfig({ ...config, instanceName: r.regId, enabled: true });
+      if (r.regId) bindDevice(r.regId, config.devicePhone);
       showToast(r.code ? `Bağlama kodu: ${r.code}` : 'Kod alındı — WhatsApp’a yazın.', 'success');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Kod alınamadı', 'error');
     } finally {
       setPairCodeBusy(false);
+    }
+  };
+
+  /**
+   * Bağlı cihazı sil ve yeniden bağlan.
+   *
+   * WaMessage tek cihaz hakkında takılı kalıyor: cihaz API'de "bağlı" görünür,
+   * gönderim isteği kabul edilir ("Gönderildi") ama mesajlar hiç iletilmez —
+   * rapor sonsuza kadar "Bekleniyor" (state 4) kalır. Yeni kod/QR almak da
+   * "maksimum cihaz sayısına ulaşıldı" hatası verir. Tek çözüm eski cihaz
+   * kaydını silip yeniden bağlamaktır.
+   */
+  /** QR/kod okutulduktan sonra yeni cihazın bağlanmasını bekle. */
+  const watchDeviceConnect = async (oldRegId?: string) => {
+    for (let i = 0; i < 12; i += 1) {
+      setDeviceWatch(`Yeni cihaz bekleniyor… (${(i + 1) * 5} sn)`);
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      try {
+        const s = await fetchWhatsAppStatus();
+        if (s.connected && s.regId && s.regId !== oldRegId) {
+          setApiStatus({
+            connected: true,
+            state: s.state,
+            provider: s.provider,
+            regId: s.regId,
+            devices: s.devices,
+            error: s.error,
+          });
+          bindDevice(s.regId, s.phone);
+          setDeviceWatch('');
+          showToast(`Cihaz bağlandı (reg_id ${s.regId}). Test mesajı gönderip “Teslim durumu” ile doğrulayın.`, 'success');
+          return;
+        }
+      } catch { /* tekrar dene */ }
+    }
+    setDeviceWatch('');
+    showToast('Cihaz henüz bağlanmadı — kodu/QR’ı okutup “Durumu yenile”yin.', 'warning');
+  };
+
+  const resetDevice = async (mode: 'code' | 'qr') => {
+    if (!canUseApi) {
+      showToast('Önce API Key kaydedin.', 'warning');
+      setView('api');
+      return;
+    }
+    setDeviceResetting(true);
+    setResetConfirm(false);
+    setPairCode('');
+    setDeviceWatch('');
+    try {
+      const res = await resetWhatsAppDevice({
+        regId: config.instanceName,
+        phone: config.devicePhone || undefined,
+        mode,
+      });
+      if (res.deleteError) {
+        showToast(`Eski cihaz silinemedi: ${res.deleteError}`, 'warning');
+      } else if (res.deleted) {
+        showToast(`Eski cihaz silindi (reg_id ${res.deletedRegId ?? '—'}).`, 'success');
+      }
+      setResetInfo({
+        mode: res.mode,
+        pairCode: res.pairCode,
+        phone: res.phone,
+        oldRegId: res.deletedRegId ?? config.instanceName,
+      });
+      if (res.phone && res.phone !== config.devicePhone) {
+        const current = loadWhatsAppConfig();
+        const merged = { ...current, devicePhone: res.phone };
+        setConfig(merged);
+        saveWhatsAppConfig(merged);
+      }
+      if (res.regId) bindDevice(res.regId, res.phone);
+      setView('qr');
+      if (res.mode === 'qr' && res.base64) {
+        setQrImage(res.base64);
+      }
+      showToast(
+        res.mode === 'code'
+          ? 'Yeni bağlama kodu hazır — WhatsApp’ta Bağlı Cihazlar → Telefon numarasıyla bağla.'
+          : 'Yeni QR hazır — 60 sn içinde okutun.',
+        'success',
+      );
+      void watchDeviceConnect(res.deletedRegId ?? config.instanceName);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Cihaz sıfırlanamadı', 'error');
+    } finally {
+      setDeviceResetting(false);
     }
   };
 
@@ -526,10 +756,14 @@ const WhatsAppManagement: React.FC = () => {
       }
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
+      if (r.sent > 0) scheduleDeliveryCheck();
       if (!config.enabled) {
         showToast('Otomatik gönderim kapalı — API Ayarlarından açın (WaMessage).', 'warning');
       } else if (r.sent > 0) {
-        showToast(`${r.sent} mesaj API ile gönderildi${r.failed ? ` (${r.failed} hata)` : ''}.`, r.failed ? 'warning' : 'success');
+        showToast(
+          `${r.sent} mesaj sağlayıcıya iletildi (teslim ~1 dk içinde netleşir)${r.failed ? ` · ${r.failed} hata` : ''}.`,
+          r.failed ? 'warning' : 'success',
+        );
       } else if (r.manual > 0) {
         showToast(`${r.manual} mesaj manuel açıldı (API kullanılmadı).`, 'warning');
       } else {
@@ -581,7 +815,11 @@ const WhatsAppManagement: React.FC = () => {
       }
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
-      showToast(`${r.sent + r.manual} veliye mesaj iletildi.`, 'success');
+      if (r.sent > 0) scheduleDeliveryCheck();
+      showToast(
+        `${r.sent + r.manual} veliye gönderim isteği alındı${r.failed ? ` · ${r.failed} hata` : ''} — teslim durumu için “Teslim durumu”na bakın.`,
+        r.failed ? 'warning' : 'success',
+      );
     } finally {
       setSending(false);
     }
@@ -632,7 +870,11 @@ const WhatsAppManagement: React.FC = () => {
       }
       const r = await sendWhatsAppBulk(recipients, { branchOffice });
       setLogs(loadWhatsAppLogs());
-      showToast(`${r.sent + r.manual} veliye grup mesajı gönderildi.`, 'success');
+      if (r.sent > 0) scheduleDeliveryCheck();
+      showToast(
+        `${r.sent + r.manual} veliye grup mesajı için gönderim isteği alındı${r.failed ? ` · ${r.failed} hata` : ''}.`,
+        r.failed ? 'warning' : 'success',
+      );
     } finally {
       setSending(false);
     }
@@ -643,7 +885,8 @@ const WhatsAppManagement: React.FC = () => {
     try {
       const r = await sendParentLoginBulk(officeStudents, branchOffice);
       setLogs(loadWhatsAppLogs());
-      showToast(`${r.sent + r.manual} veli giriş bilgisi gönderildi.`, 'success');
+      if (r.sent > 0) scheduleDeliveryCheck();
+      showToast(`${r.sent + r.manual} veli giriş bilgisi için gönderim isteği alındı.`, 'success');
     } finally {
       setSending(false);
     }
@@ -747,6 +990,18 @@ const WhatsAppManagement: React.FC = () => {
                 Otomatik gönderim kapalı
               </span>
             ) : null}
+            {account && typeof account.wpCredit === 'number' ? (
+              <span
+                className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${
+                  account.wpCredit > 20
+                    ? 'border-white/10 bg-white/5 text-slate-300'
+                    : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                }`}
+                title="WaMessage WP kredisi — her WhatsApp mesajı 1 kredi harcar. Kredi biterse gönderim yapılamaz."
+              >
+                WP kredi: {account.wpCredit}
+              </span>
+            ) : null}
           </div>
           {apiStatus.error ? (
             <p className="mt-3 text-[11px] text-amber-200/90 line-clamp-2" title={apiStatus.error}>{apiStatus.error}</p>
@@ -799,10 +1054,14 @@ const WhatsAppManagement: React.FC = () => {
 
         <WhatsAppMessageFeed
           logs={mergedLogs}
+          totalLogs={allMergedLogs.length}
+          branchLabel={branchOffice}
           students={students}
           loading={serverLogsLoading}
           onRefresh={() => void refreshServerLogs()}
           onOpenAll={() => setView('logs')}
+          onCheckDelivery={() => void runDeliveryCheck()}
+          checkingDelivery={deliveryChecking}
         />
         </>
       )}
@@ -1150,9 +1409,13 @@ Mesajınızı buraya yazın.
       {view === 'logs' && (
         <WhatsAppMessageFeed
           logs={mergedLogs}
+          totalLogs={allMergedLogs.length}
+          branchLabel={branchOffice}
           students={students}
           loading={serverLogsLoading}
           onRefresh={() => void refreshServerLogs()}
+          onCheckDelivery={() => void runDeliveryCheck()}
+          checkingDelivery={deliveryChecking}
           showAll
         />
       )}
@@ -1212,10 +1475,16 @@ Mesajınızı buraya yazın.
             type="password"
             value={config.apiKey || ''}
             onChange={(e) => persistConfig({ ...config, apiKey: e.target.value.trim(), authMode: undefined })}
-            placeholder="WaMessage → Api Entegrasyonu → API Key Göster"
+            placeholder={serverApiKeySet ? 'Sunucuda kayıtlı (boş bırakabilirsiniz)' : 'WaMessage → Api Entegrasyonu → API Key Göster'}
             className="input-field font-mono text-sm"
             autoComplete="off"
           />
+          {serverApiKeySet && !config.apiKey?.trim() ? (
+            <p className="text-[11px] text-emerald-200/80">
+              API Key sunucuda kayıtlı — bu tarayıcıda boş görünür. Gönderim ve cihaz bağlama uçları bu anahtarla çalışır;
+              değiştirmek isterseniz yeni anahtarı yazıp kaydedin.
+            </p>
+          ) : null}
 
           <label className="text-xs font-bold text-slate-400 uppercase">Gönderici telefon (+90…)</label>
           <input
@@ -1245,7 +1514,7 @@ Mesajınızı buraya yazın.
               <button
                 type="button"
                 onClick={() => void loadQr()}
-                disabled={!config.apiKey || !config.devicePhone}
+                disabled={!canUseApi}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 disabled:opacity-40 text-white text-xs font-bold"
               >
                 <QrCode className="w-3.5 h-3.5" />
@@ -1254,7 +1523,7 @@ Mesajınızı buraya yazın.
               <button
                 type="button"
                 onClick={() => void requestPairCode()}
-                disabled={pairCodeBusy || !config.apiKey || !config.devicePhone}
+                disabled={pairCodeBusy || !canUseApi}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 disabled:opacity-40 text-white text-xs font-bold"
               >
                 {pairCodeBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Phone className="w-3.5 h-3.5" />}
@@ -1312,19 +1581,135 @@ Mesajınızı buraya yazın.
           )}
 
           <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-            <input type="checkbox" checked={config.enabled} onChange={(e) => persistConfig({ ...config, enabled: e.target.checked })} />
+            <input
+              type="checkbox"
+              checked={config.enabled}
+              onChange={(e) => persistConfig({ ...config, enabled: e.target.checked }, { enabled: true })}
+            />
             API ile otomatik gönderim aktif
           </label>
-          <p className="text-xs text-slate-500">API Key + reg_id tanımlıyken mesajlar WaMessage üzerinden gider; tarayıcıda WhatsApp linki açılmaz. Otomatik gönderim kapalıysa hata gösterilir.</p>
-          <button type="button" onClick={() => { persistConfig({ ...DEFAULT_WHATSAPP_CONFIG }); showToast('Ayarlar sıfırlandı.', 'info'); }} className="text-xs text-rose-400 font-bold">Sıfırla</button>
+          <p className="text-xs text-slate-500">API Key + reg_id tanımlıyken mesajlar WaMessage üzerinden gider; tarayıcıda WhatsApp linki açılmaz. Otomatik gönderim kapalıyken hiçbir mesaj gönderilmez (panel “Hata” gösterir).</p>
+
+          <button
+            type="button"
+            onClick={() => { setResetConfirm(true); setView('qr'); }}
+            disabled={!canUseApi || deviceResetting}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-rose-600 disabled:opacity-40 text-white text-xs font-bold"
+            title="Bağlı cihaz kaydını silip yeni kod/QR üretir — 'maksimum cihaz sayısına ulaşıldı' ve mesajlar kuyrukta kalıyor sorununun çözümü"
+          >
+            {deviceResetting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+            Cihazı sıfırla ve yeniden bağla
+          </button>
+
+          <button type="button" onClick={() => { persistConfig({ ...DEFAULT_WHATSAPP_CONFIG }, { enabled: true }); showToast('Ayarlar sıfırlandı.', 'info'); }} className="text-xs text-rose-400 font-bold">Sıfırla</button>
         </Panel>
       )}
 
       {/* QR */}
       {view === 'qr' && (
-        <Panel title="QR Kod ile Bağlan">
+        <Panel title="Cihaz Bağlantısı (QR / telefon kodu)">
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] leading-snug text-amber-50 space-y-1">
+            <p className="font-bold">Mesajlar “Gönderildi” görünüp telefonlara ulaşmıyorsa</p>
+            <p>
+              WaMessage cihazı API’de bağlı görünse bile iletimi durdurabiliyor: gönderim isteği kabul edilir,
+              kredi düşer, ama mesaj hiç gönderilmez ve rapor “Bekleniyor” olarak kalır. Bu durumda yeni QR/kod
+              almak da <b>“maksimum cihaz sayısına ulaşıldı”</b> hatası verir.
+            </p>
+            <p>Çözüm: aşağıdan cihazı sıfırlayın (eski kayıt silinir) ve yeni kod/QR ile bağlayın.</p>
+          </div>
+
+          {resetConfirm ? (
+            <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 space-y-2">
+              <p className="text-xs font-bold text-rose-100">
+                {config.instanceName ? `reg_id ${config.instanceName} kaydı silinecek` : 'Bağlı cihaz kaydı silinecek'}
+                {' '}ve telefondaki “Bağlı cihazlar” listesinden düşecek. Bağlantı kesildikten sonra yeni kod ile
+                yeniden bağlayacaksınız.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={deviceResetting}
+                  onClick={() => void resetDevice('code')}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 disabled:opacity-40 text-white text-xs font-bold"
+                >
+                  {deviceResetting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Phone className="w-3.5 h-3.5" />}
+                  Telefon kodu ile yeniden bağla
+                </button>
+                <button
+                  type="button"
+                  disabled={deviceResetting}
+                  onClick={() => void resetDevice('qr')}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 disabled:opacity-40 text-white text-xs font-bold"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  QR ile yeniden bağla
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResetConfirm(false)}
+                  className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold"
+                >
+                  Vazgeç
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setResetConfirm(true)}
+              disabled={!canUseApi || deviceResetting}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-rose-600 disabled:opacity-40 text-white text-xs font-bold"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Cihazı sıfırla ve yeniden bağla
+            </button>
+          )}
+
+          {resetInfo ? (
+            <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2">
+              <p className="text-xs font-bold text-emerald-100">
+                {resetInfo.mode === 'code' ? 'Telefon kodu ile bağlama' : 'QR ile bağlama'}
+                {resetInfo.oldRegId ? ` · silinen reg_id: ${resetInfo.oldRegId}` : ''}
+              </p>
+              {resetInfo.mode === 'code' && resetInfo.pairCode ? (
+                <>
+                  <p className="font-mono text-2xl font-black tracking-[0.3em] text-white">{resetInfo.pairCode}</p>
+                  <p className="text-[11px] leading-snug text-emerald-50/90">
+                    Telefonda: WhatsApp → <b>Bağlı cihazlar</b> → <b>Cihaz bağla</b> → <b>Telefon numarasıyla bağla</b> →
+                    {' '}yukarıdaki kodu girin ({resetInfo.phone || config.devicePhone || 'gönderici numara'}). Kod birkaç dakika geçerlidir.
+                  </p>
+                </>
+              ) : (
+                <p className="text-[11px] leading-snug text-emerald-50/90">
+                  Aşağıdaki QR görselini telefonunuzdan okutun.
+                </p>
+              )}
+              {deviceWatch ? (
+                <p className="inline-flex items-center gap-2 text-[11px] font-bold text-amber-100">
+                  <Loader2 className="w-3 h-3 animate-spin" /> {deviceWatch}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void watchDeviceConnect(resetInfo.oldRegId)}
+                  className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold"
+                >
+                  Bağlantıyı bekle
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void refreshStatus()}
+                  className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold"
+                >
+                  Durumu yenile
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <p className="text-xs text-slate-400 mb-3">
-            WhatsApp → Bağlı Cihazlar → Cihaz Bağla. QR bu API Key oturumuna aittir.
+            Alternatif: WhatsApp → Bağlı Cihazlar → Cihaz Bağla. QR bu API Key oturumuna aittir.
             {config.instanceName ? ` · reg_id: ${config.instanceName}` : ''}
           </p>
           {qrLoading && !qrImage ? (
@@ -1474,13 +1859,22 @@ const PreviewTemplate: React.FC<{ templates: WhatsAppTemplate[]; templateKey: Wh
 
 const WhatsAppMessageFeed: React.FC<{
   logs: WhatsAppMessageLog[];
+  /** Şube filtresi uygulanmadan önceki toplam kayıt sayısı */
+  totalLogs?: number;
+  /** Seçili şube etiketi (boşsa tüm şubeler) */
+  branchLabel?: string;
   students?: Student[];
   loading?: boolean;
   onRefresh?: () => void;
   onOpenAll?: () => void;
+  onCheckDelivery?: () => void;
+  checkingDelivery?: boolean;
   showAll?: boolean;
-}> = ({ logs, students = [], loading, onRefresh, onOpenAll, showAll }) => {
+}> = ({
+  logs, totalLogs, branchLabel, students = [], loading, onRefresh, onOpenAll, onCheckDelivery, checkingDelivery, showAll,
+}) => {
   const displayLogs = showAll ? logs : logs.slice(0, 100);
+  const queuedCount = displayLogs.filter((log) => log.deliveryState === 'queued').length;
 
   return (
     <section className="w-full rounded-2xl border border-white/[0.07] bg-slate-900/70 overflow-hidden">
@@ -1501,6 +1895,17 @@ const WhatsAppMessageFeed: React.FC<{
               Tümünü gör
             </button>
           ) : null}
+          {onCheckDelivery ? (
+            <button
+              type="button"
+              onClick={onCheckDelivery}
+              title="Sağlayıcıdan gerçek teslim durumunu sor: kuyrukta mı, iletildi mi?"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#25D366]/30 bg-[#25D366]/10 px-3 py-1.5 text-[11px] font-bold text-[#25D366] hover:bg-[#25D366]/20"
+            >
+              <ShieldCheck className={`w-3.5 h-3.5 ${checkingDelivery ? 'animate-pulse' : ''}`} />
+              Teslim durumu
+            </button>
+          ) : null}
           {onRefresh ? (
             <button
               type="button"
@@ -1514,10 +1919,37 @@ const WhatsAppMessageFeed: React.FC<{
         </div>
       </div>
 
+      {queuedCount > 0 ? (
+        <div className="border-b border-amber-500/25 bg-amber-500/10 px-4 py-3 sm:px-5">
+          <p className="text-[11px] font-bold text-amber-100">
+            {queuedCount} mesaj sağlayıcı kuyruğunda bekliyor — telefonlara iletilmedi.
+          </p>
+          <p className="mt-1 text-[11px] leading-snug text-amber-200/90">
+            Cihaz, API’de bağlı görünse de mesajları iletmiyor olabilir. Bu panelde <b>QR Okut</b> →{' '}
+            <b>“Cihazı sıfırla ve yeniden bağla”</b> ile eski cihaz kaydını silip yeni kod/QR alın. Kuyrukta
+            kalan mesajlar iletilmez — bağlantı düzelince yeniden gönderin ve “Teslim durumu” ile doğrulayın.
+          </p>
+        </div>
+      ) : null}
+
       {displayLogs.length === 0 ? (
-        <p className="px-5 py-10 text-center text-sm text-slate-500">
-          {loading ? 'Mesajlar yükleniyor…' : 'Henüz kayıt yok. Mesaj gönderince veya otomatik bildirim çalışınca burada görünür.'}
-        </p>
+        <div className="px-5 py-10 text-center text-sm text-slate-500">
+          {loading ? (
+            'Mesajlar yükleniyor…'
+          ) : (totalLogs ?? 0) > 0 ? (
+            <>
+              <p className="font-bold text-amber-200">
+                {branchLabel ? `“${branchLabel}” şubesinde kayıt yok.` : 'Kayıt yok.'}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-400">
+                Toplam {totalLogs} kayıt var ama farklı şube adıyla işaretli. Yukarıdaki <b>ŞUBE</b> seçimini{' '}
+                “Tüm şubeler” yaparsanız hepsini görürsünüz.
+              </p>
+            </>
+          ) : (
+            'Henüz kayıt yok. Mesaj gönderince veya otomatik bildirim çalışınca burada görünür.'
+          )}
+        </div>
       ) : (
         <div className={`w-full overflow-auto custom-scrollbar ${showAll ? 'max-h-[min(70vh,42rem)]' : 'max-h-[min(60vh,36rem)]'}`}>
           <table className="w-full min-w-[960px] text-left text-xs">
@@ -1580,6 +2012,19 @@ const WhatsAppMessageFeed: React.FC<{
                     <span className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusTone(log.status)}`}>
                       {statusLabel(log.status)}
                     </span>
+                    {log.deliveryState ? (
+                      <span
+                        className={`ml-1 inline-flex rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${deliveryTone(log.deliveryState)}`}
+                        title={log.providerReportId ? `Sağlayıcı rapor: ${log.providerReportId}` : undefined}
+                      >
+                        {deliveryLabel(log.deliveryState)}
+                      </span>
+                    ) : null}
+                    {log.deliveryNote ? (
+                      <p className="mt-1 text-[10px] leading-snug text-amber-200/90" title={log.deliveryNote}>
+                        {log.deliveryNote}
+                      </p>
+                    ) : null}
                   </td>
                 </tr>
               );

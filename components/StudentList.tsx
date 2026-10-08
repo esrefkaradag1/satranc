@@ -63,9 +63,11 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast, scopedTransactions: transactions, adminViewClub, setAdminViewClubId, clubs } = useApp();
+ const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast, scopedTransactions: transactions, adminViewClub, setAdminViewClubId, clubs, hasAuthPermission } = useApp();
  const isAdmin = auth?.role === 'admin';
  const isCoach = auth?.role === 'coach';
+ /** Aidat/borç bilgisi finans izniyle görünür — kasa izni olmayan antrenör aidat göremez. */
+ const canSeeDues = hasAuthPermission('finance');
  const baseStudents = scopedStudents;
  const [searchTerm, setSearchTerm] = useState('');
  const [filterBranchOffice, setFilterBranchOffice] = useState(FILTER_ALL_OFFICES);
@@ -677,12 +679,14 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
     </div>
    </div>
    <div className="flex flex-wrap items-center gap-2">
+    {canSeeDues && (
     <button
      type="button"
      className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.08] text-slate-200 text-xs sm:text-sm font-bold transition-colors"
     >
      <FileText className="w-4 h-4 text-indigo-300" /> Aidat Takip
     </button>
+    )}
     <button
      type="button"
      className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.08] text-slate-200 text-xs sm:text-sm font-bold transition-colors"
@@ -897,7 +901,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-slate-400">
  <p className="truncate"><span className="text-slate-500">Grup</span><br /><span className="text-slate-200 font-medium">{student.group || '—'}</span></p>
- <div><span className="text-slate-500">Aidat</span><div className="mt-0.5">{formatDues(student)}</div></div>
+ {canSeeDues && <div><span className="text-slate-500">Aidat</span><div className="mt-0.5">{formatDues(student)}</div></div>}
  <p className="col-span-2 truncate text-[11px]">{student.branchOffice || '—'}{student.branch ? ` · ${student.branch}` : ''}</p>
  </div>
  <div className="mt-2.5 flex flex-wrap items-center gap-2">
@@ -961,7 +965,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Antrenör</th>
  )}
  <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Grup</th>
- <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Aidat</th>
+ {canSeeDues && <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Aidat</th>}
  <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Kayıt</th>
  <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Giriş</th>
  <th className="px-2.5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Durum</th>
@@ -1019,7 +1023,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </p>
  )}
  </td>
- <td data-label="Aidat" className="px-2.5 py-2.5">{formatDues(student)}</td>
+ {canSeeDues && <td data-label="Aidat" className="px-2.5 py-2.5">{formatDues(student)}</td>}
  <td data-label="Kayıt" className="px-2.5 py-2.5 text-xs text-slate-400 tabular-nums whitespace-nowrap">
  {student.registrationDate ? new Date(student.registrationDate).toLocaleDateString('tr-TR') : '—'}
  </td>

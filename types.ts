@@ -753,6 +753,13 @@ export interface WhatsAppTemplate {
 
 export type WhatsAppMessageStatus = 'sent' | 'failed' | 'manual' | 'queued';
 
+/**
+ * Sağlayıcı (WaMessage) raporuna göre gerçek teslim durumu.
+ * 'sent' yalnızca "sağlayıcı isteği kabul etti" demektir; mesajın telefonlara
+ * gerçekten iletildiği bilgisi delivery-check ile bu alandan okunur.
+ */
+export type WhatsAppDeliveryState = 'queued' | 'delivered' | 'failed' | 'unknown';
+
 export interface WhatsAppMessageLog {
   id: string;
   phone: string;
@@ -766,6 +773,14 @@ export interface WhatsAppMessageLog {
   branchOffice?: string;
   error?: string;
   createdAt: string;
+  /** Sağlayıcı rapor kimliği (WaMessage report_id) — teslim sorgusu için */
+  providerReportId?: string;
+  /** Sağlayıcı raporuna göre gerçek teslim durumu */
+  deliveryState?: WhatsAppDeliveryState;
+  /** Son teslim kontrolü zamanı (ISO) */
+  deliveryCheckedAt?: string;
+  /** Teslim durumu açıklaması (ör. "kuyruğa alındı, cihazı yeniden bağlayın") */
+  deliveryNote?: string;
 }
 
 export type WhatsAppAutoEvent =

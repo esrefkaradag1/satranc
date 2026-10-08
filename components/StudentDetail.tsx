@@ -980,7 +980,10 @@ const StudentDetail: React.FC<{
     confirmDialog,
     alertDialog,
     showToast,
+    hasAuthPermission,
   } = useApp();
+  /** Aidat/borç/ödeme geçmişi finans izniyle görünür — kasa izni olmayan antrenör göremez. */
+  const canSeeDues = hasAuthPermission('finance');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDuesModal, setShowDuesModal] = useState(false);
   const [showSaleModal, setShowSaleModal] = useState(false);
@@ -1051,6 +1054,13 @@ const StudentDetail: React.FC<{
 
   type DetailTab = 'finans' | 'ukd' | 'lichess' | 'chesscom' | 'analizler' | 'taksitler' | 'ozel-dersler' | 'gecmis' | 'bilgiler';
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('finans');
+
+  /** Finans izni yoksa finans/taksitler sekmeleri kapalı; varsayılan sekme buna göre seçilir. */
+  useEffect(() => {
+    if (canSeeDues) return;
+    if (activeDetailTab === 'finans') setActiveDetailTab('bilgiler');
+    else if (activeDetailTab === 'taksitler') setActiveDetailTab('bilgiler');
+  }, [canSeeDues, activeDetailTab]);
 
   const visibleStudents = auth?.role === 'admin' ? students : scopedStudents;
   const student = useMemo<Student | null>(() => {
@@ -1261,6 +1271,7 @@ const StudentDetail: React.FC<{
   }, []);
 
   const openSaleModal = useCallback((nextType?: 'aylik-paket' | 'ozel-ders') => {
+    if (!canSeeDues) return;
     const defaultOffice = student?.branchOffice?.trim() || '';
     const defaultDiscipline = student?.branch?.trim() || '';
     const hasPrivateSales = transactions.some(
@@ -1306,7 +1317,7 @@ const StudentDetail: React.FC<{
     if (matched) {
       window.setTimeout(() => applySaleLessonPackage(matched.id), 0);
     }
-  }, [student?.branchOffice, student?.branch, student?.group, student?.registrationType, studentId, transactions, lessonPackages, applySaleLessonPackage]);
+  }, [canSeeDues, student?.branchOffice, student?.branch, student?.group, student?.registrationType, studentId, transactions, lessonPackages, applySaleLessonPackage]);
 
   const switchSaleType = useCallback((nextType: 'aylik-paket' | 'ozel-ders') => {
     setSaleType(nextType);
@@ -1616,18 +1627,18 @@ const StudentDetail: React.FC<{
       .sort((a, b) => b.date.localeCompare(a.date));
     const deduped = new Map<string, typeof sorted[number]>();
     sorted.forEach((record) => {
-      const key = `${String(record.date ?? '').slice(0, 10)}::${attendanceRecordSessionScopeKey(record, student.group) || record.id}`;
+      const key = `${String(record.date ?? '').slice(0, 10)}::${attendanceRecordSessionScopeKey(record, student?.group) || record.id}`;
       if (!deduped.has(key)) deduped.set(key, record);
     });
     return [...deduped.values()];
-  }, [studentId, attendanceRecords, student.group]);
+  }, [studentId, attendanceRecords, student?.group]);
 
   const openAttendanceEdit = useCallback((record: typeof studentAttendances[number]) => {
     saveAttendanceEditBridge(
-      attendanceEditBridgePayloadFromRecord(record, student.group),
+      attendanceEditBridgePayloadFromRecord(record, student?.group),
     );
     writePanelHash('attendance');
-  }, [student.group]);
+  }, [student?.group]);
 
   const studentTransactions = useMemo(() => {
     if (!studentId) return [];
@@ -2007,7 +2018,9 @@ const StudentDetail: React.FC<{
      <div className="mt-3 sm:mt-6 grid grid-cols-4 sm:flex sm:flex-wrap gap-1.5 sm:gap-2.5">
        <ActionPill tone="outline" icon={<Edit2 className="w-4 h-4" />} label="Düzenle" onClick={() => setShowEditModal(true)} />
        <ActionPill tone="outline" icon={<Power className="w-4 h-4" />} label="Durum" onClick={() => { setStatusModalValue(student.status === 'inactive' ? 'inactive' : 'active'); setStatusModalGroup((student.group ?? '').trim()); setStatusFreezeStart(student.status === 'inactive' ? (student.duesFreezeStartedAt ?? '').slice(0, 10) : ''); setShowStatusModal(true); }} />
-      <ActionPill tone="emerald" icon={<ShoppingCart className="w-4 h-4" />} label="Paket/Ders" onClick={() => openSaleModal('aylik-paket')} />
+      {canSeeDues && (
+        <ActionPill tone="emerald" icon={<ShoppingCart className="w-4 h-4" />} label="Paket/Ders" onClick={() => openSaleModal('aylik-paket')} />
+      )}
        <ActionPill
          tone="rose"
          icon={<Trash2 className="w-4 h-4" />}
@@ -2040,7 +2053,7 @@ const StudentDetail: React.FC<{
          { id: 'ozel-dersler' as const, label: 'Özel Ders', icon: <GraduationCap className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
          { id: 'gecmis' as const, label: 'Geçmiş', icon: <History className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
          { id: 'bilgiler' as const, label: 'Bilgiler', icon: <User className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
-       ].map((t) => (
+       ].filter((t) => canSeeDues || (t.id !== 'finans' && t.id !== 'taksitler')).map((t) => (
          <button
            key={t.id}
            type="button"
@@ -2165,7 +2178,7 @@ const StudentDetail: React.FC<{
  ) : null}
 
 
- {(activeDetailTab === 'finans') && (
+ {canSeeDues && (activeDetailTab === 'finans') && (
  <div className="space-y-4 md:space-y-6">
 <div className={`grid grid-cols-2 gap-2 sm:gap-4 ${financePrivateLessonSummary ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
  <StatTile icon={<CalendarCheck className="w-5 h-5" />} title="Devam Oranı (30 Gün)" value={derived.attendanceRate} accent="indigo" />
@@ -2418,7 +2431,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  </div>
 
  {/* Paketler & Özel Dersler — sadece Finans sekmesinde, listeleme + düzenle/sil */}
- {activeDetailTab === 'finans' && (
+ {canSeeDues && activeDetailTab === 'finans' && (
  <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
  <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-700/60 bg-white/[0.02] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
  <div className="flex items-center gap-2">
@@ -2496,7 +2509,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  )}
 
  {/* Ödeme Geçmişi — sadece Finans sekmesinde */}
- {activeDetailTab === 'finans' && (
+ {canSeeDues && activeDetailTab === 'finans' && (
  <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
  <div className="px-6 py-4 border-b border-slate-700/60 bg-white/[0.02] flex items-center justify-between flex-wrap gap-2">
  <div className="flex items-center gap-2">
@@ -2578,7 +2591,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  </div>
  )}
 
- {(activeDetailTab === 'taksitler') && (
+ {canSeeDues && (activeDetailTab === 'taksitler') && (
  <div className="rounded-2xl bg-slate-800/40 backdrop-blur-xl border border-white/[0.06] shadow-xl overflow-hidden">
  <div className="px-6 py-4 border-b border-slate-700/60 flex items-center justify-between flex-wrap gap-2">
  <div className="flex items-center gap-3">
@@ -2670,9 +2683,11 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <GraduationCap className="w-5 h-5 text-amber-500" />
  <span className="text-sm font-black text-white">Özel Ders Paketleri</span>
  </div>
+{canSeeDues && (
 <button type="button" onClick={() => openSaleModal('ozel-ders')} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors">
  <ShoppingCart className="w-4 h-4" /> Yeni özel ders
  </button>
+)}
  </div>
  <div className="p-6">
  {privateLessonTransactions.length === 0 ? (
@@ -2680,9 +2695,11 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <GraduationCap className="w-14 h-14 text-slate-500 mx-auto mb-4" />
  <p className="text-slate-400 text-sm font-medium">Henüz özel ders kaydı yok.</p>
  <p className="text-slate-500 text-xs mt-2">Yeni özel ders satışı eklediğinizde burada listelenecektir.</p>
+{canSeeDues && (
 <button type="button" onClick={() => openSaleModal('ozel-ders')} className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-xs font-bold">
  <ShoppingCart className="w-4 h-4" /> Özel ders ekle
  </button>
+)}
  </div>
  ) : (
  <ResponsiveTable minWidth={560}>
@@ -2691,9 +2708,9 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  <tr className="text-[10px] font-black uppercase tracking-widest text-slate-400 border-b border-slate-700/60">
  <th className="py-3 pr-4">Tarih</th>
  <th className="py-3 pr-4">Açıklama</th>
- <th className="py-3 pr-4">Ödeme Durumu</th>
- <th className="py-3 pr-4">Ödeme</th>
- <th className="py-3 pr-4 text-right">İşlem</th>
+ {canSeeDues && <th className="py-3 pr-4">Ödeme Durumu</th>}
+ {canSeeDues && <th className="py-3 pr-4">Ödeme</th>}
+ {canSeeDues && <th className="py-3 pr-4 text-right">İşlem</th>}
  </tr>
  </thead>
  <tbody className="divide-y divide-slate-700/60">
@@ -2711,10 +2728,13 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
     ) : null}
   </div>
 </td>
- <td data-label="Ödeme Durumu" className="py-3 pr-4"><SalePaymentCell transaction={t} /></td>
+ {canSeeDues && <td data-label="Ödeme Durumu" className="py-3 pr-4"><SalePaymentCell transaction={t} /></td>}
+ {canSeeDues && (
  <td data-label="Ödeme" className="py-3 pr-4">
  <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-violet-500/30 text-violet-200 border border-violet-400/50">{t.paymentType}</span>
  </td>
+ )}
+ {canSeeDues && (
  <td data-label="İşlem" className="py-3 pr-4 text-right">
  <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
  <button type="button" onClick={() => openEditTransaction(t)} className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" title="Düzenle"><Edit2 className="w-4 h-4" /></button>
@@ -2729,6 +2749,7 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
 }} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10" title="Sil"><Trash2 className="w-4 h-4" /></button>
  </div>
  </td>
+ )}
  </tr>
  ))}
  </tbody>
@@ -4081,7 +4102,8 @@ const EditStudentModal: React.FC<{
   onSave: (updated: Partial<Student>) => void | Promise<void>;
   onClose: () => void;
 }> = ({ student, onSave, onClose }) => {
-  const { branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedLessonPackages, students } = useApp();
+  const { branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedLessonPackages, students, hasAuthPermission } = useApp();
+  const canSeeDues = hasAuthPermission('finance');
   // Use a single state object for all fields, initialized with student data
   const [fields, setFields] = useState<Partial<Student>>({ ...student });
   const [photo, setPhoto] = useState<File | null>(null);
@@ -4507,7 +4529,7 @@ const EditStudentModal: React.FC<{
               </div>
 
               {/* Section 4: Finance (if monthly) */}
-              {fields.registrationType === 'monthly' && (
+              {fields.registrationType === 'monthly' && canSeeDues && (
                 <div className="space-y-4">
                   <div className="text-xs font-bold text-white uppercase tracking-widest flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-rose-500" /> Aidat Ayarları

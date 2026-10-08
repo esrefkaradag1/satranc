@@ -2,7 +2,9 @@ import type {
   WhatsAppAutoRule,
   WhatsAppConfig,
   WhatsAppContactGroup,
+  WhatsAppDeliveryState,
   WhatsAppMessageLog,
+  WhatsAppMessageStatus,
   WhatsAppTemplate,
 } from '../types';
 import { DEFAULT_WHATSAPP_AUTO_RULES, DEFAULT_WHATSAPP_TEMPLATES } from './whatsappTemplates';
@@ -12,7 +14,9 @@ const TEMPLATES_KEY = 'netchess_whatsapp_templates';
 const LOGS_KEY = 'netchess_whatsapp_logs';
 const RULES_KEY = 'netchess_whatsapp_auto_rules';
 const GROUPS_KEY = 'netchess_whatsapp_contact_groups';
+const DELIVERY_KEY = 'netchess_whatsapp_delivery';
 const MAX_LOGS = 2000;
+const MAX_DELIVERY_ENTRIES = 1000;
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -106,11 +110,118 @@ export function mergeWhatsAppLogs(
   const byId = new Map<string, WhatsAppMessageLog>();
   for (const log of [...serverLogs, ...localLogs]) {
     if (!log?.id) continue;
-    byId.set(log.id, log);
+    const prev = byId.get(log.id);
+    if (!prev) {
+      byId.set(log.id, log);
+      continue;
+    }
+    // Aynı kayıt hem sunucuda hem yerelde olabilir: daha yeni teslim bilgisi kazanır.
+    const merged: WhatsAppMessageLog = { ...prev, ...log };
+    const prevChecked = prev.deliveryCheckedAt ?? '';
+    const nextChecked = log.deliveryCheckedAt ?? '';
+    if (prev.deliveryState && prevChecked > nextChecked) {
+      merged.deliveryState = prev.deliveryState;
+      merged.deliveryCheckedAt = prev.deliveryCheckedAt;
+      merged.deliveryNote = prev.deliveryNote ?? merged.deliveryNote;
+      merged.providerReportId = prev.providerReportId ?? merged.providerReportId;
+    }
+    byId.set(log.id, merged);
   }
   return [...byId.values()]
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
     .slice(0, limit);
+}
+
+/**
+ * Teslim durumu önbelleği: sunucudan gelen günlükler için de durum saklanır
+ * (whatsapp_message_logs tablosuna kolon eklemeye gerek kalmadan).
+ */
+export type WhatsAppDeliveryCacheEntry = {
+  state: WhatsAppDeliveryState;
+  note?: string;
+  reportId?: string;
+  checkedAt: string;
+};
+
+export function loadWhatsAppDeliveryCache(): Record<string, WhatsAppDeliveryCacheEntry> {
+  return loadJson<Record<string, WhatsAppDeliveryCacheEntry>>(DELIVERY_KEY, {});
+}
+
+/** delivery-check sonuçlarını önbelleğe yaz ve güncel önbelleği döndür */
+export function saveWhatsAppDeliveryEntries(
+  rows: { id: string; deliveryState: WhatsAppDeliveryState; note?: string; reportId?: string }[],
+): Record<string, WhatsAppDeliveryCacheEntry> {
+  const checkedAt = new Date().toISOString();
+  const next: Record<string, WhatsAppDeliveryCacheEntry> = { ...loadWhatsAppDeliveryCache() };
+  let changed = false;
+  for (const row of rows) {
+    if (!row?.id) continue;
+    changed = true;
+    next[row.id] = {
+      state: row.deliveryState,
+      note: row.note || undefined,
+      reportId: row.reportId || undefined,
+      checkedAt,
+    };
+  }
+  if (!changed) return next;
+  const trimmed = Object.fromEntries(Object.entries(next).slice(-MAX_DELIVERY_ENTRIES));
+  saveJson(DELIVERY_KEY, trimmed);
+  return trimmed;
+}
+
+/** Günlük listesine teslim durumu önbelleğini uygula */
+export function applyWhatsAppDeliveryCache(
+  logs: WhatsAppMessageLog[],
+  cache: Record<string, WhatsAppDeliveryCacheEntry> = loadWhatsAppDeliveryCache(),
+): WhatsAppMessageLog[] {
+  const keys = Object.keys(cache);
+  if (!keys.length) return logs;
+  return logs.map((log) => {
+    const entry = cache[log.id];
+    if (!entry) return log;
+    const known = log.deliveryCheckedAt ?? '';
+    if (known && known > entry.checkedAt) return log;
+    return {
+      ...log,
+      deliveryState: entry.state,
+      deliveryNote: entry.note ?? log.deliveryNote,
+      providerReportId: entry.reportId || log.providerReportId,
+      deliveryCheckedAt: entry.checkedAt,
+      status: entry.state === 'failed' ? 'failed' : log.status,
+    };
+  });
+}
+
+/** Teslim kontrolü sonuçlarını yerel günlüğe işle (delivery-check) */
+export function patchWhatsAppLogs(
+  patches: {
+    id: string;
+    deliveryState?: WhatsAppDeliveryState;
+    providerReportId?: string;
+    note?: string;
+    status?: WhatsAppMessageStatus;
+  }[],
+) {
+  if (!patches.length) return;
+  const byId = new Map(patches.filter((p) => p.id).map((p) => [p.id, p]));
+  if (!byId.size) return;
+  const checkedAt = new Date().toISOString();
+  let changed = false;
+  const next = loadWhatsAppLogs().map((log) => {
+    const p = byId.get(log.id);
+    if (!p) return log;
+    changed = true;
+    return {
+      ...log,
+      deliveryCheckedAt: checkedAt,
+      ...(p.deliveryState ? { deliveryState: p.deliveryState } : {}),
+      ...(p.providerReportId ? { providerReportId: p.providerReportId } : {}),
+      ...(p.note ? { deliveryNote: p.note } : {}),
+      ...(p.status ? { status: p.status } : {}),
+    };
+  });
+  if (changed) saveJson(LOGS_KEY, next.slice(0, MAX_LOGS));
 }
 
 export function whatsAppStats(logs: WhatsAppMessageLog[]) {

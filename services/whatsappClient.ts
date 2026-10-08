@@ -1,11 +1,20 @@
-import type { Student, WhatsAppMessageLog, WhatsAppMessageStatus, WhatsAppConfig, WhatsAppTemplate } from '../types';
+import type {
+  Student,
+  WhatsAppDeliveryState,
+  WhatsAppMessageLog,
+  WhatsAppMessageStatus,
+  WhatsAppConfig,
+  WhatsAppTemplate,
+} from '../types';
 import { openWhatsAppSend, parseWhatsAppGreetingName } from '../lib/whatsappUtils';
 import {
   appendWhatsAppLog,
   loadWhatsAppAutoRules,
   loadWhatsAppConfig,
   loadWhatsAppTemplates,
+  patchWhatsAppLogs,
   saveWhatsAppConfig,
+  saveWhatsAppDeliveryEntries,
 } from '../lib/whatsappStorage';
 import {
   buildStudentTemplateVars,
@@ -20,16 +29,27 @@ function genId(): string {
   return Math.random().toString(36).slice(2, 11);
 }
 
-function writeWhatsAppLog(entry: Omit<WhatsAppMessageLog, 'id' | 'createdAt'> & { message: string }) {
+function writeWhatsAppLog(
+  entry: Omit<WhatsAppMessageLog, 'id' | 'createdAt'> & { message: string; id?: string },
+) {
   appendWhatsAppLog({
-    id: genId(),
+    id: entry.id ?? genId(),
     createdAt: new Date().toISOString(),
     ...entry,
     recipientName: entry.recipientName ?? parseWhatsAppGreetingName(entry.message),
   });
 }
 
-type SendResult = { ok: boolean; mode: 'api' | 'manual' | 'failed'; error?: string };
+type SendResult = {
+  ok: boolean;
+  mode: 'api' | 'manual' | 'failed';
+  error?: string;
+  /** Sunucuya yazılan günlük kaydının id'si (yerel kayıtla aynı id → tekrar görünmez) */
+  logId?: string;
+  /** Sağlayıcı rapor kimliği — teslim durumu bu id ile sorgulanır */
+  reportId?: string;
+  deliveryState?: WhatsAppDeliveryState;
+};
 
 /** API Key + reg_id tanımlı mı (WaMessage otomatik gönderim için) */
 export function isWhatsAppApiConfigured(config?: WhatsAppConfig): boolean {
@@ -59,7 +79,14 @@ async function callWhatsAppApi(
   if (!res.ok) {
     throw new Error(String(data.error || 'API hatası'));
   }
-  if (data.error && action !== 'status' && action !== 'devices' && action !== 'send-bulk' && action !== 'send') {
+  if (
+    data.error
+    && action !== 'status'
+    && action !== 'devices'
+    && action !== 'send-bulk'
+    && action !== 'send'
+    && action !== 'delivery-check'
+  ) {
     throw new Error(String(data.error));
   }
   return data;
@@ -218,11 +245,29 @@ export async function sendWhatsAppMessage(options: {
   let result: SendResult = { ok: false, mode: 'failed' };
   const config = loadWhatsAppConfig();
   const allowWeb = shouldOpenWhatsAppWeb(config, openManualFallback);
+  // Sunucu günlüğüyle aynı kaydı paylaşmak için id burada üretilir
+  const logId = genId();
 
   try {
-    const data = await callWhatsAppApi('send', { phone, message });
+    const data = await callWhatsAppApi('send', {
+      phone,
+      message,
+      logId,
+      studentId: options.studentId,
+      studentName: options.studentName,
+      recipientName: options.recipientName,
+      branchOffice: options.branchOffice,
+      templateKey: options.templateKey,
+    });
     if (data.ok && data.mode === 'api') {
-      result = { ok: true, mode: 'api' };
+      const reportId = String(data.reportId ?? '');
+      result = {
+        ok: true,
+        mode: 'api',
+        logId: String(data.logId ?? logId),
+        reportId,
+        deliveryState: reportId ? 'queued' : 'unknown',
+      };
     } else if (data.mode === 'manual') {
       const err = String(
         data.error ?? 'API ile otomatik gönderim kapalı — WhatsApp Yönetimi → API Ayarlarından açın.',
@@ -253,6 +298,7 @@ export async function sendWhatsAppMessage(options: {
     : 'failed';
 
   writeWhatsAppLog({
+    id: result.logId ?? logId,
     phone,
     message,
     status,
@@ -262,6 +308,8 @@ export async function sendWhatsAppMessage(options: {
     recipientName: options.recipientName,
     branchOffice: options.branchOffice,
     error: result.error,
+    providerReportId: result.reportId,
+    deliveryState: result.deliveryState,
   });
 
   return result;
@@ -293,11 +341,20 @@ export async function sendWhatsAppBulk(
   }
 
   if (config.enabled && (config.apiKey || config.apiBaseUrl)) {
+    // Her alıcıya bir günlük id'si verilir: sunucu aynı id ile kaydeder, panelde tek satır görünür.
+    const withIds = activeRecipients.map((rec) => ({ ...rec, logId: genId() }));
     const data = await callWhatsAppApi('send-bulk', {
-      recipients: activeRecipients,
+      recipients: withIds,
       delayMs: options?.delayMs ?? 1500,
     });
-    const results = (data.results as { phone: string; ok: boolean; mode: string; error?: string }[]) ?? [];
+    const results = (data.results as {
+      phone: string;
+      logId?: string;
+      ok: boolean;
+      mode: string;
+      error?: string;
+      reportId?: string;
+    }[]) ?? [];
     if (!Array.isArray(data.results)) {
       return {
         sent: 0,
@@ -306,12 +363,15 @@ export async function sendWhatsAppBulk(
         error: String(data.error || 'Gönderim yanıtı geçersiz — sunucuyu yenileyip tekrar deneyin'),
       };
     }
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      const rec = recipients.find((x) => x.phone === r.phone) ?? recipients[i];
+    for (const r of results) {
+      const rec = withIds.find((x) => r.logId && x.logId === r.logId)
+        ?? withIds.find((x) => x.phone === r.phone);
+      const logId = r.logId ?? rec?.logId ?? genId();
       if (r.ok && r.mode === 'api') {
         sent += 1;
+        const reportId = String(r.reportId ?? '');
         writeWhatsAppLog({
+          id: logId,
           phone: r.phone,
           message: rec?.message ?? '',
           status: 'sent',
@@ -319,12 +379,15 @@ export async function sendWhatsAppBulk(
           studentName: rec?.studentName,
           recipientName: rec?.recipientName,
           branchOffice: options?.branchOffice,
+          providerReportId: reportId || undefined,
+          deliveryState: reportId ? 'queued' : 'unknown',
         });
       } else if (r.mode === 'manual' && rec) {
         if (allowWeb) {
           openWhatsAppSend(rec.phone, rec.message);
           manual += 1;
           writeWhatsAppLog({
+            id: logId,
             phone: rec.phone,
             message: rec.message,
             status: 'manual',
@@ -337,6 +400,7 @@ export async function sendWhatsAppBulk(
           failed += 1;
           if (!firstError) firstError = r.error || 'Otomatik gönderim kapalı';
           writeWhatsAppLog({
+            id: logId,
             phone: r.phone,
             message: rec?.message ?? '',
             status: 'failed',
@@ -351,6 +415,7 @@ export async function sendWhatsAppBulk(
         failed += 1;
         if (!firstError && r.error) firstError = r.error;
         writeWhatsAppLog({
+          id: logId,
           phone: r.phone,
           message: rec?.message ?? '',
           status: 'failed',
@@ -467,6 +532,13 @@ export async function fetchWhatsAppServerSettings(): Promise<{
   }
 }
 
+/**
+ * Sunucu ayarlarını kaydet.
+ * `config` içinde YALNIZCA gönderilen alanlar yazılır: `enabled` gönderilmezse
+ * sunucudaki değer korunur (panel başka bir alanı kaydederken otomatik gönderimi
+ * yanlışlıkla kapatmasın).
+ * Sunucu şablon/kural yazamadığında `warnings` döner → `ok:false`.
+ */
 export async function saveWhatsAppServerSettings(payload: {
   config?: Partial<WhatsAppConfig>;
   templates?: WhatsAppTemplate[];
@@ -474,14 +546,140 @@ export async function saveWhatsAppServerSettings(payload: {
   deliveryRules?: { event: string; channel: string }[];
 }): Promise<{ ok: boolean; error?: string }> {
   try {
-    await callWhatsAppApi('settings-save', payload as Record<string, unknown>);
-    return { ok: true };
+    const data = await callWhatsAppApi('settings-save', payload as Record<string, unknown>);
+    const warnings = Array.isArray(data.warnings) ? (data.warnings as string[]) : [];
+    return warnings.length ? { ok: false, error: warnings.join(' · ') } : { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'Kayıt başarısız' };
   }
 }
 
+/**
+ * Kalan WP kredisi / hesap durumu.
+ * Kredi 0 ise sağlayıcı gönderimleri kabul etmez — panelde gösterilir.
+ */
+export async function fetchWhatsAppAccount(): Promise<{
+  wpCredit?: number;
+  wpEnabled?: boolean;
+  name?: string;
+  phone?: string;
+  error?: string;
+}> {
+  try {
+    const data = await callWhatsAppApi('account');
+    return {
+      wpCredit: typeof data.wpCredit === 'number' ? data.wpCredit : undefined,
+      wpEnabled: data.wpEnabled === true,
+      name: data.name ? String(data.name) : undefined,
+      phone: data.phone ? String(data.phone) : undefined,
+      error: data.error ? String(data.error) : undefined,
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'Hesap bilgisi alınamadı' };
+  }
+}
+
+/**
+ * Bağlı cihazı sil + yeniden bağlama (kod veya QR) oturumu aç.
+ *
+ * "maksimum cihaz sayısına ulaşıldı" hatasında ve cihaz API'de bağlı görünüp
+ * mesajları kuyrukta bıraktığında tek çözüm budur: eski kayıt silinir, cihaz
+ * hakkı boşalır ve WhatsApp'a yeni bir kod/QR ile bağlanılır.
+ */
+export async function resetWhatsAppDevice(options?: {
+  regId?: string;
+  phone?: string;
+  mode?: 'code' | 'qr';
+}): Promise<{
+  ok: boolean;
+  mode: 'code' | 'qr';
+  deleted: boolean;
+  deleteError?: string;
+  deletedRegId?: string;
+  regId?: string;
+  phone?: string;
+  pairCode?: string;
+  qr?: string;
+  base64?: string;
+  error?: string;
+}> {
+  const data = await callWhatsAppApi('device-reset', {
+    regId: options?.regId,
+    phone: options?.phone,
+    mode: options?.mode ?? 'code',
+  });
+  return {
+    ok: Boolean(data.ok),
+    mode: data.mode === 'qr' ? 'qr' : 'code',
+    deleted: Boolean(data.deleted),
+    deleteError: data.deleteError ? String(data.deleteError) : undefined,
+    deletedRegId: data.deletedRegId ? String(data.deletedRegId) : undefined,
+    regId: data.regId ? String(data.regId) : undefined,
+    phone: data.phone ? String(data.phone) : undefined,
+    pairCode: data.pairCode ? String(data.pairCode) : undefined,
+    qr: data.qr ? String(data.qr) : undefined,
+    base64: data.base64 ? String(data.base64) : undefined,
+  };
+}
+
 /** Sunucu gönderim günlüğü (otomatik antrenman dahil) */
+/**
+ * Sağlayıcıya sorup mesajların gerçek teslim durumunu döndürür.
+ * `sent` yalnızca "sağlayıcı isteği kabul etti" demektir; bu kontrol
+ * "kuyrukta kaldı / iletildi / başarısız" ayrımını verir.
+ */
+export async function checkWhatsAppDelivery(
+  entries: { id: string; phone: string; message: string; reportId?: string }[],
+): Promise<{ updated: WhatsAppDeliveryCheckRow[]; error?: string }> {
+  const payload = entries
+    .filter((e) => e?.id && e?.phone)
+    .slice(0, 60)
+    .map((e) => ({
+      id: e.id,
+      phone: e.phone,
+      message: e.message,
+      reportId: e.reportId ?? '',
+    }));
+  if (!payload.length) return { updated: [] };
+  try {
+    const data = await callWhatsAppApi('delivery-check', { entries: payload });
+    if (data.error) return { updated: [], error: String(data.error) };
+    const updated = (data.updated as WhatsAppDeliveryCheckRow[]) ?? [];
+    // Yerel günlük kayıtlarını güncelle
+    patchWhatsAppLogs(
+      updated.map((u) => ({
+        id: u.id,
+        deliveryState: u.deliveryState,
+        providerReportId: u.reportId,
+        note: u.note,
+        status: u.deliveryState === 'failed' ? ('failed' as WhatsAppMessageStatus) : undefined,
+      })),
+    );
+    // Sunucudan gelen kayıtlar için de durumu sakla (başka tarayıcıda da görünür)
+    saveWhatsAppDeliveryEntries(
+      updated.map((u) => ({
+        id: u.id,
+        deliveryState: u.deliveryState,
+        note: u.note,
+        reportId: u.reportId,
+      })),
+    );
+    return { updated };
+  } catch (e) {
+    return { updated: [], error: e instanceof Error ? e.message : 'Teslim durumu alınamadı' };
+  }
+}
+
+export type WhatsAppDeliveryCheckRow = {
+  id: string;
+  phone: string;
+  reportId?: string;
+  deliveryState: WhatsAppDeliveryState;
+  success?: number;
+  fail?: number;
+  note?: string;
+};
+
 export async function fetchWhatsAppServerLogs(limit = 80): Promise<WhatsAppMessageLog[]> {
   try {
     const data = await callWhatsAppApi('logs', { limit });
