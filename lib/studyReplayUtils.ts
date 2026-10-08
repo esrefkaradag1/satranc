@@ -1,5 +1,5 @@
 import type { StudyChapter } from './studyTypes';
-import type { StudyEvent } from '../studyEvents';
+import { isComputerMoveEvent, type StudyEvent } from '../studyEvents';
 import { DEFAULT_FEN, makeBuilderGame } from './studyUtils';
 import { applyPuzzleMove, canReplayMovesFrom, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
 import { mainlineSansFromTree } from './studySync/moveList';
@@ -79,7 +79,26 @@ function getVsComputerHistory(payload: unknown): string[] {
   return [];
 }
 
-/** Presence satırından öğrenci + bölüm için tam oyun geçmişi (bilgisayar hamleleri dahil). */
+/** Presence payload'ındaki bölüm bazlı geçmiş haritasından bir bölümün oyunu. */
+function vsHistoryFromMap(payload: unknown, chapterId: string): string[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const map = (payload as Record<string, unknown>).vcHistories;
+  if (!map || typeof map !== 'object') return [];
+  const history = (map as Record<string, unknown>)[chapterId];
+  if (!Array.isArray(history)) return [];
+  return history.filter((move): move is string => typeof move === 'string');
+}
+
+/**
+ * Öğrenci + bölüm için tam oyun geçmişi (bilgisayar hamleleri dahil).
+ *
+ * ÖNEMLİ: `chess_study_presence` tablosunda öğrenci başına TEK satır vardır
+ * (onConflict: study_id,user_id) ve `chapter_id` yalnızca son oynanan bölümü
+ * tutar. Öğrenci başka bölüme geçtiğinde önceki bölümün gerçek oyunu bu yüzden
+ * kayboluyordu ve antrenörün kayıt ekranı rakip hamlelerini "yeniden kurmak"
+ * (tahmin etmek) zorunda kalıyordu. Yeni kayıtlar payload.vcHistories ile tüm
+ * bölümlerin gerçek oyununu taşır; bu yüzden önce ona bakılır.
+ */
 export function extractVsComputerHistory(
   presenceRows: unknown[],
   studentId: string,
@@ -92,16 +111,23 @@ export function extractVsComputerHistory(
   const rows = presenceRows
     .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
     .filter((row) => String(row.user_id ?? '') === sid)
-    .filter((row) => String(row.chapter_id ?? '') === cid)
-    .filter((row) => {
-      const payload = row.payload;
-      return !!payload && typeof payload === 'object' && Boolean((payload as Record<string, unknown>).vsComputer);
-    })
     .sort((a, b) => String(b.last_seen ?? '').localeCompare(String(a.last_seen ?? '')));
 
+  // 1) Bölüm bazlı gerçek geçmiş haritası (yeni kayıtlar)
+  let bestFromMap: string[] = [];
+  for (const row of rows) {
+    const history = vsHistoryFromMap(row.payload, cid);
+    if (history.length > bestFromMap.length) bestFromMap = history;
+  }
+  if (bestFromMap.length > 0) return bestFromMap;
+
+  // 2) Eski kayıtlar: satır bu bölüme ait ve vsComputer işaretliyse
   let best: string[] = [];
   for (const row of rows) {
-    const history = getVsComputerHistory(row.payload);
+    if (String(row.chapter_id ?? '') !== cid) continue;
+    const payload = row.payload;
+    if (!payload || typeof payload !== 'object' || !(payload as Record<string, unknown>).vsComputer) continue;
+    const history = getVsComputerHistory(payload);
     if (history.length > best.length) best = history;
   }
   return best;
@@ -142,15 +168,19 @@ export function reconstructVsFullMoveList(
   return dfs(startFen || DEFAULT_FEN, remaining, []) ?? [];
 }
 
-function isComputerLoggedEvent(event: StudyEvent): boolean {
-  const expected = (event.expectedMove ?? '').trim().toLowerCase();
-  return expected === 'bilgisayar' || expected === 'engine' || expected === 'computer';
+/** Hamle listesi başlangıç pozisyonundan itibaren eksiksiz ve yasal mı? */
+function moveLineAppliesCleanly(startFen: string, moves: string[]): boolean {
+  const game = makeBuilderGame(startFen || DEFAULT_FEN);
+  for (const san of moves) {
+    if (!applyPuzzleMove(game, san)) return false;
+  }
+  return true;
 }
 
 /** Öğrencinin logladığı hamle kayıtları (presence / motor satırları hariç). */
 export function orderedStudentMoveEvents(events: StudyEvent[]): StudyEvent[] {
   return dedupeStudyEvents(events)
-    .filter((e) => !e.id.startsWith('presence-') && !isComputerLoggedEvent(e) && !!(e.playedMove ?? '').trim())
+    .filter((e) => !e.id.startsWith('presence-') && !isComputerMoveEvent(e) && !!(e.playedMove ?? '').trim())
     .sort((a, b) => {
       const ai = typeof a.moveIndex === 'number' ? a.moveIndex : 0;
       const bi = typeof b.moveIndex === 'number' ? b.moveIndex : 0;
@@ -174,26 +204,37 @@ function studentMoveMatchesEvent(playedMove: string, event: StudyEvent | undefin
 function puzzleStudentEvents(events: StudyEvent[]): StudyEvent[] {
   return dedupeStudyEvents(events).filter((e) => {
     if (e.id.startsWith('presence-')) return false;
-    if (isComputerLoggedEvent(e)) return false;
+    if (isComputerMoveEvent(e)) return false;
     return !!(e.playedMove ?? '').trim();
   });
 }
 
 /**
- * DB + presence olaylarından veya presence geçmişinden tam ply listesi.
- * Bilgisayar hamleleri kayıtlı değilse öğrenci hamlelerinden geri kurulur.
+ * Tam ply listesinin nereden geldiği.
+ *  presence      → gerçek oyun kaydı (bölüm bazlı geçmiş)
+ *  events        → bölüm başına kaydedilmiş hamle olayları (gerçek)
+ *  reconstructed → kayıt yok: rakip hamleleri TAHSİN edilerek yeniden kuruldu
+ *  none          → hiç oyun yok
  */
-export function resolveFullVsMoveList(
+export type VsMoveListSource = 'presence' | 'events' | 'reconstructed' | 'none';
+
+/**
+ * DB + presence olaylarından veya presence geçmişinden tam ply listesi.
+ * Bilgisayar hamleleri kayıtlı değilse öğrenci hamlelerinden geri kurulur —
+ * bu durumda rakip hamleleri gerçek oyun DEĞİLDİR (bkz. VsMoveListSource).
+ */
+export function resolveFullVsMoveListDetailed(
   chapter: StudyChapter | undefined,
   events: StudyEvent[],
   vsMoveHistory: string[] = [],
-): string[] {
-  if (!isVsComputerChapter(chapter)) return [];
-  if (vsMoveHistory.length > 0) return vsMoveHistory;
+): { moves: string[]; source: VsMoveListSource } {
+  if (!isVsComputerChapter(chapter)) return { moves: [], source: 'none' };
+  if (vsMoveHistory.length > 0) return { moves: vsMoveHistory, source: 'presence' };
 
   const ordered = dedupeStudyEvents(events).filter((e) => (e.playedMove ?? '').trim());
-  if (ordered.length === 0) return [];
+  if (ordered.length === 0) return { moves: [], source: 'none' };
 
+  const startFenForEvents = chapterReplayStartFen(chapter);
   const maxIdx = Math.max(...ordered.map((e) => (typeof e.moveIndex === 'number' ? e.moveIndex : -1)), -1);
   if (maxIdx >= 0) {
     const slots: (string | null)[] = Array.from({ length: maxIdx + 1 }, () => null);
@@ -205,7 +246,13 @@ export function resolveFullVsMoveList(
     }
     const filled = slots.filter((m) => !!m).length;
     if (filled === slots.length && slots.length > 0) {
-      return slots as string[];
+      const candidate = slots as string[];
+      // Kayıtlı hamleler (öğrenci + rakibin GERÇEK hamleleri) başlangıç
+      // pozisyonundan itibaren eksiksiz uygulanabiliyorsa doğru kayıttır.
+      // Uygulanamıyorsa kayıt tutarsızdır; aşağıdaki geri kuruluma düşülür.
+      if (moveLineAppliesCleanly(startFenForEvents, candidate)) {
+        return { moves: candidate, source: 'events' };
+      }
     }
   }
 
@@ -225,18 +272,23 @@ export function resolveFullVsMoveList(
       fromEvents.push(san);
     }
     if (allOk && fromEvents.length > 0) {
-      return fromEvents;
+      return { moves: fromEvents, source: 'events' };
     }
   }
+  // Bitişik ply kaydı: öğrenci + rakibin GERÇEK hamleleri sırayla kaydedilmişse
+  // (yeni kayıtlar: moveIndex 0,1,2,…) kaydı aynen kullan. Rakip hamlesi içermeyen
+  // eski kayıtlarda uygulanabilirlik şartı korunur.
+  const hasRecordedReply = sequential.some((e) => isComputerMoveEvent(e));
   if (
     sequential.length > 1
     && sequential.every((e, i) => (e.moveIndex ?? i) === i)
+    && (hasRecordedReply || moveLineAppliesCleanly(startFenForEvents, sequential.map((e) => String(e.playedMove).trim())))
   ) {
-    return sequential.map((e) => String(e.playedMove).trim());
+    return { moves: sequential.map((e) => String(e.playedMove).trim()), source: 'events' };
   }
 
   const studentSans = ordered
-    .filter((e) => !isComputerLoggedEvent(e) && !e.id.startsWith('presence-'))
+    .filter((e) => !isComputerMoveEvent(e) && !e.id.startsWith('presence-'))
     .map((e) => String(e.playedMove).trim())
     .filter(Boolean);
   const reconstructed = reconstructVsFullMoveList(
@@ -244,9 +296,17 @@ export function resolveFullVsMoveList(
     studentSans,
     chapter?.orientation === 'black' ? 'black' : 'white',
   );
-  if (reconstructed.length > 0) return reconstructed;
+  if (reconstructed.length > 0) return { moves: reconstructed, source: 'reconstructed' };
 
-  return [];
+  return { moves: [], source: 'none' };
+}
+
+export function resolveFullVsMoveList(
+  chapter: StudyChapter | undefined,
+  events: StudyEvent[],
+  vsMoveHistory: string[] = [],
+): string[] {
+  return resolveFullVsMoveListDetailed(chapter, events, vsMoveHistory).moves;
 }
 
 function buildStepsFromMoveList(startFen: string, moves: string[]): ReplayStep[] {
@@ -477,6 +537,8 @@ export type ReplayTableRow = {
   result: 'correct' | 'wrong' | 'solution' | 'engine';
   thinkMs: number;
   createdAt: string | null;
+  /** Rakip hamlesi gerçek oyun kaydından değil, tahminle yeniden kuruldu. */
+  estimated?: boolean;
 };
 
 /** Tablo için tüm hamleler (her iki renk / bilgisayar dahil). */
@@ -484,9 +546,11 @@ export function buildReplayTableRows(
   chapter: StudyChapter | undefined,
   events: StudyEvent[],
   vsMoveHistory: string[] = [],
+  options?: { estimatedOpponent?: boolean },
 ): ReplayTableRow[] {
   const ordered = dedupeStudyEvents(events);
   const fullMoves = resolveFullVsMoveList(chapter, events, vsMoveHistory);
+  const estimatedOpponent = !!options?.estimatedOpponent;
 
   if (isVsComputerChapter(chapter) && fullMoves.length > 0) {
     const studentOrientation = chapter?.orientation ?? 'white';
@@ -525,6 +589,7 @@ export function buildReplayTableRows(
         result,
         thinkMs,
         createdAt,
+        estimated: !isStudent && estimatedOpponent,
       };
     });
   }
@@ -579,18 +644,25 @@ export function buildReplayTableRows(
   return ordered.map((event, idx) => {
     const ply = typeof event.moveIndex === 'number' ? event.moveIndex : idx;
     const isWhitePly = ply % 2 === 0;
+    const isComputer = isComputerMoveEvent(event);
     return {
       id: event.id,
       plyIndex: ply,
       stepIndex: idx + 1,
       moveNo: displayStudyEventMoveNo(event, idx, chapter),
       side: isWhitePly ? 'white' : 'black',
-      isStudent: true,
+      isStudent: !isComputer,
       playedMove: event.playedMove || '—',
       expectedLabel: event.expectedMove || 'Serbest',
-      result: event.result === 'wrong' ? 'wrong' : event.result === 'solution' ? 'solution' : 'correct',
-      thinkMs: event.thinkMs ?? 0,
-      createdAt: event.createdAt ?? null,
+      result: isComputer
+        ? 'engine'
+        : event.result === 'wrong'
+          ? 'wrong'
+          : event.result === 'solution'
+            ? 'solution'
+            : 'correct',
+      thinkMs: isComputer ? 0 : (event.thinkMs ?? 0),
+      createdAt: isComputer ? null : (event.createdAt ?? null),
     };
   });
 }

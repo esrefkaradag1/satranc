@@ -1,6 +1,6 @@
 import type { Student } from '../types';
 import type { Study, StudyChapter } from './studyTypes';
-import type { StudyEvent } from '../studyEvents';
+import { isComputerMoveEvent, type StudyEvent } from '../studyEvents';
 import { mergeStudyAnalysisEvents, type MoveAnalysisLogEntry } from './studyAnalysisEvents';
 import { studentInitials } from './homeworkPanelUtils';
 
@@ -42,7 +42,10 @@ function normalizeLogEntry(raw: unknown): MoveAnalysisLogEntry | null {
 }
 
 function eventsForStudent(events: StudyEvent[], studentId: string): StudyEvent[] {
-  return events.filter((e) => String(e.studentId) === String(studentId));
+  // Rakibin (motorun) hamleleri öğrencinin istatistiğine sayılmaz.
+  return events.filter(
+    (e) => String(e.studentId) === String(studentId) && !isComputerMoveEvent(e),
+  );
 }
 
 function chapterCompleted(

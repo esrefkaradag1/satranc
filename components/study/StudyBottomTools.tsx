@@ -2,7 +2,7 @@ import React from 'react';
 import { availableNewPgnTagTypes, defaultChapterPgnTags, filterDisplayPgnTags, buildStudyBoardPgnDisplay } from '../../lib/studyPgnTags';
 import { Tag, MessageSquare, BarChart2, Share2, Info, Copy, Download, RefreshCw, Highlighter, Send, Heart } from 'lucide-react';
 import type { Study, StudyChapter, BottomTab } from '../../lib/studyTypes';
-import type { StudyEvent } from '../../studyEvents';
+import { isComputerMoveEvent, type StudyEvent } from '../../studyEvents';
 import {
   buildOrphanChapterMap,
   eventMatchesChapter,
@@ -162,7 +162,8 @@ export const StudyBottomTools: React.FC<StudyBottomToolsProps> = ({
   );
 
   const filteredEvents = React.useMemo(() => {
-    let events = allAnalysisEvents;
+    // Rakibin (motorun) hamleleri öğrencinin hamle günlüğünde görünmez.
+    let events = allAnalysisEvents.filter((e) => !isComputerMoveEvent(e));
     if (chapter?.id) {
       events = events.filter((e) =>
         eventMatchesChapter(e, chapter.id, study, orphanChapterMap),

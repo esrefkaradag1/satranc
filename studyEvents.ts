@@ -17,6 +17,24 @@ export interface StudyEvent {
 
 const TABLE = 'chess_study_events';
 
+/**
+ * Bilgisayara karşı bölümlerde RAKİBİN (motorun) hamlesinin `expected_move` etiketi.
+ *
+ * DİKKAT: Öğrencinin aynı bölümdeki kendi hamleleri `'Bilgisayara karşı'` etiketiyle
+ * kaydedilir. İkisi karıştırılmamalıdır: aşağıdaki yardımcı yalnızca rakibin
+ * hamleleri için true döner.
+ */
+export const COMPUTER_MOVE_LABEL = 'Bilgisayar';
+
+export function isComputerMoveEvent(
+  event: Pick<StudyEvent, 'expectedMove'> | null | undefined,
+): boolean {
+  const expected = String(event?.expectedMove ?? '').trim().toLowerCase();
+  return expected === COMPUTER_MOVE_LABEL.toLowerCase()
+    || expected === 'engine'
+    || expected === 'computer';
+}
+
 async function postStudyEventViaApi(args: {
   studyId: string;
   chapterId: string;

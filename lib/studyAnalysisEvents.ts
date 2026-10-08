@@ -1,5 +1,5 @@
 import type { Study } from './studyTypes';
-import type { StudyEvent } from '../studyEvents';
+import { isComputerMoveEvent, type StudyEvent } from '../studyEvents';
 
 /** Eski chapter_id değerlerini güncel bölüm kimliklerine eşle (bölüm yeniden oluşturulduysa). */
 export function buildOrphanChapterMap(events: StudyEvent[], study: Study): Map<string, string> {
@@ -102,7 +102,8 @@ export function practiceLogsForChapter(
 }
 
 export function studyEventsToMoveAnalysis(events: StudyEvent[]): MoveAnalysisLogEntry[] {
-  return events.map((event) => ({
+  // Rakibin (motorun) hamleleri öğrencinin hamle günlüğüne girmez.
+  return events.filter((event) => !isComputerMoveEvent(event)).map((event) => ({
     id: event.id,
     chapterId: event.chapterId,
     moveNo: Math.floor(event.moveIndex / 2) + 1,

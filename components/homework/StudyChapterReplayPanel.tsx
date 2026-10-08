@@ -10,6 +10,7 @@ import {
   buildReplayTableRows,
   chapterReplayOrientation,
   chapterReplayStartFen,
+  type VsMoveListSource,
 } from '../../lib/studyReplayUtils';
 
 type Props = {
@@ -18,6 +19,8 @@ type Props = {
   studentId: string;
   studyId: string;
   vsMoveHistory?: string[];
+  /** vsMoveHistory'nin gerçek kayıttan mı yoksa tahminle kurulduğundan mı geldiği. */
+  vsMoveSource?: VsMoveListSource;
 };
 
 const PLAY_INTERVAL_MS = 900;
@@ -71,13 +74,15 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
   studentId,
   studyId,
   vsMoveHistory = [],
+  vsMoveSource,
 }) => {
   const startFen = chapterReplayStartFen(chapter);
   const orientation = chapterReplayOrientation(chapter);
+  const estimatedOpponent = vsMoveSource === 'reconstructed';
 
   const tableRows = useMemo(
-    () => buildReplayTableRows(chapter, events, vsMoveHistory),
-    [events, chapter, vsMoveHistory],
+    () => buildReplayTableRows(chapter, events, vsMoveHistory, { estimatedOpponent }),
+    [events, chapter, vsMoveHistory, estimatedOpponent],
   );
 
   const steps = useMemo(
@@ -252,7 +257,15 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
         <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02] shrink-0">
           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
             Tüm hamleler · {tableRows.length} ply
+            {estimatedOpponent ? ' · rakip hamleleri tahmini' : ''}
           </p>
+          {estimatedOpponent ? (
+            <p className="mt-1 text-[11px] leading-snug text-amber-300/90">
+              Bu bölümün gerçek oyun kaydı yok. Öğrencinin hamleleri gerçek; rakip
+              hamleleri aynı pozisyona ulaşan olası bir hat üzerinden <strong>tahminle</strong> kuruldu —
+              notasyon farklı olabilir. (Kaydın tam olması için öğrenci bölümü yeniden oynasın.)
+            </p>
+          ) : null}
         </div>
         <div className="flex-1 min-h-0 overflow-auto custom-scrollbar">
           <table className="w-full text-sm min-w-[520px]">
@@ -298,7 +311,17 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
                           {row.isStudent ? 'Öğrenci' : (row.result === 'engine' ? 'Rakip' : 'Bilgisayar')}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-white font-semibold">{row.playedMove}</td>
+                      <td className="px-3 py-2 text-white font-semibold">
+                        {row.playedMove}
+                        {row.estimated ? (
+                          <span
+                            className="ml-1.5 inline-flex rounded px-1 py-0.5 text-[9px] font-bold border border-slate-500/40 bg-slate-500/15 text-slate-400 align-middle"
+                            title="Gerçek kayıt yok — bu rakip hamlesi tahminle yeniden kuruldu"
+                          >
+                            tahmini
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="px-3 py-2">
                         <span className={`inline-flex rounded-lg px-2 py-0.5 text-[10px] font-bold border ${
                           row.result === 'wrong'

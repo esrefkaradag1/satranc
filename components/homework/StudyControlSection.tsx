@@ -6,9 +6,9 @@ import type { Study } from '../../lib/studyTypes';
 import { studyDisplayEmoji } from '../../lib/studyUtils';
 import { loadStudiesAsync, saveStudyAsync, subscribeToStudies } from '../../studyStorage';
 import { normalizeSearchText, searchIncludesText } from '../../lib/searchText';
-import { loadStudyEvents, type StudyEvent } from '../../studyEvents';
+import { isComputerMoveEvent, loadStudyEvents, type StudyEvent } from '../../studyEvents';
 import { mergeStudyAnalysisEvents, buildOrphanChapterMap, resolveEventChapterId } from '../../lib/studyAnalysisEvents';
-import { extractVsComputerHistory, resolveFullVsMoveList } from '../../lib/studyReplayUtils';
+import { extractVsComputerHistory, resolveFullVsMoveListDetailed, type VsMoveListSource } from '../../lib/studyReplayUtils';
 import { loadStudyPresence, subscribeStudyPresence } from '../../services/studyActions';
 import { buildStudyStudentStats, type StudyStudentStat } from '../../lib/studyHomeworkStats';
 import { useApp } from '../../AppContext';
@@ -118,7 +118,11 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   const mergeStudyEventsForStats = (persistedEvents: StudyEvent[], liveEvents: StudyEvent[]): StudyEvent[] => {
     const merged: StudyEvent[] = [];
     const seen = new Set<string>();
-    for (const event of [...persistedEvents, ...liveEvents]) {
+    // İstatistikler öğrencinin hamlelerini sayar; rakibin (motorun) hamleleri
+    // kayıtta tutulur ama sayıma girmez. (Not: hamle kaydı ekranı bunun yerine
+    // aşağıdaki mergeVisibleStudyEvents'i kullanır ve rakip hamlelerini korur.)
+    const forStats = [...persistedEvents, ...liveEvents].filter((event) => !isComputerMoveEvent(event));
+    for (const event of forStats) {
       const key = [
         String(event.studentId ?? ''),
         String(event.chapterId ?? ''),
@@ -396,6 +400,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
       chapter: typeof study.chapters[0] | undefined;
       events: StudyEvent[];
       vsMoveHistory: string[];
+      vsMoveSource: VsMoveListSource;
     }>();
 
     activeStudyEvents.forEach((event) => {
@@ -423,6 +428,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
               chapterId,
             )
             : [],
+          vsMoveSource: 'none' as VsMoveListSource,
         });
       }
       const entry = grouped.get(chapterId)!;
@@ -440,10 +446,14 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
       .map((entry) => {
         const isVs =
           entry.chapter?.lessonMode === 'interactive' && entry.chapter.interactiveType === 'vsComputer';
-        if (!isVs) return { ...entry, vsMoveHistory: [] as string[] };
+        if (!isVs) return { ...entry, vsMoveHistory: [] as string[], vsMoveSource: 'none' as VsMoveListSource };
         const fromPresence = entry.vsMoveHistory;
-        const full = resolveFullVsMoveList(entry.chapter, entry.events, fromPresence);
-        return { ...entry, vsMoveHistory: full.length > 0 ? full : fromPresence };
+        const detailed = resolveFullVsMoveListDetailed(entry.chapter, entry.events, fromPresence);
+        return {
+          ...entry,
+          vsMoveHistory: detailed.moves.length > 0 ? detailed.moves : fromPresence,
+          vsMoveSource: detailed.moves.length > 0 ? detailed.source : (fromPresence.length > 0 ? 'presence' : 'none'),
+        };
       })
       .sort((a, b) => {
         const ai = study.chapters.findIndex((ch) => ch.id === a.chapterId);
@@ -738,8 +748,10 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
                           <span className="block text-[10px] text-slate-500 truncate">
                             {chapter.chapterType}
                             {chapter.chapterType === 'Bilgisayara karşı' && chapter.vsMoveHistory.length > 0
-                              ? ` · ${Math.ceil(chapter.vsMoveHistory.length / 2)} hamle`
-                              : ` · ${chapter.events.filter((e) => !e.id.startsWith('presence-')).length} kayıt`}
+                              ? ` · ${Math.ceil(chapter.vsMoveHistory.length / 2)} hamle${
+                                chapter.vsMoveSource === 'reconstructed' ? ' (tahmini)' : ''
+                              }`
+                              : ` · ${chapter.events.filter((e) => !e.id.startsWith('presence-') && !isComputerMoveEvent(e)).length} kayıt`}
                           </span>
                         </button>
                       );
@@ -755,6 +767,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
                       studentId={activeStudyLog.student.id}
                       studyId={activeStudyLog.study.id}
                       vsMoveHistory={activeLogChapter.vsMoveHistory}
+                      vsMoveSource={activeLogChapter.vsMoveSource}
                     />
                   </div>
                 ) : null}

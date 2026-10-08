@@ -23,7 +23,7 @@ import {
   VS_COMPUTER_SEARCH_DEPTH,
 } from '../services/chessEngine';
 import { canWriteSupabase } from '../services/supabase';
-import { logStudyEvent, loadStudyEvents } from '../studyEvents';
+import { COMPUTER_MOVE_LABEL, logStudyEvent, loadStudyEvents } from '../studyEvents';
 import { appendStudyPracticeLogs } from '../studyPracticeLogs';
 import { studyEventsToMoveAnalysis, mergePracticeLogEntries } from '../lib/studyAnalysisEvents';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
@@ -579,6 +579,45 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     return describeGameOutcome(startFen, vcHistory);
   }, [isVcGameOver, effectiveChapter, isInteractivePuzzle, puzzlePlayNorm, vcHistory]);
 
+  /**
+   * Rakibin hamlesini kaydederken güncel geçmişi okumak için ref.
+   * (`doComputerMove` bağımlılık listesine `vcHistory` eklemek, motora karşı
+   * oyun döngüsünü gereksiz yere yeniden başlatırdı.)
+   */
+  const vcHistoryRef = useRef<string[]>([]);
+  useEffect(() => {
+    vcHistoryRef.current = vcHistory;
+  }, [vcHistory]);
+
+  /**
+   * Bölüm bazlı gerçek vs-bilgisayar geçmişi.
+   *
+   * `chess_study_presence` tablosunda öğrenci başına TEK satır vardır
+   * (onConflict: study_id,user_id); `chapter_id` yalnızca son oynanan bölümü
+   * tutar. Öğrenci başka bölüme geçince önceki bölümün oyunu kayboluyor,
+   * antrenörün hamle kaydı ekranı rakip hamlelerini tahminle yeniden kurmak
+   * zorunda kalıyordu (ör. maçta Şc6 oynandı ama kayıtta Şc8 görünüyordu).
+   * Bu harita tüm bölümlerin gerçek oyununu presence payload'ıyla taşır.
+   */
+  const vcHistoriesForPresence = useCallback((): Record<string, string[]> => {
+    if (!studentId) return {};
+    const map: Record<string, string[]> = {};
+    try {
+      const all = loadVcProgress(studentId);
+      for (const [id, entry] of Object.entries(all ?? {})) {
+        const history = (entry as { history?: unknown })?.history;
+        if (Array.isArray(history) && history.length > 0) {
+          map[id] = history.filter((m): m is string => typeof m === 'string');
+        }
+      }
+    } catch {
+      /* localStorage erişilemezse yalnızca aktif bölüm gider */
+    }
+    const currentId = effectiveChapter?.id ?? selectedChapter?.id;
+    if (currentId && vcHistory.length > 0) map[currentId] = vcHistory;
+    return map;
+  }, [studentId, effectiveChapter?.id, selectedChapter?.id, vcHistory]);
+
   // Periodic presence update (like StudyPage)
   useEffect(() => {
     if (!selectedStudy || !effectiveChapter || !studentId) return;
@@ -592,12 +631,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         payload.thinking = vcThinking;
         payload.gameOver = isVcGameOver;
       }
+      // Bölüm bazlı geçmişler her zaman taşınır: bulmaca bölümündeyken atılan
+      // "sticky" nabız vsComputer payload'ını sıfırladığı için bu bölümlerin
+      // gerçek oyunu daha önce kayıttan tamamen kayboluyordu.
+      payload.vcHistories = vcHistoriesForPresence();
       // `updatePresencePayload` already knows studyId/chapterId/userId/path/sticky from the sync hook.
       // Passing a nested object here breaks the expected payload shape and makes teacher UI miss `vsComputer`.
       void updatePresencePayload(payload);
     }, 5000);
     return () => clearInterval(interval);
-  }, [selectedStudy, effectiveChapter, studentId, vsComputer, vcFen, vcHistory, vcThinking, isVcGameOver, syncState, sticky]);
+  }, [selectedStudy, effectiveChapter, studentId, vsComputer, vcFen, vcHistory, vcThinking, isVcGameOver, syncState, sticky, vcHistoriesForPresence]);
 
   const isVsComputer = useMemo(() => {
     const ch = selectedChapter ?? effectiveChapter;
@@ -2289,27 +2332,50 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
        );
        if (san) {
          const game = makeBuilderGame(fen);
-         game.move(san);
+         // Motorun dönderdiği dize kanonik SAN olmayabilir ("e7e8q", eksik +/#).
+         // Tahlerde ve kayıtta kullanılan biçim chess.js'in SAN'ı olsun.
+         const played = game.move(san);
+         const playedSan = played?.san ?? san;
          const nextFen = game.fen();
-         let newHistory: string[] = [];
+         // Rakibin hamlesinin ply indeksi = oynanmadan ÖNCEKİ geçmiş uzunluğu.
+         // (setState güncelleyicisi ertelenirse aşağıdaki başlangıç değerleri geçerli kalır.)
+         const currentHistory = vcHistoryRef.current;
+         let plyIndex = currentHistory.length;
+         let newHistory: string[] = [...currentHistory, playedSan];
          setVcHistory((prev) => {
-           newHistory = [...prev, san];
+           plyIndex = prev.length;
+           newHistory = [...prev, playedSan];
            return newHistory;
          });
-         setVcFen(nextFen);
-         setCurrentMoveIndex(newHistory.length);
-         setLastMoveSquares(lastMoveHighlightFromSan(fen, san));
+         // Rakibin hamlesini KALICI olay olarak kaydet. Daha önce hiç kaydedilmediği
+         // için antrenörün hamle kaydı ekranı bu hamleleri tahminle kuruyordu.
+         logStudyEvent({
+           studyId: selectedStudy?.id,
+           chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+           studentId,
+           moveIndex: plyIndex,
+           expectedMove: COMPUTER_MOVE_LABEL,
+           playedMove: playedSan,
+           result: 'correct',
+           thinkMs: 0,
+         });
+         setVcFen(nextFen);         setCurrentMoveIndex(newHistory.length);
+         setLastMoveSquares(lastMoveHighlightFromSan(fen, playedSan));
+         const vcHistories = vcHistoriesForPresence();
+         const vcChapterId = effectiveChapter?.id ?? selectedChapter?.id;
+         if (vcChapterId) vcHistories[vcChapterId] = newHistory;
          void updatePresencePayload({
            vsComputer: true,
            fen: nextFen,
            vcHistory: newHistory,
            history: newHistory,
            thinking: false,
-           gameOver: isAutomaticVcGameOver(game) || vcManualGameOver
+           gameOver: isAutomaticVcGameOver(game) || vcManualGameOver,
+           vcHistories,
          });
        }
      } finally { setVcThinking(false); }
-  }, [vcLevel, vcManualGameOver, updatePresencePayload, getBestMoveWithTimeout, selectedStudy?.id, effectiveChapter?.id, selectedChapter?.id, studentId]);
+   }, [vcLevel, vcManualGameOver, updatePresencePayload, getBestMoveWithTimeout, selectedStudy?.id, effectiveChapter?.id, selectedChapter?.id, studentId, vcHistoriesForPresence]);
 
   useEffect(() => {
     if (!vsComputer || vcThinking) return;
@@ -2328,20 +2394,27 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   useEffect(() => {
     if (!vsComputer) return;
     const timer = setTimeout(() => {
+      const vcHistories = vcHistoriesForPresence();
+      const vcChapterId = effectiveChapter?.id ?? selectedChapter?.id;
+      if (vcChapterId) vcHistories[vcChapterId] = vcHistory;
       void updatePresencePayload({
         vsComputer: true,
         fen: vcFen,
         vcHistory: vcHistory,
         history: vcHistory,
         thinking: vcThinking,
-        gameOver: isVcGameOver
+        gameOver: isVcGameOver,
+        vcHistories,
       });
     }, 200);
     return () => clearTimeout(timer);
-  }, [vsComputer, vcFen, vcHistory, vcThinking, isVcGameOver, updatePresencePayload]);
+  }, [vsComputer, vcFen, vcHistory, vcThinking, isVcGameOver, updatePresencePayload, vcHistoriesForPresence, effectiveChapter?.id, selectedChapter?.id]);
 
   const claimDraw = useCallback(() => {
     setVcManualGameOver(true);
+    const vcHistories = vcHistoriesForPresence();
+    const vcChapterId = effectiveChapter?.id ?? selectedChapter?.id;
+    if (vcChapterId) vcHistories[vcChapterId] = vcHistory;
     void updatePresencePayload({
       vsComputer: true,
       fen: vcFen,
@@ -2349,8 +2422,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       history: vcHistory,
       thinking: false,
       gameOver: true,
+      vcHistories,
     });
-  }, [vcFen, vcHistory, updatePresencePayload]);
+  }, [vcFen, vcHistory, updatePresencePayload, vcHistoriesForPresence, effectiveChapter?.id, selectedChapter?.id]);
 
   const handleVcDrop = useCallback(({ sourceSquare, targetSquare, piece }: { piece?: any; sourceSquare: string; targetSquare: string | null }) => {
     if (!sourceSquare || !targetSquare) return false;
