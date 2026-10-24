@@ -164,16 +164,25 @@ export function saveStudySelection(studentId: string | null, studyId: string | n
   } catch {}
 }
 
-export function loadProgress(): Record<string, number> {
+function progressStorageKey(studentId?: string | null): string {
+  const id = String(studentId ?? '').trim();
+  return id ? `${PROGRESS_KEY}:${id}` : PROGRESS_KEY;
+}
+
+export function loadProgress(studentId?: string | null): Record<string, number> {
   try {
-    const raw = localStorage.getItem(PROGRESS_KEY);
+    const raw = localStorage.getItem(progressStorageKey(studentId));
     if (raw) return JSON.parse(raw);
+    if (studentId) {
+      const legacy = localStorage.getItem(PROGRESS_KEY);
+      if (legacy) return JSON.parse(legacy);
+    }
   } catch {}
   return {};
 }
 
-export function saveProgress(p: Record<string, number>) {
-  try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(p)); } catch {}
+export function saveProgress(p: Record<string, number>, studentId?: string | null) {
+  try { localStorage.setItem(progressStorageKey(studentId), JSON.stringify(p)); } catch {}
 }
 
 export function vcProgressKey(studentId: string | null): string {
@@ -219,6 +228,9 @@ export function migrateChapter(ch: Partial<StudyChapter>): StudyChapter {
     moveAnnotations: ch.moveAnnotations ?? {},
     variations: ch.variations ?? {},
     seedTree: ch.seedTree,
+    puzzleSetupPly: typeof ch.puzzleSetupPly === 'number' && ch.puzzleSetupPly >= 0
+      ? ch.puzzleSetupPly
+      : undefined,
     arrows: Array.isArray(ch.arrows) ? ch.arrows : [],
     circles: ch.circles ?? {},
   };

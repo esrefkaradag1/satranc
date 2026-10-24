@@ -1,10 +1,13 @@
 import type { ChessComPuzzleAttempt } from './chesscomPuzzleParse';
 import { localDayKeyFromMs, timestampMatchesDay, istanbulDayKey } from './homeworkDayUtils';
 import { parseLichessActivityPuzzles } from './leaderboardUtils';
+import {
+  lichessActivityTotalGameCount,
+  type LichessActivityLike,
+} from './lichessGameResults';
+import { lichessCountVersionAfterFetch } from './lichessCountGuard';
 
-export type LichessActivityRow = {
-  interval?: { start: number; end: number };
-  games?: Record<string, { win: number; loss: number; draw: number }>;
+export type LichessActivityRow = LichessActivityLike & {
   puzzles?: { score?: { win: number; loss: number; draw: number }; count?: number };
 };
 
@@ -42,23 +45,19 @@ export type PlatformDayStatsPayload = {
   activityTimeSeconds?: number;
   lichessError?: boolean;
   chessComError?: boolean;
+  lichessCountVersion?: number;
 };
 
 export function lichessGamesForDayFromActivity(activities: LichessActivityRow[], day: string): number {
   const target = day.slice(0, 10);
+  let best = 0;
   for (const row of activities) {
     if (!row.interval?.start) continue;
-    if (!timestampMatchesDay(row.interval.start, target)) continue;
-    const games = row.games;
-    if (!games) continue;
-    let total = 0;
-    for (const mode of Object.values(games)) {
-      if (!mode || typeof mode !== 'object') continue;
-      total += (mode.win || 0) + (mode.loss || 0) + (mode.draw || 0);
-    }
-    return total;
+    const startMs = Number(row.interval.start);
+    if (!Number.isFinite(startMs) || !timestampMatchesDay(startMs, target)) continue;
+    best = Math.max(best, lichessActivityTotalGameCount(row));
   }
-  return 0;
+  return best;
 }
 
 export function lichessPuzzleStatsForDayFromActivity(
@@ -118,7 +117,7 @@ export function chessComGamesForDay(
 }
 
 export function buildPlatformDayStats(
-  lichess: { games: number; puzzles: DayPuzzleStats; error?: boolean },
+  lichess: { games: number; puzzles: DayPuzzleStats; error?: boolean; tracked?: boolean },
   chess: { games: number; puzzles: DayPuzzleStats; error?: boolean },
   activityTimeSeconds?: number,
 ): PlatformDayStatsPayload {
@@ -141,6 +140,11 @@ export function buildPlatformDayStats(
   if (activityTimeSeconds != null && activityTimeSeconds > 0) {
     payload.activityTimeSeconds = Math.round(activityTimeSeconds);
   }
+  const version = lichessCountVersionAfterFetch({
+    hasLichessUser: !!lichess.tracked,
+    lichessError: !!lichess.error,
+  });
+  if (version != null) payload.lichessCountVersion = version;
   return payload;
 }
 

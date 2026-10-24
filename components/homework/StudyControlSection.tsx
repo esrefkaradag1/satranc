@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { BookOpen, Plus, Users, CheckSquare, ExternalLink, UserCircle, Activity, Search, X, Eye } from 'lucide-react';
+import { BookOpen, Plus, Users, CheckSquare, ExternalLink, UserCircle, Activity, Search, X, Eye, UserMinus } from 'lucide-react';
 import type { Student } from '../../types';
 import type { Study } from '../../lib/studyTypes';
 import { studyDisplayEmoji } from '../../lib/studyUtils';
 import { loadStudiesAsync, saveStudyAsync, subscribeToStudies } from '../../studyStorage';
 import { normalizeSearchText, searchIncludesText } from '../../lib/searchText';
-import { isComputerMoveEvent, loadStudyEvents, type StudyEvent } from '../../studyEvents';
+import { COMPUTER_MOVE_LABEL, isComputerMoveEvent, loadStudyEvents, type StudyEvent } from '../../studyEvents';
 import { mergeStudyAnalysisEvents, buildOrphanChapterMap, resolveEventChapterId } from '../../lib/studyAnalysisEvents';
 import { extractVsComputerHistory, resolveFullVsMoveListDetailed, type VsMoveListSource } from '../../lib/studyReplayUtils';
 import { loadStudyPresence, subscribeStudyPresence } from '../../services/studyActions';
@@ -74,14 +74,17 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
       const chapterId = String(row.chapter_id ?? '');
       const createdAt = String(row.last_seen ?? new Date().toISOString());
       const history = getVsComputerHistory(row.payload);
+      const chapter = study.chapters.find((c) => c.id === chapterId);
+      const studentIsBlack = chapter?.orientation === 'black';
       history.forEach((move, moveIndex) => {
+        const isStudentPly = studentIsBlack ? moveIndex % 2 === 1 : moveIndex % 2 === 0;
         liveEvents.push({
           id: `presence-${study.id}-${student.id}-${chapterId || 'live'}-${rowIndex}-${moveIndex}`,
           studyId: study.id,
           chapterId,
           studentId: String(student.id),
           moveIndex,
-          expectedMove: null,
+          expectedMove: isStudentPly ? 'Bilgisayara karşı' : COMPUTER_MOVE_LABEL,
           playedMove: move,
           result: 'correct',
           thinkMs: 0,
@@ -96,8 +99,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   const mergeVisibleStudyEvents = (persistedEvents: StudyEvent[], liveEvents: StudyEvent[]): StudyEvent[] => {
     const merged: StudyEvent[] = [];
     const seen = new Set<string>();
-    const withoutWrong = persistedEvents.filter((event) => event.result !== 'wrong');
-    for (const event of [...withoutWrong, ...liveEvents]) {
+    for (const event of [...persistedEvents, ...liveEvents]) {
       const key = [
         String(event.studentId ?? ''),
         String(event.chapterId ?? ''),
@@ -352,8 +354,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
         if (cancelled) return;
         setActiveStudyPresenceRows(presenceRows);
         const persisted = mergeStudyAnalysisEvents(dbEvents, study)
-          .filter((event) => String(event.studentId) === String(student.id))
-          .filter((event) => event.result !== 'wrong');
+          .filter((event) => String(event.studentId) === String(student.id));
         const live = buildPresenceStudyEvents(study, student, presenceRows);
         // Presence (study_id,user_id) tek satır — bölüm değişince eski vs geçmişi silinir.
         // Bu yüzden DB + practiceLogs kayıtlarını da tut; presence yalnızca canlı tamamlayıcı.
@@ -542,7 +543,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
           </div>
         </div>
         <p className="text-[10px] text-slate-500">
-          Seçili gruba veya öğrenciye çalışma atayın. Öğrenci panelinde Çalışmalar sekmesinde görünür.
+          Seçili listedeki öğrencilere çalışma atayın. Öğrenci panelinde Çalışmalar sekmesinde görünür.
         </p>
       </div>
 
@@ -666,6 +667,14 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
                         <ExternalLink className="w-4 h-4" />
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => void removeStudentFromStudy(study.id, selectedStudent.id)}
+                      className="p-2 rounded-lg text-rose-400 hover:bg-rose-500/10"
+                      title="Atamayı kaldır"
+                    >
+                      <UserMinus className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
                 {study.description?.trim() ? (

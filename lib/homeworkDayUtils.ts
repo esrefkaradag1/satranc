@@ -33,7 +33,28 @@ export function utcDayKeyFromMs(ms: number): string {
 
 export function timestampMatchesDay(ms: number, target: string): boolean {
   const day = target.slice(0, 10);
-  return localDayKeyFromMs(ms) === day || utcDayKeyFromMs(ms) === day;
+  return istanbulDayKey(new Date(ms)) === day || utcDayKeyFromMs(ms) === day;
+}
+
+/** İstanbul takvim gününün başlangıç/bitiş anı (Lichess since/until için). */
+export function istanbulDayBoundsMs(day: string): { startMs: number; endMs: number } {
+  const d = day.slice(0, 10);
+  const startMs = new Date(`${d}T00:00:00+03:00`).getTime();
+  const endMs = new Date(`${d}T23:59:59.999+03:00`).getTime();
+  return { startMs, endMs };
+}
+
+/** Ödev son tarihi: tarih-only alanlar İstanbul gün sonu (23:59:59.999). */
+export function homeworkDueEndMs(raw?: string | null): number | null {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  if (s.includes('T')) {
+    const t = new Date(s).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  const day = s.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  return istanbulDayBoundsMs(day).endMs;
 }
 
 export function weekdayKeyFromIso(isoDate: string): number {

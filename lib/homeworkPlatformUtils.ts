@@ -15,11 +15,12 @@ import {
   fetchLichessDaysStats,
   fetchLichessGamesCountForDay,
   fetchLichessGamesForDay,
+  fetchLichessGamesForRange,
   type ChessComGame,
   type LichessGame,
 } from '../services/chessPlatformService';
 import { fetchLichessOAuthDayPuzzleStats, isStudentLichessOAuthConnected } from '../services/lichessOAuthClient';
-import { timestampMatchesDay, istanbulDayKey } from './homeworkDayUtils';
+import { timestampMatchesDay, istanbulDayKey, istanbulDayBoundsMs } from './homeworkDayUtils';
 import { weekdayKeyFromIso } from './homeworkDayUtils';
 import {
   chessComGameDurationSeconds,
@@ -28,6 +29,10 @@ import {
 import { chessComPuzzleTimeEstimateForDay } from './platformActivityTime';
 import { isHomeworkAssignedToStudent } from '../homeworkUtils';
 import { homeworkHasPlatformGoals } from './homeworkStatsBuilders';
+import {
+  lichessCountVersionAfterFetch,
+  mergedLichessCountVersion,
+} from './lichessCountGuard';
 
 export type PlatformDayStats = {
   games: number;
@@ -45,7 +50,20 @@ export type PlatformDayStats = {
   activityTimeSeconds?: number;
   lichessError?: boolean;
   chessComError?: boolean;
+  /** 3+ = Lichess gün sayısı until + turnuva ile doğrulandı; yoksa kapalı gün yeniden çekilir. */
+  lichessCountVersion?: number;
 };
+
+function withLichessCountVersion(
+  stats: PlatformDayStats,
+  hasLichessUser: boolean,
+): PlatformDayStats {
+  const version = lichessCountVersionAfterFetch({
+    hasLichessUser,
+    lichessError: !!stats.lichessError,
+  });
+  return version != null ? { ...stats, lichessCountVersion: version } : stats;
+}
 
 export async function fetchStudentPlatformDayStats(
   student: Student,
@@ -101,7 +119,7 @@ export async function fetchStudentPlatformDayStats(
     }
   }
 
-  return {
+  const result: PlatformDayStats = {
     games: lichessDay.games + chessComGames,
     puzzleSolved: (lichessDay.puzzles.count ?? 0) + (chessComPuzzles.count ?? 0),
     puzzlePassed: (lichessDay.puzzles.passed ?? 0) + (chessComPuzzles.passed ?? 0),
@@ -121,6 +139,7 @@ export async function fetchStudentPlatformDayStats(
       return puzzleSec > 0 ? { activityTimeSeconds: puzzleSec } : {};
     })()),
   };
+  return withLichessCountVersion(result, !!lichessUsername);
 }
 
 /** Öğrenci başına tek Lichess aktivite + tek Chess.com bundle ile çoklu gün özeti (istemci yedeği). */
@@ -157,6 +176,27 @@ export async function fetchStudentPlatformDaysStats(
       if (!oauthUsed) {
         lichessByDay = await fetchLichessDaysStats(lichessUsername, days);
         if (Object.values(lichessByDay).some((d) => d.activityRateLimited)) lichessError = true;
+      } else {
+        const sorted = [...days].sort();
+        const startMs = istanbulDayBoundsMs(sorted[0]!).startMs;
+        const endMs = istanbulDayBoundsMs(sorted[sorted.length - 1]!).endMs;
+        try {
+          const ranged = await fetchLichessGamesForRange(lichessUsername, startMs, endMs);
+          const byDay: Record<string, number> = {};
+          for (const game of ranged) {
+            const ts = game.lastMoveAt ?? game.createdAt ?? 0;
+            if (ts <= 0) continue;
+            const key = istanbulDayKey(new Date(ts));
+            byDay[key] = (byDay[key] ?? 0) + 1;
+          }
+          for (const day of days) {
+            const existing = lichessByDay[day];
+            if (!existing) continue;
+            existing.games = Math.max(existing.games ?? 0, byDay[day] ?? 0);
+          }
+        } catch {
+          lichessError = true;
+        }
       }
     } catch {
       lichessError = true;
@@ -195,6 +235,7 @@ export async function fetchStudentPlatformDaysStats(
       lichessError: lichessUsername ? lichessError : undefined,
       chessComError: chessComUsername ? chessComError : undefined,
     };
+    out[day] = withLichessCountVersion(out[day], !!lichessUsername);
   }
   return out;
 }
@@ -554,7 +595,12 @@ export function mergePlatformDayStats(
   const prev = prevRaw && isImplausibleDayStats(prevRaw) ? dropPuzzleContribution(prevRaw) : prevRaw;
   const next = isImplausibleDayStats(nextRaw) ? dropPuzzleContribution(nextRaw) : nextRaw;
 
-  if (!prev) return { ...next };
+  if (!prev) {
+    return {
+      ...next,
+      lichessCountVersion: mergedLichessCountVersion(undefined, next),
+    };
+  }
 
   const prevGames = (prev.lichessGames ?? 0) + (prev.chessComGames ?? 0);
   const prevPuzzles = (prev.lichessPuzzles ?? 0) + (prev.chessComPuzzles ?? 0);
@@ -572,6 +618,42 @@ export function mergePlatformDayStats(
       ...prev,
       lichessError: next.lichessError ? true : prev.lichessError,
       chessComError: next.chessComError ? true : prev.chessComError,
+      lichessCountVersion: next.lichessError
+        ? prev.lichessCountVersion
+        : mergedLichessCountVersion(prev, next),
+    };
+  }
+
+  // Lichess 429/timeout: Chess.com dolu olsa bile Lichess 0 yazılmaz.
+  const nextLichessEmpty = (next.lichessGames ?? 0) === 0 && (next.lichessPuzzles ?? 0) === 0;
+  const prevLichessKept = (prev.lichessGames ?? 0) > 0 || (prev.lichessPuzzles ?? 0) > 0;
+  if (next.lichessError && nextLichessEmpty) {
+    const chessComGames = Math.max(prev.chessComGames ?? 0, next.chessComGames ?? 0);
+    const chessComPuzzles = Math.max(prev.chessComPuzzles ?? 0, next.chessComPuzzles ?? 0);
+    const chessComPuzzlePassed = Math.max(prev.chessComPuzzlePassed ?? 0, next.chessComPuzzlePassed ?? 0);
+    const chessComPuzzleFailed = Math.max(prev.chessComPuzzleFailed ?? 0, next.chessComPuzzleFailed ?? 0);
+    const lichessGames = prevLichessKept ? (prev.lichessGames ?? 0) : 0;
+    const lichessPuzzles = prev.lichessPuzzles ?? 0;
+    const lichessPuzzlePassed = prev.lichessPuzzlePassed ?? 0;
+    const lichessPuzzleFailed = prev.lichessPuzzleFailed ?? 0;
+    const activityTimeSeconds = Math.max(prevTime, nextTime);
+    return {
+      games: lichessGames + chessComGames,
+      puzzleSolved: lichessPuzzles + chessComPuzzles,
+      puzzlePassed: lichessPuzzlePassed + chessComPuzzlePassed,
+      puzzleFailed: lichessPuzzleFailed + chessComPuzzleFailed,
+      lichessGames,
+      lichessPuzzles,
+      lichessPuzzlePassed,
+      lichessPuzzleFailed,
+      chessComGames,
+      chessComPuzzles,
+      chessComPuzzlePassed,
+      chessComPuzzleFailed,
+      ...(activityTimeSeconds > 0 ? { activityTimeSeconds } : {}),
+      lichessError: prevLichessKept ? undefined : true,
+      chessComError: next.chessComError && chessComGames === 0 && chessComPuzzles === 0 ? true : undefined,
+      lichessCountVersion: prev.lichessCountVersion,
     };
   }
 
@@ -610,6 +692,7 @@ export function mergePlatformDayStats(
     ...(activityTimeSeconds > 0 ? { activityTimeSeconds } : {}),
     lichessError: next.lichessError && !lichessKept ? true : (prev.lichessError && !lichessKept ? true : undefined),
     chessComError: next.chessComError && !chessKept ? true : (prev.chessComError && !chessKept ? true : undefined),
+    lichessCountVersion: mergedLichessCountVersion(prev, next),
   };
 }
 

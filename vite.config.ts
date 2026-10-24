@@ -71,6 +71,8 @@ const DEV_POST_ROUTES = new Set([
   '/api/whatsapp',
   '/api/fetch-ukd',
   '/api/auth-parent',
+  '/api/mobile-push',
+  '/api/mobile-auth',
   '/api/lichess-oauth-token',
   '/api/lichess-oauth-disconnect',
   '/api/training-notify',
@@ -370,6 +372,12 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 };
               } else if (route === '/api/auth-parent') {
                 result = await parentStudentLoginViaEnv(body, env);
+              } else if (route === '/api/mobile-push') {
+                const { mobilePushHandler } = await import('./lib/mobilePush.mjs');
+                result = await mobilePushHandler(body, env);
+              } else if (route === '/api/mobile-auth') {
+                const { mobileAuthHandler } = await import('./lib/mobileAuth.mjs');
+                result = await mobileAuthHandler(body, env);
               } else if (route === '/api/training-notify') {
                 result = await trainingNotifyHandler(body, env);
               } else if (route === '/api/platform-week-stats') {
@@ -429,7 +437,8 @@ export default defineConfig(({ mode }) => {
     return {
       server: {
         port: 3000,
-        host: '127.0.0.1',
+        host: true,
+        allowedHosts: true,
         proxy: {
           '/api/chesscom-member-stats': {
             target: 'https://www.chess.com',

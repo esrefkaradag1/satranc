@@ -6,7 +6,7 @@ import {
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../../types';
 import { evaluatePlatformDailyGoals } from '../../lib/homeworkPlatformUtils';
 import { homeworkHasPlatformGoals } from '../../lib/homeworkStatsBuilders';
-import { isDailyHomeworkDayClosed } from '../../lib/homeworkDayUtils';
+import { homeworkDueEndMs, isDailyHomeworkDayClosed } from '../../lib/homeworkDayUtils';
 import { nextHomeworkPuzzle } from '../../lib/puzzlePlayUtils';
 import {
   StudentWeeklyHomeworkGrid,
@@ -109,9 +109,15 @@ export function buildHomeworkProgress(
     return failed && !solved;
   }).length;
 
+  const puzzleIsSolved = (puzzle: Puzzle) =>
+    solvedIds.has(puzzle.id) || (!!puzzle.lichessId?.trim() && solvedIds.has(puzzle.lichessId.trim()));
+  const puzzleIsWrong = (puzzle: Puzzle) =>
+    (wrongIds.has(puzzle.id) || (!!puzzle.lichessId?.trim() && wrongIds.has(puzzle.lichessId.trim())))
+    && !puzzleIsSolved(puzzle);
+
   const puzzleStates = hwPuzzles.map((puzzle) => {
-    if (solvedIds.has(puzzle.id)) return { puzzle, state: 'done' as const };
-    if (wrongIds.has(puzzle.id)) return { puzzle, state: 'wrong' as const };
+    if (puzzleIsSolved(puzzle)) return { puzzle, state: 'done' as const };
+    if (puzzleIsWrong(puzzle)) return { puzzle, state: 'wrong' as const };
     return { puzzle, state: 'pending' as const };
   });
 
@@ -183,18 +189,18 @@ export function buildHomeworkProgress(
     }
 
     status = 'Başlamadı';
-    if (submitted || (hasDailyTargets && dailyGoalsMet) || (puzzlesDone && !hasDailyTargets)) {
+    if (submitted || (puzzlesDone && (!hasDailyTargets || dailyGoalsMet))) {
       status = 'Tamamlandı';
-    } else if (assignedAttempts.length > 0 || dailyStarted) {
+    } else if (assignedAttempts.length > 0 || dailyStarted || (hasDailyTargets && dailyGoalsMet && !puzzlesDone)) {
       status = 'Devam Ediyor';
     }
   }
 
-  const dueDate = hw.dueDate ? new Date(hw.dueDate) : null;
-  const now = new Date();
-  const isOverdue = !!(dueDate && dueDate < now && status !== 'Tamamlandı');
-  const daysLeft = dueDate && dueDate >= now
-    ? Math.ceil((dueDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
+  const dueEnd = homeworkDueEndMs(hw.dueDate);
+  const nowMs = Date.now();
+  const isOverdue = !!(dueEnd != null && dueEnd < nowMs && status !== 'Tamamlandı');
+  const daysLeft = dueEnd != null && dueEnd >= nowMs
+    ? Math.ceil((dueEnd - nowMs) / (24 * 60 * 60 * 1000))
     : null;
   const isUrgent = isOverdue || (daysLeft != null && daysLeft <= 3 && status !== 'Tamamlandı');
 
@@ -306,12 +312,18 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
     });
   }, [progressList, search]);
 
-  const makePlayPayload = (puzzle: Puzzle, hw: HomeworkAssignment): HomeworkPlayPayload => ({
-    puzzle,
-    homeworkId: hw.id,
-    openKey: `${hw.id}:${puzzle.id}:${Date.now()}`,
-    nextPuzzle: nextHomeworkPuzzle(hw, puzzle.id, puzzles),
-  });
+  const makePlayPayload = (puzzle: Puzzle, hw: HomeworkAssignment): HomeworkPlayPayload => {
+    const item = progressList.find((x) => x.hw.id === hw.id);
+    const solved = (item?.puzzleStates ?? [])
+      .filter((x) => x.state === 'done')
+      .flatMap((x) => [x.puzzle.id, x.puzzle.lichessId?.trim()].filter((id): id is string => !!id));
+    return {
+      puzzle,
+      homeworkId: hw.id,
+      openKey: `${hw.id}:${puzzle.id}:${Date.now()}`,
+      nextPuzzle: nextHomeworkPuzzle(hw, puzzle.id, puzzles, solved),
+    };
+  };
 
   const renderCard = (item: HwProgress) => {
     const meta = STATUS_META[item.status];

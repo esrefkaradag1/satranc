@@ -1,6 +1,6 @@
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Puzzle, Student } from '../types';
 import { resolveHomeworkAssignees } from '../homeworkUtils';
-import { homeworkDayKey, enumerateIsoDaysInclusive } from './homeworkDayUtils';
+import { homeworkDayKey, enumerateIsoDaysInclusive, homeworkDueEndMs } from './homeworkDayUtils';
 import { studentInitials } from './homeworkPanelUtils';
 
 /** Tek bulmaca denemesi için makul üst sınır (2 saat). */
@@ -157,8 +157,9 @@ export function getHomeworkBranchLabel(hw: HomeworkAssignment, students: Student
 export function homeworkStatusLabel(hw: HomeworkAssignment): 'Aktif' | 'Süresi Doldu' {
   const raw = hw.endDate?.trim() || hw.dueDate?.trim();
   if (!raw) return 'Aktif';
-  const end = new Date(raw.includes('T') ? raw : `${raw}T23:59:59`);
-  return end < new Date() ? 'Süresi Doldu' : 'Aktif';
+  const end = homeworkDueEndMs(raw);
+  if (end == null) return 'Aktif';
+  return end < Date.now() ? 'Süresi Doldu' : 'Aktif';
 }
 
 export function homeworkEndDateLabel(hw: HomeworkAssignment): string {

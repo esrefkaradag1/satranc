@@ -1282,16 +1282,30 @@ export function formatStudentSolutionLabels(puzzle: Puzzle): string[] {
   return out;
 }
 
-/** Ödevde sıradaki bulmacayı döndürür. */
+function puzzleMatchesSolvedIds(puzzle: Puzzle, solvedIds: Set<string>): boolean {
+  if (solvedIds.has(puzzle.id)) return true;
+  const lichessId = puzzle.lichessId?.trim();
+  return !!lichessId && solvedIds.has(lichessId);
+}
+
+/** Ödevde sıradaki çözülmemiş bulmacayı döndürür. */
 export function nextHomeworkPuzzle(
   homework: Pick<HomeworkAssignment, 'puzzles'>,
   currentPuzzleId: string,
   puzzles: Puzzle[],
+  solvedIds: Iterable<string> = [],
 ): Puzzle | null {
+  const solved = new Set(solvedIds);
   const idx = homework.puzzles.indexOf(currentPuzzleId);
-  if (idx < 0 || idx >= homework.puzzles.length - 1) return null;
-  const nextId = homework.puzzles[idx + 1];
-  return puzzles.find((p) => p.id === nextId) ?? null;
+  if (idx < 0) return null;
+  for (let i = idx + 1; i < homework.puzzles.length; i++) {
+    const nextId = homework.puzzles[i];
+    const puzzle = puzzles.find((p) => p.id === nextId);
+    if (!puzzle) continue;
+    if (puzzleMatchesSolvedIds(puzzle, solved)) continue;
+    return puzzle;
+  }
+  return null;
 }
 
 /**

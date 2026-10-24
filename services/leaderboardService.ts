@@ -6,6 +6,7 @@ import {
   fetchChessComPuzzlesBundle,
   fetchChessComStats,
   fetchLichessActivity,
+  fetchLichessGamesForRange,
   fetchLichessUser,
   reconcileChessComMemberStats,
   type ChessComGame,
@@ -38,6 +39,7 @@ import {
   normalizeScoringMode,
   sumGameResultsByMode,
 } from '../lib/leaderboardPointSettings';
+import { gameResultsFromLichessGames } from '../lib/lichessGameResults';
 import {
   readCachedStudentPeriodStats,
   writeCachedStudentPeriodStats,
@@ -209,10 +211,13 @@ async function studentPeriodStats(
   const lichessUsername = student.lichessUsername?.trim();
   const chessComUsername = student.chessComUsername?.trim();
 
-  const [lichessActivityResult, chessComBundle, chessComGames] = await Promise.all([
+  const [lichessActivityResult, lichessPeriodGames, chessComBundle, chessComGames] = await Promise.all([
     lichessUsername
       ? fetchLichessActivity(lichessUsername).catch(() => [] as Awaited<ReturnType<typeof fetchLichessActivity>>)
       : Promise.resolve([] as Awaited<ReturnType<typeof fetchLichessActivity>>),
+    lichessUsername
+      ? fetchLichessGamesForRange(lichessUsername, bounds.startMs, bounds.endMs).catch(() => [])
+      : Promise.resolve([]),
     chessComUsername
       ? fetchChessComPuzzlesBundle(chessComUsername).catch(() => null)
       : Promise.resolve(null),
@@ -221,20 +226,46 @@ async function studentPeriodStats(
       : Promise.resolve([] as ChessComGame[]),
   ]);
 
+  const lichessFromGames = lichessUsername && lichessPeriodGames.length > 0
+    ? gameResultsFromLichessGames(lichessPeriodGames, lichessUsername)
+    : null;
+  const lichessFromGamesTotals = lichessFromGames ? sumGameResultsByMode(lichessFromGames) : null;
+
+  let lichessFromActivityGames = 0;
+  const lichessFromActivityByMode = emptyGameResultsByMode();
   for (const row of lichessActivityResult) {
     const start = row.interval?.start;
     if (!start || !isEpochMsInPeriod(start, bounds)) continue;
     externalCorrect += lichessActivityPuzzleCount(row);
     const lichessPuzzles = parseLichessActivityPuzzles(row);
     externalWrong += lichessPuzzles.failed;
-    games += lichessActivityGameCount(row);
+    lichessFromActivityGames += lichessActivityGameCount(row);
     const modeResults = lichessActivityGameResultsByMode(row);
     for (const mode of Object.keys(modeResults) as (keyof GameResultsByMode)[]) {
-      gameResultsByMode[mode].wins += modeResults[mode].wins;
-      gameResultsByMode[mode].draws += modeResults[mode].draws;
-      gameResultsByMode[mode].losses += modeResults[mode].losses;
+      lichessFromActivityByMode[mode].wins += modeResults[mode].wins;
+      lichessFromActivityByMode[mode].draws += modeResults[mode].draws;
+      lichessFromActivityByMode[mode].losses += modeResults[mode].losses;
     }
   }
+
+  const lichessCombined = emptyGameResultsByMode();
+  for (const mode of Object.keys(lichessCombined) as (keyof GameResultsByMode)[]) {
+    const fromGames = lichessFromGames?.[mode] ?? { wins: 0, draws: 0, losses: 0 };
+    const fromActivity = lichessFromActivityByMode[mode];
+    lichessCombined[mode] = {
+      wins: Math.max(fromGames.wins, fromActivity.wins),
+      draws: Math.max(fromGames.draws, fromActivity.draws),
+      losses: Math.max(fromGames.losses, fromActivity.losses),
+    };
+    gameResultsByMode[mode].wins += lichessCombined[mode].wins;
+    gameResultsByMode[mode].draws += lichessCombined[mode].draws;
+    gameResultsByMode[mode].losses += lichessCombined[mode].losses;
+  }
+  games += Math.max(
+    lichessFromGamesTotals?.games ?? 0,
+    lichessFromActivityGames,
+    sumGameResultsByMode(lichessCombined).games,
+  );
 
   if (chessComBundle) {
     const attempts = chessComBundle.rated.filter((a) => isTimestampInPeriod(a.date, bounds));

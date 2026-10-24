@@ -18,7 +18,8 @@ export const APP_RELEASE: AppReleaseInfo = {
     'Lider tablosu: dönem puanları önbellekte tutulur',
     'WhatsApp: antrenman bildirimi yalnızca başarılı gönderimden sonra işaretlenir',
     'Veli WhatsApp hedefi: baba, anne veya her ikisi (öğrenci detayı)',
-    'WhatsApp yoklama: derse katıldı/katılmadı şablonları ve varsayılan kanal (WhatsApp+panel)',
+    'Yoklama bildirimi: Veli paneli seçiliyse WhatsApp gönderilmez',
+    'Çalışma/ödev: bölüm tamamlandı yalnızca tüm öğrenci hamleleriyle; günlük program hedefleri kaydedilir',
   ],
 };
 

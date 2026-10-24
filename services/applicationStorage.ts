@@ -2,6 +2,7 @@ import type { StudentApplication, ApplicationStatus } from '../lib/applicationTy
 import { normalizeApplicationPersonNames, formatPersonName } from '../lib/personNameUtils';
 import type { Student } from '../types';
 import { isDisplayablePhotoUrl } from '../lib/studentPhotoUpload';
+import { normalizeClubKey } from '../lib/clubScope';
 import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './supabase';
 
 const TABLE = 'student_applications';
@@ -141,6 +142,23 @@ async function fetchApplicationByIdFromSupabase(id: string): Promise<StudentAppl
   const app = rowToApp(data as Record<string, unknown>);
   upsertLocalApplication(app);
   return app;
+}
+
+async function resolveClubIdForBranch(clubId: string | undefined, branchOffice: string | undefined): Promise<string | undefined> {
+  const existing = clubId?.trim();
+  if (existing) return existing;
+  const branch = branchOffice?.trim();
+  if (!branch || !isSupabaseBackend()) return undefined;
+  try {
+    const client = getServiceSupabase() ?? supabase;
+    const { data, error } = await client.from('clubs').select('id, name');
+    if (error || !data) return undefined;
+    const key = normalizeClubKey(branch);
+    const match = data.find((row) => normalizeClubKey(String((row as { name?: string }).name ?? '')) === key);
+    return match ? String((match as { id: string }).id) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function countApplicationsForYear(year: number): Promise<number> {
@@ -624,7 +642,9 @@ async function fetchApplicationsListFromColumns(
   const listSelect =
     'id, application_no, status, created_at, updated_at, app_name, app_tc_no, app_branch_office, app_group, app_club_id, app_student_id, app_birth_date, app_father_phone, app_mother_phone, has_photo, has_signature';
   let query = client.from(TABLE).select(listSelect).order('created_at', { ascending: false });
-  if (clubId) query = query.eq('app_club_id', clubId);
+  // Kulüp linki olmadan gönderilen başvuruda app_club_id boş kalır; şube adı yine kulüp adıdır.
+  // Kimliği boş olanları da çek, kulüp ekranı şube adıyla eler.
+  if (clubId) query = query.or(`app_club_id.eq.${clubId},app_club_id.is.null`);
   const { data, error } = await query;
   if (error) {
     if (error.code === '42703' || /app_name|has_photo/i.test(error.message ?? '')) return null;
@@ -793,9 +813,11 @@ export async function createApplicationAsync(
 
   const year = new Date().getFullYear();
   const seq = (await countApplicationsForYear(year)) + 1;
+  const clubId = await resolveClubIdForBranch(normalizedInput.clubId, normalizedInput.branchOffice);
   const now = new Date().toISOString();
   const app: StudentApplication = {
     ...normalizedInput,
+    clubId,
     id: genId(),
     applicationNo: `B-${year}-${String(seq).padStart(4, '0')}`,
     status: input.status ?? 'pending',

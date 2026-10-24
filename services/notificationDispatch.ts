@@ -33,6 +33,7 @@ async function sendWhatsAppForEvent(
 ): Promise<number> {
   const autoRules = loadWhatsAppAutoRules();
   const rule = autoRules.find((r) => r.event === event);
+  if (rule && rule.enabled === false) return 0;
   const templates = loadWhatsAppTemplates();
   const templateKey = (rule?.templateKey ?? event) as import('../types').WhatsAppTemplateKey;
   const tpl = findTemplate(templates, templateKey);

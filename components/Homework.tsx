@@ -23,6 +23,7 @@ import { WeeklyScheduleGrid } from './homework/WeeklyScheduleGrid';
 import { StudentPuzzleDetailModal } from './homework/StudentPuzzleDetailModal';
 import { StudentPlatformDetailModal } from './homework/StudentPlatformDetailModal';
 import { StudyControlSection } from './homework/StudyControlSection';
+import { writeStudyEditorHash } from '../lib/panelRouting';
 import { ClubLeaderboard } from './leaderboard/ClubLeaderboard';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import {
@@ -1610,6 +1611,9 @@ const Homework: React.FC = () => {
 
     const today = homeworkDayKey();
     const due = assignDueDate.trim();
+    const hwGameTarget = Math.max(0, Number(assignDefaultTargets.dailyGameTarget) || 0);
+    const hwPuzzleTarget = Math.max(0, Number(assignDefaultTargets.dailyPuzzleTarget) || 0);
+    const hwAccuracy = Math.max(0, Math.min(100, Number(assignDefaultTargets.minPuzzleAccuracyPct) || 60));
     addHomework({
       title: assignTitle.trim(),
       puzzles: isProgramForm ? [] : assignSelectedPuzzles,
@@ -1618,7 +1622,10 @@ const Homework: React.FC = () => {
       endDate: due || undefined,
       createdAt: new Date().toISOString(),
       assignedTo: selectedTargets,
-      studentDailyTargets: isProgramForm && Object.keys(studentDailyTargets).length > 0
+      dailyGameTarget: hwGameTarget > 0 ? hwGameTarget : undefined,
+      dailyPuzzleTarget: hwPuzzleTarget > 0 ? hwPuzzleTarget : undefined,
+      minPuzzleAccuracyPct: hwPuzzleTarget > 0 ? hwAccuracy : undefined,
+      studentDailyTargets: Object.keys(studentDailyTargets).length > 0
         ? studentDailyTargets
         : undefined,
     });
@@ -1642,6 +1649,7 @@ const Homework: React.FC = () => {
     assignSelectedPuzzles,
     assignSelectedStudents,
     assignTitle,
+    assignDefaultTargets,
     resetAssignForm,
     showToast,
   ]);
@@ -2527,7 +2535,10 @@ const Homework: React.FC = () => {
           )}
 
           {panelTab === 'calisma' && (
-            <StudyControlSection students={targetStudents} />
+            <StudyControlSection
+              students={targetStudents}
+              onOpenStudy={(studyId) => writeStudyEditorHash(studyId, 0)}
+            />
           )}
 
           {panelTab === 'lider' && (

@@ -83,6 +83,7 @@ import { apiHomeworksForStudent, apiScheduleForStudent } from '../services/backe
 import { getServiceSupabase, isSupabaseBackend } from '../services/supabase';
 import { loadStudiesAsync } from '../studyStorage';
 import { loadProgress } from '../lib/studyUtils';
+import { isTrackedChapter } from '../lib/studyHomeworkStats';
 import type { Study } from '../lib/studyTypes';
 import {
   fetchLichessUser,
@@ -722,14 +723,19 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   /** Bu öğrenciye atanmış bulmaca ödevleri — sunucu modunda API'den, yoksa context + homeworkUtils */
   const [apiHomeworks, setApiHomeworks] = useState<typeof homeworks>([]);
-  const [homeworksLoading, setHomeworksLoading] = useState(false);
+  const [homeworksLoading, setHomeworksLoading] = useState(() => isServerMode());
   const assignedHomeworksFromContext = useMemo(() => {
     if (!student) return [];
     return homeworks.filter((hw) =>
       isHomeworkAssignedToStudent(hw, studentId, student.group)
     );
   }, [student, studentId, homeworks]);
-  const assignedHomeworks = isServerMode() ? apiHomeworks : assignedHomeworksFromContext;
+  const assignedHomeworks = useMemo(() => {
+    if (!isServerMode()) return assignedHomeworksFromContext;
+    if (apiHomeworks.length > 0) return apiHomeworks;
+    if (homeworksLoading) return [];
+    return assignedHomeworksFromContext;
+  }, [apiHomeworks, assignedHomeworksFromContext, homeworksLoading]);
 
   const [assignedStudies, setAssignedStudies] = useState<Study[]>([]);
   useEffect(() => {
@@ -755,30 +761,33 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     if (!student) return 0;
     return assignedHomeworks.filter((hw) => {
       const puzzleIds = hw.puzzles ?? [];
-      if (puzzleIds.length === 0) {
-        // Platform / günlük hedef ödevi — gönderim yoksa bekliyor say
-        const submitted = homeworkSubmissions.some(
-          (s) => s.studentId === studentId && s.homeworkId === hw.id,
-        );
-        return !submitted;
-      }
+      const submitted = homeworkSubmissions.some(
+        (s) => s.studentId === studentId && s.homeworkId === hw.id,
+      );
+      if (submitted) return false;
+      if (puzzleIds.length === 0) return true;
       const solved = new Set(
         homeworkAttempts
           .filter((a) => a.studentId === studentId && a.homeworkId === hw.id && a.correct)
           .map((a) => a.puzzleId),
       );
-      return puzzleIds.some((id) => !solved.has(id));
+      return puzzleIds.some((id) => {
+        if (solved.has(id)) return false;
+        const puzzle = puzzles.find((p) => p.id === id);
+        const lichessId = puzzle?.lichessId?.trim();
+        return !(lichessId && solved.has(lichessId));
+      });
     }).length;
-  }, [student, assignedHomeworks, homeworkAttempts, homeworkSubmissions, studentId]);
+  }, [student, assignedHomeworks, homeworkAttempts, homeworkSubmissions, studentId, puzzles]);
 
   const pendingStudyCount = useMemo(() => {
-    const progress = loadProgress();
+    const progress = loadProgress(studentId);
     return assignedStudies.filter((study) => {
-      const chapters = study.chapters ?? [];
-      if (chapters.length === 0) return true;
-      return chapters.some((ch) => (progress[`${study.id}_${ch.id}`] ?? 0) < 100);
+      const tracked = (study.chapters ?? []).filter(isTrackedChapter);
+      if (tracked.length === 0) return false;
+      return tracked.some((ch) => (progress[`${study.id}_${ch.id}`] ?? 0) < 100);
     }).length;
-  }, [assignedStudies]);
+  }, [assignedStudies, studentId]);
 
   const dashboardAlerts = useMemo((): StudentDashboardAlert[] => {
     const items: StudentDashboardAlert[] = [];
@@ -1233,19 +1242,19 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [activeTab, student?.id, student?.fideId, student?.tcNo, loadFide, loadTsfUkdSnapshot]);
 
   useEffect(() => {
-    if (isServerMode() && studentId && student?.group != null) {
+    if (isServerMode() && studentId) {
       setHomeworksLoading(true);
-      apiHomeworksForStudent(studentId, student.group)
+      apiHomeworksForStudent(studentId, student?.group)
         .then(setApiHomeworks)
         .catch(() => setApiHomeworks([]))
         .finally(() => setHomeworksLoading(false));
     }
-  }, [isServerMode(), studentId, student?.group]);
+  }, [studentId, student?.group]);
 
   const refreshStudentHomeworks = useCallback(() => {
-    if (isServerMode() && studentId && student?.group != null) {
+    if (isServerMode() && studentId) {
       setHomeworksLoading(true);
-      apiHomeworksForStudent(studentId, student.group)
+      apiHomeworksForStudent(studentId, student?.group)
         .then(setApiHomeworks)
         .catch(() => setApiHomeworks([]))
         .finally(() => setHomeworksLoading(false));
@@ -1464,12 +1473,13 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       ];
 
   const veliAdi = parentDisplayNameFor(student);
+  const embedApp = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('embed') === 'app';
 
   const chessPointerTabs = activeTab === 'study' || activeTab === 'live-lesson' || activeTab === 'puzzle-practice' || activeTab === 'puzzles';
 
   return (
     <div className={`flex min-h-screen bg-[#020617] text-slate-100 min-w-0 ${chessPointerTabs ? 'app-ui-scale app-ui-scale--precise' : 'app-ui-scale'}`}>
-      <Sidebar
+      {!embedApp && <Sidebar
         activeTab={activeTab}
         setActiveTab={(id) => setActiveTab(id as PanelTab)}
         navCategories={navCategoriesForView}
@@ -1491,11 +1501,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         onClose={() => setSidebarOpen(false)}
         defaultIconOnly={sidebarIconOnlyDefault}
         onDesktopExpandedChange={setSidebarDesktopExpanded}
-      />
+      />}
 
-      <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
+      <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${embedApp ? '' : sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
-        <header className="relative z-10 h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/60 backdrop-blur-2xl border-b border-white/[0.06] shrink-0 shadow-lg shadow-black/5">
+        {!embedApp && <header className="relative z-10 h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/60 backdrop-blur-2xl border-b border-white/[0.06] shrink-0 shadow-lg shadow-black/5">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <button type="button" onClick={() => setSidebarOpen(true)} className="p-2.5 rounded-xl lg:hidden hover:bg-white/5 text-slate-400 hover:text-white shrink-0 transition-colors" aria-label="Menüyü aç">
               <Menu className="w-5 h-5" />
@@ -1545,7 +1555,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               </button>
             ) : null}
           </div>
-        </header>
+        </header>}
 
         <div
           className={
@@ -2812,7 +2822,16 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               puzzle: next,
               homeworkId: playingPuzzle.homeworkId,
               openKey: `${playingPuzzle.homeworkId}:${next.id}:${Date.now()}`,
-              nextPuzzle: hw ? nextHomeworkPuzzle(hw, next.id, puzzles) : null,
+              nextPuzzle: hw
+                ? nextHomeworkPuzzle(
+                  hw,
+                  next.id,
+                  puzzles,
+                  homeworkAttempts
+                    .filter((a) => a.studentId === studentId && a.homeworkId === hw.id && a.correct)
+                    .map((a) => a.puzzleId),
+                )
+                : null,
             });
           }}
           onClose={() => setPlayingPuzzle(null)}

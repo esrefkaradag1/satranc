@@ -1,6 +1,6 @@
 {
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", "supabase", "dist"],
+  "exclude": ["node_modules", "supabase", "dist", "mobile"],
   "compilerOptions": {
     "target": "ES2022",
     "experimentalDecorators": true,

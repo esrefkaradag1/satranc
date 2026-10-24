@@ -11,7 +11,7 @@ import {
   type ChessComPuzzleAttempt,
   type ChessComPuzzleTab,
 } from '../lib/chesscomPuzzleParse';
-import { timestampMatchesDay, localDayKeyFromMs, istanbulDayKey } from '../lib/homeworkDayUtils';
+import { timestampMatchesDay, localDayKeyFromMs, istanbulDayKey, istanbulDayBoundsMs } from '../lib/homeworkDayUtils';
 import {
   lichessGamesForDayFromActivity,
   lichessPuzzleStatsForDayFromActivity,
@@ -322,7 +322,17 @@ export interface LichessActivity {
   interval: { start: number; end: number };
   games?: Record<string, { win: number; loss: number; draw: number; rp?: { win: number; loss: number; draw: number } }>;
   puzzles?: { score?: { win: number; loss: number; draw: number }; count?: number };
-  tournaments?: { nb: number; best: { name: string; url: string; rank: number; score: number }[] };
+  tournaments?: {
+    nb?: number;
+    best?: Array<{
+      name?: string;
+      url?: string;
+      rank?: number;
+      score?: number;
+      /** Turnuva içindeki maç sayısı — Lichess aktivite API */
+      nbGames?: number;
+    }>;
+  };
   teams?: { joined?: string[] };
   follows?: { in?: string[]; out?: string[] };
   posts?: { nb: number; last: { url: string; title: string; date: number }[] };
@@ -756,41 +766,68 @@ export async function fetchLichessGamePgn(gameId: string): Promise<string | null
   }
 }
 
-/** Belirtilen güne ait Lichess oyunları (meta, PGN yok) */
+/** Belirtilen aralıktaki Lichess oyunları (turnuva dahil; PGN yok). */
+export async function fetchLichessGamesForRange(
+  username: string,
+  startMs: number,
+  endMs: number,
+  maxTotal = 400,
+): Promise<LichessGame[]> {
+  const trimmed = normalizeLichessUsername(username);
+  if (!trimmed) return [];
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return [];
+  if (isLichessGloballyRateLimited()) return [];
+  const all: LichessGame[] = [];
+  let until = Math.floor(endMs);
+  const since = Math.floor(startMs);
+  const BATCH = 100;
+  let batches = 0;
+  try {
+    while (all.length < maxTotal && batches < 8) {
+      batches += 1;
+      const params = new URLSearchParams();
+      params.set('max', String(BATCH));
+      params.set('moves', '0');
+      params.set('since', String(since));
+      params.set('until', String(until));
+      const res = await lichessApiFetch(
+        `games/user/${trimmed}`,
+        { headers: { Accept: 'application/x-ndjson' } },
+        params,
+      );
+      if (!res.ok) break;
+      const batch = parseNdjsonGames(await res.text()).filter((g) => lichessGameInvolvesUser(g, trimmed));
+      if (batch.length === 0) break;
+      all.push(...batch);
+      if (batch.length < BATCH) break;
+      let oldest = Infinity;
+      for (const g of batch) {
+        const t = g.lastMoveAt ?? g.createdAt ?? 0;
+        if (t > 0 && t < oldest) oldest = t;
+      }
+      if (!Number.isFinite(oldest) || oldest <= since) break;
+      until = oldest - 1;
+    }
+  } catch {
+    /* kısmi liste */
+  }
+  return dedupeLichessGamesById(all).slice(0, maxTotal);
+}
+
+/** Belirtilen güne ait Lichess oyunları (meta, PGN yok) — İstanbul gün sınırları. */
 export async function fetchLichessGamesForDay(
   username: string,
   day: string = new Date().toISOString().slice(0, 10),
 ): Promise<LichessGame[]> {
   const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return [];
-  if (isLichessGloballyRateLimited()) return [];
   const target = day.slice(0, 10);
-  const [y, m, d] = target.split('-').map(Number);
-  if (!y || !m || !d) return [];
-  const since = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
-  const until = new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
-  try {
-    const params = new URLSearchParams();
-    params.set('max', '100');
-    params.set('moves', '0');
-    params.set('since', String(since));
-    params.set('until', String(until));
-    const res = await lichessApiFetch(
-      `games/user/${trimmed}`,
-      { headers: { Accept: 'application/x-ndjson' } },
-      params,
-    );
-    if (!res.ok) return [];
-    const games = parseNdjsonGames(await res.text()).filter((g) => lichessGameInvolvesUser(g, trimmed));
-    return dedupeLichessGamesById(
-      games.filter((g) => {
-        const ts = lichessGameTimestamp(g);
-        return ts > 0 && timestampMatchesDay(ts, target);
-      }),
-    );
-  } catch {
-    return [];
-  }
+  const { startMs, endMs } = istanbulDayBoundsMs(target);
+  const games = await fetchLichessGamesForRange(trimmed, startMs, endMs, 100);
+  return games.filter((g) => {
+    const ts = g.lastMoveAt ?? g.createdAt ?? 0;
+    return ts > 0 && timestampMatchesDay(ts, target);
+  });
 }
 
 /** Chess.com kullanıcı profili çeker */
@@ -1476,29 +1513,9 @@ export async function fetchLichessGamesCountForDay(
   username: string,
   day: string = new Date().toISOString().slice(0, 10),
 ): Promise<number> {
-  const trimmed = normalizeLichessUsername(username);
-  if (!trimmed) return 0;
-  if (isLichessGloballyRateLimited()) return 0;
-  const target = day.slice(0, 10);
-  const [y, m, d] = target.split('-').map(Number);
-  if (!y || !m || !d) return 0;
-  const since = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
   try {
-    const params = new URLSearchParams();
-    params.set('max', '100');
-    params.set('moves', '0');
-    params.set('since', String(since));
-    const res = await lichessApiFetch(
-      `games/user/${trimmed}`,
-      { headers: { Accept: 'application/x-ndjson' } },
-      params,
-    );
-    if (!res.ok) return 0;
-    const games = parseNdjsonGames(await res.text()).filter((g) => lichessGameInvolvesUser(g, trimmed));
-    return games.filter((g) => {
-      const ts = lichessGameTimestamp(g);
-      return ts > 0 && timestampMatchesDay(ts, target);
-    }).length;
+    const games = await fetchLichessGamesForDay(username, day);
+    return games.length;
   } catch {
     return 0;
   }
@@ -1517,8 +1534,11 @@ export async function fetchLichessDayStats(
   try {
     const activities = await fetchLichessActivity(username);
     const activityRateLimited = isLichessActivityRateLimited(username);
-    const games = lichessGamesForDayFromActivity(activities, day);
+    let games = lichessGamesForDayFromActivity(activities, day);
     const puzzles = lichessPuzzleStatsForDayFromActivity(activities, day);
+    if (games === 0 && !activityRateLimited) {
+      games = await fetchLichessGamesCountForDay(username, day);
+    }
     return { games, puzzles, activityRateLimited };
   } catch {
     return { games: 0, puzzles: { count: 0, passed: 0, failed: 0 }, activityRateLimited: true };
@@ -1530,7 +1550,7 @@ export async function fetchLichessDaysStats(
   username: string,
   days: string[],
 ): Promise<Record<string, { games: number; puzzles: DailyPuzzleActivityStats; activityRateLimited: boolean }>> {
-  const uniqueDays = [...new Set(days.map((d) => d.slice(0, 10)))];
+  const uniqueDays = [...new Set(days.map((d) => d.slice(0, 10)))].sort();
   const activities = await fetchLichessActivity(username);
   const activityRateLimited = isLichessActivityRateLimited(username);
   const out: Record<string, { games: number; puzzles: DailyPuzzleActivityStats; activityRateLimited: boolean }> = {};
@@ -1540,6 +1560,27 @@ export async function fetchLichessDaysStats(
       puzzles: lichessPuzzleStatsForDayFromActivity(activities, day),
       activityRateLimited,
     };
+  }
+  const missingDays = uniqueDays.filter((day) => (out[day]?.games ?? 0) === 0);
+  if (missingDays.length > 0 && !activityRateLimited) {
+    const startMs = istanbulDayBoundsMs(missingDays[0]!).startMs;
+    const endMs = istanbulDayBoundsMs(missingDays[missingDays.length - 1]!).endMs;
+    try {
+      const ranged = await fetchLichessGamesForRange(username, startMs, endMs);
+      const byDay: Record<string, number> = {};
+      for (const game of ranged) {
+        const ts = lichessGameTimestamp(game);
+        if (ts <= 0) continue;
+        const key = istanbulDayKey(new Date(ts));
+        byDay[key] = (byDay[key] ?? 0) + 1;
+      }
+      for (const day of missingDays) {
+        const n = byDay[day] ?? 0;
+        if (n > 0 && out[day]) out[day].games = n;
+      }
+    } catch {
+      /* aktivite sayısı korunur */
+    }
   }
   return out;
 }

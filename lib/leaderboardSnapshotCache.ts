@@ -89,7 +89,7 @@ export function leaderboardSnapshotKey(opts: {
 }): string {
   const club = (opts.clubScope || 'club').trim().toLocaleLowerCase('tr-TR') || 'club';
   const settingsKey = simpleHash(JSON.stringify(opts.pointSettings));
-  return `${club}|${opts.periodStartMs}|${opts.period}|${opts.rankMode}|${settingsKey}`;
+  return `${club}|${opts.periodStartMs}|${opts.period}|${opts.rankMode}|${settingsKey}|lg4`;
 }
 
 /** Son günlük yenileme eşiği (bugün 06:00 veya henüz gelmediyse dün 06:00). */

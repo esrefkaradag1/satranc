@@ -1,6 +1,6 @@
 import type { LichessGame } from '../services/chessPlatformService';
 import { lichessProxyRequest } from './lichessProxyThrottle.mjs';
-import { timestampMatchesDay } from './homeworkDayUtils';
+import { timestampMatchesDay, istanbulDayBoundsMs, istanbulDayKey } from './homeworkDayUtils';
 import { lichessGameDurationSeconds } from './chesscomGameDuration';
 
 function parseNdjsonGames(text: string): LichessGame[] {
@@ -46,10 +46,8 @@ export async function fetchLichessGamesTimeSecondsForDay(
   const trimmed = username.trim();
   if (!trimmed) return 0;
   const target = dayIso.slice(0, 10);
-  const [y, m, d] = target.split('-').map(Number);
-  if (!y || !m || !d) return 0;
-  const since = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
-  const until = new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+  const { startMs: since, endMs: until } = istanbulDayBoundsMs(target);
+  if (!Number.isFinite(since) || !Number.isFinite(until)) return 0;
   try {
     const params = new URLSearchParams();
     params.set('max', '100');
@@ -70,5 +68,44 @@ export async function fetchLichessGamesTimeSecondsForDay(
     return games.reduce((sum, g) => sum + lichessGameDurationSeconds(g), 0);
   } catch {
     return 0;
+  }
+}
+
+/** İstanbul günlerine göre maç sayısı — tek since/until isteği (turnuva dahil). */
+export async function fetchLichessGameCountsByIstanbulDays(
+  username: string,
+  days: string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<Record<string, number>> {
+  const trimmed = username.trim();
+  const uniqueDays = [...new Set(days.map((d) => d.slice(0, 10)))].sort();
+  const out: Record<string, number> = {};
+  for (const day of uniqueDays) out[day] = 0;
+  if (!trimmed || uniqueDays.length === 0) return out;
+  const startMs = istanbulDayBoundsMs(uniqueDays[0]!).startMs;
+  const endMs = istanbulDayBoundsMs(uniqueDays[uniqueDays.length - 1]!).endMs;
+  try {
+    const params = new URLSearchParams();
+    params.set('max', '300');
+    params.set('moves', '0');
+    params.set('since', String(startMs));
+    params.set('until', String(endMs));
+    const upstream = await lichessProxyRequest(
+      `games/user/${trimmed}`,
+      params,
+      'application/x-ndjson',
+      env,
+    );
+    if (upstream.status < 200 || upstream.status >= 300) return out;
+    for (const game of parseNdjsonGames(upstream.body)) {
+      if (!lichessGameInvolvesUser(game, trimmed)) continue;
+      const ts = lichessGameTimestamp(game);
+      if (ts <= 0) continue;
+      const day = istanbulDayKey(new Date(ts));
+      if (day in out) out[day] += 1;
+    }
+    return out;
+  } catch {
+    return out;
   }
 }

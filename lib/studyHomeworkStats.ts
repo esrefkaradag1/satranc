@@ -3,6 +3,9 @@ import type { Study, StudyChapter } from './studyTypes';
 import { isComputerMoveEvent, type StudyEvent } from '../studyEvents';
 import { mergeStudyAnalysisEvents, type MoveAnalysisLogEntry } from './studyAnalysisEvents';
 import { studentInitials } from './homeworkPanelUtils';
+import { countStudentSolutionPlies } from './puzzlePlayUtils';
+
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 export type StudyStudentStatus = 'Başlamadı' | 'Devam Ediyor' | 'Tamamlandı';
 
@@ -20,7 +23,7 @@ export type StudyStudentStat = {
   lastActivityAt?: string;
 };
 
-function isTrackedChapter(ch: StudyChapter): boolean {
+export function isTrackedChapter(ch: StudyChapter): boolean {
   if (ch.lessonMode !== 'interactive') return false;
   const t = ch.interactiveType ?? 'puzzle';
   return t === 'puzzle' || t === 'vsComputer' || t === 'liveAnalysis';
@@ -60,23 +63,26 @@ function chapterCompleted(
   const type = chapter.interactiveType ?? 'puzzle';
   if (type === 'puzzle') {
     if (chapterEvents.some((e) => e.result === 'solution')) return true;
-    if (chapterLogs.some((e) => e.isCorrect)) return true;
-    if (chapterEvents.some((e) => e.result === 'correct')) return true;
-    const mainlineMoves = chapter.moves?.length ?? 0;
-    if (mainlineMoves <= 0) return chapterEvents.length > 0 || chapterLogs.length > 0;
-    const studentMoves = chapterEvents.filter((e) => e.result !== 'wrong').length
-      + chapterLogs.filter((e) => e.isCorrect).length;
-    return studentMoves >= Math.ceil(mainlineMoves / 2);
+    const studentColor = chapter.orientation === 'black' ? 'b' : 'w';
+    const studentPlies = countStudentSolutionPlies(
+      chapter.fen?.trim() || START_FEN,
+      chapter.moves?.filter(Boolean) ?? [],
+      studentColor,
+    );
+    if (studentPlies <= 0) return false;
+    const eventCorrect = chapterEvents.filter((e) => e.result === 'correct' || e.result === 'solution').length;
+    const logCorrect = chapterLogs.filter((e) => e.isCorrect).length;
+    return Math.max(eventCorrect, logCorrect) >= studentPlies;
   }
   if (type === 'liveAnalysis') {
-    return chapterEvents.some((e) => e.chapterId === chapter.id)
-      || logEntries.some((e) => e.chapterId === chapter.id);
+    return chapterEvents.some((e) => e.result === 'solution' || e.result === 'correct');
   }
   if (type === 'vsComputer') {
-    return studentEvents.some((e) => e.chapterId === chapter.id)
-      || logEntries.some((e) => e.chapterId === chapter.id);
+    if (chapterEvents.some((e) => e.result === 'solution')) return true;
+    const vcMoves = chapterEvents.filter((e) => e.result === 'correct' || e.result === 'solution').length;
+    return vcMoves >= 8;
   }
-  return chapterEvents.length > 0 || chapterLogs.length > 0;
+  return false;
 }
 
 export function buildStudyStudentStats(

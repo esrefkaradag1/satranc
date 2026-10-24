@@ -158,7 +158,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [hoverPly, setHoverPly] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [feedbackText, setFeedbackText] = useState<string | null>(null);
-  const [progress, setProgress] = useState<Record<string, number>>(loadProgress);
+  const [chapterSolved, setChapterSolved] = useState(false);
+  const [progress, setProgress] = useState<Record<string, number>>(() => loadProgress(studentId));
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoReplyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pieceDropRef = useRef<(args: { sourceSquare: string; targetSquare: string | null; piece?: any }) => boolean>(() => false);
@@ -1128,13 +1129,18 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (previewMode) return;
     setProgress(prev => {
       const next = { ...prev, [key]: Math.max(prev[key] ?? 0, idx) };
-      saveProgress(next);
+      saveProgress(next, studentId);
       return next;
     });
-  }, [previewMode]);
+  }, [previewMode, studentId]);
+
+  useEffect(() => {
+    setProgress(loadProgress(studentId));
+  }, [studentId]);
 
   useEffect(() => {
     setSquareMarks({}); setBoardArrows([]); setCircleMarks({}); setMarkBrush('off'); setHoverPly(null); setFeedback(null); setFeedbackText(null);
+    setChapterSolved(false);
     setCurrentVariation(null);
     setLiveAnalysisNote(null);
     setLaMoveQuality(null);
@@ -1301,6 +1307,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const showFeedback = useCallback((f: Feedback, text?: string | null) => {
     setFeedback(f);
     setFeedbackText(text ?? null);
+    if (f === 'solved') setChapterSolved(true);
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     if (f === 'correct') feedbackTimer.current = setTimeout(() => { setFeedback(null); setFeedbackText(null); }, 1200);
     else if (f === 'wrong') feedbackTimer.current = setTimeout(() => { setFeedback(null); setFeedbackText(null); }, 3500);
@@ -1342,6 +1349,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       setOptionSquares({});
       setClickMoveSquares({});
       setMoveFrom(null);
+      logStudyEvent({
+        studyId: selectedStudy?.id,
+        chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+        studentId,
+        moveIndex: currentMoveIndex,
+        expectedMove: COMPUTER_MOVE_LABEL,
+        playedMove: played.san || san,
+        result: 'correct',
+        thinkMs: 0,
+      });
       if (nextIdx >= totalMoves) {
         const outcome = describeGameOutcomeFromFen(game.fen());
         showFeedback(
@@ -1368,6 +1385,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     showFeedback,
     recordProgress,
     progressKey,
+    selectedStudy?.id,
+    effectiveChapter?.id,
+    selectedChapter?.id,
+    studentId,
   ]);
 
   const getBestMoveWithTimeout = useCallback(async (
@@ -2018,6 +2039,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setCurrentVariation(null);
     setFeedback(null);
     setFeedbackText(null);
+    setChapterSolved(false);
     setFreePlayFen(null);
     setHoverPly(null);
     setLaHint(null);
@@ -2033,12 +2055,14 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setLastActionMs(now);
     if (progressKey) {
       setProgress((prev) => {
+        const cur = prev[progressKey] ?? 0;
+        if (cur >= 100) return prev;
         const next = { ...prev, [progressKey]: 0 };
-        saveProgress(next);
+        saveProgress(next, studentId);
         return next;
       });
     }
-  }, [progressKey]);
+  }, [progressKey, studentId]);
 
   const handlePuzzleBranchPick = useCallback((san: string) => {
     const exp = resolveExpectedMoveSquares(studyBoardFen, san);
@@ -2275,6 +2299,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       setVcHistory(saved.history);
       setCurrentMoveIndex(Array.isArray(saved.history) ? saved.history.length : 0);
       setVcManualGameOver(saved.gameOver);
+      setVcOrientation(ch.orientation === 'black' ? 'black' : 'white');
       setVsComputer(true);
     } else {
       let fen = ch.fen || DEFAULT_FEN;
@@ -2359,6 +2384,18 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
            result: 'correct',
            thinkMs: 0,
          });
+         if (isAutomaticVcGameOver(game)) {
+           logStudyEvent({
+             studyId: selectedStudy?.id,
+             chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+             studentId,
+             moveIndex: plyIndex + 1,
+             expectedMove: 'Bilgisayara karşı',
+             playedMove: 'Oyun bitti',
+             result: 'solution',
+             thinkMs: 0,
+           });
+         }
          setVcFen(nextFen);         setCurrentMoveIndex(newHistory.length);
          setLastMoveSquares(lastMoveHighlightFromSan(fen, playedSan));
          const vcHistories = vcHistoriesForPresence();
@@ -2462,6 +2499,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         return next;
       });
 
+      const gameOver = isAutomaticVcGameOver(game) || vcManualGameOver;
       logStudyEvent({
         studyId: selectedStudy?.id,
         chapterId: effectiveChapter?.id ?? selectedChapter?.id,
@@ -2469,7 +2507,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         moveIndex: vcHistory.length,
         expectedMove: 'Bilgisayara karşı',
         playedMove: playedSan,
-        result: 'correct',
+        result: gameOver ? 'solution' : 'correct',
         thinkMs,
       });
 
@@ -2606,6 +2644,194 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   }
 
   const activeStudy = selectedStudy;
+  const studentGuide = (
+    <>
+          {(isInteractive || isLiveAnalysis) && (
+            <div className={`${hideEngineForStudentPuzzle ? 'flex-1 min-h-0 overflow-y-auto' : ''} border-t border-white/[0.06] bg-gradient-to-b from-teal-950/20 to-transparent p-4 flex flex-col gap-3`}>
+              {(() => {
+                const turn = sideToMove(studyBoardFen) === 'white' ? 'white' as const : 'black' as const;
+                const computerPlaysReply = hideEngineForStudentPuzzle && !isStudentTurnInPuzzle && !isComplete;
+                const puzzleMoveInstruction = computerPlaysReply
+                  ? 'Rakip hamleyi bilgisayar, antrenörün kaydettiği hatta göre oynuyor'
+                  : turn === 'white'
+                    ? 'Beyaz için en iyi hamleyi bulunuz'
+                    : 'Siyah için en iyi hamleyi bulunuz';
+                const puzzleStatusTitle = computerPlaysReply ? 'Bilgisayar oynuyor' : undefined;
+                const showChapterComplete = chapterSolved || feedback === 'solved';
+                const guideComment =
+                  feedbackText
+                  || (laHint && String(laHint))
+                  || scenarioText
+                  || (feedback === 'correct'
+                    ? 'İyi hamle!'
+                    : showChapterComplete
+                      ? 'Tebrikler! Bu dersi tamamladınız.'
+                      : feedback === 'wrong'
+                        ? 'Yanlış hamle, tekrar dene.'
+                        : 'Burada hangi hamleyi yapardınız?');
+
+                const guideMode =
+                  feedback === 'wrong' ? 'bad' as const
+                  : showChapterComplete ? 'end' as const
+                  : feedback === 'correct' ? 'good' as const
+                  : 'play' as const;
+
+                const actions: GamebookFloorAction[] = [];
+                if (showChapterComplete) {
+                  if (selectedChapterIndex < (selectedStudy?.chapters.length ?? 1) - 1) {
+                    actions.push({
+                      id: 'next',
+                      label: 'Sonraki bölüm',
+                      onClick: goNextChapter,
+                      variant: 'primary',
+                      icon: 'play',
+                    });
+                  }
+                  actions.push({
+                    id: 'retry',
+                    label: 'Tekrar oyna',
+                    onClick: restartPuzzleChapter,
+                    variant: 'neutral',
+                    icon: 'retry',
+                  });
+                } else if (feedback === 'wrong') {
+                  actions.push({
+                    id: 'retry-bad',
+                    label: 'Tekrar dene',
+                    onClick: () => {
+                      setFeedback(null);
+                      setFeedbackText(null);
+                      restartPuzzleChapter();
+                    },
+                    variant: 'danger',
+                    icon: 'retry',
+                  });
+                } else if (puzzleBranchChoices.length === 0) {
+                  // play: aksiyon yok — şah + talimat floor'da
+                }
+
+                if (puzzleBranchChoices.length > 0 && !showChapterComplete) {
+                  return (
+                    <div className="space-y-3">
+                      <StudyGamebookGuide
+                        comment={guideComment}
+                        feedback={guideMode}
+                        turnColor={turn}
+                        instruction={puzzleMoveInstruction}
+                        statusTitle={puzzleStatusTitle}
+                      />
+                      <div className="flex flex-col gap-2">
+                        {puzzleBranchChoices.map((choice) => (
+                          <button
+                            key={choice.nodeId}
+                            type="button"
+                            onClick={() => handlePuzzleBranchPick(choice.san)}
+                            className={`w-full py-3 px-4 rounded-xl text-sm font-bold transition-all border active:scale-[0.98] ${
+                              choice.isCorrect
+                                ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/35'
+                                : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                            }`}
+                          >
+                            {choice.san}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    <StudyGamebookGuide
+                      comment={guideComment}
+                      feedback={guideMode}
+                      turnColor={turn}
+                      instruction={puzzleMoveInstruction}
+                      statusTitle={puzzleStatusTitle}
+                      actions={actions}
+                      hint={null}
+                    />
+                    {feedback !== 'solved' && feedback !== 'wrong' && puzzleBranchChoices.length === 0 ? (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { void requestHint(); }}
+                          disabled={computerPlaysReply || laHintThinking || laAnalyzing || laReplyThinking}
+                          className="flex-1 py-2.5 px-3 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 rounded-xl text-xs font-bold transition-all border border-amber-500/25 disabled:opacity-40"
+                        >
+                          {laHintThinking ? 'Hazırlanıyor...' : 'İpucu göster'}
+                        </button>
+                        {isInteractive && !isLiveAnalysis && (
+                          <button
+                            type="button"
+                            onClick={() => { void showSolution(); }}
+                            disabled={computerPlaysReply}
+                            className="flex-1 py-2.5 px-3 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 rounded-xl text-xs font-bold transition-all border border-emerald-500/30 disabled:opacity-40"
+                          >
+                            Çözümü uygula
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()}
+
+              {isLiveAnalysis && (
+                <div className="space-y-2 mt-2 pt-4 border-t border-white/5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                      Canlı analiz oturumu
+                      {liveAttemptHistory.length > 0 ? (
+                        <span className="ml-2 text-teal-500/80 normal-case tracking-normal">
+                          · {liveAttemptHistory.length} önceki deneme kayıtlı
+                        </span>
+                      ) : null}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={restartLiveAnalysis}
+                      className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-bold text-slate-300 uppercase tracking-wide"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Yeniden başla
+                    </button>
+                  </div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Antrenöre Not</p>
+                  <div className="flex gap-2">
+                    <input
+                      value={replyToCoach}
+                      onChange={(e) => setReplyToCoach(e.target.value)}
+                      placeholder="Hamle fikrin..."
+                      className="flex-1 bg-black/40 border border-white/5 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={sendLiveAnalysisNote}
+                      disabled={!replyToCoach.trim()}
+                      className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold transition-all"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  {liveAnalysisNote && <p className="text-[10px] text-indigo-400 font-bold">{liveAnalysisNote}</p>}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="p-3 border-t border-white/[0.06] bg-[#0f172a]/80 shrink-0">
+            <button
+              onClick={goNextChapter}
+              disabled={selectedChapterIndex >= (selectedStudy.chapters.length - 1)}
+              className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-30 text-white text-xs font-black uppercase tracking-wider transition-colors shadow-lg shadow-teal-900/30"
+            >
+              Sonraki bölüm
+            </button>
+          </div>
+    </>
+  );
+
 
   return (
     <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0b1220] text-slate-200 overflow-hidden font-sans">
@@ -3211,6 +3437,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                 ) : null}
              </div>
 
+             <div className="lg:hidden w-full min-w-0">{studentGuide}</div>
+
              <div className="w-full flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 bg-slate-950/50 p-1.5 rounded-2xl border border-white/[0.06]">
                 <div className="flex items-center justify-center gap-0.5">
                   <button type="button" title="Tahtayı çevir (F)" onClick={() => setStudentBoardOrientation(o => o === 'white' ? 'black' : 'white')} className="p-2.5 sm:p-2 rounded-xl hover:bg-white/[0.06] text-slate-500 hover:text-slate-200 transition-colors"><FlipHorizontal className="w-4 h-4" /></button>
@@ -3502,188 +3730,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             )}
           </div>
 
-          {(isInteractive || isLiveAnalysis) && (
-            <div className={`${hideEngineForStudentPuzzle ? 'flex-1 min-h-0 overflow-y-auto' : ''} border-t border-white/[0.06] bg-gradient-to-b from-teal-950/20 to-transparent p-4 flex flex-col gap-3`}>
-              {(() => {
-                const turn = sideToMove(studyBoardFen) === 'white' ? 'white' as const : 'black' as const;
-                const computerPlaysReply = hideEngineForStudentPuzzle && !isStudentTurnInPuzzle && !isComplete;
-                const puzzleMoveInstruction = computerPlaysReply
-                  ? 'Rakip hamleyi bilgisayar, antrenörün kaydettiği hatta göre oynuyor'
-                  : turn === 'white'
-                    ? 'Beyaz için en iyi hamleyi bulunuz'
-                    : 'Siyah için en iyi hamleyi bulunuz';
-                const puzzleStatusTitle = computerPlaysReply ? 'Bilgisayar oynuyor' : undefined;
-                const guideComment =
-                  feedbackText
-                  || (laHint && String(laHint))
-                  || scenarioText
-                  || (feedback === 'correct'
-                    ? 'İyi hamle!'
-                    : feedback === 'solved'
-                      ? 'Tebrikler! Bu dersi tamamladınız.'
-                      : feedback === 'wrong'
-                        ? 'Yanlış hamle, tekrar dene.'
-                        : 'Burada hangi hamleyi yapardınız?');
-
-                const guideMode =
-                  feedback === 'wrong' ? 'bad' as const
-                  : feedback === 'solved' ? 'end' as const
-                  : feedback === 'correct' ? 'good' as const
-                  : 'play' as const;
-
-                const actions: GamebookFloorAction[] = [];
-                if (feedback === 'solved') {
-                  if (selectedChapterIndex < (selectedStudy?.chapters.length ?? 1) - 1) {
-                    actions.push({
-                      id: 'next',
-                      label: 'Sonraki bölüm',
-                      onClick: goNextChapter,
-                      variant: 'primary',
-                      icon: 'play',
-                    });
-                  }
-                  actions.push({
-                    id: 'retry',
-                    label: 'Tekrar oyna',
-                    onClick: restartPuzzleChapter,
-                    variant: 'neutral',
-                    icon: 'retry',
-                  });
-                } else if (feedback === 'wrong') {
-                  actions.push({
-                    id: 'retry-bad',
-                    label: 'Tekrar dene',
-                    onClick: () => {
-                      setFeedback(null);
-                      setFeedbackText(null);
-                      restartPuzzleChapter();
-                    },
-                    variant: 'danger',
-                    icon: 'retry',
-                  });
-                } else if (puzzleBranchChoices.length === 0) {
-                  // play: aksiyon yok — şah + talimat floor'da
-                }
-
-                if (puzzleBranchChoices.length > 0 && feedback !== 'solved') {
-                  return (
-                    <div className="space-y-3">
-                      <StudyGamebookGuide
-                        comment={guideComment}
-                        feedback={guideMode}
-                        turnColor={turn}
-                        instruction={puzzleMoveInstruction}
-                        statusTitle={puzzleStatusTitle}
-                      />
-                      <div className="flex flex-col gap-2">
-                        {puzzleBranchChoices.map((choice) => (
-                          <button
-                            key={choice.nodeId}
-                            type="button"
-                            onClick={() => handlePuzzleBranchPick(choice.san)}
-                            className={`w-full py-3 px-4 rounded-xl text-sm font-bold transition-all border active:scale-[0.98] ${
-                              choice.isCorrect
-                                ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/35'
-                                : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
-                            }`}
-                          >
-                            {choice.san}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="space-y-3">
-                    <StudyGamebookGuide
-                      comment={guideComment}
-                      feedback={guideMode}
-                      turnColor={turn}
-                      instruction={puzzleMoveInstruction}
-                      statusTitle={puzzleStatusTitle}
-                      actions={actions}
-                      hint={null}
-                    />
-                    {feedback !== 'solved' && feedback !== 'wrong' && puzzleBranchChoices.length === 0 ? (
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => { void requestHint(); }}
-                          disabled={computerPlaysReply || laHintThinking || laAnalyzing || laReplyThinking}
-                          className="flex-1 py-2.5 px-3 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 rounded-xl text-xs font-bold transition-all border border-amber-500/25 disabled:opacity-40"
-                        >
-                          {laHintThinking ? 'Hazırlanıyor...' : 'İpucu göster'}
-                        </button>
-                        {isInteractive && !isLiveAnalysis && (
-                          <button
-                            type="button"
-                            onClick={() => { void showSolution(); }}
-                            disabled={computerPlaysReply}
-                            className="flex-1 py-2.5 px-3 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 rounded-xl text-xs font-bold transition-all border border-emerald-500/30 disabled:opacity-40"
-                          >
-                            Çözümü uygula
-                          </button>
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })()}
-
-              {isLiveAnalysis && (
-                <div className="space-y-2 mt-2 pt-4 border-t border-white/5">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                      Canlı analiz oturumu
-                      {liveAttemptHistory.length > 0 ? (
-                        <span className="ml-2 text-teal-500/80 normal-case tracking-normal">
-                          · {liveAttemptHistory.length} önceki deneme kayıtlı
-                        </span>
-                      ) : null}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={restartLiveAnalysis}
-                      className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-bold text-slate-300 uppercase tracking-wide"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      Yeniden başla
-                    </button>
-                  </div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Antrenöre Not</p>
-                  <div className="flex gap-2">
-                    <input
-                      value={replyToCoach}
-                      onChange={(e) => setReplyToCoach(e.target.value)}
-                      placeholder="Hamle fikrin..."
-                      className="flex-1 bg-black/40 border border-white/5 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500/40"
-                    />
-                    <button
-                      type="button"
-                      onClick={sendLiveAnalysisNote}
-                      disabled={!replyToCoach.trim()}
-                      className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold transition-all"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  {liveAnalysisNote && <p className="text-[10px] text-indigo-400 font-bold">{liveAnalysisNote}</p>}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="p-3 border-t border-white/[0.06] bg-[#0f172a]/80 shrink-0">
-            <button
-              onClick={goNextChapter}
-              disabled={selectedChapterIndex >= (selectedStudy.chapters.length - 1)}
-              className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-30 text-white text-xs font-black uppercase tracking-wider transition-colors shadow-lg shadow-teal-900/30"
-            >
-              Sonraki bölüm
-            </button>
-          </div>
+          {studentGuide}
         </div>
       </div>
 

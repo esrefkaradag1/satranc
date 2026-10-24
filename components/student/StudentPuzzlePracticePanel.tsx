@@ -102,13 +102,15 @@ export function StudentPuzzlePracticePanel({ student, pool, viewAs = 'student' }
     (record: HomeworkAttemptRecord) => {
       const puzzle = playing?.puzzle;
       if (!puzzle) return;
-      const { state, delta, pointsEarned } = applyPracticeResult(practice, puzzle, record.correct);
-      setPractice(state);
-      savePracticeState(studentId, state);
-      setLastDelta(delta);
-      setLastPoints(pointsEarned);
+      setPractice((prev) => {
+        const { state, delta, pointsEarned } = applyPracticeResult(prev, puzzle, record.correct);
+        savePracticeState(studentId, state);
+        setLastDelta(delta);
+        setLastPoints(pointsEarned);
+        return state;
+      });
     },
-    [playing?.puzzle, practice, studentId],
+    [playing?.puzzle, studentId],
   );
 
   return (
@@ -319,7 +321,11 @@ export function StudentPuzzlePracticePanel({ student, pool, viewAs = 'student' }
           studentId={studentId}
           onClose={() => setPlaying(null)}
           onAttemptRecord={handleAttempt}
-          nextPuzzle={pickNextPracticePuzzle(pool, practice.rating, practice.recentPuzzleIds)}
+          nextPuzzle={pickNextPracticePuzzle(
+            pool,
+            practice.rating,
+            [playing.puzzle.id, ...practice.recentPuzzleIds],
+          )}
           onPlayNext={(puzzle) => setPlaying({ puzzle, openKey: `${puzzle.id}-${Date.now()}` })}
         />
       ) : null}

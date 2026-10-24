@@ -15,13 +15,14 @@ import {
   type PlatformDayCacheRow,
 } from '../services/platformStatsCacheService';
 import { fetchStudentsPlatformWeekStats } from '../services/platformWeekStatsService';
+import { isTrustedPlatformDayStats } from './lichessCountGuard';
 
 function normalizeDays(days: string[]): string[] {
   return [...new Set(days.map((d) => d.slice(0, 10)).filter(Boolean))];
 }
 
 function hasPlatformDayCache(stats: PlatformDayStats | undefined): boolean {
-  return stats != null && typeof stats === 'object';
+  return isTrustedPlatformDayStats(stats);
 }
 
 /**
@@ -95,7 +96,12 @@ export async function syncStudentPlatformDays(
     const fresh = batchStats?.[sid]?.[day];
     if (fresh) {
       merged = mergePlatformDayStats(merged, fresh);
-    } else if (effectiveRefreshDays.includes(day)) {
+    }
+    if (
+      effectiveRefreshDays.includes(day)
+      && !isTrustedPlatformDayStats(merged)
+      && student.lichessUsername?.trim()
+    ) {
       try {
         const clientFresh = await fetchStudentPlatformDayStats(student, day);
         merged = mergePlatformDayStats(merged, clientFresh);
@@ -166,21 +172,18 @@ export async function syncStudentsPlatformDays(
       const fresh = batchStats?.[sid]?.[day];
       if (fresh) {
         merged = mergePlatformDayStats(merged, fresh);
-      } else if (effectiveRefreshDays.includes(day)) {
-        // Batch tamamen düştü, öğrenci chunk'tan gelmedi veya önbellek yoksa tarayıcıdan yedek çek.
-        const missingFromBatch = batchRequested && batchStats != null && !fresh;
-        const shouldClientFallback =
-          students.length === 1
-          || batchFailed
-          || missingFromBatch
-          || !hasPlatformDayCache(merged);
-        if (shouldClientFallback) {
-          try {
-            const clientFresh = await fetchStudentPlatformDayStats(student, day);
-            merged = mergePlatformDayStats(merged, clientFresh);
-          } catch {
-            /* DB korunur */
-          }
+      }
+      const shouldClientFallback =
+        effectiveRefreshDays.includes(day)
+        && !isTrustedPlatformDayStats(merged)
+        && !!student.lichessUsername?.trim()
+        && (students.length <= 8 || batchFailed || (batchRequested && batchStats != null && !fresh));
+      if (shouldClientFallback) {
+        try {
+          const clientFresh = await fetchStudentPlatformDayStats(student, day);
+          merged = mergePlatformDayStats(merged, clientFresh);
+        } catch {
+          /* DB korunur */
         }
       }
       if (merged) {

@@ -22,6 +22,8 @@ import {
 } from '../lib/lichessOAuthApi.mjs';
 import { lichessProxyRequest } from '../lib/lichessProxyThrottle.mjs';
 import { parentStudentLoginViaEnv } from '../lib/studentParentAuth.mjs';
+import { mobilePushHandler } from '../lib/mobilePush.mjs';
+import { mobileAuthHandler } from '../lib/mobileAuth.mjs';
 import { trainingNotifyHandler, startTrainingNotifyScheduler } from '../lib/trainingWhatsAppNotify.mjs';
 import { whatsappApiGetHandler, whatsappApiPostHandler } from '../lib/whatsappApi.mjs';
 import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch.mjs';
@@ -621,6 +623,18 @@ export async function dispatchApi(req, res, url) {
     }
     if (path === '/api/auth-parent' && req.method === 'POST') {
       await handleAuthParent(req, res);
+      return true;
+    }
+    if (path === '/api/mobile-push' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const result = await mobilePushHandler(body, process.env);
+      sendJson(res, result.status, result.body);
+      return true;
+    }
+    if (path === '/api/mobile-auth' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const result = await mobileAuthHandler(body, process.env);
+      sendJson(res, result.status, result.body);
       return true;
     }
     if (path === '/api/fetch-ukd' && req.method === 'POST') {

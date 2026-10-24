@@ -123,13 +123,18 @@ export function lichessActivityGameResults(row: LichessActivity): { wins: number
 }
 
 export function lichessActivityGameCount(row: LichessActivity): number {
-  if (!row.games) return 0;
   let total = 0;
-  for (const mode of Object.values(row.games)) {
-    if (!mode) continue;
-    total += (mode.win || 0) + (mode.loss || 0) + (mode.draw || 0);
+  if (row.games) {
+    for (const mode of Object.values(row.games)) {
+      if (!mode) continue;
+      total += (mode.win || 0) + (mode.loss || 0) + (mode.draw || 0);
+    }
   }
-  return total;
+  const tournamentGames = (row.tournaments?.best ?? []).reduce(
+    (sum, item) => sum + Math.max(0, Number(item?.nbGames) || 0),
+    0,
+  );
+  return total + tournamentGames;
 }
 
 /** Aynı kulüp/şube içindeki öğrenciler (yoksa grup, o da yoksa tüm liste) */

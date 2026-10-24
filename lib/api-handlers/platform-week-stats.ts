@@ -21,7 +21,8 @@ import {
   tacticsLifetimeFromMemberStats,
 } from '../chesscomDailyTacticsTracker';
 import { computeChessComActivityTimeSeconds } from '../platformActivityTime';
-import { fetchLichessGamesTimeSecondsForDay } from '../lichessDayGamesFetch';
+import { fetchLichessGamesTimeSecondsForDay, fetchLichessGameCountsByIstanbulDays } from '../lichessDayGamesFetch';
+import { pickLichessGameCount } from '../lichessCountGuard';
 import { istanbulDayKey, shiftIstanbulDayKey } from '../homeworkDayUtils';
 import {
   enrichChessComPuzzlesWithLifetime,
@@ -261,6 +262,7 @@ export async function computePlatformWeekStats(
 
   const lichessActivityByUser = new Map<string, LichessActivityRow[]>();
   const lichessUnavailableUsers = new Set<string>();
+  const lichessExportCountsByUser = new Map<string, Record<string, number>>();
   const chessComUnavailableUsers = new Set<string>();
   const chessPuzzlesByUser = new Map<string, Awaited<ReturnType<typeof loadChessComUserData>>['rated']>();
   const chessLifetimeByUser = new Map<string, NonNullable<Awaited<ReturnType<typeof loadChessComUserData>>['lifetime']>>();
@@ -298,6 +300,10 @@ export async function computePlatformWeekStats(
         const fetched = await fetchLichessActivity(username);
         lichessActivityByUser.set(username, fetched.rows);
         if (fetched.unavailable) lichessUnavailableUsers.add(username);
+        else if (lichessUsers.length <= 12) {
+          const exportCounts = await fetchLichessGameCountsByIstanbulDays(username, uniqueDays, process.env);
+          lichessExportCountsByUser.set(username, exportCounts);
+        }
       }
     })(),
     Promise.all(
@@ -342,7 +348,13 @@ export async function computePlatformWeekStats(
 
     stats[sid] = {};
     for (const day of uniqueDays) {
-      const lichessGames = lichessUser ? lichessGamesForDayFromActivity(activities, day) : 0;
+      let lichessGames = lichessUser ? lichessGamesForDayFromActivity(activities, day) : 0;
+      if (lichessUser) {
+        lichessGames = pickLichessGameCount(
+          lichessGames,
+          lichessExportCountsByUser.get(lichessUser)?.[day],
+        );
+      }
       let lichessPuzzles = lichessUser
         ? lichessPuzzleStatsForDayFromActivity(activities, day)
         : { count: 0, passed: 0, failed: 0 };
@@ -432,6 +444,7 @@ export async function computePlatformWeekStats(
           // Boş aktivite ≠ hata; yalnızca rate-limit / timeout / HTTP hatasında işaretle
           // ki merge önceki doğru Lichess sayılarını korusun.
           error: lichessUser ? lichessUnavailableUsers.has(lichessUser) : undefined,
+          tracked: !!lichessUser,
         },
         {
           games: chessGames,
