@@ -116,6 +116,7 @@ import LichessOpeningsSection from './LichessOpeningsSection';
 import { fetchFidePlayer, federationLabel, resolveFideProfileForStudent, type FidePlayer } from '../services/fideService';
 import { fetchUkdFromTsf } from '../services/ukdService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
+import { persistLeaderboardStatsFromActivity, persistLeaderboardStatsFromDays } from '../services/leaderboardService';
 import { fetchLichessOAuthProfile, fetchLichessOAuthStatus } from '../services/lichessOAuthClient';
 import { formatMidnightCountdown, homeworkDayKey } from '../lib/homeworkDayUtils';
 import {
@@ -547,6 +548,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       );
       weekPlatformStatsRef.current = nextWeek;
       setWeekPlatformStatsByDate(nextWeek);
+      void persistLeaderboardStatsFromDays(student, nextWeek);
       const stats = nextWeek[todayKey] ?? mergePlatformDayStats(undefined, {
         games: 0,
         puzzleSolved: 0,
@@ -995,6 +997,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         if (cancelled) return;
         setDailyLichessPuzzle(daily);
         setLichessActivities(activity ?? []);
+        if (student && activity?.length) {
+          void persistLeaderboardStatsFromActivity(student, activity);
+        }
       })
       .catch(() => {
         if (!cancelled) {

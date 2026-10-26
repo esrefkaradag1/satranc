@@ -23,7 +23,7 @@ import {
   leaderboardModeRating,
   mergeLeaderboardEntryRows,
 } from '../../lib/leaderboardUtils';
-import { buildClubLeaderboard, buildCachedClubLeaderboardPreview } from '../../services/leaderboardService';
+import { buildClubLeaderboard, buildCachedClubLeaderboardPreview, harvestStaleLeaderboardStudent } from '../../services/leaderboardService';
 import { scheduleDailyLeaderboardRefresh } from '../../lib/scheduleHourlyRefresh';
 import {
   formatLeaderboardSnapshotAge,
@@ -451,6 +451,16 @@ export const ClubLeaderboard: React.FC<Props> = ({
       });
       lastUpdatedAtRef.current = Date.now();
       setLastUpdatedAt(lastUpdatedAtRef.current);
+      if (mode === 'activity' && canRefreshRef.current) {
+        void harvestStaleLeaderboardStudent(
+          currentPeers,
+          homeworkAttemptsRef.current,
+          currentPeriod,
+        ).then((row) => {
+          if (!row || generation !== loadGenerationRef.current) return;
+          keepBestEntries([row], key);
+        });
+      }
     } catch {
       if (generation !== loadGenerationRef.current) return;
       setError('Sıralama yüklenemedi. Lütfen tekrar deneyin.');

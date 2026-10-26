@@ -319,8 +319,8 @@ export async function fetchChessComMonthGamesViaProxy(
 const LICHESS_ACTIVITY_CACHE_TTL_MS = 15 * 60 * 1000;
 const LICHESS_ACTIVITY_RATE_LIMIT_MS = 10 * 60 * 1000;
 const LICHESS_USER_CACHE_TTL_MS = 45 * 60 * 1000;
-/** Tarayıcıdan Lichess: 429 olmasın diye tek sıra, geniş aralık */
-const LICHESS_MIN_REQUEST_GAP_MS = 1500;
+/** Lichess activity limiti: 15 istek / 2 dakika / IP → en az ~8 sn ara */
+const LICHESS_MIN_REQUEST_GAP_MS = 8500;
 const LICHESS_MAX_PARALLEL = 1;
 const LICHESS_DEFAULT_BACKOFF_MS = 60_000;
 const LICHESS_MAX_BACKOFF_MS = 5 * 60_000;

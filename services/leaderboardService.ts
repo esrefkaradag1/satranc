@@ -11,7 +11,17 @@ import {
   isLichessGloballyRateLimited,
   reconcileChessComMemberStats,
   type ChessComGame,
+  type LichessActivity,
 } from './chessPlatformService';
+import { loadPlatformDayStatsFromDb } from './platformStatsCacheService';
+import type { PlatformDayStats } from '../lib/homeworkPlatformUtils';
+import { istanbulDayKey } from '../lib/homeworkDayUtils';
+import {
+  isRemotePeriodStatsFresh,
+  loadRemotePeriodStats,
+  saveRemotePeriodStats,
+} from '../lib/leaderboardPeriodRemoteStore';
+import type { CachedStudentPeriodStats } from '../lib/leaderboardPeriodCache';
 import {
   buildLeaderboardPlatformSnapshot,
   leaderboardModeRating,
@@ -154,6 +164,100 @@ function chessComRangeMonths(bounds: PeriodBounds): Array<{ year: string; month:
   return months;
 }
 
+function isoDaysInBounds(bounds: PeriodBounds): string[] {
+  const out: string[] = [];
+  const cursor = new Date(bounds.startMs);
+  const endDay = istanbulDayKey(new Date(bounds.endMs));
+  for (let i = 0; i < 40; i += 1) {
+    const key = istanbulDayKey(cursor);
+    out.push(key);
+    if (key >= endDay) break;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}
+
+function statsFromLichessActivity(
+  activities: LichessActivity[],
+  bounds: PeriodBounds,
+): Omit<CachedStudentPeriodStats, 'cachedAt'> {
+  const gameResultsByMode = emptyGameResultsByMode();
+  let puzzles = 0;
+  let puzzleWrong = 0;
+  let games = 0;
+  for (const row of activities) {
+    const start = row.interval?.start;
+    if (!start || !isEpochMsInPeriod(start, bounds)) continue;
+    puzzles += lichessActivityPuzzleCount(row);
+    const parsed = parseLichessActivityPuzzles(row);
+    puzzleWrong += parsed.failed;
+    games += lichessActivityGameCount(row);
+    const modeResults = lichessActivityGameResultsByMode(row);
+    for (const mode of Object.keys(modeResults) as (keyof GameResultsByMode)[]) {
+      gameResultsByMode[mode].wins += modeResults[mode].wins;
+      gameResultsByMode[mode].draws += modeResults[mode].draws;
+      gameResultsByMode[mode].losses += modeResults[mode].losses;
+    }
+  }
+  const totals = sumGameResultsByMode(gameResultsByMode);
+  return {
+    puzzles,
+    puzzleWrong,
+    games: Math.max(games, totals.games),
+    internalPuzzles: 0,
+    wins: totals.wins,
+    draws: totals.draws,
+    losses: totals.losses,
+    gameResultsByMode,
+  };
+}
+
+function statsFromPlatformDays(
+  byDay: Record<string, PlatformDayStats> | undefined,
+): Omit<CachedStudentPeriodStats, 'cachedAt'> {
+  const empty = {
+    puzzles: 0,
+    puzzleWrong: 0,
+    games: 0,
+    internalPuzzles: 0,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    gameResultsByMode: emptyGameResultsByMode(),
+  };
+  if (!byDay) return empty;
+  for (const stats of Object.values(byDay)) {
+    empty.puzzles += Math.max(
+      0,
+      stats.puzzlePassed || ((stats.lichessPuzzlePassed || 0) + (stats.chessComPuzzlePassed || 0)),
+    );
+    empty.puzzleWrong += Math.max(
+      0,
+      stats.puzzleFailed || ((stats.lichessPuzzleFailed || 0) + (stats.chessComPuzzleFailed || 0)),
+    );
+    empty.games += Math.max(
+      0,
+      stats.games || ((stats.lichessGames || 0) + (stats.chessComGames || 0)),
+    );
+  }
+  return empty;
+}
+
+function withHomeworkInternals(
+  stats: Omit<CachedStudentPeriodStats, 'cachedAt'>,
+  internalCorrect: number,
+  internalWrong: number,
+): Omit<CachedStudentPeriodStats, 'cachedAt'> {
+  const extPuzzles = Math.max(0, stats.puzzles - (stats.internalPuzzles ?? 0));
+  const extWrong = Math.max(0, stats.puzzleWrong - Math.max(0, (stats.internalPuzzles ?? 0) - internalCorrect));
+  return {
+    ...stats,
+    puzzles: extPuzzles + internalCorrect,
+    puzzleWrong: extWrong + internalWrong,
+    internalPuzzles: internalCorrect,
+  };
+}
+
 function raceWithTimeout<T>(work: Promise<T>, timeoutMs: number, fallback: () => T): Promise<T> {
   return new Promise((resolve) => {
     let settled = false;
@@ -207,6 +311,13 @@ async function studentPeriodStats(
   student: Student,
   bounds: PeriodBounds,
   homeworkAttempts: HomeworkPuzzleAttempt[],
+  opts?: {
+    allowLiveLichess?: boolean;
+    remote?: CachedStudentPeriodStats | null;
+    dayStats?: Record<string, PlatformDayStats>;
+    persistRemote?: boolean;
+    period?: LeaderboardPeriod;
+  },
 ): Promise<{
   puzzles: number;
   puzzleWrong: number;
@@ -233,12 +344,13 @@ async function studentPeriodStats(
   const lichessUsername = student.lichessUsername?.trim();
   const chessComUsername = student.chessComUsername?.trim();
 
-  const skipLichess = !lichessUsername || isLichessGloballyRateLimited();
+  const allowLiveLichess = opts?.allowLiveLichess === true;
+  const skipLichess = !lichessUsername || isLichessGloballyRateLimited() || !allowLiveLichess;
   const [lichessActivityResult, chessComGames] = await Promise.all([
     skipLichess
       ? Promise.resolve([] as Awaited<ReturnType<typeof fetchLichessActivity>>)
       : fetchLichessActivity(lichessUsername).catch(() => [] as Awaited<ReturnType<typeof fetchLichessActivity>>),
-    chessComUsername
+    chessComUsername && allowLiveLichess
       ? raceWithTimeout(
         fetchChessComGamesForPeriod(chessComUsername, bounds),
         6_000,
@@ -247,22 +359,15 @@ async function studentPeriodStats(
       : Promise.resolve([] as ChessComGame[]),
   ]);
 
-  let lichessFromActivityGames = 0;
-  for (const row of lichessActivityResult) {
-    const start = row.interval?.start;
-    if (!start || !isEpochMsInPeriod(start, bounds)) continue;
-    externalCorrect += lichessActivityPuzzleCount(row);
-    const lichessPuzzles = parseLichessActivityPuzzles(row);
-    externalWrong += lichessPuzzles.failed;
-    lichessFromActivityGames += lichessActivityGameCount(row);
-    const modeResults = lichessActivityGameResultsByMode(row);
-    for (const mode of Object.keys(modeResults) as (keyof GameResultsByMode)[]) {
-      gameResultsByMode[mode].wins += modeResults[mode].wins;
-      gameResultsByMode[mode].draws += modeResults[mode].draws;
-      gameResultsByMode[mode].losses += modeResults[mode].losses;
-    }
+  const fromActivity = statsFromLichessActivity(lichessActivityResult, bounds);
+  externalCorrect += Math.max(0, fromActivity.puzzles);
+  externalWrong += Math.max(0, fromActivity.puzzleWrong);
+  games += fromActivity.games;
+  for (const mode of Object.keys(gameResultsByMode) as (keyof GameResultsByMode)[]) {
+    gameResultsByMode[mode].wins += fromActivity.gameResultsByMode[mode].wins;
+    gameResultsByMode[mode].draws += fromActivity.gameResultsByMode[mode].draws;
+    gameResultsByMode[mode].losses += fromActivity.gameResultsByMode[mode].losses;
   }
-  games += Math.max(lichessFromActivityGames, sumGameResultsByMode(gameResultsByMode).games);
 
   if (chessComUsername) {
     for (const game of chessComGames) {
@@ -290,7 +395,7 @@ async function studentPeriodStats(
   if (cached && hasPlatformAccount && externalEmpty) {
     const extPuzzles = Math.max(0, cached.puzzles - (cached.internalPuzzles ?? 0));
     const extWrong = Math.max(0, cached.puzzleWrong - Math.max(0, (cached.internalPuzzles ?? 0) - internalCorrect));
-    const merged = mergePeriodStatsMax(cached, {
+    let merged = mergePeriodStatsMax(cached, {
       puzzles: extPuzzles + internalCorrect,
       puzzleWrong: extWrong + internalWrong,
       games: cached.games,
@@ -300,12 +405,28 @@ async function studentPeriodStats(
       losses: cached.losses,
       gameResultsByMode: cached.gameResultsByMode,
     });
+    if (opts?.remote) merged = mergePeriodStatsMax(merged, opts.remote);
+    const fromDays = statsFromPlatformDays(opts?.dayStats);
+    if (fromDays.puzzles > 0 || fromDays.games > 0 || fromDays.puzzleWrong > 0) {
+      merged = mergePeriodStatsMax(merged, withHomeworkInternals(fromDays, internalCorrect, internalWrong));
+    }
     writeCachedStudentPeriodStats(student.id, bounds, merged);
+    if (opts?.persistRemote && opts.period) {
+      void saveRemotePeriodStats(student.id, opts.period, bounds.startMs, merged);
+    }
     return merged;
   }
 
-  const merged = cached ? mergePeriodStatsMax(cached, fresh) : fresh;
+  let merged = cached ? mergePeriodStatsMax(cached, fresh) : fresh;
+  if (opts?.remote) merged = mergePeriodStatsMax(merged, opts.remote);
+  const fromDays = statsFromPlatformDays(opts?.dayStats);
+  if (fromDays.puzzles > 0 || fromDays.games > 0 || fromDays.puzzleWrong > 0) {
+    merged = mergePeriodStatsMax(merged, withHomeworkInternals(fromDays, internalCorrect, internalWrong));
+  }
   writeCachedStudentPeriodStats(student.id, bounds, merged);
+  if (opts?.persistRemote && opts.period) {
+    void saveRemotePeriodStats(student.id, opts.period, bounds.startMs, merged);
+  }
   return merged;
 }
 
@@ -340,13 +461,20 @@ async function buildStudentLeaderboardRow(
   bounds: PeriodBounds,
   homeworkAttempts: HomeworkPuzzleAttempt[],
   rankMode: LeaderboardRankMode,
+  opts?: {
+    allowLiveLichess?: boolean;
+    remote?: CachedStudentPeriodStats | null;
+    dayStats?: Record<string, PlatformDayStats>;
+    persistRemote?: boolean;
+    period?: LeaderboardPeriod;
+  },
 ): Promise<Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>> {
   const needsPeriod = rankModeNeedsPeriodStats(rankMode);
   const needsPlatformApi = rankModeNeedsPlatformApi(rankMode);
 
   const [stats, platform] = await Promise.all([
     needsPeriod
-      ? studentPeriodStats(student, bounds, homeworkAttempts)
+      ? studentPeriodStats(student, bounds, homeworkAttempts, opts)
       : Promise.resolve({
           puzzles: 0,
           puzzleWrong: 0,
@@ -440,11 +568,29 @@ export async function buildClubLeaderboard(
 ): Promise<LeaderboardEntry[]> {
   const bounds = getPeriodBounds(period);
   const total = peers.length;
-  const partialRows: Array<Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>> = new Array(total);
-  const scanDeadline = Date.now() + SCAN_BUDGET_MS;
-  let done = 0;
+  const days = isoDaysInBounds(bounds);
+  const ids = peers.map((peer) => String(peer.id));
+  const [dayDb, remotePeriod] = await Promise.all([
+    rankMode === 'activity' ? loadPlatformDayStatsFromDb(ids, days) : Promise.resolve(null),
+    loadRemotePeriodStats(ids, period, bounds.startMs),
+  ]);
 
-  const emitProgress = () => {
+  const partialRows: Array<Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>> = new Array(total);
+  let done = 0;
+  const rows = await mapWithConcurrency(peers, LEADERBOARD_STUDENT_CONCURRENCY, async (student, index) => {
+    const row = await raceWithTimeout(
+      buildStudentLeaderboardRow(student, bounds, homeworkAttempts, rankMode, {
+        allowLiveLichess: false,
+        remote: remotePeriod.get(String(student.id)) ?? null,
+        dayStats: dayDb?.stats[String(student.id)],
+        persistRemote: rankMode === 'activity',
+        period,
+      }),
+      STUDENT_ROW_TIMEOUT_MS,
+      () => cachedStudentLeaderboardRow(student, bounds, homeworkAttempts),
+    );
+    partialRows[index] = row;
+    done += 1;
     onProgress?.(
       done,
       total,
@@ -454,30 +600,88 @@ export async function buildClubLeaderboard(
         pointSettings,
       ),
     );
-  };
-
-  const rowsPromise = mapWithConcurrency(peers, LEADERBOARD_STUDENT_CONCURRENCY, async (student, index) => {
-    const fallback = () => cachedStudentLeaderboardRow(student, bounds, homeworkAttempts);
-    const row = Date.now() > scanDeadline || isLichessGloballyRateLimited()
-      ? fallback()
-      : await raceWithTimeout(
-        buildStudentLeaderboardRow(student, bounds, homeworkAttempts, rankMode),
-        STUDENT_ROW_TIMEOUT_MS,
-        fallback,
-      );
-    partialRows[index] = row;
-    done += 1;
-    emitProgress();
     return row;
   });
 
-  const rows = await raceWithTimeout(rowsPromise, SCAN_BUDGET_MS, () =>
-    peers.map((student, index) =>
-      partialRows[index] ?? cachedStudentLeaderboardRow(student, bounds, homeworkAttempts),
-    ),
-  );
+  const ranked = rankLeaderboardEntries(rows, rankMode, pointSettings);
+  onProgress?.(total, total, ranked);
+  return ranked;
+}
 
-  return rankLeaderboardEntries(rows, rankMode, pointSettings);
+export async function persistLeaderboardStatsFromDays(
+  student: Student,
+  byDay: Record<string, PlatformDayStats>,
+  homeworkAttempts: HomeworkPuzzleAttempt[] = [],
+): Promise<void> {
+  if (!student.id || !byDay || Object.keys(byDay).length === 0) return;
+  const period: LeaderboardPeriod = 'week';
+  const bounds = getPeriodBounds(period);
+  const internalCorrect = homeworkAttempts.filter(
+    (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
+  ).length;
+  const internalWrong = homeworkAttempts.filter(
+    (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && !a.correct,
+  ).length;
+  const fromDays = withHomeworkInternals(statsFromPlatformDays(byDay), internalCorrect, internalWrong);
+  const cached = readCachedStudentPeriodStats(student.id, bounds);
+  const merged = cached ? mergePeriodStatsMax(cached, fromDays) : fromDays;
+  writeCachedStudentPeriodStats(student.id, bounds, merged);
+  await saveRemotePeriodStats(student.id, period, bounds.startMs, merged);
+}
+
+export async function persistLeaderboardStatsFromActivity(
+  student: Student,
+  activities: LichessActivity[],
+  homeworkAttempts: HomeworkPuzzleAttempt[] = [],
+): Promise<void> {
+  if (!student.id || activities.length === 0) return;
+  for (const period of ['week', 'month'] as const) {
+    const bounds = getPeriodBounds(period);
+    const internalCorrect = homeworkAttempts.filter(
+      (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
+    ).length;
+    const internalWrong = homeworkAttempts.filter(
+      (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && !a.correct,
+    ).length;
+    const fromActivity = withHomeworkInternals(
+      statsFromLichessActivity(activities, bounds),
+      internalCorrect,
+      internalWrong,
+    );
+    const cached = readCachedStudentPeriodStats(student.id, bounds);
+    const merged = cached ? mergePeriodStatsMax(cached, fromActivity) : fromActivity;
+    writeCachedStudentPeriodStats(student.id, bounds, merged);
+    await saveRemotePeriodStats(student.id, period, bounds.startMs, merged);
+  }
+}
+
+/** Antrenör tarayıcısından en fazla 1 eksik öğrenciyi yavaşça tamamla (15/2dk limiti). */
+export async function harvestStaleLeaderboardStudent(
+  peers: Student[],
+  homeworkAttempts: HomeworkPuzzleAttempt[],
+  period: LeaderboardPeriod,
+): Promise<LeaderboardEntry | null> {
+  if (isLichessGloballyRateLimited()) return null;
+  const bounds = getPeriodBounds(period);
+  const remote = await loadRemotePeriodStats(peers.map((p) => String(p.id)), period, bounds.startMs);
+  const stale = peers.find((peer) => {
+    if (!peer.lichessUsername?.trim()) return false;
+    const hit = remote.get(String(peer.id));
+    return !hit || !isRemotePeriodStatsFresh(hit.cachedAt);
+  });
+  if (!stale?.lichessUsername?.trim()) return null;
+  const activities = await fetchLichessActivity(stale.lichessUsername).catch(() => []);
+  if (isLichessGloballyRateLimited() && activities.length === 0) return null;
+  if (activities.length === 0) return null;
+  await persistLeaderboardStatsFromActivity(stale, activities, homeworkAttempts);
+  return rankLeaderboardEntries(
+    [await buildStudentLeaderboardRow(stale, bounds, homeworkAttempts, 'activity', {
+      allowLiveLichess: false,
+      persistRemote: true,
+      period,
+    })],
+    'activity',
+  )[0] ?? null;
 }
 
 /** API beklerken anında gösterilecek önbellek tablosu (yalnızca aktivite modu). */
