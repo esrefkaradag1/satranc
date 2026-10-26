@@ -7,11 +7,13 @@ import {
   fetchChessComStats,
   fetchLichessActivity,
   fetchLichessUser,
+  fetchLichessUsers,
   isChessPlatformBackendAvailable,
   isLichessGloballyRateLimited,
   reconcileChessComMemberStats,
   type ChessComGame,
   type LichessActivity,
+  type LichessUserProfile,
 } from './chessPlatformService';
 import { loadPlatformDayStatsFromDb } from './platformStatsCacheService';
 import type { PlatformDayStats } from '../lib/homeworkPlatformUtils';
@@ -430,7 +432,10 @@ async function studentPeriodStats(
   return merged;
 }
 
-async function studentPlatformSnapshot(student: Student): Promise<LeaderboardPlatformSnapshot> {
+async function studentPlatformSnapshot(
+  student: Student,
+  lichessProfileOverride?: LichessUserProfile | null,
+): Promise<LeaderboardPlatformSnapshot> {
   const cacheKey = platformSnapshotCacheKey(student);
   const cached = platformSnapshotCache.get(cacheKey);
   if (cached && Date.now() - cached.at < PLATFORM_SNAPSHOT_CACHE_TTL_MS) {
@@ -439,9 +444,14 @@ async function studentPlatformSnapshot(student: Student): Promise<LeaderboardPla
 
   const lichessUsername = student.lichessUsername?.trim();
   const chessComUsername = student.chessComUsername?.trim();
+  const overrideKey = (lichessProfileOverride?.id || lichessProfileOverride?.username || '').toLowerCase();
+  const wantKey = (lichessUsername || '').toLowerCase();
+  const bundled = overrideKey && wantKey && overrideKey === wantKey ? lichessProfileOverride : null;
 
   const [lichessProfile, chessComProfile, memberStatsRaw, pubStats] = await Promise.all([
-    lichessUsername ? fetchLichessUser(lichessUsername).catch(() => null) : Promise.resolve(null),
+    bundled
+      ? Promise.resolve(bundled)
+      : lichessUsername ? fetchLichessUser(lichessUsername).catch(() => null) : Promise.resolve(null),
     chessComUsername ? fetchChessComPlayer(chessComUsername).catch(() => null) : Promise.resolve(null),
     chessComUsername && isChessPlatformBackendAvailable()
       ? fetchChessComMemberStats(chessComUsername).catch(() => null)
@@ -467,6 +477,7 @@ async function buildStudentLeaderboardRow(
     dayStats?: Record<string, PlatformDayStats>;
     persistRemote?: boolean;
     period?: LeaderboardPeriod;
+    lichessProfile?: LichessUserProfile | null;
   },
 ): Promise<Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>> {
   const needsPeriod = rankModeNeedsPeriodStats(rankMode);
@@ -485,7 +496,9 @@ async function buildStudentLeaderboardRow(
           losses: 0,
           gameResultsByMode: emptyGameResultsByMode(),
         }),
-    needsPlatformApi ? studentPlatformSnapshot(student) : Promise.resolve(minimalPlatformSnapshot(student)),
+    needsPlatformApi
+      ? studentPlatformSnapshot(student, opts?.lichessProfile)
+      : Promise.resolve(minimalPlatformSnapshot(student)),
   ]);
 
   const displayStats = needsPeriod
@@ -570,9 +583,13 @@ export async function buildClubLeaderboard(
   const total = peers.length;
   const days = isoDaysInBounds(bounds);
   const ids = peers.map((peer) => String(peer.id));
-  const [dayDb, remotePeriod] = await Promise.all([
+  const lichessNames = peers.map((peer) => peer.lichessUsername?.trim() || '').filter(Boolean);
+  const [dayDb, remotePeriod, bulkUsers] = await Promise.all([
     rankMode === 'activity' ? loadPlatformDayStatsFromDb(ids, days) : Promise.resolve(null),
     loadRemotePeriodStats(ids, period, bounds.startMs),
+    rankModeNeedsPlatformApi(rankMode)
+      ? fetchLichessUsers(lichessNames)
+      : Promise.resolve(new Map<string, LichessUserProfile>()),
   ]);
 
   const partialRows: Array<Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>> = new Array(total);
@@ -585,6 +602,7 @@ export async function buildClubLeaderboard(
         dayStats: dayDb?.stats[String(student.id)],
         persistRemote: rankMode === 'activity',
         period,
+        lichessProfile: bulkUsers.get((student.lichessUsername || '').trim().toLowerCase()) ?? null,
       }),
       STUDENT_ROW_TIMEOUT_MS,
       () => cachedStudentLeaderboardRow(student, bounds, homeworkAttempts),

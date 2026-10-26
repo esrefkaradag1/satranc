@@ -702,6 +702,55 @@ export async function fetchLichessUser(username: string): Promise<LichessUserPro
   return promise;
 }
 
+/**
+ * Resmi API: POST /api/users — en fazla 300 kullanıcı, tek istek.
+ * https://lichess.org/api#tag/Users/operation/apiUsers
+ */
+export async function fetchLichessUsers(usernames: string[]): Promise<Map<string, LichessUserProfile>> {
+  const out = new Map<string, LichessUserProfile>();
+  const missing: string[] = [];
+  const now = Date.now();
+  for (const raw of usernames) {
+    const trimmed = normalizeLichessUsername(raw);
+    if (!trimmed || isLichessUnknownUser(trimmed)) continue;
+    const key = trimmed.toLowerCase();
+    const cached = lichessUserCache.get(key);
+    if (cached && now - cached.fetchedAt < LICHESS_USER_CACHE_TTL_MS && cached.profile) {
+      out.set(key, cached.profile);
+      continue;
+    }
+    missing.push(trimmed);
+  }
+  if (missing.length === 0 || isLichessGloballyRateLimited()) return out;
+
+  try {
+    const res = await runLichessThrottled(() =>
+      fetchWithTimeout(`${LICHESS_DIRECT_API}/users`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'text/plain' },
+        body: missing.slice(0, 300).join(','),
+      }),
+    );
+    if (res.status === 429) {
+      markLichessRateLimited(res.headers.get('retry-after'));
+      return out;
+    }
+    if (!res.ok) return out;
+    const list = (await res.json()) as LichessUserProfile[];
+    if (!Array.isArray(list)) return out;
+    const fetchedAt = Date.now();
+    for (const profile of list) {
+      const key = String(profile.id || profile.username || '').trim().toLowerCase();
+      if (!key) continue;
+      lichessUserCache.set(key, { fetchedAt, profile });
+      out.set(key, profile);
+    }
+  } catch {
+    /* mevcut cache */
+  }
+  return out;
+}
+
 /** Profil yüklenemediğinde limit mi yoksa gerçekten bulunamadı mı ayırır. */
 export function lichessUserLikelyRateLimited(username: string): boolean {
   const key = normalizeLichessUsername(username).toLowerCase();
