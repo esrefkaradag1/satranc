@@ -8,6 +8,7 @@ import {
   fetchLichessActivity,
   fetchLichessUser,
   isChessPlatformBackendAvailable,
+  isLichessGloballyRateLimited,
   reconcileChessComMemberStats,
   type ChessComGame,
 } from './chessPlatformService';
@@ -232,10 +233,11 @@ async function studentPeriodStats(
   const lichessUsername = student.lichessUsername?.trim();
   const chessComUsername = student.chessComUsername?.trim();
 
+  const skipLichess = !lichessUsername || isLichessGloballyRateLimited();
   const [lichessActivityResult, chessComGames] = await Promise.all([
-    lichessUsername
-      ? fetchLichessActivity(lichessUsername).catch(() => [] as Awaited<ReturnType<typeof fetchLichessActivity>>)
-      : Promise.resolve([] as Awaited<ReturnType<typeof fetchLichessActivity>>),
+    skipLichess
+      ? Promise.resolve([] as Awaited<ReturnType<typeof fetchLichessActivity>>)
+      : fetchLichessActivity(lichessUsername).catch(() => [] as Awaited<ReturnType<typeof fetchLichessActivity>>),
     chessComUsername
       ? raceWithTimeout(
         fetchChessComGamesForPeriod(chessComUsername, bounds),
@@ -456,7 +458,7 @@ export async function buildClubLeaderboard(
 
   const rowsPromise = mapWithConcurrency(peers, LEADERBOARD_STUDENT_CONCURRENCY, async (student, index) => {
     const fallback = () => cachedStudentLeaderboardRow(student, bounds, homeworkAttempts);
-    const row = Date.now() > scanDeadline
+    const row = Date.now() > scanDeadline || isLichessGloballyRateLimited()
       ? fallback()
       : await raceWithTimeout(
         buildStudentLeaderboardRow(student, bounds, homeworkAttempts, rankMode),

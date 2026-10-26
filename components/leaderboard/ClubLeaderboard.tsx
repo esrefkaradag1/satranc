@@ -236,6 +236,19 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const loadGenerationRef = useRef(0);
   const inFlightRef = useRef(false);
   const lastUpdatedAtRef = useRef<number | null>(null);
+  const displayedKeyRef = useRef('');
+
+  const keepBestEntries = useCallback((next: LeaderboardEntry[], key = snapshotKeyRef.current) => {
+    const mode = rankModeRef.current;
+    const settings = pointSettingsRef.current;
+    const live = displayedKeyRef.current === key ? entriesRef.current : [];
+    const merged = live.length > 0
+      ? mergeLeaderboardEntryRows(live, next, mode, settings)
+      : next;
+    displayedKeyRef.current = key;
+    setEntries(merged);
+    return merged;
+  }, []);
 
   useEffect(() => { peersRef.current = peers; }, [peers]);
   useEffect(() => { homeworkAttemptsRef.current = homeworkAttempts; }, [homeworkAttempts]);
@@ -275,9 +288,9 @@ export const ClubLeaderboard: React.FC<Props> = ({
         const merged = preview.length
           ? mergeLeaderboardEntryRows(snapshot.entries, preview, mode, settings)
           : snapshot.entries;
-        setEntries(merged);
+        keepBestEntries(merged, key);
       } else {
-        setEntries(snapshot.entries);
+        keepBestEntries(snapshot.entries, key);
       }
       lastUpdatedAtRef.current = snapshot.cachedAt;
       setLastUpdatedAt(snapshot.cachedAt);
@@ -301,8 +314,8 @@ export const ClubLeaderboard: React.FC<Props> = ({
       settings,
     );
     if (preview.length > 0) {
-      setEntries(preview);
-    } else {
+      keepBestEntries(preview, key);
+    } else if (displayedKeyRef.current !== key) {
       setEntries([]);
     }
     return null;
@@ -342,11 +355,11 @@ export const ClubLeaderboard: React.FC<Props> = ({
       const mergedRemote = snapshot?.entries.length
         ? mergeLeaderboardEntryRows(snapshot.entries, remote.entries, mode, settings)
         : mergeLeaderboardEntryRows(entriesRef.current, remote.entries, mode, settings);
-      setEntries(mergedRemote);
+      const keptRemote = keepBestEntries(mergedRemote, key);
       lastUpdatedAtRef.current = remote.cachedAt;
       setLastUpdatedAt(remote.cachedAt);
-      writeLeaderboardSnapshot(key, mergedRemote, currentPeers.length);
-      snapshot = { entries: mergedRemote, cachedAt: remote.cachedAt, peerCount: remote.peerCount };
+      writeLeaderboardSnapshot(key, keptRemote, currentPeers.length);
+      snapshot = { entries: keptRemote, cachedAt: remote.cachedAt, peerCount: remote.peerCount };
     }
 
     const snapshotFresh = snapshot ? isLeaderboardSnapshotFresh(snapshot.cachedAt) : false;
@@ -414,7 +427,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
             mode,
             settings,
           );
-          setEntries(merged);
+          keepBestEntries(merged, key);
         },
         settings,
       );
@@ -425,24 +438,24 @@ export const ClubLeaderboard: React.FC<Props> = ({
         ? mergeLeaderboardEntryRows(baseline, result, mode, settings)
         : mergeLeaderboardEntryRows(entriesRef.current, result, mode, settings);
 
-      writeLeaderboardSnapshot(key, merged, currentPeers.length);
+      const kept = keepBestEntries(merged, key);
+      writeLeaderboardSnapshot(key, kept, currentPeers.length);
       void saveRemoteLeaderboardSnapshot({
         snapshotKey: key,
         clubScope: clubScopeRef.current,
         period: currentPeriod,
         rankMode: mode,
         periodStartMs: boundsNow.startMs,
-        entries: merged,
+        entries: kept,
         peerCount: currentPeers.length,
       });
-      setEntries(merged);
       lastUpdatedAtRef.current = Date.now();
       setLastUpdatedAt(lastUpdatedAtRef.current);
     } catch {
       if (generation !== loadGenerationRef.current) return;
       setError('Sıralama yüklenemedi. Lütfen tekrar deneyin.');
       if (snapshot?.entries.length) {
-        setEntries(snapshot.entries);
+        keepBestEntries(snapshot.entries, key);
         lastUpdatedAtRef.current = snapshot.cachedAt;
         setLastUpdatedAt(snapshot.cachedAt);
       }

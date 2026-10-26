@@ -138,15 +138,17 @@ function isLichessUnknownUser(username: string): boolean {
   return lichessUnknownUsers.has(username.trim().toLowerCase());
 }
 
-function emptyLichessResponse(apiPath: string): Response {
+function emptyLichessResponse(apiPath: string, opts?: { rateLimited?: boolean }): Response {
   const path = apiPath.replace(/^\/+/, '');
   const isGames = path.startsWith('games/');
+  const headers: Record<string, string> = {
+    'Content-Type': isGames ? 'application/x-ndjson' : 'application/json',
+  };
+  if (opts?.rateLimited) headers['X-Lichess-Rate-Limited'] = '1';
   return new Response(isGames ? '' : '[]', {
-    status: 200,
-    statusText: 'Lichess fallback',
-    headers: {
-      'Content-Type': isGames ? 'application/x-ndjson' : 'application/json',
-    },
+    status: opts?.rateLimited ? 429 : 200,
+    statusText: opts?.rateLimited ? 'Lichess rate limit' : 'Lichess fallback',
+    headers,
   });
 }
 
@@ -193,11 +195,14 @@ async function lichessApiFetch(
   if (unknownUser && isLichessUnknownUser(unknownUser)) {
     return emptyLichessResponse(apiPath);
   }
+  if (isLichessGloballyRateLimited()) {
+    return emptyLichessResponse(apiPath, { rateLimited: true });
+  }
   return runLichessThrottled(async () => {
     const tryDirect = async () => fetchWithTimeout(lichessDirectUrl(apiPath, query), init, FETCH_TIMEOUT_MS);
 
     if (isLichessGloballyRateLimited()) {
-      return emptyLichessResponse(apiPath);
+      return emptyLichessResponse(apiPath, { rateLimited: true });
     }
 
     // Tarayıcı: kullanıcı IP'sinden doğrudan Lichess (CORS açık). Proxy 404 olunca takılma.
@@ -314,9 +319,9 @@ export async function fetchChessComMonthGamesViaProxy(
 const LICHESS_ACTIVITY_CACHE_TTL_MS = 15 * 60 * 1000;
 const LICHESS_ACTIVITY_RATE_LIMIT_MS = 10 * 60 * 1000;
 const LICHESS_USER_CACHE_TTL_MS = 45 * 60 * 1000;
-/** Lichess public API — tarayıcı IP'sinden birkaç paralel istek güvenli */
-const LICHESS_MIN_REQUEST_GAP_MS = 250;
-const LICHESS_MAX_PARALLEL = 3;
+/** Tarayıcıdan Lichess: 429 olmasın diye tek sıra, geniş aralık */
+const LICHESS_MIN_REQUEST_GAP_MS = 1500;
+const LICHESS_MAX_PARALLEL = 1;
 const LICHESS_DEFAULT_BACKOFF_MS = 60_000;
 const LICHESS_MAX_BACKOFF_MS = 5 * 60_000;
 const CHESSCOM_API = CHESSCOM_DIRECT_API;
@@ -674,9 +679,7 @@ export async function fetchLichessUser(username: string): Promise<LichessUserPro
       const softlyRateLimited = res.headers.get('X-Lichess-Rate-Limited') === '1';
       if (res.status === 429 || softlyRateLimited) {
         markLichessRateLimited(res.headers.get('retry-after'));
-        const fallback = cached?.profile ?? null;
-        lichessUserCache.set(key, { fetchedAt: Date.now(), profile: fallback, rateLimited: true });
-        return fallback;
+        return cached?.profile ?? null;
       }
       if (res.status === 404) {
         lichessUserCache.set(key, { fetchedAt: Date.now(), profile: null });
@@ -1594,9 +1597,7 @@ export async function fetchLichessActivity(username: string): Promise<LichessAct
     if (now - cached.fetchedAt < ttl) return cached.data;
   }
   if (isLichessGloballyRateLimited()) {
-    const fallback = cached?.data ?? [];
-    lichessActivityCache.set(key, { fetchedAt: Date.now(), data: fallback, rateLimited: true });
-    return fallback;
+    return cached?.data ?? [];
   }
 
   const inflight = lichessActivityInFlight.get(key);
@@ -1613,12 +1614,17 @@ export async function fetchLichessActivity(username: string): Promise<LichessAct
       if (res.status === 429 || softlyRateLimited) {
         markLichessRateLimited(res.headers.get('retry-after'));
         const fallback = cached?.data ?? [];
-        lichessActivityCache.set(key, { fetchedAt: Date.now(), data: fallback, rateLimited: true });
+        if (cached) {
+          lichessActivityCache.set(key, { ...cached, rateLimited: true });
+        }
         return fallback;
       }
-      if (!res.ok) {
+      if (res.status === 404) {
         lichessActivityCache.set(key, { fetchedAt: Date.now(), data: [] });
         return [];
+      }
+      if (!res.ok) {
+        return cached?.data ?? [];
       }
       const data = await res.json();
       const activities = Array.isArray(data) ? (data as LichessActivity[]) : [];
