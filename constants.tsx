@@ -40,6 +40,7 @@ export const NAV_ITEMS: NavItem[] = [
     { id: 'groups', label: 'Branş & Grup' },
     { id: 'bulk-actions', label: 'Toplu İşlemler' },
     { id: 'applications', label: 'Başvurular' },
+    { id: 'demo-applications', label: 'Demo Başvuruları' },
   ]},
   { id: 'puzzles', label: 'Bulmaca Yönetimi', icon: <FileText className="w-5 h-5" /> },
   { id: 'homework', label: 'Ödev Yönetimi', icon: <CheckSquare className="w-5 h-5" /> },
@@ -76,6 +77,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
       { id: 'groups', label: 'Branş & Grup', icon: <Building2 className="w-5 h-5" />, iconColor: 'violet' },
       { id: 'bulk-actions', label: 'Toplu İşlemler', icon: <Grid className="w-5 h-5" />, iconColor: 'teal' },
       { id: 'applications', label: 'Başvurular', icon: <FileText className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'demo-applications', label: 'Demo Başvuruları', icon: <GraduationCap className="w-5 h-5" />, iconColor: 'amber' },
     ],
   },
   {

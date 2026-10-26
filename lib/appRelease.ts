@@ -20,6 +20,7 @@ export const APP_RELEASE: AppReleaseInfo = {
     'Veli WhatsApp hedefi: baba, anne veya her ikisi (öğrenci detayı)',
     'Yoklama bildirimi: Veli paneli seçiliyse WhatsApp gönderilmez',
     'Çalışma/ödev: bölüm tamamlandı yalnızca tüm öğrenci hamleleriyle; günlük program hedefleri kaydedilir',
+    'Demo talebi: ana siteden gelen başvurular yönetim panelinde; onaylanınca antrenör paneli açılır',
   ],
 };
 

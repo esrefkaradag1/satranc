@@ -425,6 +425,27 @@ CREATE INDEX IF NOT EXISTS idx_student_applications_status ON public.student_app
 CREATE INDEX IF NOT EXISTS idx_student_applications_created ON public.student_applications(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_student_applications_invite_token ON public.student_applications ((data->>'inviteToken'));
 
+CREATE TABLE IF NOT EXISTS public.demo_applications (
+  id text PRIMARY KEY,
+  application_no text NOT NULL,
+  status text NOT NULL DEFAULT 'pending',
+  club_name text,
+  contact_person text,
+  phone text,
+  data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.demo_applications DROP CONSTRAINT IF EXISTS demo_applications_status_check;
+ALTER TABLE public.demo_applications ADD CONSTRAINT demo_applications_status_check
+  CHECK (status IN ('pending', 'approved', 'rejected'));
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_applications_no ON public.demo_applications(application_no);
+CREATE INDEX IF NOT EXISTS idx_demo_applications_status ON public.demo_applications(status);
+CREATE INDEX IF NOT EXISTS idx_demo_applications_created ON public.demo_applications(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_demo_applications_phone ON public.demo_applications(phone);
+
 -- ── 10. AI RAPORLARI ────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.coach_ai_reports (
   id text PRIMARY KEY,
@@ -589,7 +610,7 @@ BEGIN
     'students','puzzles','homeworks','homework_attempts','homework_submissions',
     'live_lesson_state','attendance_records','schedule_entries','lessons','coaches',
     'transactions','gallery','inventory','activity_logs','performance_analyses',
-    'tournaments','clubs','student_applications','coach_ai_reports',
+    'tournaments','clubs','student_applications','demo_applications','coach_ai_reports',
     'chess_studies','chess_study_events','chess_study_actions',
     'chess_study_snapshots','chess_study_presence'
   ])
@@ -602,6 +623,10 @@ BEGIN
     );
   END LOOP;
 END $$;
+
+DROP POLICY IF EXISTS "Public insert pending demo_applications" ON public.demo_applications;
+CREATE POLICY "Public insert pending demo_applications" ON public.demo_applications
+  FOR INSERT WITH CHECK (status = 'pending');
 
 -- ── 14. STORAGE: öğrenci fotoğrafları ───────────────────────────────────────
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)

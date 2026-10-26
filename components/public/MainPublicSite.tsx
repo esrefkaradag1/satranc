@@ -33,6 +33,8 @@ import {
 import { publicLoginHref } from '../../lib/panelRouting';
 import { useApp } from '../../AppContext';
 import type { MainSiteContent } from '../../types';
+import { createDemoApplicationAsync } from '../../services/demoApplicationStorage';
+import { fetchClientIp } from '../../services/applicationStorage';
 import { useDashboard3DEnabled } from '../dashboard/useDashboard3D';
 import './mainPublicSite.css';
 
@@ -82,6 +84,9 @@ const MainPublicSite: React.FC<Props> = ({ previewContent, previewPage, onCloseP
     contactPerson: '',
     phone: '',
     submitted: false,
+    submitting: false,
+    error: '',
+    applicationNo: '',
   });
 
   useEffect(() => {
@@ -140,10 +145,40 @@ const MainPublicSite: React.FC<Props> = ({ previewContent, previewPage, onCloseP
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const handleDemoSubmit = (e: React.FormEvent) => {
+  const handleDemoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!demoForm.phone.trim()) return;
-    setDemoForm((prev) => ({ ...prev, submitted: true }));
+    if (demoForm.submitting) return;
+    const clubName = demoForm.clubName.trim();
+    const contactPerson = demoForm.contactPerson.trim();
+    const phone = demoForm.phone.trim();
+    if (!clubName || !contactPerson || !phone) {
+      setDemoForm((prev) => ({ ...prev, error: 'Lütfen tüm alanları doldurun.' }));
+      return;
+    }
+    setDemoForm((prev) => ({ ...prev, submitting: true, error: '' }));
+    try {
+      const clientIp = await fetchClientIp();
+      const app = await createDemoApplicationAsync({
+        clubName,
+        contactPerson,
+        phone,
+        clientIp,
+      });
+      setDemoForm((prev) => ({
+        ...prev,
+        submitted: true,
+        submitting: false,
+        applicationNo: app.applicationNo,
+        error: '',
+      }));
+    } catch (err) {
+      console.error('[Demo] submit failed:', err);
+      setDemoForm((prev) => ({
+        ...prev,
+        submitting: false,
+        error: 'Talep gönderilemedi. Lütfen tekrar deneyin.',
+      }));
+    }
   };
 
   return (
@@ -427,6 +462,9 @@ const MainPublicSite: React.FC<Props> = ({ previewContent, previewPage, onCloseP
                       <CheckCircle2 className="w-7 h-7 mx-auto mb-2 text-emerald-600" />
                       <h4>Talebiniz alındı</h4>
                       <p>Kısa süre içinde sizinle iletişime geçeceğiz.</p>
+                      {demoForm.applicationNo ? (
+                        <p className="mt-2 text-sm font-semibold">Başvuru no: {demoForm.applicationNo}</p>
+                      ) : null}
                     </div>
                   ) : (
                     <form onSubmit={handleDemoSubmit}>
@@ -437,8 +475,9 @@ const MainPublicSite: React.FC<Props> = ({ previewContent, previewPage, onCloseP
                           required
                           placeholder="Örn: Satranç Akademisi"
                           value={demoForm.clubName}
-                          onChange={(e) => setDemoForm({ ...demoForm, clubName: e.target.value })}
+                          onChange={(e) => setDemoForm({ ...demoForm, clubName: e.target.value, error: '' })}
                           className="ms-input"
+                          disabled={demoForm.submitting}
                         />
                       </div>
                       <div className="ms-input-group">
@@ -448,8 +487,9 @@ const MainPublicSite: React.FC<Props> = ({ previewContent, previewPage, onCloseP
                           required
                           placeholder="Ad Soyad"
                           value={demoForm.contactPerson}
-                          onChange={(e) => setDemoForm({ ...demoForm, contactPerson: e.target.value })}
+                          onChange={(e) => setDemoForm({ ...demoForm, contactPerson: e.target.value, error: '' })}
                           className="ms-input"
+                          disabled={demoForm.submitting}
                         />
                       </div>
                       <div className="ms-input-group">
@@ -459,12 +499,16 @@ const MainPublicSite: React.FC<Props> = ({ previewContent, previewPage, onCloseP
                           required
                           placeholder="05XX XXX XX XX"
                           value={demoForm.phone}
-                          onChange={(e) => setDemoForm({ ...demoForm, phone: e.target.value })}
+                          onChange={(e) => setDemoForm({ ...demoForm, phone: e.target.value, error: '' })}
                           className="ms-input"
+                          disabled={demoForm.submitting}
                         />
                       </div>
-                      <button type="submit" className="ms-btn ms-btn-primary w-full mt-2 py-3">
-                        <Send className="w-4 h-4" /> Demo iste
+                      {demoForm.error ? (
+                        <p className="text-sm text-rose-600 mb-2">{demoForm.error}</p>
+                      ) : null}
+                      <button type="submit" className="ms-btn ms-btn-primary w-full mt-2 py-3" disabled={demoForm.submitting}>
+                        <Send className="w-4 h-4" /> {demoForm.submitting ? 'Gönderiliyor...' : 'Demo iste'}
                       </button>
                     </form>
                   )}
@@ -886,9 +930,25 @@ function DemoPage({
   onSubmit,
 }: {
   site: MainSiteContent;
-  demoForm: { clubName: string; contactPerson: string; phone: string; submitted: boolean };
+  demoForm: {
+    clubName: string;
+    contactPerson: string;
+    phone: string;
+    submitted: boolean;
+    submitting: boolean;
+    error: string;
+    applicationNo: string;
+  };
   setDemoForm: React.Dispatch<
-    React.SetStateAction<{ clubName: string; contactPerson: string; phone: string; submitted: boolean }>
+    React.SetStateAction<{
+      clubName: string;
+      contactPerson: string;
+      phone: string;
+      submitted: boolean;
+      submitting: boolean;
+      error: string;
+      applicationNo: string;
+    }>
   >;
   onSubmit: (e: React.FormEvent) => void;
 }) {
@@ -923,6 +983,9 @@ function DemoPage({
                 <CheckCircle2 className="w-7 h-7 mx-auto mb-2 text-emerald-600" />
                 <h4>Talebiniz alındı</h4>
                 <p>Kısa süre içinde sizinle iletişime geçeceğiz.</p>
+                {demoForm.applicationNo ? (
+                  <p className="mt-2 text-sm font-semibold">Başvuru no: {demoForm.applicationNo}</p>
+                ) : null}
               </div>
             ) : (
               <form onSubmit={onSubmit}>
@@ -932,7 +995,8 @@ function DemoPage({
                     className="ms-input"
                     required
                     value={demoForm.clubName}
-                    onChange={(e) => setDemoForm({ ...demoForm, clubName: e.target.value })}
+                    onChange={(e) => setDemoForm({ ...demoForm, clubName: e.target.value, error: '' })}
+                    disabled={demoForm.submitting}
                   />
                 </div>
                 <div className="ms-input-group">
@@ -941,7 +1005,8 @@ function DemoPage({
                     className="ms-input"
                     required
                     value={demoForm.contactPerson}
-                    onChange={(e) => setDemoForm({ ...demoForm, contactPerson: e.target.value })}
+                    onChange={(e) => setDemoForm({ ...demoForm, contactPerson: e.target.value, error: '' })}
+                    disabled={demoForm.submitting}
                   />
                 </div>
                 <div className="ms-input-group">
@@ -950,11 +1015,15 @@ function DemoPage({
                     className="ms-input"
                     required
                     value={demoForm.phone}
-                    onChange={(e) => setDemoForm({ ...demoForm, phone: e.target.value })}
+                    onChange={(e) => setDemoForm({ ...demoForm, phone: e.target.value, error: '' })}
+                    disabled={demoForm.submitting}
                   />
                 </div>
-                <button type="submit" className="ms-btn ms-btn-primary w-full py-3">
-                  <Send className="w-4 h-4" /> Demo iste
+                {demoForm.error ? (
+                  <p className="text-sm text-rose-600 mb-2">{demoForm.error}</p>
+                ) : null}
+                <button type="submit" className="ms-btn ms-btn-primary w-full py-3" disabled={demoForm.submitting}>
+                  <Send className="w-4 h-4" /> {demoForm.submitting ? 'Gönderiliyor...' : 'Demo iste'}
                 </button>
               </form>
             )}

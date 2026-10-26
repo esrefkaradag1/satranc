@@ -557,6 +557,7 @@ const Dashboard: React.FC = () => {
             <div className="grid grid-cols-2 gap-2">
               <ActionButton icon={<Users className="w-4 h-4" />} label="Yeni Öğrenci" href="#/ogrenci-ekle" accent="indigo" />
               <ActionButton icon={<FileText className="w-4 h-4" />} label="Başvurular" href="#/basvurular" accent="violet" />
+              <ActionButton icon={<GraduationCap className="w-4 h-4" />} label="Demo Başvuruları" href="#/demo-basvurulari" accent="amber" />
               <ActionButton icon={<Calendar className="w-4 h-4" />} label="QR Yoklama" href="#/qr-yoklama" accent="sky" />
               <ActionButton icon={<ClipboardCheck className="w-4 h-4" />} label="Yoklama Al" href="#/yoklama-al" accent="emerald" />
               <ActionButton icon={<Box className="w-4 h-4" />} label="Envanter" href="#/depo-envanter" accent="amber" />

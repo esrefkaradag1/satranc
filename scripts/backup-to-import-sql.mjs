@@ -40,6 +40,7 @@ const DATA_TABLE_ORDER = [
   'coaches',
   'students',
   'student_applications',
+  'demo_applications',
   'puzzles',
   'homeworks',
   'homework_attempts',

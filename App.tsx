@@ -32,6 +32,7 @@ import ClubPanel from './components/ClubPanel';
 import ApplicationForm from './components/ApplicationForm';
 import ParentConsentForm from './components/ParentConsentForm';
 import ApplicationsAdmin from './components/ApplicationsAdmin';
+import DemoApplicationsAdmin from './components/admin/DemoApplicationsAdmin';
 import LeaderboardPage from './components/leaderboard/LeaderboardPage';
 import CoachProfilePage from './components/profile/CoachProfilePage';
 import AdminProfilePage from './components/profile/AdminProfilePage';
@@ -274,6 +275,8 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <BranchGroupManagement />;
       case 'applications':
         return <ApplicationsAdmin />;
+      case 'demo-applications':
+        return <DemoApplicationsAdmin />;
       case 'lessons':
         return <LiveLesson />;
       case 'puzzles':

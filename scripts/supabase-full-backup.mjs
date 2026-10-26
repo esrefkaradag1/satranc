@@ -53,6 +53,7 @@ const FALLBACK_TABLES = [
   'discipline_branches',
   'training_groups',
   'student_applications',
+  'demo_applications',
   'homeworks',
   'homework_attempts',
   'homework_submissions',

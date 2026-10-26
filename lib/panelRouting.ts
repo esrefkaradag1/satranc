@@ -12,6 +12,7 @@ export const TAB_TO_SLUG: Record<string, string> = {
   groups: 'brans-grup',
   'bulk-actions': 'toplu-islemler',
   applications: 'basvurular',
+  'demo-applications': 'demo-basvurulari',
   puzzles: 'bulmaca-yonetimi',
   study: 'bulmaca-yeni',
   tournaments: 'turnuvalar',

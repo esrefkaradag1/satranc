@@ -28,6 +28,7 @@ import { insertHomeworkAttemptSupabase, detectHomeworkAttemptPayloadStyle, setCa
 import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentAuth.ts';
 import { apiLocalAuthParentLogin } from './services/backendApi';
 import { findClubForLogin } from './lib/clubLoginUtils';
+import { buildClubDefaultOrgStructure, persistDefaultOrgStructure } from './lib/seedDefaultOrgStructure';
 import { createStudentLoginCredentials } from './lib/studentCredentials';
 import { sortLessonLogEntries } from './lib/lessonLogUtils';
 import {
@@ -169,9 +170,11 @@ interface AppContextType {
   addBranchOffice: (name: string, options?: { clubId?: string }) => void;
   removeBranchOffice: (name: string) => void;
   clubs: Club[];
-  addClub: (club: Omit<Club, 'id'>) => void;
+  addClub: (club: Omit<Club, 'id'>) => Club;
   updateClub: (id: string, club: Partial<Club>) => void;
   removeClub: (id: string) => void;
+  /** Yeni kulüp için varsayılan şube / branş / grup */
+  seedClubOrgStructure: (clubId: string, clubName: string, coachId?: string) => void;
   disciplines: string[];
   addDiscipline: (name: string) => void;
   removeDiscipline: (name: string) => void;
@@ -203,7 +206,7 @@ interface AppContextType {
   deleteScheduleEntry: (id: string) => void;
 
   coaches: Coach[];
-  addCoach: (coach: Omit<Coach, 'id'>) => void;
+  addCoach: (coach: Omit<Coach, 'id'>) => Promise<Coach>;
   updateCoach: (id: string, coach: Partial<Coach>) => void;
   deleteCoach: (id: string) => void;
 
@@ -3202,6 +3205,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const { error } = await sb.from('coaches').insert(coachToDb(newCoach));
       if (error) console.error('Supabase coaches insert error:', error);
     } catch (err) { console.error('Supabase coaches throw error:', err); }
+    return newCoach;
   }, [addActivityLog]);
   const updateCoach = useCallback(async (id: string, fields: Partial<Coach>) => {
     const patch = { ...fields };
@@ -4205,7 +4209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       loginPassword: club.loginPassword?.trim() || undefined,
       roleId: club.roleId,
     };
-    setClubs(prev => [...prev, full].sort((a, b) => a.name.localeCompare(b.name)));
+    setClubs(prev => [...prev, full].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
     addActivityLog({ user: CURRENT_USER, action: 'Kulüp Eklendi', target: full.name, type: 'info' });
     const sb = getServiceSupabase();
     if (sb) {
@@ -4213,6 +4217,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (error) console.error('Supabase clubs insert error:', error);
       }).then(undefined, (err) => console.error('Supabase clubs insert throw:', err));
     }
+    return full;
   }, [addActivityLog]);
   const updateClub = useCallback((id: string, patch: Partial<Club>) => {
     setClubs(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
@@ -4279,6 +4284,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const names = [...new Set(tGroups.map((g) => g.name.trim()).filter(Boolean))].sort();
     setGroups(names);
   }, []);
+
+  const seedClubOrgStructure = useCallback((clubId: string, clubName: string, coachId?: string) => {
+    const data = buildClubDefaultOrgStructure(clubName, clubId);
+    if (coachId) {
+      data.groups = data.groups.map((g) => ({ ...g, coachIds: [coachId] }));
+    }
+    setBranchOfficeRecords((prev) => {
+      const exists = prev.some(
+        (o) => o.clubId === clubId || normalizeClubKey(o.name) === normalizeClubKey(clubName),
+      );
+      return exists ? prev : [...prev, ...data.offices];
+    });
+    setDisciplineBranches((prev) => {
+      const next = [...prev];
+      for (const b of data.branches) {
+        if (next.some((x) => x.clubId === clubId && x.name === b.name)) continue;
+        next.push(b);
+      }
+      syncDisciplineNames(next);
+      return next;
+    });
+    setTrainingGroups((prev) => {
+      const next = [...prev];
+      for (const g of data.groups) {
+        if (next.some((x) => x.clubId === clubId && x.name === g.name && x.discipline === g.discipline)) continue;
+        next.push(g);
+      }
+      syncGroupNames(next);
+      return next;
+    });
+    const sb = getServiceSupabase();
+    if (sb) {
+      void persistDefaultOrgStructure(sb, data, clubId);
+    }
+  }, [syncDisciplineNames, syncGroupNames]);
 
   const addDisciplineBranch = useCallback((branch: Omit<DisciplineBranch, 'id'>) => {
     const name = branch.name.trim();
@@ -4723,7 +4763,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       inventory, addInventoryItem, updateInventoryItem, deleteInventoryItem,
       gallery, addGalleryItem, removeGalleryItem,
       branchOffices, branchOfficeRecords, addBranchOffice, removeBranchOffice,
-      clubs, addClub, updateClub, removeClub,
+      clubs, addClub, updateClub, removeClub, seedClubOrgStructure,
       disciplines, addDiscipline, removeDiscipline,
       groups, addGroup, removeGroup,
       disciplineBranches, addDisciplineBranch, updateDisciplineBranch, removeDisciplineBranch,
