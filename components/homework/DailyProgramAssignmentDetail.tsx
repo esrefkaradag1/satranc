@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Users, Percent, Trophy, Calendar, RefreshCw, ChevronDown, ChevronUp, Target,
-  ChevronLeft, ChevronRight, Swords, CheckCircle2, XCircle, CalendarPlus, Pencil,
+  ChevronLeft, ChevronRight, Swords, CheckCircle2, XCircle,   CalendarPlus, Pencil, Trash2,
 } from 'lucide-react';
 import type { HomeworkAssignment, Student, StudentDailyTarget } from '../../types';
 import type { PlatformStudentStat } from '../../lib/homeworkStatsBuilders';
@@ -43,6 +43,7 @@ type Props = {
   dayProgress?: Record<number, { games: number; gameTarget: number; puzzles: number; puzzleTarget: number; syncNote?: string | null }>;
   onExtend?: () => void;
   onEditScheduleMeta?: () => void;
+  onDelete?: () => void;
 };
 
 export const DailyProgramAssignmentDetail: React.FC<Props> = ({
@@ -69,6 +70,7 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
   dayProgress,
   onExtend,
   onEditScheduleMeta,
+  onDelete,
 }) => {
   const { auth } = useApp();
   const [showSchedule, setShowSchedule] = useState(false);
@@ -158,6 +160,16 @@ export const DailyProgramAssignmentDetail: React.FC<Props> = ({
           >
             <Pencil className="w-4 h-4" />
             Düzenle
+          </button>
+        ) : null}
+        {onDelete ? (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-sm font-bold transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            Programı Sil
           </button>
         ) : null}
       </div>

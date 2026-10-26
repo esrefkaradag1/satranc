@@ -296,10 +296,11 @@ const Homework: React.FC = () => {
 
   const handleDeleteHomework = useCallback(async (homeworkId: string) => {
     const hw = homeworks.find((h) => h.id === homeworkId);
-    const label = hw?.title?.trim() || 'Bu ödev';
+    const label = hw?.title?.trim() || 'Bu kayıt';
+    const isProgram = hw ? isDailyProgramAssignment(hw) : false;
     const ok = await confirmDialog({
-      title: 'Ödevi sil',
-      message: `"${label}" ödevi kalıcı olarak silinecek. Öğrenci panelinden de kalkar. Emin misiniz?`,
+      title: isProgram ? 'Programı sil' : 'Ödevi sil',
+      message: `"${label}" ${isProgram ? 'programı' : 'ödevi'} kalıcı olarak silinecek. Öğrenci panelinden de kalkar. Emin misiniz?`,
       confirmLabel: 'Sil',
       variant: 'danger',
     });
@@ -310,8 +311,13 @@ const Homework: React.FC = () => {
       setAnalysisView('list');
       setDetailStat(null);
     }
-    showToast('Ödev silindi.', 'success');
-  }, [homeworks, deleteHomework, selectedHwId, showToast, confirmDialog]);
+    if (programSelectedHwId === homeworkId) {
+      setProgramSelectedHwId(null);
+      setProgramAnalysisView('list');
+      setProgramDetailStat(null);
+    }
+    showToast(isProgram ? 'Program silindi.' : 'Ödev silindi.', 'success');
+  }, [homeworks, deleteHomework, selectedHwId, programSelectedHwId, showToast, confirmDialog]);
 
   /** Ödev Takibi sayfası açıldığında localStorage'dan güncel denemeleri ve teslimleri çek (öğrenci aynı/başka sekmede hamle yaptıysa admin görsün) */
   useEffect(() => {
@@ -2440,6 +2446,7 @@ const Homework: React.FC = () => {
                   onOpenDetail={openHomeworkDetail}
                   onExtend={openExtendHomework}
                   onEditSchedule={openEditHomeworkSchedule}
+                  onDelete={(hw) => void handleDeleteHomework(hw.id)}
                 />
               ) : selectedHw ? (
                 <HomeworkAssignmentDetail
@@ -2463,6 +2470,7 @@ const Homework: React.FC = () => {
                   onOpenDetail={openHomeworkDetail}
                   onExtend={openExtendHomework}
                   onEditSchedule={openEditHomeworkSchedule}
+                  onDelete={(hw) => void handleDeleteHomework(hw.id)}
                 />
               )}
             </>
@@ -2480,6 +2488,7 @@ const Homework: React.FC = () => {
                     onOpenDetail={openProgramDetail}
                     onExtend={openExtendHomework}
                     onEditSchedule={openEditHomeworkSchedule}
+                    onDelete={(hw) => void handleDeleteHomework(hw.id)}
                     hasPlatformActivityInRange={hasPlatformActivityInRange}
                     variant="platform"
                   />
@@ -2515,6 +2524,7 @@ const Homework: React.FC = () => {
                   dayProgress={programDayProgress}
                   onExtend={() => openExtendHomework(programSelectedHw)}
                   onEditScheduleMeta={() => openEditHomeworkSchedule(programSelectedHw)}
+                  onDelete={() => void handleDeleteHomework(programSelectedHw.id)}
                 />
               ) : (
                 <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-12 text-center">

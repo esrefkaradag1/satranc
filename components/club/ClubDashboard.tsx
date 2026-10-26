@@ -218,8 +218,11 @@ const ClubDashboard: React.FC<ClubDashboardProps> = ({
             <DashboardHeroScene />
             <div className="relative z-10 h-full flex flex-col justify-center pl-5 sm:pl-6 pr-[42%] sm:pr-[38%]">
               <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest capitalize">{todayLabel}</p>
-              <h1 className="text-lg sm:text-xl font-black text-white tracking-tight mt-0.5 leading-tight">
-                {branch} Kulüp Paneli
+              <h1 className="text-lg sm:text-xl font-black text-white tracking-tight mt-0.5 leading-tight flex items-center gap-2 min-w-0">
+                {club?.logoUrl ? (
+                  <img src={club.logoUrl} alt="" className="w-8 h-8 rounded-lg object-contain bg-slate-950/40 border border-white/10 shrink-0" />
+                ) : null}
+                <span className="truncate">{branch} Kulüp Paneli</span>
               </h1>
               <p className="text-xs sm:text-sm text-emerald-100/80 font-medium mt-1">
                 Şube özetiniz, finans ve operasyonlar tek ekranda

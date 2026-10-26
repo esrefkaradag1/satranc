@@ -14,6 +14,7 @@ import {
 import { useApp } from '../../AppContext';
 import type { AppRole, RolePanel } from '../../types';
 import {
+  defaultPermissionsForRole,
   groupedPermissionsForRoleEditor,
   permissionKeysForRoleEditor,
   sanitizePermissionsForRole,
@@ -113,6 +114,10 @@ const RoleManagement: React.FC = () => {
       color: PANEL_COLORS[newPanel],
       isSystem: false,
     });
+    void setRolePermissions(
+      role.id,
+      defaultPermissionsForRole(newPanel === 'parent' ? 'parent' : newPanel),
+    );
     setSelectedId(role.id);
     setShowCreate(false);
     setNewName('');

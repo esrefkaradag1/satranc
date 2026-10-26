@@ -407,6 +407,12 @@ CREATE TABLE IF NOT EXISTS public.clubs (
   login_password text
 );
 
+ALTER TABLE public.clubs ADD COLUMN IF NOT EXISTS logo_url text;
+ALTER TABLE public.clubs ADD COLUMN IF NOT EXISTS profile jsonb;
+ALTER TABLE public.clubs ADD COLUMN IF NOT EXISTS login_username text;
+ALTER TABLE public.clubs ADD COLUMN IF NOT EXISTS role_id text;
+ALTER TABLE public.clubs ADD COLUMN IF NOT EXISTS leaderboard_points jsonb;
+
 -- ── 9. VELİ İMZA / BAŞVURU ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.student_applications (
   id text PRIMARY KEY,
@@ -654,6 +660,39 @@ DROP POLICY IF EXISTS "Authenticated update student photos" ON storage.objects;
 CREATE POLICY "Authenticated update student photos" ON storage.objects
   FOR UPDATE USING (bucket_id = 'student-photos');
 
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES
+  (
+    'club-logos',
+    'club-logos',
+    true,
+    5242880,
+    ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+  ),
+  (
+    'coach-photos',
+    'coach-photos',
+    true,
+    5242880,
+    ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+  )
+ON CONFLICT (id) DO UPDATE SET
+  public = EXCLUDED.public,
+  file_size_limit = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+DROP POLICY IF EXISTS "Public read club logos" ON storage.objects;
+CREATE POLICY "Public read club logos" ON storage.objects
+  FOR SELECT USING (bucket_id IN ('club-logos', 'coach-photos'));
+
+DROP POLICY IF EXISTS "Authenticated upload club logos" ON storage.objects;
+CREATE POLICY "Authenticated upload club logos" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id IN ('club-logos', 'coach-photos'));
+
+DROP POLICY IF EXISTS "Authenticated update club logos" ON storage.objects;
+CREATE POLICY "Authenticated update club logos" ON storage.objects
+  FOR UPDATE USING (bucket_id IN ('club-logos', 'coach-photos'));
+
 -- ── 15. REALTIME (çalışma senkronu) ─────────────────────────────────────────
 DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.chess_studies;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -669,6 +708,36 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.chess_study_presence;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS public.leaderboard_snapshots (
+  snapshot_key     text PRIMARY KEY,
+  club_scope       text NOT NULL,
+  period           text NOT NULL,
+  rank_mode        text NOT NULL,
+  period_start_ms  bigint NOT NULL,
+  entries          jsonb NOT NULL DEFAULT '[]'::jsonb,
+  peer_count       integer NOT NULL DEFAULT 0,
+  cached_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS leaderboard_snapshots_lookup_idx
+  ON public.leaderboard_snapshots (club_scope, period, rank_mode, period_start_ms);
+
+ALTER TABLE public.leaderboard_snapshots ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS leaderboard_snapshots_select ON public.leaderboard_snapshots;
+CREATE POLICY leaderboard_snapshots_select
+  ON public.leaderboard_snapshots
+  FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS leaderboard_snapshots_write ON public.leaderboard_snapshots;
+CREATE POLICY leaderboard_snapshots_write
+  ON public.leaderboard_snapshots
+  FOR ALL
+  USING (true)
+  WITH CHECK (true);
 
 -- =============================================================================
 -- TAMAMLANDI

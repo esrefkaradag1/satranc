@@ -1,4 +1,5 @@
 import { normalizeClubKey } from './clubScope';
+import { displayablePhotoUrl } from './studentPhotoUpload';
 import type { Club, Student } from '../types';
 
 export type ClubDisplayInfo = {
@@ -34,7 +35,7 @@ export function clubDisplayForStudent(
   return {
     id: club?.id,
     name,
-    logoUrl: club?.logoUrl?.trim() || undefined,
+    logoUrl: displayablePhotoUrl(club?.logoUrl),
   };
 }
 

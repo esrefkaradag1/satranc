@@ -18,6 +18,9 @@ function BrandEmblem({ className = 'h-10 w-10' }: { className?: string }) {
       alt=""
       className={`object-contain shrink-0 ${className}`}
       draggable={false}
+      onError={(e) => {
+        e.currentTarget.style.visibility = 'hidden';
+      }}
     />
   );
 }

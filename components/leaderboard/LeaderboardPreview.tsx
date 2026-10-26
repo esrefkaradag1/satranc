@@ -1,9 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronRight, Loader2, Medal, Trophy } from 'lucide-react';
+import { ChevronRight, Medal, Trophy } from 'lucide-react';
 import type { HomeworkPuzzleAttempt, Student } from '../../types';
-import type { LeaderboardEntry, LeaderboardRankMode } from '../../lib/leaderboardUtils';
-import { clubDisplayName, getClubPeerStudents, leaderboardModeLabel } from '../../lib/leaderboardUtils';
-import { buildClubLeaderboard } from '../../services/leaderboardService';
+import type { LeaderboardEntry } from '../../lib/leaderboardUtils';
+import {
+  clubDisplayName,
+  getClubPeerStudents,
+  getPeriodBounds,
+  mergeLeaderboardEntryRows,
+} from '../../lib/leaderboardUtils';
+import { buildCachedClubLeaderboardPreview } from '../../services/leaderboardService';
+import {
+  entriesHaveActivity,
+  findBestLeaderboardSnapshot,
+} from '../../lib/leaderboardSnapshotCache';
+import { loadRemoteLeaderboardSnapshot } from '../../lib/leaderboardRemoteStore';
+import { normalizeClubKey } from '../../lib/clubScope';
 
 const PREVIEW_LIMIT = 5;
 
@@ -23,8 +34,6 @@ export const LeaderboardPreview: React.FC<Props> = ({
   onViewAll,
 }) => {
   const [entries, setEntries] = useState([] as LeaderboardEntry[]);
-  const [loading, setLoading] = useState(true);
-  const [previewMode] = useState<LeaderboardRankMode>('rapid');
 
   const peers = useMemo(
     () => getClubPeerStudents(allStudents, anchorStudent),
@@ -36,37 +45,53 @@ export const LeaderboardPreview: React.FC<Props> = ({
   const load = useCallback(async () => {
     if (peers.length === 0) {
       setEntries([]);
-      setLoading(false);
       return;
     }
-    setLoading(true);
-    try {
-      const result = await buildClubLeaderboard(peers, homeworkAttempts, 'week', previewMode, (_done, _total, partial) => {
-        if (partial?.length) setEntries(partial);
-      });
-      setEntries(result);
-    } catch {
-      setEntries([]);
-    } finally {
-      setLoading(false);
+    const bounds = getPeriodBounds('week');
+    const office = (anchorStudent.branchOffice || clubName || '').trim();
+    const clubScope = office ? `office:${normalizeClubKey(office)}` : 'club:default';
+    const snapshot = findBestLeaderboardSnapshot({
+      preferredKey: '',
+      period: 'week',
+      rankMode: 'activity',
+      periodStartMs: bounds.startMs,
+    });
+    const remote = await loadRemoteLeaderboardSnapshot({
+      preferredKey: '',
+      clubScope,
+      period: 'week',
+      rankMode: 'activity',
+      periodStartMs: bounds.startMs,
+    });
+    const preview = buildCachedClubLeaderboardPreview(
+      peers,
+      homeworkAttempts,
+      'week',
+      'activity',
+    );
+    let merged = snapshot?.entries.length ? snapshot.entries : [];
+    if (remote?.entries.length) {
+      merged = merged.length
+        ? mergeLeaderboardEntryRows(merged, remote.entries, 'activity')
+        : remote.entries;
     }
-  }, [peers, homeworkAttempts, previewMode]);
+    if (preview.length) {
+      merged = merged.length
+        ? mergeLeaderboardEntryRows(merged, preview, 'activity')
+        : preview;
+    }
+    setEntries(entriesHaveActivity(merged) ? merged : []);
+  }, [peers, homeworkAttempts, anchorStudent.branchOffice, clubName]);
 
   useEffect(() => {
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      if (!cancelled) void load();
-    }, 800);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
+    load();
   }, [load]);
 
   const top = entries.slice(0, PREVIEW_LIMIT);
-  const myEntry = entries.find((e) => e.studentId === highlightStudentId);
+  const hid = String(highlightStudentId);
+  const myEntry = entries.find((e) => String(e.studentId) === hid);
   const showMyRankBelow =
-    myEntry != null && !top.some((e) => e.studentId === highlightStudentId);
+    myEntry != null && !top.some((e) => String(e.studentId) === hid);
 
   const medalClass = (rank: number): string => {
     if (rank === 1) return 'text-amber-400';
@@ -84,7 +109,7 @@ export const LeaderboardPreview: React.FC<Props> = ({
             Haftalık Lider Tablosu
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            {clubName} · {leaderboardModeLabel(previewMode)} + aktivite
+            {clubName} · ilk 5 + senin sıran
           </p>
         </div>
         <button
@@ -97,12 +122,7 @@ export const LeaderboardPreview: React.FC<Props> = ({
         </button>
       </div>
 
-      {loading ? (
-        <div className="p-8 flex items-center justify-center gap-2 text-sm text-slate-500">
-          <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-          Sıralama hesaplanıyor…
-        </div>
-      ) : entries.length === 0 ? (
+      {entries.length === 0 ? (
         <p className="p-6 text-sm text-slate-500 text-center">Bu hafta henüz aktivite yok.</p>
       ) : (
         <div className="divide-y divide-white/[0.05]">
@@ -110,7 +130,7 @@ export const LeaderboardPreview: React.FC<Props> = ({
             <div
               key={e.studentId}
               className={`flex items-center gap-3 px-5 py-3 ${
-                e.studentId === highlightStudentId ? 'bg-indigo-600/10' : ''
+                String(e.studentId) === hid ? 'bg-indigo-600/10' : ''
               }`}
             >
               <span className={`w-6 text-center font-black text-sm ${e.rank <= 3 ? medalClass(e.rank) : 'text-slate-500'}`}>
@@ -122,20 +142,18 @@ export const LeaderboardPreview: React.FC<Props> = ({
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-white truncate">
                   {e.name}
-                  {e.studentId === highlightStudentId && (
+                  {String(e.studentId) === hid && (
                     <span className="ml-2 text-[9px] font-bold text-indigo-400 uppercase">Sen</span>
                   )}
                 </p>
                 <p className="text-[10px] text-slate-500">
-                  {e.platform.rapid?.rating ? `${leaderboardModeLabel('rapid')}: ${e.platform.rapid.rating}` : `${e.puzzles} bulmaca`}
+                  {e.puzzles} bulmaca
                   {' · '}
                   {e.games} maç
                 </p>
               </div>
               <span className="text-sm font-black text-white tabular-nums">
-                {previewMode === 'rapid' && e.platform.rapid?.rating
-                  ? e.platform.rapid.rating
-                  : e.rankMetric || e.score}
+                {e.rankMetric || e.score}
               </span>
             </div>
           ))}

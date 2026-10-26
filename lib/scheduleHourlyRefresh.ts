@@ -1,4 +1,4 @@
-import { msUntilNextLeaderboardDailyRefresh } from './leaderboardSnapshotCache';
+import { msUntilNextLeaderboardRefresh } from './leaderboardSnapshotCache';
 
 /** Bir sonraki tam saate (14:00, 15:00 …) kalan ms */
 export function msUntilNextHour(ref = new Date()): number {
@@ -23,14 +23,17 @@ export function scheduleHourlyRefresh(callback: () => void): () => void {
   };
 }
 
-/** Lider tablosu: günde bir (sabah) yenileme zamanlayıcısı */
-export function scheduleDailyLeaderboardRefresh(callback: () => void): () => void {
+/** Lider tablosu: son taramadan 2 saat sonra yenileme zamanlayıcısı */
+export function scheduleDailyLeaderboardRefresh(
+  callback: () => void,
+  getCachedAt: () => number | null = () => null,
+): () => void {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const schedule = () => {
     timeoutId = setTimeout(() => {
       callback();
       schedule();
-    }, msUntilNextLeaderboardDailyRefresh());
+    }, msUntilNextLeaderboardRefresh(getCachedAt()));
   };
   schedule();
   return () => {

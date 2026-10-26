@@ -126,8 +126,12 @@ const Dashboard: React.FC = () => {
                   <div className="flex items-start justify-between gap-2 mb-4">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center shrink-0">
-                          <Building2 className="w-4 h-4 text-indigo-400" />
+                        <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/25 overflow-hidden flex items-center justify-center shrink-0">
+                          {club.logoUrl ? (
+                            <img src={club.logoUrl} alt="" className="w-full h-full object-contain bg-slate-950" />
+                          ) : (
+                            <Building2 className="w-4 h-4 text-indigo-400" />
+                          )}
                         </div>
                         <h3 className="text-base font-bold text-white truncate">{club.name}</h3>
                       </div>

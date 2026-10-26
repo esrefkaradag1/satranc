@@ -31,8 +31,10 @@ import {
   isLeaderboardSnapshotFresh,
   leaderboardSnapshotKey,
   writeLeaderboardSnapshot,
-  LEADERBOARD_DAILY_REFRESH_HOUR,
+  entriesHaveActivity,
+  LEADERBOARD_REFRESH_INTERVAL_MS,
 } from '../../lib/leaderboardSnapshotCache';
+import { loadRemoteLeaderboardSnapshot, saveRemoteLeaderboardSnapshot } from '../../lib/leaderboardRemoteStore';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
 import { useApp } from '../../AppContext';
 import { normalizeClubKey } from '../../lib/clubScope';
@@ -225,16 +227,22 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const homeworkAttemptsRef = useRef(homeworkAttempts);
   const entriesRef = useRef(entries);
   const snapshotKeyRef = useRef(snapshotKey);
+  const clubScopeRef = useRef(clubScope);
   const pointSettingsRef = useRef(pointSettings);
   const periodRef = useRef(period);
   const rankModeRef = useRef(rankMode);
+  const canRefreshLeaderboard = auth?.role === 'admin' || auth?.role === 'club' || auth?.role === 'coach';
+  const canRefreshRef = useRef(canRefreshLeaderboard);
   const loadGenerationRef = useRef(0);
   const inFlightRef = useRef(false);
+  const lastUpdatedAtRef = useRef<number | null>(null);
 
   useEffect(() => { peersRef.current = peers; }, [peers]);
   useEffect(() => { homeworkAttemptsRef.current = homeworkAttempts; }, [homeworkAttempts]);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
   useEffect(() => { snapshotKeyRef.current = snapshotKey; }, [snapshotKey]);
+  useEffect(() => { clubScopeRef.current = clubScope; }, [clubScope]);
+  useEffect(() => { canRefreshRef.current = canRefreshLeaderboard; }, [canRefreshLeaderboard]);
   useEffect(() => { pointSettingsRef.current = pointSettings; }, [pointSettings]);
   useEffect(() => { periodRef.current = period; }, [period]);
   useEffect(() => { rankModeRef.current = rankMode; }, [rankMode]);
@@ -271,13 +279,17 @@ export const ClubLeaderboard: React.FC<Props> = ({
       } else {
         setEntries(snapshot.entries);
       }
+      lastUpdatedAtRef.current = snapshot.cachedAt;
       setLastUpdatedAt(snapshot.cachedAt);
       return snapshot;
     }
 
+    // Dönem/mod değişince önceki tablonun saatini taşıma (ör. haftalık 12:10 ≠ aylık).
+    lastUpdatedAtRef.current = null;
+    setLastUpdatedAt(null);
+
     if (currentPeers.length === 0) {
       setEntries([]);
-      setLastUpdatedAt(null);
       return null;
     }
 
@@ -289,10 +301,9 @@ export const ClubLeaderboard: React.FC<Props> = ({
       settings,
     );
     if (preview.length > 0) {
-      setEntries((prev) => {
-        if (prev.length === 0) return preview;
-        return mergeLeaderboardEntryRows(prev, preview, mode, settings);
-      });
+      setEntries(preview);
+    } else {
+      setEntries([]);
     }
     return null;
   }, []);
@@ -301,25 +312,61 @@ export const ClubLeaderboard: React.FC<Props> = ({
     const currentPeers = peersRef.current;
     if (currentPeers.length === 0) {
       setEntries([]);
+      lastUpdatedAtRef.current = null;
       setLastUpdatedAt(null);
       return;
     }
 
-    const snapshot = restoreCachedTable();
-    const snapshotFresh = snapshot ? isLeaderboardSnapshotFresh(snapshot.cachedAt) : false;
+    const localSnapshot = restoreCachedTable();
+    const key = snapshotKeyRef.current;
+    const mode = rankModeRef.current;
+    const settings = pointSettingsRef.current;
+    const currentPeriod = periodRef.current;
+    const boundsNow = getPeriodBounds(currentPeriod);
 
-    // Sabah 06:00 sonrası bugün hesaplandıysa API'ye gitme (manuel force hariç)
-    if (!force && snapshotFresh && snapshot?.entries.length) {
+    const remote = await loadRemoteLeaderboardSnapshot({
+      preferredKey: key,
+      clubScope: clubScopeRef.current,
+      period: currentPeriod,
+      rankMode: mode,
+      periodStartMs: boundsNow.startMs,
+    });
+
+    let snapshot = localSnapshot;
+    if (remote?.entries.length) {
+      const mergedRemote = snapshot?.entries.length
+        ? mergeLeaderboardEntryRows(snapshot.entries, remote.entries, mode, settings)
+        : mergeLeaderboardEntryRows(entriesRef.current, remote.entries, mode, settings);
+      setEntries(mergedRemote);
+      lastUpdatedAtRef.current = remote.cachedAt;
+      setLastUpdatedAt(remote.cachedAt);
+      writeLeaderboardSnapshot(key, mergedRemote, currentPeers.length);
+      snapshot = { entries: mergedRemote, cachedAt: remote.cachedAt, peerCount: remote.peerCount };
+    }
+
+    const snapshotFresh = snapshot ? isLeaderboardSnapshotFresh(snapshot.cachedAt) : false;
+    const snapshotHasScores = entriesHaveActivity(snapshot?.entries) || (snapshot?.entries.length ?? 0) > 0;
+    const allowScan = canRefreshRef.current;
+
+    // Öğrenci/veli taramaz; antrenörde 2 saat dolmadıysa da taramaz.
+    if (!force && snapshotFresh && snapshotHasScores) {
+      return;
+    }
+    if (
+      !force
+      && lastUpdatedAtRef.current
+      && isLeaderboardSnapshotFresh(lastUpdatedAtRef.current)
+      && entriesRef.current.length > 0
+    ) {
+      return;
+    }
+    if (!allowScan) {
       return;
     }
     if (inFlightRef.current && !force) {
       return;
     }
 
-    const key = snapshotKeyRef.current;
-    const mode = rankModeRef.current;
-    const settings = pointSettingsRef.current;
-    const currentPeriod = periodRef.current;
     const baseline = snapshot?.entries?.length
       ? snapshot.entries
       : entriesRef.current;
@@ -350,13 +397,24 @@ export const ClubLeaderboard: React.FC<Props> = ({
         : mergeLeaderboardEntryRows(entriesRef.current, result, mode, settings);
 
       writeLeaderboardSnapshot(key, merged, currentPeers.length);
+      void saveRemoteLeaderboardSnapshot({
+        snapshotKey: key,
+        clubScope: clubScopeRef.current,
+        period: currentPeriod,
+        rankMode: mode,
+        periodStartMs: boundsNow.startMs,
+        entries: merged,
+        peerCount: currentPeers.length,
+      });
       setEntries(merged);
-      setLastUpdatedAt(Date.now());
+      lastUpdatedAtRef.current = Date.now();
+      setLastUpdatedAt(lastUpdatedAtRef.current);
     } catch {
       if (generation !== loadGenerationRef.current) return;
       setError('Sıralama yüklenemedi. Lütfen tekrar deneyin.');
       if (snapshot?.entries.length) {
         setEntries(snapshot.entries);
+        lastUpdatedAtRef.current = snapshot.cachedAt;
         setLastUpdatedAt(snapshot.cachedAt);
       }
     } finally {
@@ -368,12 +426,16 @@ export const ClubLeaderboard: React.FC<Props> = ({
     }
   }, [restoreCachedTable]);
 
-  // Dönem / mod / kulüp değişince: önce cache göster, gerekirse sabah yenilemesi
+  // Dönem / mod / kulüp değişince: önce paylaşılan tablo, antrenörde 2 saatte bir tarama
   useEffect(() => {
     restoreCachedTable();
     void load(false);
-    return scheduleDailyLeaderboardRefresh(() => void load(true));
-  }, [snapshotKey, load, restoreCachedTable]);
+    if (!canRefreshLeaderboard) return undefined;
+    return scheduleDailyLeaderboardRefresh(
+      () => void load(true),
+      () => lastUpdatedAtRef.current,
+    );
+  }, [snapshotKey, load, restoreCachedTable, canRefreshLeaderboard]);
 
   // Öğrenci listesi sonradan dolunca (Supabase): cache skorlarını koruyarak yeni satırları ekle — API yok
   useEffect(() => {
@@ -404,8 +466,9 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const tableEntries = useMemo(() => {
     if (!compact) return entries.length > 3 ? entries.slice(3) : entries;
     const top5 = entries.slice(0, 5);
-    if (!highlightId || top5.some((e) => e.studentId === highlightId)) return top5;
-    const mine = entries.find((e) => e.studentId === highlightId);
+    const hid = highlightId != null ? String(highlightId) : '';
+    if (!hid || top5.some((e) => String(e.studentId) === hid)) return top5;
+    const mine = entries.find((e) => String(e.studentId) === hid);
     return mine ? [...top5, mine] : top5;
   }, [entries, compact, highlightId]);
 
@@ -460,15 +523,17 @@ export const ClubLeaderboard: React.FC<Props> = ({
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={() => void load(true)}
-              disabled={fetching}
-              className="p-2.5 rounded-xl bg-slate-800 border border-white/10 text-slate-400 hover:text-white disabled:opacity-50"
-              title={`Yenile (günde bir sabah ${String(LEADERBOARD_DAILY_REFRESH_HOUR).padStart(2, '0')}:00; mevcut puanlar korunur)`}
-            >
-              <RefreshCw className={`w-4 h-4 ${fetching ? 'animate-spin' : ''}`} />
-            </button>
+            {canRefreshLeaderboard ? (
+              <button
+                type="button"
+                onClick={() => void load(true)}
+                disabled={fetching}
+                className="p-2.5 rounded-xl bg-slate-800 border border-white/10 text-slate-400 hover:text-white disabled:opacity-50"
+                title={`Yenile (otomatik ${Math.round(LEADERBOARD_REFRESH_INTERVAL_MS / 3600000)} saatte bir; mevcut puanlar korunur)`}
+              >
+                <RefreshCw className={`w-4 h-4 ${fetching ? 'animate-spin' : ''}`} />
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -511,7 +576,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
         {!fetching && lastUpdatedAt ? (
           <p className="mt-3 text-[11px] text-slate-500">
             Son güncelleme: {formatLeaderboardSnapshotAge(lastUpdatedAt)}
-            {isLeaderboardSnapshotFresh(lastUpdatedAt) ? ' · Bugün hesaplandı' : ''}
+            {isLeaderboardSnapshotFresh(lastUpdatedAt) ? ' · Güncel' : ''}
           </p>
         ) : null}
         {error && <p className="mt-3 text-sm text-rose-400">{error}</p>}
@@ -553,13 +618,13 @@ export const ClubLeaderboard: React.FC<Props> = ({
         </div>
       )}
 
-      {top3.length > 0 && (
+      {top3.length > 0 && !compact && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {top3.map((e) => (
             <div
               key={e.studentId}
               className={`rounded-2xl border p-5 text-center transition-all ${
-                e.studentId === highlightId
+                String(e.studentId) === String(highlightId ?? '')
                   ? 'border-indigo-500/50 bg-indigo-500/10 ring-1 ring-indigo-500/30'
                   : 'border-white/5 bg-[#1e293b]'
               }`}
@@ -612,7 +677,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
                   <tr
                     key={e.studentId}
                     className={
-                      e.studentId === highlightId
+                      String(e.studentId) === String(highlightId ?? '')
                         ? 'bg-indigo-500/10'
                         : 'hover:bg-white/[0.02]'
                     }
@@ -631,7 +696,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
                           <p className="font-bold text-white">{e.name}</p>
                           <p className="text-[10px] text-slate-500">{e.group}</p>
                         </div>
-                        {e.studentId === highlightId && (
+                        {String(e.studentId) === String(highlightId ?? '') && (
                           <span className="ml-1 px-2 py-0.5 rounded-full bg-indigo-600/30 text-indigo-300 text-[9px] font-bold uppercase">
                             Sen
                           </span>
@@ -655,7 +720,9 @@ export const ClubLeaderboard: React.FC<Props> = ({
             </table>
           </ResponsiveTable>
           <p className="px-4 py-3 text-[10px] text-slate-500 border-t border-white/5">
-            Sistem ödevleri + Lichess + Chess.com. Sayfa açılışında son kayıtlı tablo gösterilir; API yalnızca sabah 06:00 sonrası bir kez yeniler ve yeni veriyi mevcut puanların üzerine ekler (sıfırlamaz).
+            {compact
+              ? 'İlk 5 öğrenci ve senin sıran gösterilir. Sıralama kulüp genelindeki son taramadan gelir; öğrenci/veli tarafında yeniden taranmaz.'
+              : `Sistem ödevleri + Lichess + Chess.com. Aynı tablo tüm panellerde paylaşılır; otomatik tarama ${Math.round(LEADERBOARD_REFRESH_INTERVAL_MS / 3600000)} saatte bir yapılır ve puanlar sıfırlanmaz.`}
           </p>
         </div>
       )}

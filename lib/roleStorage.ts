@@ -153,20 +153,45 @@ export async function persistRolePermissionsToSupabase(
   const sb = getRolesClient();
   if (!sb) return { ok: false, error: 'Supabase bağlantısı yok' };
 
-  const { error: delErr } = await sb.from('app_role_permissions').delete().eq('role_id', roleId);
-  if (delErr) {
-    console.error('[roles] perm delete failed:', delErr.message);
-    return { ok: false, error: delErr.message };
+  const unique = [...new Set(permKeys.map((k) => String(k).trim()).filter(Boolean))];
+
+  if (unique.length > 0) {
+    const rows = unique.map((perm_key) => ({ role_id: roleId, perm_key }));
+    const { error } = await sb.from('app_role_permissions').upsert(rows, {
+      onConflict: 'role_id,perm_key',
+      ignoreDuplicates: true,
+    });
+    if (error && !/duplicate key/i.test(error.message)) {
+      console.error('[roles] perm upsert failed:', error.message);
+      return { ok: false, error: error.message };
+    }
   }
 
-  if (permKeys.length === 0) return { ok: true };
-
-  const rows = permKeys.map((perm_key) => ({ role_id: roleId, perm_key }));
-  const { error } = await sb.from('app_role_permissions').insert(rows);
-  if (error) {
-    console.error('[roles] perm insert failed:', error.message);
-    return { ok: false, error: error.message };
+  const { data: existing, error: readErr } = await sb
+    .from('app_role_permissions')
+    .select('perm_key')
+    .eq('role_id', roleId);
+  if (readErr) {
+    console.error('[roles] perm read failed:', readErr.message);
+    return { ok: false, error: readErr.message };
   }
+
+  const wanted = new Set(unique);
+  const extras = (existing ?? [])
+    .map((row) => String((row as { perm_key: string }).perm_key))
+    .filter((key) => !wanted.has(key));
+  if (extras.length > 0) {
+    const { error: delErr } = await sb
+      .from('app_role_permissions')
+      .delete()
+      .eq('role_id', roleId)
+      .in('perm_key', extras);
+    if (delErr) {
+      console.error('[roles] perm extra delete failed:', delErr.message);
+      return { ok: false, error: delErr.message };
+    }
+  }
+
   return { ok: true };
 }
 

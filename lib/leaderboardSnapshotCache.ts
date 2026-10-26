@@ -3,8 +3,10 @@ import type { LeaderboardPointSettings } from './leaderboardPointSettings';
 
 const STORAGE_KEY = 'netchess_leaderboard_snapshot_v2';
 const LEGACY_STORAGE_KEY = 'netchess_leaderboard_snapshot_v1';
-/** Günlük otomatik yenileme saati (yerel saat). */
+/** Eski sabit (footer/metin uyumu). Yeni otomatik tarama 2 saatte bir. */
 export const LEADERBOARD_DAILY_REFRESH_HOUR = 6;
+/** Antrenör/admin tarayıcısında lider tablosu yenileme aralığı. */
+export const LEADERBOARD_REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000;
 
 type SnapshotRecord = {
   entries: LeaderboardEntry[];
@@ -25,7 +27,7 @@ function simpleHash(input: string): string {
   return Math.abs(h).toString(36);
 }
 
-function entriesHaveActivity(entries: LeaderboardEntry[] | undefined): boolean {
+export function entriesHaveActivity(entries: LeaderboardEntry[] | undefined): boolean {
   return !!entries?.some((e) => (e.puzzles ?? 0) > 0 || (e.games ?? 0) > 0 || (e.score ?? 0) > 0);
 }
 
@@ -103,13 +105,21 @@ export function lastLeaderboardRefreshCutoffMs(ref = new Date()): number {
 }
 
 export function isLeaderboardSnapshotFresh(cachedAt: number, ref = new Date()): boolean {
-  return cachedAt >= lastLeaderboardRefreshCutoffMs(ref);
+  const at = Number(cachedAt);
+  if (!Number.isFinite(at) || at <= 0) return false;
+  return ref.getTime() - at < LEADERBOARD_REFRESH_INTERVAL_MS;
 }
 
 export function msUntilNextLeaderboardDailyRefresh(ref = new Date()): number {
-  const next = new Date(lastLeaderboardRefreshCutoffMs(ref));
-  next.setDate(next.getDate() + 1);
-  return Math.max(60_000, next.getTime() - ref.getTime());
+  return msUntilNextLeaderboardRefresh(null, ref);
+}
+
+export function msUntilNextLeaderboardRefresh(cachedAt: number | null, ref = new Date()): number {
+  if (!cachedAt) return 5_000;
+  const due = Number(cachedAt) + LEADERBOARD_REFRESH_INTERVAL_MS;
+  const wait = due - ref.getTime();
+  if (wait <= 0) return 5_000;
+  return wait;
 }
 
 export function readLeaderboardSnapshot(key: string): SnapshotRecord | null {
@@ -117,6 +127,17 @@ export function readLeaderboardSnapshot(key: string): SnapshotRecord | null {
   const hit = readFile().snapshots[key];
   if (!hit || !Array.isArray(hit.entries)) return null;
   return hit;
+}
+
+function snapshotKeyParts(key: string): { periodStart: string; period: string; rankMode: string } | null {
+  const parts = key.split('|');
+  // club|periodStart|period|rankMode|settings|lg4  OR  legacy|periodStart|period|rankMode|settings
+  const startIdx = key.startsWith('legacy|') ? 1 : 1;
+  const periodStart = parts[startIdx];
+  const period = parts[startIdx + 1];
+  const rankMode = parts[startIdx + 2];
+  if (!periodStart || !period || !rankMode) return null;
+  return { periodStart, period, rankMode };
 }
 
 /** Aynı dönem+mod için en güncel snapshot (kulüp anahtarı farklı olsa bile). */
@@ -130,21 +151,18 @@ export function findBestLeaderboardSnapshot(opts: {
   if (preferred?.entries.length) return preferred;
 
   const file = readFile();
-  let best: SnapshotRecord | null = null;
+  let exact: SnapshotRecord | null = null;
+  let samePeriod: SnapshotRecord | null = null;
   for (const [key, value] of Object.entries(file.snapshots)) {
     if (!value?.entries?.length) continue;
-    const parts = key.split('|');
-    // club|periodStart|period|rankMode|settings  OR  legacy|periodStart|period|rankMode|settings
-    const startIdx = key.startsWith('legacy|') ? 1 : 1;
-    const periodStart = parts[startIdx];
-    const period = parts[startIdx + 1];
-    const rankMode = parts[startIdx + 2];
-    if (periodStart !== String(opts.periodStartMs) || period !== opts.period || rankMode !== opts.rankMode) {
-      continue;
-    }
-    if (!best || value.cachedAt > best.cachedAt) best = value;
+    const parts = snapshotKeyParts(key);
+    if (!parts) continue;
+    if (parts.period !== opts.period || parts.rankMode !== opts.rankMode) continue;
+    if (!samePeriod || value.cachedAt > samePeriod.cachedAt) samePeriod = value;
+    if (parts.periodStart !== String(opts.periodStartMs)) continue;
+    if (!exact || value.cachedAt > exact.cachedAt) exact = value;
   }
-  return best;
+  return exact ?? samePeriod;
 }
 
 /**

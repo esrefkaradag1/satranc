@@ -354,10 +354,11 @@ export function mergeLeaderboardEntryRows(
   pointSettings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
 ): LeaderboardEntry[] {
   const byId = new Map<string, LeaderboardEntryRow>();
-  for (const row of prev) byId.set(row.studentId, row);
+  for (const row of prev) byId.set(String(row.studentId), row);
   for (const row of next) {
-    const existing = byId.get(row.studentId);
-    byId.set(row.studentId, existing ? mergeLeaderboardEntryRow(existing, row) : row);
+    const id = String(row.studentId);
+    const existing = byId.get(id);
+    byId.set(id, existing ? mergeLeaderboardEntryRow(existing, row) : row);
   }
   return rankLeaderboardEntries([...byId.values()], rankMode, pointSettings);
 }

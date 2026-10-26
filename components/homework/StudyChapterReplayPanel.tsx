@@ -293,7 +293,10 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
                   return (
                     <tr
                       key={row.id}
-                      onClick={() => { setPlaying(false); setStepIndex(row.stepIndex); }}
+                      onClick={() => {
+                        setPlaying(false);
+                        setStepIndex(Math.max(0, Math.min(row.stepIndex, Math.max(0, steps.length - 1))));
+                      }}
                       className={`border-b border-white/5 last:border-b-0 cursor-pointer transition-colors ${
                         isActive ? 'bg-violet-500/20' : 'hover:bg-white/[0.04]'
                       }`}
@@ -326,19 +329,23 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
                         <span className={`inline-flex rounded-lg px-2 py-0.5 text-[10px] font-bold border ${
                           row.result === 'wrong'
                             ? 'border-rose-500/30 bg-rose-500/15 text-rose-300'
-                            : row.result === 'solution'
-                              ? 'border-sky-500/30 bg-sky-500/15 text-sky-300'
-                              : row.result === 'engine'
-                                ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-                                : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                            : row.result === 'hint'
+                              ? 'border-violet-500/30 bg-violet-500/15 text-violet-200'
+                              : row.result === 'solution'
+                                ? 'border-sky-500/30 bg-sky-500/15 text-sky-300'
+                                : row.result === 'engine'
+                                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                                  : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
                         }`}>
                           {row.result === 'wrong'
                             ? 'Yanlış'
-                            : row.result === 'solution'
-                              ? 'Çözüm'
-                              : row.result === 'engine'
-                                ? 'Hat'
-                                : 'Doğru'}
+                            : row.result === 'hint'
+                              ? 'İpucu'
+                              : row.result === 'solution'
+                                ? 'Çözüm'
+                                : row.result === 'engine'
+                                  ? 'Rakip'
+                                  : 'Doğru'}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-slate-300">

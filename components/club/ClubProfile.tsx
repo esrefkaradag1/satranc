@@ -106,7 +106,7 @@ const ClubProfile: React.FC<ClubProfileProps> = ({
       showToast('Logo yüklendi ve kaydedildi.', 'success');
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Logo yüklenemedi.';
-      showToast(msg.includes('bucket') ? 'Logo yüklenemedi. coach-photos bucket kontrol edin.' : msg, 'error');
+      showToast(msg, 'error');
     } finally {
       setLogoUploading(false);
     }

@@ -2,7 +2,7 @@ import React from 'react';
 import { availableNewPgnTagTypes, defaultChapterPgnTags, filterDisplayPgnTags, buildStudyBoardPgnDisplay } from '../../lib/studyPgnTags';
 import { Tag, MessageSquare, BarChart2, Share2, Info, Copy, Download, RefreshCw, Highlighter, Send, Heart } from 'lucide-react';
 import type { Study, StudyChapter, BottomTab } from '../../lib/studyTypes';
-import { isComputerMoveEvent, type StudyEvent } from '../../studyEvents';
+import { isComputerMoveEvent, isHintMoveEvent, type StudyEvent } from '../../studyEvents';
 import {
   buildOrphanChapterMap,
   eventMatchesChapter,
@@ -253,20 +253,24 @@ export const StudyBottomTools: React.FC<StudyBottomToolsProps> = ({
     } catch { return '--:--'; }
   }, []);
 
-  const getResultLabel = React.useCallback((result: string) => {
+  const getResultLabel = React.useCallback((result: string, event?: StudyEvent) => {
+    if (event && isHintMoveEvent(event)) return 'İpucu kullanıldı';
     switch (result) {
       case 'correct': return 'Doğru hamle';
-      case 'solution': return 'Çözüm gösterildi';
+      case 'solution': return 'Çözüm uygulandı';
       case 'wrong': return 'Yanlış / geçersiz hamle';
+      case 'hint': return 'İpucu kullanıldı';
       default: return result;
     }
   }, []);
 
-  const getResultClass = React.useCallback((result: string) => {
+  const getResultClass = React.useCallback((result: string, event?: StudyEvent) => {
+    if (event && isHintMoveEvent(event)) return 'text-violet-300';
     switch (result) {
       case 'correct': return 'text-emerald-400';
       case 'solution': return 'text-teal-400';
       case 'wrong': return 'text-rose-400';
+      case 'hint': return 'text-violet-300';
       default: return 'text-slate-400';
     }
   }, []);
@@ -566,10 +570,12 @@ export const StudyBottomTools: React.FC<StudyBottomToolsProps> = ({
                       const time = formatEventTime(event.createdAt);
                       const studentName = getStudentName(event.studentId);
                       const chapterNo = getChapterNumber(event.chapterId);
-                      const resultLabel = getResultLabel(event.result);
-                      const resultClass = getResultClass(event.result);
+                      const resultLabel = getResultLabel(event.result, event);
+                      const resultClass = getResultClass(event.result, event);
                       const thinkLabel = formatDuration(event.thinkMs ?? 0);
-                      const moveInfo = event.result === 'wrong'
+                      const moveInfo = isHintMoveEvent(event)
+                        ? event.playedMove ?? event.expectedMove ?? 'İpucu'
+                        : event.result === 'wrong'
                         ? `${event.playedMove ?? '—'} / beklenen: ${event.expectedMove ?? '—'}`
                         : event.result === 'solution'
                         ? event.expectedMove ?? event.playedMove ?? '—'

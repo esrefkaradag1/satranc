@@ -23,7 +23,7 @@ import {
   VS_COMPUTER_SEARCH_DEPTH,
 } from '../services/chessEngine';
 import { canWriteSupabase } from '../services/supabase';
-import { COMPUTER_MOVE_LABEL, logStudyEvent, loadStudyEvents } from '../studyEvents';
+import { COMPUTER_MOVE_LABEL, HINT_MOVE_LABEL, SOLUTION_APPLY_LABEL, logStudyEvent, loadStudyEvents } from '../studyEvents';
 import { appendStudyPracticeLogs } from '../studyPracticeLogs';
 import { studyEventsToMoveAnalysis, mergePracticeLogEntries } from '../lib/studyAnalysisEvents';
 import { useChessWheelNavigation } from '../hooks/useChessWheelNavigation';
@@ -163,6 +163,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoReplyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pieceDropRef = useRef<(args: { sourceSquare: string; targetSquare: string | null; piece?: any }) => boolean>(() => false);
+  const applyingSolutionRef = useRef(false);
   const [platformActivityLoading, setPlatformActivityLoading] = useState(false);
   const [platformActivityError, setPlatformActivityError] = useState<string | null>(null);
   const [platformActivitySummary, setPlatformActivitySummary] = useState<string | null>(null);
@@ -1519,6 +1520,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       setCircleMarks({ [highlightTo]: true });
       setMoveFrom(highlightFrom);
       setLaHint(hintText);
+      logStudyEvent({
+        studyId: selectedStudy?.id,
+        chapterId: effectiveChapter?.id ?? selectedChapter?.id,
+        studentId,
+        moveIndex: currentMoveIndex,
+        expectedMove: HINT_MOVE_LABEL,
+        playedMove: hintSan || hintText,
+        result: 'solution',
+        thinkMs: Math.max(0, Date.now() - lastActionMs),
+      });
     } catch {
       setLaHint('İpucu alınamadı.');
     } finally {
@@ -1526,6 +1537,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     }
   }, [
     effectiveChapter,
+    selectedChapter?.id,
+    selectedStudy?.id,
+    studentId,
+    lastActionMs,
     studyBoardFen,
     puzzlePlayFen,
     hideEngineForStudentPuzzle,
@@ -1571,10 +1586,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     setLaHint(`Çözüm uygulanıyor: ${squares.san}`);
 
     window.setTimeout(() => {
+      applyingSolutionRef.current = true;
       const ok = pieceDropRef.current({
         sourceSquare: squares.from,
         targetSquare: squares.to,
       });
+      applyingSolutionRef.current = false;
       if (!ok) {
         setMoveFrom(squares.from);
         setLaHint(
@@ -1846,13 +1863,22 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           const now = Date.now();
           const thinkMs = Math.max(0, now - lastActionMs);
           setLastActionMs(now);
+          let attemptedSan = `${sourceSquare}-${targetSquare}`;
+          try {
+            const attempted = makeBuilderGame(playFen).move({
+              from: sourceSquare as any,
+              to: targetSquare as any,
+              promotion: 'q',
+            });
+            if (attempted?.san) attemptedSan = attempted.san;
+          } catch { /* yasal olmayan deneme — kare çifti kalsın */ }
           setChapterMoveAnalysis((prev) => {
             const next = [
               ...prev,
               {
                 id: `${now}-${prev.length}`,
                 moveNo: Math.floor(currentMoveIndex / 2) + 1,
-                played: `${sourceSquare}-${targetSquare}`,
+                played: attemptedSan,
                 expected: expectedSan || 'variation',
                 isCorrect: false,
                 thinkMs,
@@ -1868,7 +1894,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
             studentId,
             moveIndex: currentMoveIndex,
             expectedMove: expectedSan || 'variation',
-            playedMove: `${sourceSquare}-${targetSquare}`,
+            playedMove: attemptedSan,
             result: 'wrong',
             thinkMs,
           });
@@ -1903,14 +1929,15 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
           return next;
         });
 
+        const appliedSolution = applyingSolutionRef.current;
         logStudyEvent({
           studyId: selectedStudy?.id,
           chapterId: effectiveChapter?.id ?? selectedChapter?.id,
           studentId,
           moveIndex: currentMoveIndex,
-          expectedMove: expectedSan || 'variation',
+          expectedMove: appliedSolution ? SOLUTION_APPLY_LABEL : (expectedSan || 'variation'),
           playedMove: playedSan,
-          result: nextIdx >= totalMoves ? 'solution' : 'correct',
+          result: appliedSolution || nextIdx >= totalMoves ? 'solution' : 'correct',
           thinkMs,
         });
 

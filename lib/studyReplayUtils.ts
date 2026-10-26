@@ -1,5 +1,11 @@
 import type { StudyChapter } from './studyTypes';
-import { isComputerMoveEvent, type StudyEvent } from '../studyEvents';
+import {
+  isComputerMoveEvent,
+  isHintMoveEvent,
+  isNonBoardStudyEvent,
+  isSolutionApplyEvent,
+  type StudyEvent,
+} from '../studyEvents';
 import { DEFAULT_FEN, makeBuilderGame } from './studyUtils';
 import { applyPuzzleMove, canReplayMovesFrom, normalizeStudyChapterPuzzle } from './puzzlePlayUtils';
 import { mainlineSansFromTree } from './studySync/moveList';
@@ -177,10 +183,15 @@ function moveLineAppliesCleanly(startFen: string, moves: string[]): boolean {
   return true;
 }
 
-/** Öğrencinin logladığı hamle kayıtları (presence / motor satırları hariç). */
+/** Öğrencinin logladığı hamle kayıtları (presence / motor / ipucu / oyun-bitti hariç). */
 export function orderedStudentMoveEvents(events: StudyEvent[]): StudyEvent[] {
   return dedupeStudyEvents(events)
-    .filter((e) => !e.id.startsWith('presence-') && !isComputerMoveEvent(e) && !!(e.playedMove ?? '').trim())
+    .filter((e) =>
+      !e.id.startsWith('presence-')
+      && !isComputerMoveEvent(e)
+      && !isNonBoardStudyEvent(e)
+      && !!(e.playedMove ?? '').trim()
+    )
     .sort((a, b) => {
       const ai = typeof a.moveIndex === 'number' ? a.moveIndex : 0;
       const bi = typeof b.moveIndex === 'number' ? b.moveIndex : 0;
@@ -198,6 +209,20 @@ function studentMoveMatchesEvent(playedMove: string, event: StudyEvent | undefin
   const logged = (event.playedMove ?? '').trim();
   if (!logged) return false;
   return normalizeReplaySan(logged) === normalizeReplaySan(playedMove);
+}
+
+/** SAN eşleşen bir sonraki öğrenci olayını al; eşleşmeyeni atla (eski parti artıkları kaydırmasın). */
+function takeMatchingStudentEvent(
+  events: StudyEvent[],
+  from: number,
+  move: string,
+): { event: StudyEvent | undefined; next: number } {
+  for (let i = from; i < events.length; i += 1) {
+    if (studentMoveMatchesEvent(move, events[i])) {
+      return { event: events[i], next: i + 1 };
+    }
+  }
+  return { event: undefined, next: from };
 }
 
 /** Presence kaynaklı vs-computer satırlarını bulmaca bölümlerinden ayıkla. */
@@ -534,7 +559,7 @@ export type ReplayTableRow = {
   isStudent: boolean;
   playedMove: string;
   expectedLabel: string;
-  result: 'correct' | 'wrong' | 'solution' | 'engine';
+  result: 'correct' | 'wrong' | 'solution' | 'engine' | 'hint';
   thinkMs: number;
   createdAt: string | null;
   /** Rakip hamlesi gerçek oyun kaydından değil, tahminle yeniden kuruldu. */
@@ -561,20 +586,20 @@ export function buildReplayTableRows(
       const isStudent = studentOrientation === 'white' ? isWhitePly : !isWhitePly;
       let thinkMs = 0;
       let createdAt: string | null = null;
+      // Yasal vs-computer geçmişindeki öğrenci hamlesi "yanlış" değildir;
+      // eski parti artıkları veya SAN kayması bütün satırları kirletmesin.
       let result: ReplayTableRow['result'] = isStudent ? 'correct' : 'engine';
+      let expectedLabel = isStudent ? 'Öğrenci' : 'Bilgisayar';
       if (isStudent) {
-        const ev = studentEvents[studentEventCursor];
-        if (ev) {
-          thinkMs = ev.thinkMs ?? 0;
-          createdAt = ev.createdAt ?? null;
-          if (ev.result === 'wrong') {
-            result = 'wrong';
-          } else if (!studentMoveMatchesEvent(move, ev)) {
-            result = 'wrong';
-          } else {
-            result = 'correct';
+        const matched = takeMatchingStudentEvent(studentEvents, studentEventCursor, move);
+        studentEventCursor = matched.next;
+        if (matched.event) {
+          thinkMs = matched.event.thinkMs ?? 0;
+          createdAt = matched.event.createdAt ?? null;
+          expectedLabel = matched.event.playedMove || expectedLabel;
+          if (matched.event.result === 'solution' || isSolutionApplyEvent(matched.event)) {
+            result = 'solution';
           }
-          studentEventCursor += 1;
         }
       }
       return {
@@ -585,7 +610,7 @@ export function buildReplayTableRows(
         side: isWhitePly ? 'white' : 'black',
         isStudent,
         playedMove: move,
-        expectedLabel: isStudent ? (studentEvents[studentEventCursor - 1]?.playedMove ?? 'Öğrenci') : 'Bilgisayar',
+        expectedLabel,
         result,
         thinkMs,
         createdAt,
@@ -598,47 +623,77 @@ export function buildReplayTableRows(
     const { startFen, moves, studentColor } = resolvePuzzlePlayedMoves(chapter, events);
     if (moves.length === 0) return [];
 
-    const studentEvents = puzzleStudentEvents(events).filter((e) => e.result !== 'wrong');
+    const allStudentEvents = puzzleStudentEvents(events);
+    const appliedEvents = allStudentEvents.filter(
+      (e) => e.result !== 'wrong' && !isHintMoveEvent(e),
+    );
     let studentEventCursor = 0;
     const game = makeBuilderGame(startFen || DEFAULT_FEN);
+    const rows: ReplayTableRow[] = [];
+    let extraSeq = 0;
 
-    return moves.map((move, plyIdx) => {
+    moves.forEach((move, plyIdx) => {
       const turnBefore = game.turn();
-      applyPuzzleMove(game, move);
-      // Öğrenci yalnızca kendi rengini bulur; karşı renk antrenör hattından bilgisayar oynar.
       const isStudent = turnBefore === studentColor;
       const isOpponentLine = turnBefore !== studentColor;
+      const side: ReplayTableRow['side'] = turnBefore === 'w' ? 'white' : 'black';
+      const moveNo = Math.floor(plyIdx / 2) + 1;
+
+      if (isStudent) {
+        const extras = allStudentEvents.filter((e) => {
+          if ((e.moveIndex ?? -1) !== plyIdx) return false;
+          return e.result === 'wrong' || isHintMoveEvent(e);
+        });
+        extras.forEach((ev) => {
+          extraSeq += 1;
+          rows.push({
+            id: `puzzle-extra-${extraSeq}-${ev.id}`,
+            plyIndex: plyIdx,
+            stepIndex: plyIdx,
+            moveNo,
+            side,
+            isStudent: true,
+            playedMove: ev.playedMove || '—',
+            expectedLabel: ev.expectedMove || 'Bulmaca',
+            result: isHintMoveEvent(ev) ? 'hint' : 'wrong',
+            thinkMs: ev.thinkMs ?? 0,
+            createdAt: ev.createdAt ?? null,
+          });
+        });
+      }
+
+      applyPuzzleMove(game, move);
       let thinkMs = 0;
       let createdAt: string | null = null;
       let result: ReplayTableRow['result'] = isOpponentLine ? 'engine' : 'correct';
       let expectedLabel = isOpponentLine ? 'Rakip' : 'Bulmaca';
-      if (isStudent && studentEventCursor < studentEvents.length) {
-        const ev = studentEvents[studentEventCursor];
+      if (isStudent && studentEventCursor < appliedEvents.length) {
+        const ev = appliedEvents[studentEventCursor];
         const logged = (ev?.playedMove ?? '').trim();
-        // Antrenör hattında olay sırası ply ile uyuşmuyorsa (eski bug: yalnızca siyah
-        // hamleleri loglanmış) yanlış satıra düşünme süresi yazma.
         if (!logged || studentMoveMatchesEvent(move, ev)) {
           thinkMs = ev?.thinkMs ?? 0;
           createdAt = ev?.createdAt ?? null;
           expectedLabel = ev?.expectedMove || expectedLabel;
-          if (ev?.result === 'solution') result = 'solution';
+          if (ev?.result === 'solution' || isSolutionApplyEvent(ev)) result = 'solution';
           studentEventCursor += 1;
         }
       }
-      return {
+      rows.push({
         id: `puzzle-full-${plyIdx}-${move}`,
         plyIndex: plyIdx,
         stepIndex: plyIdx + 1,
-        moveNo: Math.floor(plyIdx / 2) + 1,
-        side: turnBefore === 'w' ? 'white' as const : 'black' as const,
+        moveNo,
+        side,
         isStudent,
         playedMove: move,
         expectedLabel,
         result,
         thinkMs,
         createdAt,
-      };
+      });
     });
+
+    return rows;
   }
 
   return ordered.map((event, idx) => {
@@ -656,11 +711,13 @@ export function buildReplayTableRows(
       expectedLabel: event.expectedMove || 'Serbest',
       result: isComputer
         ? 'engine'
-        : event.result === 'wrong'
-          ? 'wrong'
-          : event.result === 'solution'
-            ? 'solution'
-            : 'correct',
+        : isHintMoveEvent(event)
+          ? 'hint'
+          : event.result === 'wrong'
+            ? 'wrong'
+            : event.result === 'solution' || isSolutionApplyEvent(event)
+              ? 'solution'
+              : 'correct',
       thinkMs: isComputer ? 0 : (event.thinkMs ?? 0),
       createdAt: isComputer ? null : (event.createdAt ?? null),
     };

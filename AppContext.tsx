@@ -1719,12 +1719,13 @@ function dbToClub(row: Record<string, unknown>): Club {
       leaderboardRaw && typeof leaderboardRaw === 'object'
         ? normalizeLeaderboardPointSettings(leaderboardRaw as Club['leaderboardPoints'])
         : undefined,
-    logoUrl:
+    logoUrl: resolvePublicStorageUrl(
       r.logo_url != null
         ? String(r.logo_url)
         : r.logoUrl != null
           ? String(r.logoUrl)
           : undefined,
+    ),
     profile:
       r.profile && typeof r.profile === 'object' && !Array.isArray(r.profile)
         ? (r.profile as Club['profile'])
@@ -2462,7 +2463,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setRolePermissionMap((prev) => ({ ...prev, [role.id]: defaultPerms }));
       if (useSupabase) {
         void persistRoleToSupabase(role);
-        void persistRolePermissionsToSupabase(role.id, defaultPerms);
       }
       return role;
     },

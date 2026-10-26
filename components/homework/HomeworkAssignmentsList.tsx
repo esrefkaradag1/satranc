@@ -1,5 +1,5 @@
 import React from 'react';
-import { Eye, List, Grid, Pencil, CalendarPlus } from 'lucide-react';
+import { Eye, List, Grid, Pencil, CalendarPlus, Trash2 } from 'lucide-react';
 import type { HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, Student } from '../../types';
 import {
   getHomeworkBranchLabel,
@@ -25,6 +25,7 @@ type Props = {
   onOpenDetail: (homeworkId: string) => void;
   onExtend?: (homework: HomeworkAssignment) => void;
   onEditSchedule?: (homework: HomeworkAssignment) => void;
+  onDelete?: (homework: HomeworkAssignment) => void;
   /** @deprecated Platform listesi için hasPlatformActivityInRange kullanın */
   isStudentActive?: (studentId: string) => boolean;
   hasPlatformActivityInRange?: (studentId: string, range: PlatformActivityRange) => boolean;
@@ -39,6 +40,7 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
   onOpenDetail,
   onExtend,
   onEditSchedule,
+  onDelete,
   isStudentActive,
   hasPlatformActivityInRange,
   variant = 'internal',
@@ -172,6 +174,16 @@ export const HomeworkAssignmentsList: React.FC<Props> = ({
                           title="Düzenle"
                         >
                           <Pencil className="w-4 h-4" />
+                        </button>
+                      ) : null}
+                      {onDelete ? (
+                        <button
+                          type="button"
+                          onClick={() => onDelete(hw)}
+                          className="inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-full bg-rose-600/90 hover:bg-rose-500 text-white shadow-lg shadow-rose-900/30 transition-colors"
+                          title="Sil"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       ) : null}
                       <button

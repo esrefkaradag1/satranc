@@ -25,6 +25,9 @@ const TABLE = 'chess_study_events';
  * hamleleri için true döner.
  */
 export const COMPUTER_MOVE_LABEL = 'Bilgisayar';
+export const HINT_MOVE_LABEL = 'İpucu';
+export const SOLUTION_APPLY_LABEL = 'Çözüm uygulandı';
+export const VS_COMPUTER_GAME_OVER_MOVE = 'Oyun bitti';
 
 export function isComputerMoveEvent(
   event: Pick<StudyEvent, 'expectedMove'> | null | undefined,
@@ -33,6 +36,35 @@ export function isComputerMoveEvent(
   return expected === COMPUTER_MOVE_LABEL.toLowerCase()
     || expected === 'engine'
     || expected === 'computer';
+}
+
+export function isHintMoveEvent(
+  event: Pick<StudyEvent, 'expectedMove'> | null | undefined,
+): boolean {
+  const expected = String(event?.expectedMove ?? '').trim().toLowerCase();
+  return expected === HINT_MOVE_LABEL.toLowerCase() || expected === 'hint';
+}
+
+export function isSolutionApplyEvent(
+  event: Pick<StudyEvent, 'expectedMove' | 'result'> | null | undefined,
+): boolean {
+  const expected = String(event?.expectedMove ?? '').trim().toLowerCase();
+  return expected === SOLUTION_APPLY_LABEL.toLowerCase()
+    || expected === 'çözüm'
+    || expected === 'cozum';
+}
+
+export function isVsComputerTerminalEvent(
+  event: Pick<StudyEvent, 'playedMove'> | null | undefined,
+): boolean {
+  return String(event?.playedMove ?? '').trim().toLowerCase() === VS_COMPUTER_GAME_OVER_MOVE.toLowerCase();
+}
+
+/** Tahtada bir ply üretmeyen kayıtlar (ipucu, oyun bitti vb.). */
+export function isNonBoardStudyEvent(
+  event: Pick<StudyEvent, 'expectedMove' | 'playedMove'> | null | undefined,
+): boolean {
+  return isHintMoveEvent(event) || isVsComputerTerminalEvent(event);
 }
 
 async function postStudyEventViaApi(args: {

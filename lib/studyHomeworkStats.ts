@@ -1,6 +1,6 @@
 import type { Student } from '../types';
 import type { Study, StudyChapter } from './studyTypes';
-import { isComputerMoveEvent, type StudyEvent } from '../studyEvents';
+import { isComputerMoveEvent, isHintMoveEvent, isVsComputerTerminalEvent, type StudyEvent } from '../studyEvents';
 import { mergeStudyAnalysisEvents, type MoveAnalysisLogEntry } from './studyAnalysisEvents';
 import { studentInitials } from './homeworkPanelUtils';
 import { countStudentSolutionPlies } from './puzzlePlayUtils';
@@ -62,7 +62,7 @@ function chapterCompleted(
 
   const type = chapter.interactiveType ?? 'puzzle';
   if (type === 'puzzle') {
-    if (chapterEvents.some((e) => e.result === 'solution')) return true;
+    if (chapterEvents.some((e) => e.result === 'solution' && !isHintMoveEvent(e))) return true;
     const studentColor = chapter.orientation === 'black' ? 'b' : 'w';
     const studentPlies = countStudentSolutionPlies(
       chapter.fen?.trim() || START_FEN,
@@ -70,7 +70,9 @@ function chapterCompleted(
       studentColor,
     );
     if (studentPlies <= 0) return false;
-    const eventCorrect = chapterEvents.filter((e) => e.result === 'correct' || e.result === 'solution').length;
+    const eventCorrect = chapterEvents.filter((e) =>
+      !isHintMoveEvent(e) && (e.result === 'correct' || e.result === 'solution')
+    ).length;
     const logCorrect = chapterLogs.filter((e) => e.isCorrect).length;
     return Math.max(eventCorrect, logCorrect) >= studentPlies;
   }
@@ -79,7 +81,11 @@ function chapterCompleted(
   }
   if (type === 'vsComputer') {
     if (chapterEvents.some((e) => e.result === 'solution')) return true;
-    const vcMoves = chapterEvents.filter((e) => e.result === 'correct' || e.result === 'solution').length;
+    const vcMoves = chapterEvents.filter((e) =>
+      !isHintMoveEvent(e)
+      && !isVsComputerTerminalEvent(e)
+      && (e.result === 'correct' || e.result === 'solution')
+    ).length;
     return vcMoves >= 8;
   }
   return false;
@@ -108,6 +114,10 @@ export function buildStudyStudentStats(
     let lastActivityAt = '';
 
     for (const e of studentEvents) {
+      if (isHintMoveEvent(e) || isVsComputerTerminalEvent(e)) {
+        if (e.createdAt && e.createdAt > lastActivityAt) lastActivityAt = e.createdAt;
+        continue;
+      }
       if (e.result === 'wrong') wrongMoves += 1;
       else correctMoves += 1;
       thinkMs += e.thinkMs ?? 0;
