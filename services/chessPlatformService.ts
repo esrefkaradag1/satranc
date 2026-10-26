@@ -34,8 +34,8 @@ export { parseChessComTactics2Puzzles };
 
 const LICHESS_DIRECT_API = 'https://lichess.org/api';
 const CHESSCOM_DIRECT_API = 'https://api.chess.com/pub';
-const FETCH_TIMEOUT_MS = 8000;
-const CHESSCOM_FETCH_TIMEOUT_MS = 8000;
+const FETCH_TIMEOUT_MS = 5000;
+const CHESSCOM_FETCH_TIMEOUT_MS = 5000;
 const LICHESS_USERNAME_RE = /^[A-Za-z0-9_-]{1,30}$/;
 const CHESSCOM_USERNAME_RE = /^[a-z0-9_-]{1,25}$/i;
 
@@ -120,6 +120,24 @@ async function fetchSameOriginApi(
   }
 }
 
+const lichessUnknownUsers = new Set<string>();
+
+function lichessUsernameFromApiPath(apiPath: string): string {
+  const path = apiPath.replace(/^\/+/, '');
+  const match = path.match(/^(?:games\/)?user\/([^/?#]+)/i);
+  return match?.[1] ? decodeURIComponent(match[1]).trim().toLowerCase() : '';
+}
+
+function rememberLichessUnknownUser(apiPath: string, status: number) {
+  if (status !== 404) return;
+  const username = lichessUsernameFromApiPath(apiPath);
+  if (username) lichessUnknownUsers.add(username);
+}
+
+function isLichessUnknownUser(username: string): boolean {
+  return lichessUnknownUsers.has(username.trim().toLowerCase());
+}
+
 function emptyLichessResponse(apiPath: string): Response {
   const path = apiPath.replace(/^\/+/, '');
   const isGames = path.startsWith('games/');
@@ -171,8 +189,12 @@ async function lichessApiFetch(
   params?: URLSearchParams,
 ): Promise<Response> {
   const query = params ? new URLSearchParams(params) : new URLSearchParams();
+  const unknownUser = lichessUsernameFromApiPath(apiPath);
+  if (unknownUser && isLichessUnknownUser(unknownUser)) {
+    return emptyLichessResponse(apiPath);
+  }
   return runLichessThrottled(async () => {
-    const tryDirect = async () => fetchWithTimeout(lichessDirectUrl(apiPath, query), init);
+    const tryDirect = async () => fetchWithTimeout(lichessDirectUrl(apiPath, query), init, FETCH_TIMEOUT_MS);
 
     if (isLichessGloballyRateLimited()) {
       return emptyLichessResponse(apiPath);
@@ -182,6 +204,7 @@ async function lichessApiFetch(
     if (typeof window !== 'undefined') {
       try {
         const directRes = await tryDirect();
+        rememberLichessUnknownUser(apiPath, directRes.status);
         if (directRes.ok || directRes.status === 404) return directRes;
         if (directRes.status === 429) {
           markLichessRateLimited(directRes.headers.get('retry-after'));
@@ -291,13 +314,15 @@ export async function fetchChessComMonthGamesViaProxy(
 const LICHESS_ACTIVITY_CACHE_TTL_MS = 15 * 60 * 1000;
 const LICHESS_ACTIVITY_RATE_LIMIT_MS = 10 * 60 * 1000;
 const LICHESS_USER_CACHE_TTL_MS = 45 * 60 * 1000;
-/** Lichess public API — ardışık istekler arası minimum süre (429 önleme) */
-const LICHESS_MIN_REQUEST_GAP_MS = 1000;
+/** Lichess public API — tarayıcı IP'sinden birkaç paralel istek güvenli */
+const LICHESS_MIN_REQUEST_GAP_MS = 250;
+const LICHESS_MAX_PARALLEL = 3;
 const LICHESS_DEFAULT_BACKOFF_MS = 60_000;
 const LICHESS_MAX_BACKOFF_MS = 5 * 60_000;
 const CHESSCOM_API = CHESSCOM_DIRECT_API;
 
-let lichessRequestChain: Promise<unknown> = Promise.resolve();
+let lichessActive = 0;
+const lichessWaitQueue: Array<() => void> = [];
 let lichessLastRequestDoneAt = 0;
 let lichessGlobalBackoffUntil = 0;
 
@@ -320,20 +345,24 @@ function parseRetryAfterMs(headerValue: string | null): number | null {
   return null;
 }
 
-/** Tüm Lichess proxy isteklerini sıraya alır; Lichess rate limit (429) riskini azaltır. */
+/** Tarayıcıdan sınırlı paralel Lichess isteği; 404/timeout kuyruğu kilitlemesin. */
 async function runLichessThrottled<T>(fn: () => Promise<T>): Promise<T> {
-  const task = async () => {
-    const gapWait = lichessLastRequestDoneAt + LICHESS_MIN_REQUEST_GAP_MS - Date.now();
-    if (gapWait > 0) await sleep(gapWait);
-    try {
-      return await fn();
-    } finally {
-      lichessLastRequestDoneAt = Date.now();
-    }
-  };
-  const next = lichessRequestChain.then(task, task);
-  lichessRequestChain = next.catch(() => {});
-  return next;
+  if (lichessActive >= LICHESS_MAX_PARALLEL) {
+    await new Promise<void>((resolve) => {
+      lichessWaitQueue.push(resolve);
+    });
+  }
+  lichessActive += 1;
+  const gapWait = lichessLastRequestDoneAt + LICHESS_MIN_REQUEST_GAP_MS - Date.now();
+  if (gapWait > 0) await sleep(gapWait);
+  try {
+    return await fn();
+  } finally {
+    lichessLastRequestDoneAt = Date.now();
+    lichessActive -= 1;
+    const next = lichessWaitQueue.shift();
+    if (next) next();
+  }
 }
 
 function markLichessRateLimited(retryAfterHeader?: string | null): void {
@@ -623,6 +652,7 @@ export async function fetchChessComGamesPage(
 export async function fetchLichessUser(username: string): Promise<LichessUserProfile | null> {
   const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return null;
+  if (isLichessUnknownUser(trimmed)) return null;
   const key = trimmed.toLowerCase();
   const now = Date.now();
   const cached = lichessUserCache.get(key);
@@ -874,6 +904,7 @@ export async function fetchLichessGamesForRange(
 ): Promise<LichessGame[]> {
   const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return [];
+  if (isLichessUnknownUser(trimmed)) return [];
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return [];
   if (isLichessGloballyRateLimited()) return [];
   const all: LichessGame[] = [];
@@ -1554,6 +1585,7 @@ export function lichessPerfLabel(key: string): string {
 export async function fetchLichessActivity(username: string): Promise<LichessActivity[]> {
   const trimmed = normalizeLichessUsername(username);
   if (!trimmed) return [];
+  if (isLichessUnknownUser(trimmed)) return [];
   const key = lichessActivityCacheKey(trimmed);
   const now = Date.now();
   const cached = lichessActivityCache.get(key);

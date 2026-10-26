@@ -324,13 +324,18 @@ export const ClubLeaderboard: React.FC<Props> = ({
     const currentPeriod = periodRef.current;
     const boundsNow = getPeriodBounds(currentPeriod);
 
-    const remote = await loadRemoteLeaderboardSnapshot({
-      preferredKey: key,
-      clubScope: clubScopeRef.current,
-      period: currentPeriod,
-      rankMode: mode,
-      periodStartMs: boundsNow.startMs,
-    });
+    const remote = await Promise.race([
+      loadRemoteLeaderboardSnapshot({
+        preferredKey: key,
+        clubScope: clubScopeRef.current,
+        period: currentPeriod,
+        rankMode: mode,
+        periodStartMs: boundsNow.startMs,
+      }),
+      new Promise<null>((resolve) => {
+        window.setTimeout(() => resolve(null), 4000);
+      }),
+    ]);
 
     let snapshot = localSnapshot;
     if (remote?.entries.length) {
@@ -386,6 +391,13 @@ export const ClubLeaderboard: React.FC<Props> = ({
     setFetching(true);
     setError('');
     setProgress({ done: 0, total: currentPeers.length });
+    const watchdog = window.setTimeout(() => {
+      if (generation !== loadGenerationRef.current) return;
+      loadGenerationRef.current += 1;
+      inFlightRef.current = false;
+      setFetching(false);
+      setProgress({ done: 0, total: 0 });
+    }, 20_000);
     try {
       const result = await buildClubLeaderboard(
         currentPeers,
@@ -435,6 +447,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
         setLastUpdatedAt(snapshot.cachedAt);
       }
     } finally {
+      window.clearTimeout(watchdog);
       if (generation === loadGenerationRef.current) {
         inFlightRef.current = false;
         setFetching(false);

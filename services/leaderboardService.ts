@@ -4,10 +4,8 @@ import {
   fetchChessComMemberStats,
   fetchChessComMonthGamesViaProxy,
   fetchChessComPlayer,
-  fetchChessComPuzzlesBundle,
   fetchChessComStats,
   fetchLichessActivity,
-  fetchLichessGamesForRange,
   fetchLichessUser,
   isChessPlatformBackendAvailable,
   reconcileChessComMemberStats,
@@ -41,7 +39,6 @@ import {
   normalizeScoringMode,
   sumGameResultsByMode,
 } from '../lib/leaderboardPointSettings';
-import { gameResultsFromLichessGames } from '../lib/lichessGameResults';
 import {
   readCachedStudentPeriodStats,
   writeCachedStudentPeriodStats,
@@ -49,9 +46,9 @@ import {
 } from '../lib/leaderboardPeriodCache';
 
 const PLATFORM_SNAPSHOT_CACHE_TTL_MS = 60 * 60 * 1000;
-const LEADERBOARD_STUDENT_CONCURRENCY = 3;
-const STUDENT_ROW_TIMEOUT_MS = 16_000;
-const SCAN_BUDGET_MS = 45_000;
+const LEADERBOARD_STUDENT_CONCURRENCY = 4;
+const STUDENT_ROW_TIMEOUT_MS = 8_000;
+const SCAN_BUDGET_MS = 18_000;
 const CHESSCOM_USERNAME_RE = /^[a-z0-9_-]{1,25}$/i;
 
 const platformSnapshotCache = new Map<string, { at: number; snapshot: LeaderboardPlatformSnapshot }>();
@@ -235,28 +232,20 @@ async function studentPeriodStats(
   const lichessUsername = student.lichessUsername?.trim();
   const chessComUsername = student.chessComUsername?.trim();
 
-  const [lichessActivityResult, lichessPeriodGames, chessComBundle, chessComGames] = await Promise.all([
+  const [lichessActivityResult, chessComGames] = await Promise.all([
     lichessUsername
       ? fetchLichessActivity(lichessUsername).catch(() => [] as Awaited<ReturnType<typeof fetchLichessActivity>>)
       : Promise.resolve([] as Awaited<ReturnType<typeof fetchLichessActivity>>),
-    lichessUsername
-      ? fetchLichessGamesForRange(lichessUsername, bounds.startMs, bounds.endMs, 120).catch(() => [])
-      : Promise.resolve([]),
-    chessComUsername && isChessPlatformBackendAvailable()
-      ? fetchChessComPuzzlesBundle(chessComUsername).catch(() => null)
-      : Promise.resolve(null),
     chessComUsername
-      ? fetchChessComGamesForPeriod(chessComUsername, bounds).catch(() => [] as ChessComGame[])
+      ? raceWithTimeout(
+        fetchChessComGamesForPeriod(chessComUsername, bounds),
+        6_000,
+        () => [] as ChessComGame[],
+      )
       : Promise.resolve([] as ChessComGame[]),
   ]);
 
-  const lichessFromGames = lichessUsername && lichessPeriodGames.length > 0
-    ? gameResultsFromLichessGames(lichessPeriodGames, lichessUsername)
-    : null;
-  const lichessFromGamesTotals = lichessFromGames ? sumGameResultsByMode(lichessFromGames) : null;
-
   let lichessFromActivityGames = 0;
-  const lichessFromActivityByMode = emptyGameResultsByMode();
   for (const row of lichessActivityResult) {
     const start = row.interval?.start;
     if (!start || !isEpochMsInPeriod(start, bounds)) continue;
@@ -266,36 +255,12 @@ async function studentPeriodStats(
     lichessFromActivityGames += lichessActivityGameCount(row);
     const modeResults = lichessActivityGameResultsByMode(row);
     for (const mode of Object.keys(modeResults) as (keyof GameResultsByMode)[]) {
-      lichessFromActivityByMode[mode].wins += modeResults[mode].wins;
-      lichessFromActivityByMode[mode].draws += modeResults[mode].draws;
-      lichessFromActivityByMode[mode].losses += modeResults[mode].losses;
+      gameResultsByMode[mode].wins += modeResults[mode].wins;
+      gameResultsByMode[mode].draws += modeResults[mode].draws;
+      gameResultsByMode[mode].losses += modeResults[mode].losses;
     }
   }
-
-  const lichessCombined = emptyGameResultsByMode();
-  for (const mode of Object.keys(lichessCombined) as (keyof GameResultsByMode)[]) {
-    const fromGames = lichessFromGames?.[mode] ?? { wins: 0, draws: 0, losses: 0 };
-    const fromActivity = lichessFromActivityByMode[mode];
-    lichessCombined[mode] = {
-      wins: Math.max(fromGames.wins, fromActivity.wins),
-      draws: Math.max(fromGames.draws, fromActivity.draws),
-      losses: Math.max(fromGames.losses, fromActivity.losses),
-    };
-    gameResultsByMode[mode].wins += lichessCombined[mode].wins;
-    gameResultsByMode[mode].draws += lichessCombined[mode].draws;
-    gameResultsByMode[mode].losses += lichessCombined[mode].losses;
-  }
-  games += Math.max(
-    lichessFromGamesTotals?.games ?? 0,
-    lichessFromActivityGames,
-    sumGameResultsByMode(lichessCombined).games,
-  );
-
-  if (chessComBundle) {
-    const attempts = chessComBundle.rated.filter((a) => isTimestampInPeriod(a.date, bounds));
-    externalCorrect += attempts.filter((a) => a.passed).length;
-    externalWrong += attempts.filter((a) => !a.passed).length;
-  }
+  games += Math.max(lichessFromActivityGames, sumGameResultsByMode(gameResultsByMode).games);
 
   if (chessComUsername) {
     for (const game of chessComGames) {
@@ -489,7 +454,7 @@ export async function buildClubLeaderboard(
     );
   };
 
-  const rows = await mapWithConcurrency(peers, LEADERBOARD_STUDENT_CONCURRENCY, async (student, index) => {
+  const rowsPromise = mapWithConcurrency(peers, LEADERBOARD_STUDENT_CONCURRENCY, async (student, index) => {
     const fallback = () => cachedStudentLeaderboardRow(student, bounds, homeworkAttempts);
     const row = Date.now() > scanDeadline
       ? fallback()
@@ -503,6 +468,12 @@ export async function buildClubLeaderboard(
     emitProgress();
     return row;
   });
+
+  const rows = await raceWithTimeout(rowsPromise, SCAN_BUDGET_MS, () =>
+    peers.map((student, index) =>
+      partialRows[index] ?? cachedStudentLeaderboardRow(student, bounds, homeworkAttempts),
+    ),
+  );
 
   return rankLeaderboardEntries(rows, rankMode, pointSettings);
 }
