@@ -367,9 +367,18 @@ export const ClubLeaderboard: React.FC<Props> = ({
       return;
     }
 
+    const previewRows = buildCachedClubLeaderboardPreview(
+      currentPeers,
+      homeworkAttemptsRef.current,
+      currentPeriod,
+      mode,
+      settings,
+    );
     const baseline = snapshot?.entries?.length
       ? snapshot.entries
-      : entriesRef.current;
+      : entriesRef.current.length
+        ? entriesRef.current
+        : previewRows;
 
     const generation = loadGenerationRef.current + 1;
     loadGenerationRef.current = generation;
@@ -383,9 +392,17 @@ export const ClubLeaderboard: React.FC<Props> = ({
         homeworkAttemptsRef.current,
         currentPeriod,
         mode,
-        (done, total) => {
+        (done, total, partial) => {
           if (generation !== loadGenerationRef.current) return;
           setProgress({ done, total });
+          if (!partial?.length) return;
+          const merged = mergeLeaderboardEntryRows(
+            baseline.length > 0 ? baseline : entriesRef.current,
+            partial,
+            mode,
+            settings,
+          );
+          setEntries(merged);
         },
         settings,
       );

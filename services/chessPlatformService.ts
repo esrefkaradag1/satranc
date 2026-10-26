@@ -35,7 +35,7 @@ export { parseChessComTactics2Puzzles };
 const LICHESS_DIRECT_API = 'https://lichess.org/api';
 const CHESSCOM_DIRECT_API = 'https://api.chess.com/pub';
 const FETCH_TIMEOUT_MS = 8000;
-const CHESSCOM_FETCH_TIMEOUT_MS = 15000;
+const CHESSCOM_FETCH_TIMEOUT_MS = 8000;
 const LICHESS_USERNAME_RE = /^[A-Za-z0-9_-]{1,30}$/;
 const CHESSCOM_USERNAME_RE = /^[a-z0-9_-]{1,25}$/i;
 
@@ -62,13 +62,74 @@ function lichessDirectUrl(apiPath: string, params?: URLSearchParams): string {
   return `${LICHESS_DIRECT_API}/${path}${qs ? `?${qs}` : ''}`;
 }
 
-function canFetchLichessDirectInBrowser(): boolean {
-  return typeof window !== 'undefined' && typeof fetch === 'function';
+/** Proxy yoksa (Hostinger 404) veya HTML dönüyorsa bir daha deneme. */
+let lichessProxyUsable: boolean | null = null;
+let backendApiUsable: boolean | null = null;
+let backendApiFailures = 0;
+const BACKEND_API_FAIL_LIMIT = 2;
+
+function isMissingApiResponse(res: Response): boolean {
+  if (res.status === 404 || res.status === 405 || res.status === 501) return true;
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  return ct.includes('text/html');
 }
 
-/** Canlıda paylaşımlı IP 429 verir — her zaman sunucu proxy kullan. */
-function shouldUseLichessDirect(_apiPath: string): boolean {
-  return false;
+function markBackendApiUnusable() {
+  backendApiUsable = false;
+  lichessProxyUsable = false;
+}
+
+function noteBackendApiFailure() {
+  backendApiFailures += 1;
+  if (backendApiFailures >= BACKEND_API_FAIL_LIMIT) markBackendApiUnusable();
+}
+
+function noteBackendApiSuccess() {
+  backendApiUsable = true;
+  backendApiFailures = 0;
+}
+
+export function isChessPlatformBackendAvailable(): boolean {
+  return backendApiUsable !== false;
+}
+
+function missingApiJsonResponse(): Response {
+  return new Response('{"error":"api missing"}', {
+    status: 503,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+async function fetchSameOriginApi(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<Response | null> {
+  if (backendApiUsable === false) return null;
+  try {
+    const res = await fetchWithTimeout(url, init, timeoutMs);
+    if (isMissingApiResponse(res)) {
+      markBackendApiUnusable();
+      return null;
+    }
+    noteBackendApiSuccess();
+    return res;
+  } catch {
+    noteBackendApiFailure();
+    return null;
+  }
+}
+
+function emptyLichessResponse(apiPath: string): Response {
+  const path = apiPath.replace(/^\/+/, '');
+  const isGames = path.startsWith('games/');
+  return new Response(isGames ? '' : '[]', {
+    status: 200,
+    statusText: 'Lichess fallback',
+    headers: {
+      'Content-Type': isGames ? 'application/x-ndjson' : 'application/json',
+    },
+  });
 }
 
 function withSoftParam(params?: URLSearchParams): URLSearchParams {
@@ -90,12 +151,14 @@ async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = FET
 async function fetchChessComRecentPuzzlesApi(username: string): Promise<Response> {
   const url = `/api/chesscom-recent-puzzles?username=${encodeURIComponent(username)}&type=all`;
   const init = { headers: { Accept: 'application/json' } };
-  let res = await fetchWithTimeout(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
-  if (res.status === 502 || res.status === 503 || res.status === 504) {
+  const first = await fetchSameOriginApi(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+  if (!first) return missingApiJsonResponse();
+  if (first.status === 502 || first.status === 503 || first.status === 504) {
     await sleep(800);
-    res = await fetchWithTimeout(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+    const retry = await fetchSameOriginApi(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+    return retry ?? first;
   }
-  return res;
+  return first;
 }
 
 /**
@@ -107,49 +170,85 @@ async function lichessApiFetch(
   init?: RequestInit,
   params?: URLSearchParams,
 ): Promise<Response> {
-  const query = withSoftParam(params);
+  const query = params ? new URLSearchParams(params) : new URLSearchParams();
   return runLichessThrottled(async () => {
-    if (shouldUseLichessDirect(apiPath)) {
+    const tryDirect = async () => fetchWithTimeout(lichessDirectUrl(apiPath, query), init);
+
+    if (isLichessGloballyRateLimited()) {
+      return emptyLichessResponse(apiPath);
+    }
+
+    // Tarayıcı: kullanıcı IP'sinden doğrudan Lichess (CORS açık). Proxy 404 olunca takılma.
+    if (typeof window !== 'undefined') {
       try {
-        const directRes = await fetchWithTimeout(lichessDirectUrl(apiPath, query), init);
+        const directRes = await tryDirect();
         if (directRes.ok || directRes.status === 404) return directRes;
-        if (directRes.status !== 429 && directRes.status < 500) return directRes;
+        if (directRes.status === 429) {
+          markLichessRateLimited(directRes.headers.get('retry-after'));
+          return directRes;
+        }
+        if (directRes.status < 500) return directRes;
       } catch {
-        /* proxy fallback */
+        /* proxy'ye düş */
       }
     }
 
-    if (isLichessGloballyRateLimited()) {
-      const path = apiPath.replace(/^\/+/, '');
-      const emptyBody = path.startsWith('games/') ? '' : '[]';
-      return new Response(emptyBody, {
-        status: 200,
-        statusText: 'Lichess rate limit (bekleme)',
-        headers: {
-          'Content-Type': path.startsWith('games/') ? 'application/x-ndjson' : 'application/json',
-          'X-Lichess-Rate-Limited': '1',
-        },
-      });
+    if (lichessProxyUsable === false || backendApiUsable === false) {
+      try {
+        return await tryDirect();
+      } catch {
+        return emptyLichessResponse(apiPath);
+      }
     }
 
-    const proxyUrl = lichessProxyUrl(apiPath, query);
-    const res = await fetchWithTimeout(proxyUrl, init);
-    if (res.status === 429) markLichessRateLimited(res.headers.get('retry-after'));
-    return res;
+    try {
+      const res = await fetchWithTimeout(lichessProxyUrl(apiPath, withSoftParam(query)), init);
+      if (isMissingApiResponse(res)) {
+        markBackendApiUnusable();
+        try {
+          return await tryDirect();
+        } catch {
+          return emptyLichessResponse(apiPath);
+        }
+      }
+      lichessProxyUsable = true;
+      noteBackendApiSuccess();
+      if (res.status === 429) markLichessRateLimited(res.headers.get('retry-after'));
+      return res;
+    } catch {
+      noteBackendApiFailure();
+      lichessProxyUsable = false;
+      try {
+        return await tryDirect();
+      } catch {
+        return emptyLichessResponse(apiPath);
+      }
+    }
   });
 }
 
 async function chessComGamesFetch(username: string, year: string, month: string): Promise<Response> {
   const mm = month.padStart(2, '0');
-  const q = new URLSearchParams({ username: username.toLowerCase(), year, month: mm });
-  const url = `/api/chesscom-games?${q}`;
+  const user = username.toLowerCase();
   const init = { headers: { Accept: 'application/json' } };
-  let res = await fetchWithTimeout(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
-  if (res.status === 502 || res.status === 503 || res.status === 504) {
-    await sleep(800);
-    res = await fetchWithTimeout(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+  const directUrl = `${CHESSCOM_DIRECT_API}/player/${encodeURIComponent(user)}/games/${year}/${mm}`;
+  try {
+    const directRes = await fetchWithTimeout(directUrl, init, CHESSCOM_FETCH_TIMEOUT_MS);
+    if (directRes.ok || directRes.status === 404) return directRes;
+  } catch {
+    /* proxy'ye düş */
   }
-  return res;
+
+  const q = new URLSearchParams({ username: user, year, month: mm });
+  const url = `/api/chesscom-games?${q}`;
+  const first = await fetchSameOriginApi(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+  if (!first) return missingApiJsonResponse();
+  if (first.status === 502 || first.status === 504) {
+    await sleep(800);
+    const retry = await fetchSameOriginApi(url, init, CHESSCOM_FETCH_TIMEOUT_MS);
+    return retry ?? first;
+  }
+  return first;
 }
 
 const CHESSCOM_MONTH_GAMES_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -173,7 +272,7 @@ async function fetchChessComMonthGamesCached(
   return games;
 }
 
-async function fetchChessComMonthGamesViaProxy(
+export async function fetchChessComMonthGamesViaProxy(
   username: string,
   year: string,
   month: string,
@@ -193,7 +292,7 @@ const LICHESS_ACTIVITY_CACHE_TTL_MS = 15 * 60 * 1000;
 const LICHESS_ACTIVITY_RATE_LIMIT_MS = 10 * 60 * 1000;
 const LICHESS_USER_CACHE_TTL_MS = 45 * 60 * 1000;
 /** Lichess public API — ardışık istekler arası minimum süre (429 önleme) */
-const LICHESS_MIN_REQUEST_GAP_MS = 2500;
+const LICHESS_MIN_REQUEST_GAP_MS = 1000;
 const LICHESS_DEFAULT_BACKOFF_MS = 60_000;
 const LICHESS_MAX_BACKOFF_MS = 5 * 60_000;
 const CHESSCOM_API = CHESSCOM_DIRECT_API;
@@ -835,7 +934,7 @@ export async function fetchChessComPlayer(username: string): Promise<ChessComPla
   const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
   try {
-    const res = await fetch(`${CHESSCOM_API}/player/${encodeURIComponent(trimmed)}`);
+    const res = await fetchWithTimeout(`${CHESSCOM_API}/player/${encodeURIComponent(trimmed)}`);
     if (!res.ok) return null;
     return (await res.json()) as ChessComPlayer;
   } catch {
@@ -848,7 +947,7 @@ export async function fetchChessComStats(username: string): Promise<ChessComStat
   const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
   try {
-    const res = await fetch(`${CHESSCOM_API}/player/${encodeURIComponent(trimmed)}/stats`);
+    const res = await fetchWithTimeout(`${CHESSCOM_API}/player/${encodeURIComponent(trimmed)}/stats`);
     if (!res.ok) return null;
     return (await res.json()) as ChessComStats;
   } catch {
@@ -1107,11 +1206,12 @@ export async function fetchChessComMemberStats(
   const trimmed = normalizeChessComUsername(username);
   if (!trimmed) return null;
   try {
-    const res = await fetch(
+    const res = await fetchSameOriginApi(
       `/api/chesscom-member-stats?username=${encodeURIComponent(trimmed)}&type=${encodeURIComponent(type)}`,
       { headers: { Accept: 'application/json' } },
+      CHESSCOM_FETCH_TIMEOUT_MS,
     );
-    if (!res.ok) return null;
+    if (!res?.ok) return null;
     const data = await res.json();
     return parseChessComMemberStatsPayload(data);
   } catch {

@@ -2,12 +2,14 @@ import type { HomeworkPuzzleAttempt, Student } from '../types';
 import {
   chessComGameInvolvesUser,
   fetchChessComMemberStats,
+  fetchChessComMonthGamesViaProxy,
   fetchChessComPlayer,
   fetchChessComPuzzlesBundle,
   fetchChessComStats,
   fetchLichessActivity,
   fetchLichessGamesForRange,
   fetchLichessUser,
+  isChessPlatformBackendAvailable,
   reconcileChessComMemberStats,
   type ChessComGame,
 } from './chessPlatformService';
@@ -47,7 +49,9 @@ import {
 } from '../lib/leaderboardPeriodCache';
 
 const PLATFORM_SNAPSHOT_CACHE_TTL_MS = 60 * 60 * 1000;
-const LEADERBOARD_STUDENT_CONCURRENCY = 4;
+const LEADERBOARD_STUDENT_CONCURRENCY = 3;
+const STUDENT_ROW_TIMEOUT_MS = 16_000;
+const SCAN_BUDGET_MS = 45_000;
 const CHESSCOM_USERNAME_RE = /^[a-z0-9_-]{1,25}$/i;
 
 const platformSnapshotCache = new Map<string, { at: number; snapshot: LeaderboardPlatformSnapshot }>();
@@ -152,6 +156,31 @@ function chessComRangeMonths(bounds: PeriodBounds): Array<{ year: string; month:
   return months;
 }
 
+function raceWithTimeout<T>(work: Promise<T>, timeoutMs: number, fallback: () => T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback());
+    }, timeoutMs);
+    work.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(fallback());
+      },
+    );
+  });
+}
+
 /** Dönem içindeki Chess.com maçları — yalnızca gerekli arşiv ayları (400 oyun taraması yok). */
 async function fetchChessComGamesForPeriod(
   username: string,
@@ -162,13 +191,8 @@ async function fetchChessComGamesForPeriod(
   try {
     const all: ChessComGame[] = [];
     for (const { year, month } of chessComRangeMonths(bounds)) {
-      const q = new URLSearchParams({ username: trimmed, year, month });
-      const gamesRes = await fetch(`/api/chesscom-games?${q.toString()}`, {
-        headers: { Accept: 'application/json' },
-      });
-      if (!gamesRes.ok) continue;
-      const gamesData = (await gamesRes.json()) as { games?: ChessComGame[] };
-      for (const game of gamesData.games ?? []) {
+      const monthGames = await fetchChessComMonthGamesViaProxy(trimmed, year, month);
+      for (const game of monthGames) {
         const ms = (game.end_time ?? 0) * 1000;
         if (ms <= 0 || !isEpochMsInPeriod(ms, bounds)) continue;
         if (!chessComGameInvolvesUser(game, trimmed)) continue;
@@ -216,9 +240,9 @@ async function studentPeriodStats(
       ? fetchLichessActivity(lichessUsername).catch(() => [] as Awaited<ReturnType<typeof fetchLichessActivity>>)
       : Promise.resolve([] as Awaited<ReturnType<typeof fetchLichessActivity>>),
     lichessUsername
-      ? fetchLichessGamesForRange(lichessUsername, bounds.startMs, bounds.endMs).catch(() => [])
+      ? fetchLichessGamesForRange(lichessUsername, bounds.startMs, bounds.endMs, 120).catch(() => [])
       : Promise.resolve([]),
-    chessComUsername
+    chessComUsername && isChessPlatformBackendAvailable()
       ? fetchChessComPuzzlesBundle(chessComUsername).catch(() => null)
       : Promise.resolve(null),
     chessComUsername
@@ -331,7 +355,9 @@ async function studentPlatformSnapshot(student: Student): Promise<LeaderboardPla
   const [lichessProfile, chessComProfile, memberStatsRaw, pubStats] = await Promise.all([
     lichessUsername ? fetchLichessUser(lichessUsername).catch(() => null) : Promise.resolve(null),
     chessComUsername ? fetchChessComPlayer(chessComUsername).catch(() => null) : Promise.resolve(null),
-    chessComUsername ? fetchChessComMemberStats(chessComUsername).catch(() => null) : Promise.resolve(null),
+    chessComUsername && isChessPlatformBackendAvailable()
+      ? fetchChessComMemberStats(chessComUsername).catch(() => null)
+      : Promise.resolve(null),
     chessComUsername ? fetchChessComStats(chessComUsername).catch(() => null) : Promise.resolve(null),
   ]);
 
@@ -394,6 +420,48 @@ async function buildStudentLeaderboardRow(
   );
 }
 
+function cachedStudentLeaderboardRow(
+  student: Student,
+  bounds: PeriodBounds,
+  homeworkAttempts: HomeworkPuzzleAttempt[],
+): Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'> {
+  const cached = readCachedStudentPeriodStats(student.id, bounds);
+  const internalCorrect = homeworkAttempts.filter(
+    (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
+  ).length;
+  const internalWrong = homeworkAttempts.filter(
+    (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && !a.correct,
+  ).length;
+  if (!cached) {
+    return entryForStudent(
+      student,
+      internalCorrect,
+      0,
+      internalCorrect,
+      minimalPlatformSnapshot(student),
+      emptyGameResultsByMode(),
+      0,
+      0,
+      0,
+      internalWrong,
+    );
+  }
+  const extPuzzles = Math.max(0, cached.puzzles - (cached.internalPuzzles ?? 0));
+  const extWrong = Math.max(0, cached.puzzleWrong - Math.max(0, (cached.internalPuzzles ?? 0) - internalCorrect));
+  return entryForStudent(
+    student,
+    extPuzzles + internalCorrect,
+    cached.games,
+    internalCorrect,
+    minimalPlatformSnapshot(student),
+    cached.gameResultsByMode,
+    cached.wins,
+    cached.draws,
+    cached.losses,
+    extWrong + internalWrong,
+  );
+}
+
 /** Kulüp öğrencileri için haftalık/aylık lider tablosu */
 export async function buildClubLeaderboard(
   peers: Student[],
@@ -406,12 +474,10 @@ export async function buildClubLeaderboard(
   const bounds = getPeriodBounds(period);
   const total = peers.length;
   const partialRows: Array<Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'>> = new Array(total);
+  const scanDeadline = Date.now() + SCAN_BUDGET_MS;
   let done = 0;
 
-  const rows = await mapWithConcurrency(peers, LEADERBOARD_STUDENT_CONCURRENCY, async (student, index) => {
-    const row = await buildStudentLeaderboardRow(student, bounds, homeworkAttempts, rankMode);
-    partialRows[index] = row;
-    done += 1;
+  const emitProgress = () => {
     onProgress?.(
       done,
       total,
@@ -421,6 +487,20 @@ export async function buildClubLeaderboard(
         pointSettings,
       ),
     );
+  };
+
+  const rows = await mapWithConcurrency(peers, LEADERBOARD_STUDENT_CONCURRENCY, async (student, index) => {
+    const fallback = () => cachedStudentLeaderboardRow(student, bounds, homeworkAttempts);
+    const row = Date.now() > scanDeadline
+      ? fallback()
+      : await raceWithTimeout(
+        buildStudentLeaderboardRow(student, bounds, homeworkAttempts, rankMode),
+        STUDENT_ROW_TIMEOUT_MS,
+        fallback,
+      );
+    partialRows[index] = row;
+    done += 1;
+    emitProgress();
     return row;
   });
 
@@ -437,42 +517,6 @@ export function buildCachedClubLeaderboardPreview(
 ): LeaderboardEntry[] {
   if (rankMode !== 'activity' || peers.length === 0) return [];
   const bounds = getPeriodBounds(period);
-  const rows = peers.map((student) => {
-    const cached = readCachedStudentPeriodStats(student.id, bounds);
-    const internalCorrect = homeworkAttempts.filter(
-      (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
-    ).length;
-    const internalWrong = homeworkAttempts.filter(
-      (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && !a.correct,
-    ).length;
-    if (!cached) {
-      return entryForStudent(
-        student,
-        internalCorrect,
-        0,
-        internalCorrect,
-        minimalPlatformSnapshot(student),
-        emptyGameResultsByMode(),
-        0,
-        0,
-        0,
-        internalWrong,
-      );
-    }
-    const extPuzzles = Math.max(0, cached.puzzles - (cached.internalPuzzles ?? 0));
-    const extWrong = Math.max(0, cached.puzzleWrong - Math.max(0, (cached.internalPuzzles ?? 0) - internalCorrect));
-    return entryForStudent(
-      student,
-      extPuzzles + internalCorrect,
-      cached.games,
-      internalCorrect,
-      minimalPlatformSnapshot(student),
-      cached.gameResultsByMode,
-      cached.wins,
-      cached.draws,
-      cached.losses,
-      extWrong + internalWrong,
-    );
-  });
+  const rows = peers.map((student) => cachedStudentLeaderboardRow(student, bounds, homeworkAttempts));
   return rankLeaderboardEntries(rows, rankMode, pointSettings);
 }
