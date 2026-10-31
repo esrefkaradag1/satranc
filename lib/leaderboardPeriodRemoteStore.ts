@@ -5,6 +5,7 @@ import {
   mergePeriodStatsMax,
 } from './leaderboardPeriodCache';
 import { emptyGameResultsByMode, type GameResultsByMode } from './leaderboardPointSettings';
+import { istanbulDayKey } from './homeworkDayUtils';
 
 const TABLE = 'leaderboard_period_stats';
 const REMOTE_FRESH_MS = 6 * 60 * 60 * 1000;
@@ -46,6 +47,12 @@ function rowToStats(row: Record<string, unknown>): CachedStudentPeriodStats {
 
 export function isRemotePeriodStatsFresh(cachedAt: number, now = Date.now()): boolean {
   return cachedAt > 0 && now - cachedAt < REMOTE_FRESH_MS;
+}
+
+/** İstanbul takvim gününde bir kez çekilmiş mi? */
+export function wasHarvestedToday(cachedAt: number | null | undefined, now = new Date()): boolean {
+  if (!cachedAt || cachedAt <= 0) return false;
+  return istanbulDayKey(new Date(cachedAt)) === istanbulDayKey(now);
 }
 
 export async function loadRemotePeriodStats(

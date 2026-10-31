@@ -40,6 +40,7 @@ import Analysis from './Analysis';
 import Gallery from './Gallery';
 import Messages from './Messages';
 import WhatsAppManagement from './WhatsAppManagement';
+import ChessDuelloPanel from './ChessDuelloPanel';
 import LeaderboardPage from './leaderboard/LeaderboardPage';
 import Homework from './Homework';
 import ChessBoard from './ChessBoard';
@@ -703,6 +704,8 @@ const ClubPanel: React.FC<ClubPanelProps> = ({ branch, clubId, onLogout }) => {
         return <WhatsAppManagement />;
       case 'leaderboard':
         return <LeaderboardPage />;
+      case 'chessduello':
+        return <ChessDuelloPanel />;
       case 'homework':
         return <Homework />;
       case 'puzzles':

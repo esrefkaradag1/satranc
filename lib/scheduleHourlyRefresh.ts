@@ -23,7 +23,7 @@ export function scheduleHourlyRefresh(callback: () => void): () => void {
   };
 }
 
-/** Lider tablosu: son taramadan 2 saat sonra yenileme zamanlayıcısı */
+/** Lider tablosu: son taramadan 24 saat sonra yenileme zamanlayıcısı */
 export function scheduleDailyLeaderboardRefresh(
   callback: () => void,
   getCachedAt: () => number | null = () => null,

@@ -23,7 +23,7 @@ import {
   leaderboardModeRating,
   mergeLeaderboardEntryRows,
 } from '../../lib/leaderboardUtils';
-import { buildClubLeaderboard, buildCachedClubLeaderboardPreview, harvestStaleLeaderboardStudent } from '../../services/leaderboardService';
+import { buildClubLeaderboard, buildCachedClubLeaderboardPreview, harvestClubLeaderboardDaily } from '../../services/leaderboardService';
 import { scheduleDailyLeaderboardRefresh } from '../../lib/scheduleHourlyRefresh';
 import {
   formatLeaderboardSnapshotAge,
@@ -32,7 +32,6 @@ import {
   leaderboardSnapshotKey,
   writeLeaderboardSnapshot,
   entriesHaveActivity,
-  LEADERBOARD_REFRESH_INTERVAL_MS,
 } from '../../lib/leaderboardSnapshotCache';
 import { loadRemoteLeaderboardSnapshot, saveRemoteLeaderboardSnapshot } from '../../lib/leaderboardRemoteStore';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
@@ -237,6 +236,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const inFlightRef = useRef(false);
   const lastUpdatedAtRef = useRef<number | null>(null);
   const displayedKeyRef = useRef('');
+  const harvestAbortRef = useRef(false);
 
   const keepBestEntries = useCallback((next: LeaderboardEntry[], key = snapshotKeyRef.current) => {
     const mode = rankModeRef.current;
@@ -259,6 +259,12 @@ export const ClubLeaderboard: React.FC<Props> = ({
   useEffect(() => { pointSettingsRef.current = pointSettings; }, [pointSettings]);
   useEffect(() => { periodRef.current = period; }, [period]);
   useEffect(() => { rankModeRef.current = rankMode; }, [rankMode]);
+  useEffect(() => {
+    harvestAbortRef.current = false;
+    return () => {
+      harvestAbortRef.current = true;
+    };
+  }, [snapshotKey]);
 
   const restoreCachedTable = useCallback(() => {
     const currentPeers = peersRef.current;
@@ -366,7 +372,34 @@ export const ClubLeaderboard: React.FC<Props> = ({
     const snapshotHasScores = entriesHaveActivity(snapshot?.entries) || (snapshot?.entries.length ?? 0) > 0;
     const allowScan = canRefreshRef.current;
 
-    // Öğrenci/veli taramaz; antrenörde 2 saat dolmadıysa da taramaz.
+    if (mode === 'activity' && allowScan) {
+      void harvestClubLeaderboardDaily(
+        currentPeers,
+        homeworkAttemptsRef.current,
+        currentPeriod,
+        {
+          shouldAbort: () => harvestAbortRef.current,
+          onStudent: (row) => {
+            if (harvestAbortRef.current) return;
+            const kept = keepBestEntries([row], key);
+            lastUpdatedAtRef.current = Date.now();
+            setLastUpdatedAt(lastUpdatedAtRef.current);
+            writeLeaderboardSnapshot(key, kept, currentPeers.length);
+            void saveRemoteLeaderboardSnapshot({
+              snapshotKey: key,
+              clubScope: clubScopeRef.current,
+              period: currentPeriod,
+              rankMode: mode,
+              periodStartMs: boundsNow.startMs,
+              entries: kept,
+              peerCount: currentPeers.length,
+            });
+          },
+        },
+      );
+    }
+
+    // Öğrenci/veli taramaz; antrenörde güncel snapshot varken Lichess tarama günde bir harvest'ta.
     if (!force && snapshotFresh && snapshotHasScores) {
       return;
     }
@@ -451,16 +484,6 @@ export const ClubLeaderboard: React.FC<Props> = ({
       });
       lastUpdatedAtRef.current = Date.now();
       setLastUpdatedAt(lastUpdatedAtRef.current);
-      if (mode === 'activity' && canRefreshRef.current) {
-        void harvestStaleLeaderboardStudent(
-          currentPeers,
-          homeworkAttemptsRef.current,
-          currentPeriod,
-        ).then((row) => {
-          if (!row || generation !== loadGenerationRef.current) return;
-          keepBestEntries([row], key);
-        });
-      }
     } catch {
       if (generation !== loadGenerationRef.current) return;
       setError('Sıralama yüklenemedi. Lütfen tekrar deneyin.');
@@ -479,7 +502,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
     }
   }, [restoreCachedTable]);
 
-  // Dönem / mod / kulüp değişince: önce paylaşılan tablo, antrenörde 2 saatte bir tarama
+  // Dönem / mod / kulüp değişince: önce paylaşılan tablo; Lichess günde bir kez çekilir
   useEffect(() => {
     restoreCachedTable();
     void load(false);
@@ -582,7 +605,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
                 onClick={() => void load(true)}
                 disabled={fetching}
                 className="p-2.5 rounded-xl bg-slate-800 border border-white/10 text-slate-400 hover:text-white disabled:opacity-50"
-                title={`Yenile (otomatik ${Math.round(LEADERBOARD_REFRESH_INTERVAL_MS / 3600000)} saatte bir; mevcut puanlar korunur)`}
+                title="Yenile (Lichess günde bir kez çekilir; mevcut puanlar korunur)"
               >
                 <RefreshCw className={`w-4 h-4 ${fetching ? 'animate-spin' : ''}`} />
               </button>
@@ -775,7 +798,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
           <p className="px-4 py-3 text-[10px] text-slate-500 border-t border-white/5">
             {compact
               ? 'İlk 5 öğrenci ve senin sıran gösterilir. Sıralama kulüp genelindeki son taramadan gelir; öğrenci/veli tarafında yeniden taranmaz.'
-              : `Sistem ödevleri + Lichess + Chess.com. Aynı tablo tüm panellerde paylaşılır; otomatik tarama ${Math.round(LEADERBOARD_REFRESH_INTERVAL_MS / 3600000)} saatte bir yapılır ve puanlar sıfırlanmaz.`}
+              : 'Sistem ödevleri + Lichess + Chess.com. Aynı tablo tüm panellerde paylaşılır. Lichess günde bir kez, öğrenci girişi beklemeden çekilir; puanlar sıfırlanmaz.'}
           </p>
         </div>
       )}

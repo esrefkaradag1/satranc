@@ -19,6 +19,7 @@ import {
   lichessOAuthAccountViaEnv,
 } from './lib/lichessOAuthApi.mjs';
 import { lichessProxyRequest } from './lib/lichessProxyThrottle.mjs';
+import { chessduelloApiHandler } from './lib/chessduelloCoachApi.mjs';
 import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
 import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
 import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
@@ -60,6 +61,7 @@ const DEV_GET_ROUTES = new Set([
   '/api/chesscom-puzzle',
   '/api/external-game-snapshot',
   '/api/lichess-proxy',
+  '/api/chessduello',
 ]);
 const DEV_POST_ROUTES = new Set([
   '/api/homework-attempt',
@@ -79,6 +81,7 @@ const DEV_POST_ROUTES = new Set([
   '/api/platform-week-stats',
   '/api/platform-day-sync',
   '/api/nightly',
+  '/api/chessduello',
 ]);
 
 function devApiPlugin(env: Record<string, string>): Plugin {
@@ -102,6 +105,8 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 result = await listSiteMessagesViaEnv(conversationId || undefined, env);
               } else if (route === '/api/whatsapp') {
                 result = await whatsappApiGetHandler(fullUrl, env);
+              } else if (route === '/api/chessduello') {
+                result = await chessduelloApiHandler('GET', fullUrl, {}, env);
               } else if (route === '/api/chesscom-member-stats') {
                 const username = parsed.searchParams.get('username')?.trim().toLowerCase() ?? '';
                 const type = parsed.searchParams.get('type')?.trim().toLowerCase() || 'rated';
@@ -358,6 +363,8 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 result = await insertSiteMessageViaEnv(body, env);
               } else if (route === '/api/whatsapp') {
                 result = await whatsappApiPostHandler(body, env, fullUrl);
+              } else if (route === '/api/chessduello') {
+                result = await chessduelloApiHandler('POST', fullUrl, body, env);
               } else if (route === '/api/lichess-oauth-token') {
                 result = await lichessOAuthTokenViaEnv(body, env, req.headers as Record<string, string | string[] | undefined>);
               } else if (route === '/api/lichess-oauth-disconnect') {

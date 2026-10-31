@@ -62,6 +62,7 @@ type FormState = {
   registrationDate: string;
   lichessUsername: string;
   chessComUsername: string;
+  chessDuelloUsername: string;
   school: string;
   teacher: string;
   hasSiblingDiscount: boolean;
@@ -360,6 +361,7 @@ const StudentAdd: React.FC<{
     registrationDate: todayIso(),
     lichessUsername: '',
     chessComUsername: '',
+    chessDuelloUsername: '',
     school: '',
     teacher: '',
     hasSiblingDiscount: false,
@@ -680,6 +682,7 @@ const StudentAdd: React.FC<{
         tcNo: onlyDigits(form.tcNo) || undefined,
         lichessUsername: form.lichessUsername.trim() || undefined,
         chessComUsername: form.chessComUsername.trim() || undefined,
+        chessDuelloUsername: form.chessDuelloUsername.trim() || undefined,
         school: form.school.trim() || undefined,
         teacher: form.teacher.trim() || undefined,
         hasSiblingDiscount: form.hasSiblingDiscount && !form.isScholarshipStudent ? true : undefined,
@@ -1052,6 +1055,14 @@ const StudentAdd: React.FC<{
               <input
                 value={form.chessComUsername}
                 onChange={(e) => set('chessComUsername')(e.target.value)}
+                placeholder="Kullanıcı adı"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="ChessDuello">
+              <input
+                value={form.chessDuelloUsername}
+                onChange={(e) => set('chessDuelloUsername')(e.target.value)}
                 placeholder="Kullanıcı adı"
                 className={inputCls}
               />

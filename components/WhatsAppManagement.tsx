@@ -28,6 +28,7 @@ import { normalizeClubKey } from '../lib/clubScope';
 import { activeStudentsForNotifications } from '../lib/studentNotificationUtils';
 import {
   CHANNEL_LABELS,
+  DEFAULT_NOTIFICATION_CHANNELS,
   NOTIFICATION_EVENT_META,
   NOTIFICATION_EVENTS,
   channelUsesWhatsApp,
@@ -38,7 +39,9 @@ import {
 import {
   defaultDeliveryRules,
   deliveryRulesFromWhatsAppAuto,
+  hydrateNotificationDeliveryRules,
   loadNotificationDeliveryRules,
+  persistNotificationDeliveryRulesRemote,
   saveNotificationDeliveryRules,
   syncWhatsAppAutoRulesFromDelivery,
 } from '../lib/notificationRouting';
@@ -276,6 +279,7 @@ const WhatsAppManagement: React.FC = () => {
   const persistDeliveryRules = useCallback((next: NotificationDeliveryRule[]) => {
     setDeliveryRules(next);
     saveNotificationDeliveryRules(next);
+    void persistNotificationDeliveryRulesRemote(next);
     const syncedAuto = syncWhatsAppAutoRulesFromDelivery(next, loadWhatsAppAutoRules());
     setAutoRules(syncedAuto);
     saveWhatsAppAutoRules(syncedAuto);
@@ -390,6 +394,8 @@ const WhatsAppManagement: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      const fromDb = await hydrateNotificationDeliveryRules();
+      if (!cancelled && fromDb.length) setDeliveryRules(fromDb);
       const remote = await fetchWhatsAppServerSettings();
       if (cancelled || !remote) return;
       setServerSyncNote(
@@ -443,7 +449,7 @@ const WhatsAppManagement: React.FC = () => {
           const row = remote.deliveryRules!.find((r) => r.event === event);
           return {
             event,
-            channel: (row?.channel ?? 'whatsapp') as NotificationChannel,
+            channel: (row?.channel ?? DEFAULT_NOTIFICATION_CHANNELS[event]) as NotificationChannel,
           };
         });
         setDeliveryRules(mapped);

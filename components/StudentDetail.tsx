@@ -41,6 +41,7 @@ import {
   Gamepad2,
   Power,
   Star,
+  Swords,
   Settings,
   Activity,
   Brain,
@@ -54,6 +55,8 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
+import ChessDuelloStudentCard from './student/ChessDuelloStudentCard';
+import { resolveAuthClubId } from '../lib/supabaseClubContext';
 import { createStudentLoginCredentials } from '../lib/studentCredentials';
 import { analyzeStudentHomework } from '../services/geminiService';
 import {
@@ -963,6 +966,10 @@ const StudentDetail: React.FC<{
     scopedGallery: gallery,
     scopedHomeworks: homeworks,
     auth,
+    clubs,
+    coaches,
+    branchOfficeRecords,
+    adminViewClub,
     updateStudent,
     deleteStudent,
     addActivityLog,
@@ -1052,7 +1059,7 @@ const StudentDetail: React.FC<{
   const [analysisFormMeta, setAnalysisFormMeta] = useState<AnalysisFormMeta>(emptyAnalysisFormMeta);
   const [analysisCategories, setAnalysisCategories] = useState<PerformanceAnalysisCategory[]>(cloneDefaultCategories);
 
-  type DetailTab = 'finans' | 'ukd' | 'lichess' | 'chesscom' | 'analizler' | 'taksitler' | 'ozel-dersler' | 'gecmis' | 'bilgiler';
+  type DetailTab = 'finans' | 'ukd' | 'lichess' | 'chesscom' | 'chessduello' | 'analizler' | 'taksitler' | 'ozel-dersler' | 'gecmis' | 'bilgiler';
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('finans');
 
   /** Finans izni yoksa finans/taksitler sekmeleri kapalı; varsayılan sekme buna göre seçilir. */
@@ -2048,6 +2055,7 @@ const StudentDetail: React.FC<{
          { id: 'ukd' as const, label: 'UKD/FIDE', icon: <Trophy className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
          { id: 'lichess' as const, label: 'Lichess', icon: <ExternalLink className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
          { id: 'chesscom' as const, label: 'Chess.com', icon: <ExternalLink className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
+         { id: 'chessduello' as const, label: 'ChessDuello', icon: <Swords className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
          { id: 'analizler' as const, label: 'Analizler', icon: <BarChart3 className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
          { id: 'taksitler' as const, label: 'Taksitler', icon: <CreditCard className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
          { id: 'ozel-dersler' as const, label: 'Özel Ders', icon: <GraduationCap className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> },
@@ -2175,6 +2183,14 @@ const StudentDetail: React.FC<{
  setChessComInput={setChessComInput}
  updateStudent={updateStudent}
  />
+ ) : null}
+
+ {activeDetailTab === 'chessduello' && student ? (
+   <ChessDuelloStudentCard
+     student={student}
+     clubId={student.clubId || (auth?.role === 'admin' ? adminViewClub?.id : undefined) || resolveAuthClubId(auth, coaches, clubs, branchOfficeRecords) || undefined}
+     onChange={(patch) => updateStudent(student.id, patch)}
+   />
  ) : null}
 
 
@@ -4676,6 +4692,10 @@ const EditStudentModal: React.FC<{
                   <div>
                     <label className={labelCls}>Chess.com Kullanıcı Adı</label>
                     <input type="text" value={fields.chessComUsername || ''} onChange={e => setFields(f => ({ ...f, chessComUsername: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>ChessDuello Kullanıcı Adı</label>
+                    <input type="text" value={fields.chessDuelloUsername || ''} onChange={e => setFields(f => ({ ...f, chessDuelloUsername: e.target.value }))} className={inputCls} />
                   </div>
                   <div>
                     <label className={labelCls}>UKD (Puan)</label>

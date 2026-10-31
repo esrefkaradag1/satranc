@@ -26,6 +26,7 @@ import { mobilePushHandler } from '../lib/mobilePush.mjs';
 import { mobileAuthHandler } from '../lib/mobileAuth.mjs';
 import { trainingNotifyHandler, startTrainingNotifyScheduler } from '../lib/trainingWhatsAppNotify.mjs';
 import { whatsappApiGetHandler, whatsappApiPostHandler } from '../lib/whatsappApi.mjs';
+import { chessduelloApiHandler } from '../lib/chessduelloCoachApi.mjs';
 import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch.mjs';
 
 function syncServerEnv() {
@@ -701,6 +702,22 @@ export async function dispatchApi(req, res, url) {
       if (req.method === 'POST') {
         const body = await readJsonBody(req);
         const result = await whatsappApiPostHandler(body, process.env, fullUrl);
+        sendJson(res, result.status, result.body);
+        return true;
+      }
+      sendJson(res, 405, { error: 'Yalnızca GET ve POST' });
+      return true;
+    }
+    if (path === '/api/chessduello') {
+      const fullUrl = req.url || path;
+      if (req.method === 'GET') {
+        const result = await chessduelloApiHandler('GET', fullUrl, {}, process.env);
+        sendJson(res, result.status, result.body);
+        return true;
+      }
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const result = await chessduelloApiHandler('POST', fullUrl, body, process.env);
         sendJson(res, result.status, result.body);
         return true;
       }

@@ -4,8 +4,8 @@ import type { ParentPanelNotification } from '../../lib/notificationEvents';
 import { NOTIFICATION_EVENT_META } from '../../lib/notificationEvents';
 import {
   listParentPanelNotifications,
-  markAllParentPanelNotificationsReadLocal,
-  markParentPanelNotificationReadLocal,
+  markAllParentPanelNotificationsRead,
+  markParentPanelNotificationRead,
 } from '../../lib/parentPanelNotifications';
 
 type ParentNotificationsPanelProps = {
@@ -54,7 +54,7 @@ const ParentNotificationsPanel: React.FC<ParentNotificationsPanelProps> = ({
   const unread = rows.filter((n) => !n.read).length;
 
   const markRead = (id: string) => {
-    markParentPanelNotificationReadLocal(id, studentId);
+    void markParentPanelNotificationRead(id, studentId);
     setRows((prev) => {
       const next = prev.map((n) => (n.id === id ? { ...n, read: true } : n));
       onUnreadChange?.(next.filter((n) => !n.read).length);
@@ -63,7 +63,7 @@ const ParentNotificationsPanel: React.FC<ParentNotificationsPanelProps> = ({
   };
 
   const markAllRead = () => {
-    markAllParentPanelNotificationsReadLocal(studentId);
+    void markAllParentPanelNotificationsRead(studentId);
     setRows((prev) => {
       const next = prev.map((n) => ({ ...n, read: true }));
       onUnreadChange?.(0);

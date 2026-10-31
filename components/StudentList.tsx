@@ -21,6 +21,7 @@ import {
  RotateCcw,
  PenLine,
  UsersRound,
+ HeartHandshake,
 } from'lucide-react';
 import { Student } from'../types';
 import {
@@ -38,6 +39,8 @@ import { APPLICATIONS_UPDATED_EVENT, loadApplicationListMetaAsync, loadApplicati
 import StudentSignedFormsModal from'./StudentSignedFormsModal';
 import { StudentLoginQuickInfo, StudentLoginQuickInfoInline } from './student/StudentLoginQuickInfo';
 import StudentParentAccessModal from './student/StudentParentAccessModal';
+import ParentAccessTable from './student/ParentAccessTable';
+import { matchesParentSearch, studentHasParentRecord } from '../lib/parentDirectory';
 import StudentAvatar from './student/StudentAvatar';
 import { uploadStudentPhotoDataUrl, isDisplayablePhotoUrl } from '../lib/studentPhotoUpload';
 import { ResponsiveTable } from './ui/ResponsiveTable';
@@ -63,7 +66,7 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => {
- const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast, scopedTransactions: transactions, adminViewClub, setAdminViewClubId, clubs, hasAuthPermission } = useApp();
+ const { scopedStudents, students, updateStudent, deleteStudent, bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach, branchOffices, scopedTrainingGroups, scopedDisciplineBranches, scopedCoaches, auth, confirmDialog, showToast, scopedTransactions: transactions, adminViewClub, setAdminViewClubId, clubs, hasAuthPermission, enterStudentOrParentPanel } = useApp();
  const isAdmin = auth?.role === 'admin';
  const isCoach = auth?.role === 'coach';
  /** Aidat/borç bilgisi finans izniyle görünür — kasa izni olmayan antrenör aidat göremez. */
@@ -78,6 +81,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const [filterScholarship, setFilterScholarship] = useState<'all' | 'yes' | 'no'>('all');
  const [filterPackage, setFilterPackage] = useState<'all' | 'yes'>('all');
  const [filterCoach, setFilterCoach] = useState('Tüm Antrenörler');
+ const [listMode, setListMode] = useState<'students' | 'parents'>('students');
+ const [showParentSecrets, setShowParentSecrets] = useState(true);
  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(true);
  const [page, setPage] = useState(1);
  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
@@ -235,10 +240,18 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   .filter((s) => {
  const matchSearch =
  !searchTerm ||
- searchIncludesText(s.name, searchTerm) ||
- searchIncludesText(s.group, searchTerm) ||
- (s.tcNo && s.tcNo.includes(searchTerm)) ||
- (s.parentPhone && s.parentPhone.includes(searchTerm));
+ (listMode === 'parents'
+  ? matchesParentSearch(s, searchTerm)
+  : (
+   searchIncludesText(s.name, searchTerm) ||
+   searchIncludesText(s.group, searchTerm) ||
+   (s.tcNo && s.tcNo.includes(searchTerm)) ||
+   (s.parentPhone && s.parentPhone.includes(searchTerm)) ||
+   searchIncludesText(s.parentName, searchTerm) ||
+   searchIncludesText(s.fatherName ?? '', searchTerm) ||
+   searchIncludesText(s.motherName ?? '', searchTerm)
+  ));
+ const matchParents = listMode !== 'parents' || studentHasParentRecord(s);
  const matchBranchOffice =
  filterBranchOffice === FILTER_ALL_OFFICES || s.branchOffice === filterBranchOffice;
  const matchBranch =
@@ -258,7 +271,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const matchCoach =
  filterCoach === 'Tüm Antrenörler' ||
  getCoachNamesForStudent(s, scopedCoaches, scopedTrainingGroups).includes(filterCoach);
- return matchSearch && matchBranchOffice && matchBranch && matchGroup && matchStatus && matchScholarship && matchPackage && matchCoach;
+ return matchSearch && matchParents && matchBranchOffice && matchBranch && matchGroup && matchStatus && matchScholarship && matchPackage && matchCoach;
  })
   .sort((a, b) => a.name.localeCompare(b.name, 'tr', { sensitivity: 'base' }));
  }, [
@@ -273,6 +286,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  filterScholarship,
  filterPackage,
  filterCoach,
+ listMode,
  ]);
 
  const totalPages = Math.max(1, Math.ceil(filteredStudents.length / pageSize));
@@ -300,6 +314,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   filterScholarship,
   filterPackage,
   filterCoach,
+  listMode,
   pageSize,
  ]);
 
@@ -313,7 +328,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  const inactive = baseStudents.filter((s) => s.status === 'inactive').length;
  const scholarship = baseStudents.filter((s) => s.isScholarshipStudent).length;
  const privateLesson = baseStudents.filter((s) => s.group?.toLowerCase().includes('özel') || s.registrationType === 'package').length;
- return { total, active, inactive, scholarship, privateLesson };
+ const parents = baseStudents.filter((s) => studentHasParentRecord(s) && s.status !== 'inactive').length;
+ return { total, active, inactive, scholarship, privateLesson, parents };
  }, [baseStudents]);
 
  const clearFilters = () => {
@@ -325,6 +341,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  setFilterScholarship('all');
  setFilterPackage('all');
  setFilterCoach('Tüm Antrenörler');
+ setListMode('students');
  };
 
  const hasActiveFilters =
@@ -335,9 +352,17 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   filterStatus !== 'all' ||
   filterScholarship !== 'all' ||
   filterPackage !== 'all' ||
-  filterCoach !== 'Tüm Antrenörler';
+  filterCoach !== 'Tüm Antrenörler' ||
+  listMode === 'parents';
 
- const applyStatFilter = (key: 'total' | 'active' | 'inactive' | 'scholarship' | 'private') => {
+ const applyStatFilter = (key: 'total' | 'active' | 'inactive' | 'scholarship' | 'private' | 'parents') => {
+  if (key === 'parents') {
+   setListMode((v) => (v === 'parents' ? 'students' : 'parents'));
+   setFilterPackage('all');
+   setFilterScholarship('all');
+   return;
+  }
+  setListMode('students');
   if (key === 'total') {
    setFilterStatus('all');
    setFilterScholarship('all');
@@ -361,6 +386,20 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   }
   setFilterPackage((v) => (v === 'yes' ? 'all' : 'yes'));
   setFilterScholarship('all');
+ };
+
+ const handleEnterPanel = (student: Student, viewAs: 'student' | 'parent') => {
+  const ok = enterStudentOrParentPanel(student.id, viewAs);
+  if (!ok) {
+   showToast('Bu oturumdan gizli giriş yapılamadı.', 'error');
+   return;
+  }
+  showToast(
+   viewAs === 'parent'
+    ? `${student.name} veli paneline girildi. Çıkış Listeye dön’dür.`
+    : `${student.name} öğrenci paneline girildi. Çıkış Listeye dön’dür.`,
+   'success',
+  );
  };
 
  const toggleSelectAll = () => {
@@ -579,7 +618,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   'w-full lg:w-auto lg:min-w-[8.5rem] px-3 py-2.5 rounded-xl bg-slate-950/50 border border-white/[0.08] text-xs sm:text-sm font-medium text-slate-200 focus:ring-2 focus:ring-indigo-500/35 outline-none truncate';
 
  const statCards: {
-  key: 'total' | 'active' | 'inactive' | 'scholarship' | 'private';
+  key: 'total' | 'active' | 'inactive' | 'scholarship' | 'private' | 'parents';
   value: number;
   label: string;
   icon: React.ReactNode;
@@ -591,7 +630,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    value: stats.total,
    label: 'Toplam',
    icon: <Users className="w-4 h-4" />,
-   active: filterStatus === 'all' && filterScholarship === 'all' && filterPackage === 'all',
+   active: listMode === 'students' && filterStatus === 'all' && filterScholarship === 'all' && filterPackage === 'all',
    accent: 'hover:border-indigo-400/30 data-[on=true]:border-indigo-400/40 data-[on=true]:bg-indigo-500/10 data-[on=true]:text-indigo-200',
   },
   {
@@ -599,15 +638,23 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    value: stats.active,
    label: 'Aktif',
    icon: <UserCheck className="w-4 h-4" />,
-   active: filterStatus === 'active',
+   active: listMode === 'students' && filterStatus === 'active',
    accent: 'hover:border-emerald-400/30 data-[on=true]:border-emerald-400/40 data-[on=true]:bg-emerald-500/10 data-[on=true]:text-emerald-200',
+  },
+  {
+   key: 'parents',
+   value: stats.parents,
+   label: 'Veliler',
+   icon: <HeartHandshake className="w-4 h-4" />,
+   active: listMode === 'parents',
+   accent: 'hover:border-violet-400/30 data-[on=true]:border-violet-400/40 data-[on=true]:bg-violet-500/10 data-[on=true]:text-violet-200',
   },
   {
    key: 'private',
    value: stats.privateLesson,
    label: 'Özel / Paket',
    icon: <FileText className="w-4 h-4" />,
-   active: filterPackage === 'yes',
+   active: listMode === 'students' && filterPackage === 'yes',
    accent: 'hover:border-sky-400/30 data-[on=true]:border-sky-400/40 data-[on=true]:bg-sky-500/10 data-[on=true]:text-sky-200',
   },
   {
@@ -615,7 +662,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    value: stats.scholarship,
    label: 'Burslu',
    icon: <GraduationCap className="w-4 h-4" />,
-   active: filterScholarship === 'yes',
+   active: listMode === 'students' && filterScholarship === 'yes',
    accent: 'hover:border-amber-400/30 data-[on=true]:border-amber-400/40 data-[on=true]:bg-amber-500/10 data-[on=true]:text-amber-200',
   },
   {
@@ -623,7 +670,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
    value: stats.inactive,
    label: 'Pasif',
    icon: <UserX className="w-4 h-4" />,
-   active: filterStatus === 'inactive',
+   active: listMode === 'students' && filterStatus === 'inactive',
    accent: 'hover:border-rose-400/30 data-[on=true]:border-rose-400/40 data-[on=true]:bg-rose-500/10 data-[on=true]:text-rose-200',
   },
  ];
@@ -661,17 +708,19 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
    <div className="min-w-0">
     <div className="flex items-center gap-2.5">
-     <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-400/20 flex items-center justify-center shrink-0">
-      <Users className="w-4 h-4 text-indigo-300" />
+     <div className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 ${listMode === 'parents' ? 'bg-violet-500/15 border-violet-400/20' : 'bg-indigo-500/15 border-indigo-400/20'}`}>
+      {listMode === 'parents' ? <HeartHandshake className="w-4 h-4 text-violet-300" /> : <Users className="w-4 h-4 text-indigo-300" />}
      </div>
      <div className="min-w-0">
-      <h1 className="text-base sm:text-xl font-black tracking-tight text-white">Öğrenci Listesi</h1>
+      <h1 className="text-base sm:text-xl font-black tracking-tight text-white">{listMode === 'parents' ? 'Veli Listesi' : 'Öğrenci Listesi'}</h1>
       <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate">
-       {isCoach
-        ? 'Kulübünüzdeki / size atanmış öğrenciler'
-        : isAdmin
-          ? (adminViewClub ? `${adminViewClub.name} öğrencileri` : 'Kulüp seçin — öğrenciler birleştirilmez')
-          : 'Ara, filtrele ve yönet'}
+       {listMode === 'parents'
+        ? 'PIN, öğrenci şifresi ve gizli panel girişi'
+        : isCoach
+          ? 'Kulübünüzdeki / size atanmış öğrenciler'
+          : isAdmin
+            ? (adminViewClub ? `${adminViewClub.name} öğrencileri` : 'Kulüp seçin — öğrenciler birleştirilmez')
+            : 'Ara, filtrele ve yönet'}
        {' · '}
        <span className="text-slate-300 font-semibold">{filteredStudents.length}</span> kayıt
       </p>
@@ -709,7 +758,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
 
  {/* Clickable stats */}
- <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+ <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
   {statCards.map((card) => (
    <button
     key={card.key}
@@ -740,7 +789,7 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
      <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
      <input
       type="text"
-      placeholder="Ad, TC, telefon veya grup ara..."
+      placeholder={listMode === 'parents' ? 'Veli adı, telefon, PIN veya çocuk ara...' : 'Ad, TC, telefon veya grup ara...'}
       className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-slate-950/50 border border-white/[0.08] text-sm text-slate-100 placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500/35 outline-none transition-all"
       value={searchTerm}
       onChange={(e) => setSearchTerm(e.target.value)}
@@ -865,6 +914,18 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  </div>
  )}
 
+ {listMode === 'parents' ? (
+ <ParentAccessTable
+  students={paginatedStudents}
+  pageStartIndex={pageStartIndex}
+  applicationPhotos={applicationPhotos}
+  showSecrets={showParentSecrets}
+  onToggleSecrets={() => setShowParentSecrets((v) => !v)}
+  onEnterPanel={handleEnterPanel}
+  onViewDetail={onViewDetail}
+ />
+ ) : (
+ <>
  {/* Mobil: kart listesi */}
  <div className="lg:hidden space-y-2.5">
  {paginatedStudents.map((student) => (
@@ -1131,6 +1192,8 @@ const StudentList: React.FC<StudentListProps> = ({ onAddNew, onViewDetail }) => 
  )}
  </ResponsiveTable>
  </div>
+ </>
+ )}
 
  {filteredStudents.length > 0 && (
   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-white/[0.06] bg-[#1e293b]/70 px-3.5 py-3">

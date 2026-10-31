@@ -19,6 +19,7 @@ import LiveLesson from './components/LiveLesson';
 import Curriculum from './components/Curriculum';
 import Messages from './components/Messages';
 import WhatsAppManagement from './components/WhatsAppManagement';
+import ChessDuelloPanel from './components/ChessDuelloPanel';
 import Security from './components/Security';
 import Inventory from './components/Inventory';
 import StudyPage from './components/StudyPage';
@@ -291,6 +292,8 @@ const AdminLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Tournaments role="admin" />;
       case 'leaderboard':
         return <LeaderboardPage />;
+      case 'chessduello':
+        return <ChessDuelloPanel />;
       case 'analysis':
         return <Analysis />;
       case 'finance':
@@ -602,6 +605,8 @@ const CoachLayout: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         return <Homework />;
       case 'leaderboard':
         return <LeaderboardPage />;
+      case 'chessduello':
+        return <ChessDuelloPanel />;
       case 'curriculum':
         return <Curriculum />;
       case 'analysis':

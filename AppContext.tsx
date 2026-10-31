@@ -26,6 +26,14 @@ import { homeworkAssignmentCategory } from './lib/homeworkStatsBuilders';
 import { looksLikeLichessPuzzleId, materializeLichessPuzzleRecord } from './lib/puzzlePlayUtils';
 import { insertHomeworkAttemptSupabase, detectHomeworkAttemptPayloadStyle, setCachedHomeworkAttemptPayloadStyle } from './lib/homeworkAttemptDb.mjs';
 import { findStudentForLogin, verifyStudentLoginPin } from './lib/studentParentAuth.ts';
+import {
+  clearStaffAuthBackup,
+  hasStaffAuthBackup,
+  isStaffAuth,
+  readStaffAuthBackup,
+  saveStaffAuthBackup,
+} from './lib/staffImpersonation';
+import { writePanelHash } from './lib/panelRouting';
 import { apiLocalAuthParentLogin } from './services/backendApi';
 import { findClubForLogin } from './lib/clubLoginUtils';
 import { buildClubDefaultOrgStructure, persistDefaultOrgStructure } from './lib/seedDefaultOrgStructure';
@@ -243,6 +251,10 @@ interface AppContextType {
   loginParent: (studentIdOrPhone: string, pin: string) => Promise<true | false | 'inactive'>;
   loginStudent: (studentIdOrPhone: string, pin: string) => Promise<true | false | 'inactive'>;
   logout: () => void;
+  /** Antrenör/admin/kulüp: şifre girmeden öğrenci veya veli paneline gir. */
+  enterStudentOrParentPanel: (studentId: string, viewAs: 'student' | 'parent') => boolean;
+  /** Gizli girişte staff oturumu yedekte; Çıkış Listeye dön anlamına gelir. */
+  isStaffImpersonating: boolean;
   /** Sunucu modunda API girişi sonrası auth + öğrenci bilgisini set eder. */
   setAuthWithStudent: (auth: AuthUser | null, student: Student | null) => void;
   /** Öğrenci paneli: localStorage'dan tekrar yükler (sadece yerel mod). */
@@ -326,6 +338,7 @@ const STUDENT_DB_CORE_SNAKE = new Set<string>([
 /** İlk insert'ten sonra update ile eklenir (şemada yoksa atlanır). */
 const STUDENT_DB_OPTIONAL_SNAKE = new Set<string>([
   'fide_id', 'photo_url', 'lichess_username', 'lichess_access_token', 'lichess_oauth_connected_at', 'chess_com_username',
+  'chess_duello_username', 'chess_duello_member_id',
   'contact_numbers', 'father_name', 'father_phone', 'father_job', 'mother_name', 'mother_phone', 'mother_job',
   'address', 'health_info', 'school', 'teacher', 'notes', 'branch_group',
   'has_sibling_discount', 'sibling_discount_type', 'sibling_discount_percent', 'sibling_discount_amount',
@@ -395,6 +408,7 @@ const STUDENT_DB_OPTIONAL_NO_INFER_SKIP = new Set<string>([
   'coach_id',
   'whatsapp_notify_target',
   'username', 'password', 'parent_pin',
+  'chess_duello_username', 'chess_duello_member_id',
 ]);
 
 function restoreStudentLoginColumnsInSchema() {
@@ -2114,6 +2128,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const loginAdmin = useCallback((password: string): boolean => {
     if (password !== ADMIN_PASSWORD) return false;
+    clearStaffAuthBackup();
     setAuth({ role: 'admin' });
     return true;
   }, []);
@@ -2390,10 +2405,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setApiStudent(student);
   }, []);
 
+  const enterStudentOrParentPanel = useCallback((studentId: string, viewAs: 'student' | 'parent'): boolean => {
+    const id = studentId.trim();
+    if (!id) return false;
+    if (isStaffAuth(auth) && !readStaffAuthBackup()) {
+      saveStaffAuthBackup(auth);
+    } else if (!isStaffAuth(auth) && !readStaffAuthBackup()) {
+      return false;
+    }
+    setAuth({ role: viewAs, studentId: id, user: { id } });
+    return true;
+  }, [auth]);
+
+  const isStaffImpersonating = Boolean(
+    (auth?.role === 'parent' || auth?.role === 'student') && hasStaffAuthBackup(),
+  );
+
   const logout = useCallback(() => {
+    const backup = readStaffAuthBackup();
+    if (backup && (auth?.role === 'parent' || auth?.role === 'student')) {
+      clearStaffAuthBackup();
+      setAuth(backup);
+      writePanelHash('student-list');
+      return;
+    }
+    clearStaffAuthBackup();
     setAuth(null);
     setApiStudent(null);
-  }, []);
+  }, [auth]);
 
   const hydrated = useRef(false);
 
@@ -4778,7 +4817,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       tournaments, addTournament, updateTournament, deleteTournament,
       appRoles, rolePermissionMap, rolesLoaded, createAppRole, updateAppRole, deleteAppRole, setRolePermissions, refreshRoles,
       getAuthPermissions, authPermissions, hasAuthPermission,
-      auth, apiStudent, loginAdmin, loginCoach, loginClub, loginParent, loginStudent, logout, setAuthWithStudent, refreshFromStorage,
+      auth, apiStudent, loginAdmin, loginCoach, loginClub, loginParent, loginStudent, logout, enterStudentOrParentPanel, isStaffImpersonating, setAuthWithStudent, refreshFromStorage,
       refreshStudentsFromSupabase,
       initialDataLoaded,
       stockfishReady,

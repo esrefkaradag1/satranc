@@ -61,6 +61,7 @@ interface SidebarProps {
   /** Düz menü listesi (antrenör paneli vb.) */
   navItems?: NavItem[];
   onLogout?: () => void;
+  logoutLabel?: string;
   /** Mobilde sidebar açık mı (overlay) */
   mobileOpen?: boolean;
   /** Mobilde sidebar kapatma (menü tıklanınca çağrılır) */
@@ -215,6 +216,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   badgeOverrides,
   navItems = NAV_ITEMS,
   onLogout,
+  logoutLabel = 'Çıkış Yap',
   mobileOpen = false,
   onClose,
   defaultIconOnly = false,
@@ -553,7 +555,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <span className="text-rose-400 shrink-0">
                         <LogOut className="w-5 h-5" />
                       </span>
-                      <span className="text-sm font-medium truncate">Çıkış Yap</span>
+                      <span className="text-sm font-medium truncate">{logoutLabel}</span>
                     </button>
                   ) : null}
                 </div>
@@ -566,7 +568,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onLogout}
-            title={iconOnly ? "Çıkış Yap" : undefined}
+            title={iconOnly ? logoutLabel : undefined}
             className={`w-full flex items-center rounded-xl text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-all duration-200 group ${
               iconOnly ? "justify-center px-2 py-2.5" : "gap-3 px-3.5 py-2.5"
             }`}
@@ -574,7 +576,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-white/5 group-hover:bg-red-500/10 transition-colors shrink-0">
               <LogOut className="w-5 h-5" />
             </div>
-            {!iconOnly && <span className="text-sm font-semibold">Çıkış Yap</span>}
+            {!iconOnly && <span className="text-sm font-semibold">{logoutLabel}</span>}
           </button>
         )}
       </div>

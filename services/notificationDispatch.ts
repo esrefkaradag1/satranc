@@ -7,7 +7,7 @@ import {
   type NotificationDispatchContext,
   type NotificationEvent,
 } from '../lib/notificationEvents';
-import { getDeliveryChannel } from '../lib/notificationRouting';
+import { getDeliveryChannel, hydrateNotificationDeliveryRules } from '../lib/notificationRouting';
 import { createParentPanelNotification } from '../lib/parentPanelNotifications';
 import {
   loadWhatsAppAutoRules,
@@ -69,10 +69,10 @@ async function sendWhatsAppForEvent(
   return count;
 }
 
-function sendPanelForEvent(event: NotificationEvent, ctx: NotificationDispatchContext): boolean {
+async function sendPanelForEvent(event: NotificationEvent, ctx: NotificationDispatchContext): Promise<boolean> {
   if (!ctx.student?.id) return false;
   const content = buildPanelNotificationContent(event, ctx);
-  createParentPanelNotification({
+  await createParentPanelNotification({
     studentId: ctx.student.id,
     event,
     title: content.title,
@@ -91,6 +91,7 @@ export async function dispatchNotification(
     return { whatsapp: 0, panel: false, skipped: true };
   }
 
+  await hydrateNotificationDeliveryRules();
   const channel = getDeliveryChannel(event);
   if (channel === 'off') {
     return { whatsapp: 0, panel: false, skipped: true };
@@ -100,7 +101,7 @@ export async function dispatchNotification(
   let panel = false;
 
   if (channelUsesPanel(channel)) {
-    panel = sendPanelForEvent(event, ctx);
+    panel = await sendPanelForEvent(event, ctx);
   }
   if (channelUsesWhatsApp(channel)) {
     whatsapp = await sendWhatsAppForEvent(event, ctx);

@@ -10,6 +10,7 @@ import {
   fetchLichessUsers,
   isChessPlatformBackendAvailable,
   isLichessGloballyRateLimited,
+  lichessActivityFetchWasOk,
   reconcileChessComMemberStats,
   type ChessComGame,
   type LichessActivity,
@@ -19,9 +20,9 @@ import { loadPlatformDayStatsFromDb } from './platformStatsCacheService';
 import type { PlatformDayStats } from '../lib/homeworkPlatformUtils';
 import { istanbulDayKey } from '../lib/homeworkDayUtils';
 import {
-  isRemotePeriodStatsFresh,
   loadRemotePeriodStats,
   saveRemotePeriodStats,
+  wasHarvestedToday,
 } from '../lib/leaderboardPeriodRemoteStore';
 import type { CachedStudentPeriodStats } from '../lib/leaderboardPeriodCache';
 import {
@@ -651,8 +652,10 @@ export async function persistLeaderboardStatsFromActivity(
   student: Student,
   activities: LichessActivity[],
   homeworkAttempts: HomeworkPuzzleAttempt[] = [],
+  opts?: { stampEmpty?: boolean },
 ): Promise<void> {
-  if (!student.id || activities.length === 0) return;
+  if (!student.id) return;
+  if (activities.length === 0 && !opts?.stampEmpty) return;
   for (const period of ['week', 'month'] as const) {
     const bounds = getPeriodBounds(period);
     const internalCorrect = homeworkAttempts.filter(
@@ -673,33 +676,69 @@ export async function persistLeaderboardStatsFromActivity(
   }
 }
 
-/** Antrenör tarayıcısından en fazla 1 eksik öğrenciyi yavaşça tamamla (15/2dk limiti). */
+let clubHarvestInFlight = false;
+
 export async function harvestStaleLeaderboardStudent(
   peers: Student[],
   homeworkAttempts: HomeworkPuzzleAttempt[],
   period: LeaderboardPeriod,
 ): Promise<LeaderboardEntry | null> {
-  if (isLichessGloballyRateLimited()) return null;
+  const rows = await harvestClubLeaderboardDaily(peers, homeworkAttempts, period, { limit: 1 });
+  return rows[0] ?? null;
+}
+
+/**
+ * Lichess activity limiti (15/2dk) yüzünden günde bir, yavaş sıra.
+ * Öğrenci girişi gerekmez; antrenör sayfası açıkken kulüp listesini çeker.
+ */
+export async function harvestClubLeaderboardDaily(
+  peers: Student[],
+  homeworkAttempts: HomeworkPuzzleAttempt[],
+  period: LeaderboardPeriod,
+  opts?: {
+    limit?: number;
+    shouldAbort?: () => boolean;
+    onStudent?: (entry: LeaderboardEntry) => void;
+  },
+): Promise<LeaderboardEntry[]> {
+  if (clubHarvestInFlight || isLichessGloballyRateLimited()) return [];
   const bounds = getPeriodBounds(period);
   const remote = await loadRemotePeriodStats(peers.map((p) => String(p.id)), period, bounds.startMs);
-  const stale = peers.find((peer) => {
+  const due = peers.filter((peer) => {
     if (!peer.lichessUsername?.trim()) return false;
-    const hit = remote.get(String(peer.id));
-    return !hit || !isRemotePeriodStatsFresh(hit.cachedAt);
+    if (wasHarvestedToday(remote.get(String(peer.id))?.cachedAt)) return false;
+    return !wasHarvestedToday(readCachedStudentPeriodStats(peer.id, bounds)?.cachedAt);
   });
-  if (!stale?.lichessUsername?.trim()) return null;
-  const activities = await fetchLichessActivity(stale.lichessUsername).catch(() => []);
-  if (isLichessGloballyRateLimited() && activities.length === 0) return null;
-  if (activities.length === 0) return null;
-  await persistLeaderboardStatsFromActivity(stale, activities, homeworkAttempts);
-  return rankLeaderboardEntries(
-    [await buildStudentLeaderboardRow(stale, bounds, homeworkAttempts, 'activity', {
-      allowLiveLichess: false,
-      persistRemote: true,
-      period,
-    })],
-    'activity',
-  )[0] ?? null;
+  if (due.length === 0) return [];
+
+  clubHarvestInFlight = true;
+  const updated: LeaderboardEntry[] = [];
+  const cap = Math.max(1, opts?.limit ?? due.length);
+  try {
+    for (const student of due.slice(0, cap)) {
+      if (opts?.shouldAbort?.() || isLichessGloballyRateLimited()) break;
+      const username = student.lichessUsername?.trim();
+      if (!username) continue;
+      const activities = await fetchLichessActivity(username).catch(() => [] as LichessActivity[]);
+      if (isLichessGloballyRateLimited() && activities.length === 0) break;
+      if (!lichessActivityFetchWasOk(username)) continue;
+      await persistLeaderboardStatsFromActivity(student, activities, homeworkAttempts, { stampEmpty: true });
+      const ranked = rankLeaderboardEntries(
+        [await buildStudentLeaderboardRow(student, bounds, homeworkAttempts, 'activity', {
+          allowLiveLichess: false,
+          persistRemote: true,
+          period,
+        })],
+        'activity',
+      )[0];
+      if (!ranked) continue;
+      updated.push(ranked);
+      opts?.onStudent?.(ranked);
+    }
+  } finally {
+    clubHarvestInFlight = false;
+  }
+  return updated;
 }
 
 /** API beklerken anında gösterilecek önbellek tablosu (yalnızca aktivite modu). */

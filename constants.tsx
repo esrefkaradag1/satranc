@@ -2,9 +2,9 @@
 import React from 'react';
 import { 
   LayoutDashboard, Users, FileText, CheckSquare, BarChart3, 
-  Wallet, MessageCircle, Video, Image, ExternalLink, Trophy,
+  Wallet, MessageCircle, Video, Image, ExternalLink,   Trophy,
   CalendarCheck, BookOpen, ShieldCheck, Box, CalendarDays, Grid, CreditCard, User, Building2,
-  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone, Globe, Bell, Target
+  GraduationCap, TrendingUp, MessageSquare, BookMarked, UserCog, Phone, Globe, Bell, Target, Swords
 } from 'lucide-react';
 
 /** Menü öğesi ikon kutusu rengi: Tailwind sınıfı (bg-* veya gradient) */
@@ -125,6 +125,7 @@ export const NAV_CATEGORIES: NavCategory[] = [
     icon: <TrendingUp className="w-4 h-4" />,
     items: [
       { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'chessduello', label: 'ChessDuello', icon: <Swords className="w-5 h-5" />, iconColor: 'violet' },
       { id: 'analysis', label: 'Analiz & Performans', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'blue-violet' },
     ],
   },
@@ -198,6 +199,7 @@ export const COACH_NAV_CATEGORIES: NavCategory[] = [
     icon: <TrendingUp className="w-4 h-4" />,
     items: [
       { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'chessduello', label: 'ChessDuello', icon: <Swords className="w-5 h-5" />, iconColor: 'violet' },
       { id: 'analysis', label: 'Analiz & Performans', icon: <BarChart3 className="w-5 h-5" />, iconColor: 'rose' },
     ],
   },
@@ -273,6 +275,13 @@ export const CLUB_NAV_CATEGORIES: NavCategory[] = [
       { id: 'gallery', label: 'Galeri İşlemleri', icon: <Image className="w-5 h-5" />, iconColor: 'rose' },
       { id: 'messages', label: 'Site İçi Mesajlar', icon: <MessageCircle className="w-5 h-5" />, iconColor: 'emerald' },
       { id: 'whatsapp', label: 'WhatsApp Yönetimi', icon: <Phone className="w-5 h-5" />, iconColor: 'emerald' },
+    ],
+  },
+  {
+    title: 'Raporlama',
+    icon: <TrendingUp className="w-4 h-4" />,
+    items: [
+      { id: 'chessduello', label: 'ChessDuello', icon: <Swords className="w-5 h-5" />, iconColor: 'violet' },
     ],
   },
 ];

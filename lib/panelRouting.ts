@@ -18,6 +18,7 @@ export const TAB_TO_SLUG: Record<string, string> = {
   tournaments: 'turnuvalar',
   homework: 'odev-yonetimi',
   leaderboard: 'lider-tablosu',
+  chessduello: 'chessduello',
   analysis: 'analiz-performans',
   finance: 'kasa-finans',
   inventory: 'depo-envanter',

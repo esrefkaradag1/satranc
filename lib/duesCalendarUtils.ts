@@ -113,7 +113,15 @@ export function getDuesMonthCell(
     && !waivedMonth
     && paid < dueInfo.expected;
 
-  const inactiveMonth = beforeRegistration || waivedMonth || frozenUnpaid;
+  const noFeeConfigured =
+    !beforeRegistration
+    && !waivedMonth
+    && !dueInfo.isScholarship
+    && student.registrationType !== 'package'
+    && dueInfo.expected <= 0
+    && paid <= 0;
+
+  const inactiveMonth = beforeRegistration || waivedMonth || frozenUnpaid || noFeeConfigured;
   const expected = inactiveMonth && !frozenUnpaid
     ? 0
     : (student.registrationType === 'package' ? 0 : dueInfo.expected);
@@ -129,16 +137,18 @@ export function getDuesMonthCell(
             ? (paid > 0 ? 'Ödendi' : 'Paket')
             : dueInfo.isScholarship
               ? 'Burslu'
-              : isFuture && paid <= 0
-                ? 'Bekliyor'
-                : paid >= expected && expected > 0
-                  ? 'Ödendi'
-                  : paid > 0
-                    ? 'Kısmi'
-                    : 'Ödenmedi';
+              : noFeeConfigured
+                ? 'Ücret yok'
+                : isFuture && paid <= 0
+                  ? 'Bekliyor'
+                  : paid >= expected && expected > 0
+                    ? 'Ödendi'
+                    : paid > 0
+                      ? 'Kısmi'
+                      : 'Ödenmedi';
 
   const tone =
-    beforeRegistration || waivedMonth
+    beforeRegistration || waivedMonth || noFeeConfigured
       ? 'bg-slate-900/50 border-slate-700/40 opacity-60'
       : frozenUnpaid
         ? 'bg-slate-800/60 border-slate-500/50 opacity-80'
@@ -157,7 +167,7 @@ export function getDuesMonthCell(
                   : 'bg-rose-500/30 border-rose-400/55 shadow-sm shadow-rose-500/15';
 
   const stateColor =
-    state === 'Kayıt öncesi' || state === 'Muaf' || state === 'Dondu' ? 'text-slate-500'
+    state === 'Kayıt öncesi' || state === 'Muaf' || state === 'Dondu' || state === 'Ücret yok' ? 'text-slate-500'
       : state === 'Ödendi' ? 'text-emerald-200'
         : state === 'Burslu' ? 'text-emerald-300'
           : state === 'Kısmi' ? 'text-amber-200'
@@ -330,7 +340,7 @@ export function summarizeClubMonthDues(
       disciplineBranches,
     );
 
-    if (cell.inactive || cell.state === 'Paket' || cell.state === 'Bekliyor') {
+    if (cell.inactive || cell.state === 'Paket' || cell.state === 'Bekliyor' || cell.state === 'Ücret yok') {
       excluded += 1;
       continue;
     }

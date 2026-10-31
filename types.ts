@@ -33,6 +33,10 @@ export interface Student {
   /** OAuth bağlantı zamanı (token istemciye gönderilmez; yalnızca bağlı mı kontrolü için) */
   lichessOauthConnectedAt?: string | null;
   chessComUsername?: string;
+  /** ChessDuello kulüp üyesi kullanıcı adı */
+  chessDuelloUsername?: string;
+  /** ChessDuello üye UUID (Coach API) */
+  chessDuelloMemberId?: string;
   /** FIDE oyuncu ID (ratings.fide.com profilinden); girilince FIDE bilgileri çekilir */
   fideId?: string;
   school?: string;

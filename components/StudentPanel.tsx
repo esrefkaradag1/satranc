@@ -39,6 +39,8 @@ import {
   KeyRound,
   Bell,
   MessageCircle,
+  ArrowLeft,
+  Eye,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { analyzeStudentHomework } from '../services/geminiService';
@@ -337,7 +339,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, logout, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs, isStaffImpersonating } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
@@ -1373,7 +1375,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [activeTab, joinedRoomId]);
 
   const handleLogout = () => {
-    logout();
     onLogout();
   };
 
@@ -1495,6 +1496,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             : undefined
         }
         onLogout={handleLogout}
+        logoutLabel={isStaffImpersonating ? 'Listeye dön' : 'Çıkış Yap'}
         footerProfile={{
           name: viewAs === 'student' ? student.name : veliAdi,
           subtitle: viewAs === 'student' ? 'Öğrenci hesabı' : `Çocuk: ${student.name}`,
@@ -1510,6 +1512,26 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
       <main className={`flex-1 min-w-0 ml-0 min-h-screen flex flex-col relative overflow-x-hidden transition-[margin] duration-300 ${embedApp ? '' : sidebarDesktopExpanded ? 'lg:ml-64' : 'lg:ml-[4.5rem]'}`}>
         <div className="absolute inset-0 atmospheric-bg pointer-events-none" />
+        {isStaffImpersonating && !embedApp ? (
+          <div className="relative z-40 sticky top-0 px-4 sm:px-6 lg:px-8 py-2 bg-amber-950/90 border-b border-amber-500/30 text-amber-100">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs sm:text-sm font-bold inline-flex items-center gap-2 min-w-0">
+                <Eye className="w-4 h-4 shrink-0" />
+                <span className="truncate">
+                  Gizli giriş · {viewAs === 'parent' ? 'Veli paneli' : 'Öğrenci paneli'} · {student.name}
+                </span>
+              </p>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-[11px] font-bold text-amber-50"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                Listeye dön
+              </button>
+            </div>
+          </div>
+        ) : null}
         {!embedApp && <header className="relative z-10 h-14 sm:h-16 lg:h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30 bg-[#020617]/60 backdrop-blur-2xl border-b border-white/[0.06] shrink-0 shadow-lg shadow-black/5">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <button type="button" onClick={() => setSidebarOpen(true)} className="p-2.5 rounded-xl lg:hidden hover:bg-white/5 text-slate-400 hover:text-white shrink-0 transition-colors" aria-label="Menüyü aç">
@@ -1539,6 +1561,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               initials={viewAs === 'student' ? initials(student.name) : initials(veliAdi)}
               items={studentAccountMenuItems}
               onLogout={handleLogout}
+              logoutLabel={isStaffImpersonating ? 'Listeye dön' : 'Çıkış Yap'}
               accent="indigo"
               showIdentity={false}
               avatarClassName="w-10 h-10 sm:w-11 sm:h-11 rounded-xl"

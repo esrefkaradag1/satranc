@@ -91,9 +91,9 @@ export const DEFAULT_NOTIFICATION_CHANNELS: Record<NotificationEvent, Notificati
   lesson_start: 'both',
   lesson_present: 'panel',
   lesson_absent: 'panel',
-  training_completed: 'whatsapp',
-  training_partial: 'whatsapp',
-  training_incomplete: 'whatsapp',
+  training_completed: 'both',
+  training_partial: 'both',
+  training_incomplete: 'both',
 };
 
 export const CHANNEL_LABELS: Record<NotificationChannel, string> = {

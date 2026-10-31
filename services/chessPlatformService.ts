@@ -1691,6 +1691,16 @@ export async function fetchLichessActivity(username: string): Promise<LichessAct
   return promise;
 }
 
+/** 200/404 başarı; 429 ve ağ hatası false — harvest gün damgası için. */
+export function lichessActivityFetchWasOk(username: string): boolean {
+  const trimmed = normalizeLichessUsername(username);
+  if (!trimmed) return false;
+  if (isLichessUnknownUser(trimmed)) return true;
+  const cached = lichessActivityCache.get(lichessActivityCacheKey(trimmed));
+  if (!cached || cached.rateLimited) return false;
+  return Date.now() - cached.fetchedAt < LICHESS_ACTIVITY_CACHE_TTL_MS;
+}
+
 function lichessGameTimestamp(game: LichessGame): number {
   return game.lastMoveAt ?? game.createdAt ?? 0;
 }

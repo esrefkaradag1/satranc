@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  X, Users, Phone, KeyRound, Copy, Check, Eye, EyeOff, GraduationCap,
+  X, Users, Phone, KeyRound, Copy, Check, Eye, EyeOff, GraduationCap, LogIn,
 } from 'lucide-react';
 import type { Student } from '../../types';
+import { useApp } from '../../AppContext';
 
 type Props = {
   student: Student;
@@ -79,9 +80,23 @@ function SecretRow({
 }
 
 const StudentParentAccessModal: React.FC<Props> = ({ student, onClose, onCopied }) => {
+  const { enterStudentOrParentPanel, showToast, auth } = useApp();
+  const canImpersonate = auth?.role === 'admin' || auth?.role === 'coach' || auth?.role === 'club';
   const [showParentPin, setShowParentPin] = useState(false);
   const [showStudentPassword, setShowStudentPassword] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const enterPanel = (viewAs: 'student' | 'parent') => {
+    const ok = enterStudentOrParentPanel(student.id, viewAs);
+    if (!ok) {
+      showToast('Bu oturumdan gizli giriş yapılamadı.', 'error');
+      return;
+    }
+    showToast(
+      viewAs === 'parent' ? 'Veli paneline gizli giriş yapıldı.' : 'Öğrenci paneline gizli giriş yapıldı.',
+      'success',
+    );
+  };
 
   const parentPin = student.parentPin?.trim() || '';
   const username = student.username?.trim() || '';
@@ -209,10 +224,30 @@ const StudentParentAccessModal: React.FC<Props> = ({ student, onClose, onCopied 
             </div>
           </section>
 
+          {canImpersonate ? (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => enterPanel('parent')}
+                className="inline-flex items-center justify-center gap-2 px-3 py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-bold transition-colors"
+              >
+                <LogIn className="w-4 h-4" />
+                Veli paneli
+              </button>
+              <button
+                type="button"
+                onClick={() => enterPanel('student')}
+                className="inline-flex items-center justify-center gap-2 px-3 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold transition-colors"
+              >
+                <GraduationCap className="w-4 h-4" />
+                Öğrenci paneli
+              </button>
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={copyAll}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold transition-colors"
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-slate-100 text-sm font-bold transition-colors"
           >
             {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
             {copied ? 'Kopyalandı' : 'Tüm bilgileri kopyala'}

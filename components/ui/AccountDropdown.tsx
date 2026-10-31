@@ -18,6 +18,7 @@ interface AccountDropdownProps {
   initials?: string;
   items?: AccountDropdownItem[];
   onLogout?: () => void;
+  logoutLabel?: string;
   accent?: Accent;
   align?: 'left' | 'right';
   showIdentity?: boolean;
@@ -58,6 +59,7 @@ const AccountDropdown: React.FC<AccountDropdownProps> = ({
   initials,
   items = [],
   onLogout,
+  logoutLabel = 'Çıkış Yap',
   accent = 'indigo',
   align = 'right',
   showIdentity = true,
@@ -175,7 +177,7 @@ const AccountDropdown: React.FC<AccountDropdownProps> = ({
                 <span className="text-rose-400 shrink-0">
                   <LogOut className="w-5 h-5" />
                 </span>
-                <span className="text-sm font-medium truncate">Çıkış Yap</span>
+                <span className="text-sm font-medium truncate">{logoutLabel}</span>
               </button>
             ) : null}
           </div>

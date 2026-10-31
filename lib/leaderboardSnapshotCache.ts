@@ -3,10 +3,10 @@ import type { LeaderboardPointSettings } from './leaderboardPointSettings';
 
 const STORAGE_KEY = 'netchess_leaderboard_snapshot_v2';
 const LEGACY_STORAGE_KEY = 'netchess_leaderboard_snapshot_v1';
-/** Eski sabit (footer/metin uyumu). Yeni otomatik tarama 2 saatte bir. */
+/** Eski sabit (footer/metin uyumu). Lichess tarama günde bir. */
 export const LEADERBOARD_DAILY_REFRESH_HOUR = 6;
-/** Antrenör/admin tarayıcısında lider tablosu yenileme aralığı. */
-export const LEADERBOARD_REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000;
+/** Antrenör/admin tarayıcısında Lichess tarama aralığı: günde bir. */
+export const LEADERBOARD_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 type SnapshotRecord = {
   entries: LeaderboardEntry[];
