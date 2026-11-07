@@ -113,6 +113,11 @@ export type ChessDuelloResult = {
   answeredCount: number;
 };
 
+/** Turnuva tamamlandıktan sonra ChessDuello'nun döndürdüğü oyuncu denemesi.
+ * Şema, Coach API sürümüne göre genişleyebildiği için ayrıntı alanlarını olduğu
+ * gibi koruyoruz; arayüz bilinen alanları güvenle gösterir. */
+export type ChessDuelloAttempt = Record<string, unknown>;
+
 type Envelope<T> = {
   data: T;
   pagination?: { limit?: number; hasMore?: boolean; nextCursor?: string | null };
@@ -266,6 +271,14 @@ export async function chessduelloResults(
     limit: opts?.limit ?? 100,
     after: opts?.after,
   });
+}
+
+export async function chessduelloAttempt(
+  tournamentId: string,
+  memberId: string,
+  clubId?: string,
+): Promise<Envelope<ChessDuelloAttempt>> {
+  return request('GET', { resource: 'attempt', tournamentId, memberId, clubId });
 }
 
 export function matchChessDuelloMember<T extends {

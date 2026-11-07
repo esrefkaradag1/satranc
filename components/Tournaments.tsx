@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
   Trophy, Plus, Clock3, CalendarDays, Trash2, Users, Shuffle, 
   ChevronLeft, Play, Info, MessageSquare, Swords, Flame, 
@@ -8,6 +8,14 @@ import { useApp } from '../AppContext';
 import { canShowStudentCounts } from '../lib/studentCountVisibility';
 import { useCanShowStudentCounts } from './ui/StudentCountText';
 import { filterStudentsByClub } from '../lib/clubScope';
+import { resolveAuthClubId } from '../lib/supabaseClubContext';
+import {
+  ChessDuelloApiError,
+  chessduelloStatus,
+  chessduelloTournaments,
+  tournamentTitle,
+  type ChessDuelloTournament,
+} from '../lib/chessduelloClient';
 import type { Tournament, TournamentPairing, TournamentStanding, Student } from '../types';
 
 interface TournamentsProps {
@@ -17,8 +25,38 @@ interface TournamentsProps {
 
 const inputCls = 'w-full px-3 py-2.5 rounded-lg text-sm bg-slate-900 border border-slate-700/60 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500/50 transition-all';
 
+function chessDuelloStatusLabel(status: string): string {
+  const value = status.trim().toLowerCase();
+  if (value === 'running' || value === 'active') return 'Devam ediyor';
+  if (value === 'ended' || value === 'finished' || value === 'completed') return 'Tamamlandı';
+  if (value === 'upcoming' || value === 'scheduled') return 'Yakında';
+  return status || '—';
+}
+
+function formatChessDuelloDate(value: string | null): string {
+  if (!value) return 'Tarih belirtilmemiş';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Tarih belirtilmemiş' : date.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function formatChessDuelloLimit(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'Süre sınırı yok';
+  const minutes = Math.round(seconds / 60);
+  return minutes > 0 ? `${minutes} dk süre sınırı` : `${seconds} sn süre sınırı`;
+}
+
 const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => {
-  const { scopedTournaments: tournaments, addTournament, updateTournament, deleteTournament, scopedStudents: students, scopedCoaches: coaches, auth } = useApp();
+  const {
+    scopedTournaments: tournaments,
+    addTournament,
+    updateTournament,
+    deleteTournament,
+    scopedStudents: students,
+    scopedCoaches: coaches,
+    auth,
+    clubs,
+    branchOfficeRecords,
+  } = useApp();
   const showStudentCounts = canShowStudentCounts(auth);
   const [showForm, setShowForm] = useState(false);
   const [activeTournamentId, setActiveTournamentId] = useState<string | null>(null);
@@ -31,10 +69,41 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
   const [startAt, setStartAt] = useState(() => new Date(Date.now() + 3600000).toISOString().slice(0, 16));
   const [description, setDescription] = useState('');
   const [isRated, setIsRated] = useState(true);
+  const [chessDuelloTournaments, setChessDuelloTournaments] = useState<ChessDuelloTournament[]>([]);
+  const [chessDuelloLoading, setChessDuelloLoading] = useState(true);
+  const [chessDuelloError, setChessDuelloError] = useState('');
+
+  const chessDuelloClubId = useMemo(
+    () => resolveAuthClubId(auth, coaches, clubs, branchOfficeRecords) ?? (clubs.length === 1 ? clubs[0].id : ''),
+    [auth, coaches, clubs, branchOfficeRecords],
+  );
+
+  const refreshChessDuello = useCallback(async () => {
+    setChessDuelloLoading(true);
+    setChessDuelloError('');
+    try {
+      const status = await chessduelloStatus(chessDuelloClubId || undefined);
+      if (!status.configured) {
+        setChessDuelloTournaments([]);
+        return;
+      }
+      const response = await chessduelloTournaments(chessDuelloClubId || undefined, { limit: 100 });
+      const data = response.data;
+      setChessDuelloTournaments(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setChessDuelloTournaments([]);
+      setChessDuelloError(err instanceof ChessDuelloApiError ? err.message : 'ChessDuello turnuvaları alınamadı.');
+    } finally {
+      setChessDuelloLoading(false);
+    }
+  }, [chessDuelloClubId]);
+
+  useEffect(() => {
+    void refreshChessDuello();
+  }, [refreshChessDuello]);
 
   const list = useMemo(() => {
-    const base = tournaments;
-    return base.sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime());
+    return [...tournaments].sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime());
   }, [tournaments]);
 
   const activeTournament = useMemo(() => 
@@ -205,6 +274,51 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
       )}
 
       {/* Tournament List */}
+      <section className="border-y border-violet-400/15 py-6">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Swords className="h-5 w-5 text-violet-300" />
+              <h2 className="text-lg font-black text-white">ChessDuello turnuvaları</h2>
+              <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-violet-200">Harici kaynak</span>
+            </div>
+            <p className="mt-1 text-sm text-slate-400">ChessDuello Coach API üzerinden alınır; burada yalnızca görüntülenir.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refreshChessDuello()}
+            disabled={chessDuelloLoading}
+            className="rounded-xl border border-violet-400/20 px-3 py-2 text-xs font-bold text-violet-200 transition-colors hover:bg-violet-500/10 focus:outline-none focus:ring-2 focus:ring-violet-400/50 disabled:cursor-wait disabled:opacity-50"
+          >
+            {chessDuelloLoading ? 'Yükleniyor…' : 'ChessDuello’yu yenile'}
+          </button>
+        </div>
+
+        {chessDuelloError ? <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{chessDuelloError}</p> : null}
+        {!chessDuelloError && !chessDuelloLoading && chessDuelloTournaments.length === 0 ? (
+          <p className="rounded-xl bg-slate-900/50 px-4 py-3 text-sm text-slate-400">Bu kulüp için ChessDuello turnuvası bulunmuyor veya bağlantı yapılandırılmamış.</p>
+        ) : null}
+        {chessDuelloTournaments.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {chessDuelloTournaments.map((tournament) => (
+              <article key={tournament.id} className="rounded-2xl border border-violet-400/15 bg-violet-500/[0.04] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-black text-white">{tournamentTitle(tournament)}</h3>
+                    <p className="mt-1 text-xs text-slate-400">{formatChessDuelloDate(tournament.startDate)} – {formatChessDuelloDate(tournament.endDate)}</p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-1 text-[10px] font-black text-violet-200">{chessDuelloStatusLabel(tournament.status)}</span>
+                </div>
+                <div className="mt-4 flex items-center justify-between border-t border-violet-400/10 pt-3 text-xs text-slate-300">
+                  <span>{tournament.totalPuzzles} bulmaca</span>
+                  <span>{formatChessDuelloLimit(tournament.timeLimitSeconds)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {list.length === 0 ? (
           <div className="col-span-full py-20 text-center bg-slate-800/20 rounded-3xl border-2 border-dashed border-white/5">

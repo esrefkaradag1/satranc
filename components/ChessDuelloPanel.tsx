@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  ChevronRight,
   KeyRound,
   Loader2,
   RefreshCw,
@@ -15,6 +16,7 @@ import {
   ChessDuelloApiError,
   chessduelloAllMembers,
   chessduelloAnalytics,
+  chessduelloAttempt,
   chessduelloClearKey,
   chessduelloClan,
   chessduelloResults,
@@ -26,6 +28,7 @@ import {
   matchChessDuelloMember,
   tournamentTitle,
   type ChessDuelloAnalytics,
+  type ChessDuelloAttempt,
   type ChessDuelloClan,
   type ChessDuelloMember,
   type ChessDuelloResult,
@@ -51,6 +54,36 @@ function fmtDay(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('tr-TR');
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function valueOf(row: Record<string, unknown> | null | undefined, keys: string[]): unknown {
+  if (!row) return undefined;
+  for (const key of keys) {
+    if (row[key] != null) return row[key];
+  }
+  return undefined;
+}
+
+function displayValue(value: unknown): string {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'Evet' : 'Hayır';
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  return String(value);
+}
+
+function attemptItems(attempt: ChessDuelloAttempt | null): Record<string, unknown>[] {
+  if (!attempt) return [];
+  const source = asRecord(attempt.attempt) ?? attempt;
+  const candidates = ['puzzles', 'answers', 'attempts', 'items', 'details'];
+  for (const key of candidates) {
+    const value = source[key];
+    if (Array.isArray(value)) return value.map(asRecord).filter((item): item is Record<string, unknown> => Boolean(item));
+  }
+  return [];
 }
 
 const inputCls =
@@ -86,6 +119,10 @@ const ChessDuelloPanel: React.FC = () => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedTournament, setSelectedTournament] = useState<ChessDuelloTournament | null>(null);
   const [results, setResults] = useState<ChessDuelloResult[]>([]);
+  const [selectedResult, setSelectedResult] = useState<ChessDuelloResult | null>(null);
+  const [attemptReport, setAttemptReport] = useState<ChessDuelloAttempt | null>(null);
+  const [attemptLoading, setAttemptLoading] = useState(false);
+  const [attemptError, setAttemptError] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -180,11 +217,30 @@ const ChessDuelloPanel: React.FC = () => {
   const openTournament = async (tournament: ChessDuelloTournament) => {
     setSelectedTournament(tournament);
     setResults([]);
+    setSelectedResult(null);
+    setAttemptReport(null);
+    setAttemptError('');
     try {
       const res = await chessduelloResults(tournament.id, activeClubId || undefined);
       setResults(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Turnuva sonuçları alınamadı', 'error');
+    }
+  };
+
+  const openAttemptReport = async (result: ChessDuelloResult) => {
+    if (!selectedTournament || !result.member?.id) return;
+    setSelectedResult(result);
+    setAttemptReport(null);
+    setAttemptError('');
+    setAttemptLoading(true);
+    try {
+      const response = await chessduelloAttempt(selectedTournament.id, result.member.id, activeClubId || undefined);
+      setAttemptReport(response.data);
+    } catch (err) {
+      setAttemptError(err instanceof Error ? err.message : 'Oyuncu raporu alınamadı');
+    } finally {
+      setAttemptLoading(false);
     }
   };
 
@@ -472,10 +528,20 @@ const ChessDuelloPanel: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
-              <h3 className="text-lg font-black text-white">{tournamentTitle(selectedTournament)}</h3>
+              <div>
+                <h3 className="text-lg font-black text-white">{tournamentTitle(selectedTournament)}</h3>
+                <p className="mt-1 text-xs text-slate-400">
+                  {selectedTournament.totalPuzzles} bulmaca · {fmtDay(selectedTournament.startDate)} – {fmtDay(selectedTournament.endDate)}
+                </p>
+              </div>
               <button type="button" onClick={() => setSelectedTournament(null)} className="text-slate-400 text-sm font-bold">
                 Kapat
               </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <Stat label="Katılımcı" value={String(results.length)} />
+              <Stat label="Bulmaca" value={String(selectedTournament.totalPuzzles)} />
+              <Stat label="Durum" value={selectedTournament.status === 'ended' ? 'Tamamlandı' : selectedTournament.status} />
             </div>
             <table className="w-full text-sm">
               <thead className="text-[10px] uppercase tracking-wider text-slate-500">
@@ -484,6 +550,7 @@ const ChessDuelloPanel: React.FC = () => {
                   <th className="text-left py-1">Üye</th>
                   <th className="text-left py-1">Puan</th>
                   <th className="text-left py-1">Cevap</th>
+                  <th className="py-1" aria-label="Rapor" />
                 </tr>
               </thead>
               <tbody>
@@ -493,11 +560,46 @@ const ChessDuelloPanel: React.FC = () => {
                     <td className="py-1.5 text-white font-medium">{r.member?.username || (r.isFormerMember ? 'Ayrılmış üye' : '—')}</td>
                     <td className="py-1.5 text-slate-200">{r.score}</td>
                     <td className="py-1.5 text-slate-400">{r.answeredCount}</td>
+                    <td className="py-1.5 text-right">
+                      {r.member?.id ? (
+                        <button
+                          type="button"
+                          onClick={() => void openAttemptReport(r)}
+                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-violet-200 hover:bg-violet-500/15 focus:outline-none focus:ring-2 focus:ring-violet-500/50"
+                        >
+                          Rapor <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             {results.length === 0 ? <p className="text-sm text-slate-400">Sonuç yok veya turnuva bitmemiş.</p> : null}
+
+            {selectedResult ? (
+              <section className="border-t border-white/[0.08] pt-4 space-y-3" aria-live="polite">
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h4 className="font-black text-white">{selectedResult.member?.username} · Turnuva raporu</h4>
+                    <p className="mt-1 text-xs text-slate-400">Bulmaca ayrıntıları turnuva tamamlandığında ChessDuello tarafından açılır.</p>
+                  </div>
+                  <span className="text-xs font-bold text-slate-300 tabular-nums">{selectedResult.answeredCount}/{selectedTournament.totalPuzzles} cevap</span>
+                </div>
+
+                {attemptLoading ? (
+                  <div className="grid grid-cols-3 gap-2 animate-pulse" aria-label="Rapor yükleniyor">
+                    {[1, 2, 3].map((i) => <div key={i} className="h-16 rounded-xl bg-slate-800/70" />)}
+                  </div>
+                ) : null}
+
+                {attemptError ? (
+                  <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{attemptError}</p>
+                ) : null}
+
+                {attemptReport ? <AttemptReport attempt={attemptReport} /> : null}
+              </section>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -510,6 +612,63 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="rounded-2xl border border-white/[0.06] bg-slate-900/40 px-4 py-3">
       <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{label}</div>
       <div className="text-sm font-black text-white mt-1 truncate">{value}</div>
+    </div>
+  );
+}
+
+function AttemptReport({ attempt }: { attempt: ChessDuelloAttempt }) {
+  const data = asRecord(attempt.attempt) ?? attempt;
+  const rows = attemptItems(data);
+  const accuracy = valueOf(data, ['accuracy', 'correctPercent', 'accuracyPercent']);
+  const correct = valueOf(data, ['correct', 'correctCount']);
+  const elapsed = valueOf(data, ['timeSpent', 'timeSpentMs', 'durationMs', 'duration']);
+  const seconds = typeof elapsed === 'number' ? (elapsed > 1000 ? Math.round(elapsed / 1000) : Math.round(elapsed)) : null;
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <Stat label="Doğruluk" value={typeof accuracy === 'number' ? pct(accuracy <= 1 ? accuracy * 100 : accuracy) : '—'} />
+        <Stat label="Doğru" value={displayValue(correct)} />
+        <Stat label="Süre" value={seconds == null ? '—' : `${seconds} sn`} />
+      </div>
+
+      {rows.length ? (
+        <div className="overflow-x-auto rounded-xl border border-white/[0.06]">
+          <table className="w-full min-w-[580px] text-sm">
+            <thead className="bg-slate-900/70 text-[10px] uppercase tracking-wider text-slate-400">
+              <tr>
+                <th className="px-3 py-2 text-left">Bulmaca</th>
+                <th className="px-3 py-2 text-left">Tema</th>
+                <th className="px-3 py-2 text-left">Sonuç</th>
+                <th className="px-3 py-2 text-left">Hamle</th>
+                <th className="px-3 py-2 text-left">Süre</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => {
+                const solved = valueOf(row, ['correct', 'isCorrect', 'solved']);
+                const theme = valueOf(row, ['theme', 'themeName', 'tags']);
+                const move = valueOf(row, ['move', 'answerMove', 'selectedMove', 'wrongMove']);
+                const spent = valueOf(row, ['timeSpentMs', 'durationMs', 'timeSpent', 'duration']);
+                const spentSeconds = typeof spent === 'number' ? Math.round(spent > 1000 ? spent / 1000 : spent) : null;
+                return (
+                  <tr key={String(valueOf(row, ['id', 'puzzleId', 'attemptId']) ?? index)} className="border-t border-white/[0.05]">
+                    <td className="px-3 py-2 text-slate-300 tabular-nums">#{index + 1} {displayValue(valueOf(row, ['elo', 'rating']) ?? '')}</td>
+                    <td className="px-3 py-2 text-slate-300">{Array.isArray(theme) ? theme.map(displayValue).join(', ') : displayValue(theme)}</td>
+                    <td className={`px-3 py-2 font-bold ${solved === true ? 'text-emerald-300' : solved === false ? 'text-rose-300' : 'text-slate-400'}`}>{solved === true ? 'Doğru' : solved === false ? 'Yanlış' : '—'}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-200">{displayValue(move)}</td>
+                    <td className="px-3 py-2 text-slate-400 tabular-nums">{spentSeconds == null ? '—' : `${spentSeconds} sn`}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="rounded-xl bg-slate-900/55 px-3 py-2 text-sm text-slate-400">
+          Ayrıntı kaydı alındı; bu Coach API yanıtında bulmaca satırları bulunmuyor.
+        </p>
+      )}
     </div>
   );
 }
