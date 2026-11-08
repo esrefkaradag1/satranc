@@ -163,6 +163,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoReplyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pieceDropRef = useRef<(args: { sourceSquare: string; targetSquare: string | null; piece?: any }) => boolean>(() => false);
+  const vcDropRef = useRef<(args: { sourceSquare: string; targetSquare: string | null; piece?: any }) => boolean>(() => false);
   const applyingSolutionRef = useRef(false);
   const [platformActivityLoading, setPlatformActivityLoading] = useState(false);
   const [platformActivityError, setPlatformActivityError] = useState<string | null>(null);
@@ -2025,7 +2026,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       return true;
     };
     if (moveFrom) {
-      const moved = handlePieceDrop({ sourceSquare: moveFrom, targetSquare: square });
+      const moved = vsComputer
+        ? vcDropRef.current({ sourceSquare: moveFrom, targetSquare: square })
+        : handlePieceDrop({ sourceSquare: moveFrom, targetSquare: square });
       if (moved) {
         setMoveFrom(null);
         setClickMoveSquares({});
@@ -2054,7 +2057,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         refreshClickMoveOptions(square);
       }
     } catch { /* ignore */ }
-  }, [boardDraggingEnabled, moveFrom, handlePieceDrop, boardFenForInteraction, refreshClickMoveOptions, hideEngineForStudentPuzzle, puzzlePlayNorm]);
+  }, [boardDraggingEnabled, moveFrom, handlePieceDrop, boardFenForInteraction, refreshClickMoveOptions, hideEngineForStudentPuzzle, puzzlePlayNorm, vsComputer]);
 
   const puzzleBranchChoices = useMemo(() => {
     // Öğrenci bulmacasında sync ağacındaki deneme varyasyonları gösterilmez.
@@ -2552,6 +2555,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       return true;
     } catch { return false; }
   }, [vcFen, vcHistory, vcThinking, vcManualGameOver, doComputerMove, updatePresencePayload, lastActionMs, selectedStudy?.id, effectiveChapter?.id, selectedChapter?.id, studentId, persistChapterPracticeLogs]);
+  vcDropRef.current = handleVcDrop;
 
   const canDragStudentPiece = useCallback(({ piece }: { piece?: { pieceType?: string } | string }) => {
     if (vsComputer) return true;

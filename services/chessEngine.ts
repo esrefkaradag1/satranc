@@ -161,7 +161,6 @@ export function getEvaluationPawns(chess: Chess): number {
 }
 
 // ─── Stockfish entegrasyonu (bulmaca / çalışma alanı) ─────────────────────────
-let stockfishInitStarted = false;
 
 /** Seviye 1–10 için movetime (ms): 1=440, 10=2600 */
 function movetimeMsForLevel(level: number): number {
@@ -204,8 +203,7 @@ export async function getBestMoveAsync(
   const moves = chess.moves({ verbose: true });
   if (moves.length === 0) return null;
 
-  if (!stockfishInitStarted) {
-    stockfishInitStarted = true;
+  if (!isStockfishReady()) {
     await initStockfish();
   }
   if (isStockfishReady()) {
@@ -216,6 +214,8 @@ export async function getBestMoveAsync(
       const san = uciToSan(chess, uci);
       if (san) return san;
     }
+  } else {
+    console.warn('[chessEngine] Stockfish hazır değil, zayıf yerel motora düşülüyor.');
   }
   return getBestMove(chess, opts?.strictFallback ? 10 : level);
 }
@@ -225,8 +225,7 @@ export async function getBestMoveAsync(
  */
 export async function getEvaluationPawnsAsync(chess: Chess, movetimeMs?: number): Promise<number> {
   if (!chess) return 0;
-  if (!stockfishInitStarted) {
-    stockfishInitStarted = true;
+  if (!isStockfishReady()) {
     await initStockfish();
   }
   if (isStockfishReady()) {

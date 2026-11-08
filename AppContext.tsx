@@ -1624,6 +1624,7 @@ function tournamentToDb(t: Tournament): Record<string, unknown> {
     participant_ids: t.participantIds ?? [],
     rounds: t.rounds ?? [],
     standings: t.standings ?? {},
+    round_limit: t.roundLimit ?? null,
   };
 }
 function dbToTournament(row: Record<string, unknown>): Tournament {
@@ -1643,6 +1644,7 @@ function dbToTournament(row: Record<string, unknown>): Tournament {
     participantIds: Array.isArray(r.participant_ids) ? r.participant_ids : Array.isArray(r.participantIds) ? r.participantIds : [],
     rounds: Array.isArray(r.rounds) ? r.rounds : [],
     standings: (r.standings && typeof r.standings === 'object') ? r.standings : {},
+    roundLimit: r.round_limit != null ? Number(r.round_limit) : (r.roundLimit != null ? Number(r.roundLimit) : undefined),
   };
 }
 

@@ -686,6 +686,8 @@ export interface Tournament {
   participantIds?: string[];
   rounds?: TournamentRound[];
   standings?: Record<string, TournamentStanding>;
+  /** İsviçre sistemi için planlanan toplam tur sayısı (Arena'da kullanılmaz) */
+  roundLimit?: number;
 }
 
 export interface TournamentRound {
@@ -697,8 +699,10 @@ export interface TournamentRound {
 
 export interface TournamentPairing {
   whiteId: string;
-  blackId: string;
-  result: '1-0' | '0-1' | '1/2-1/2';
+  /** null => beyaz oyuncu bu tur bay (rakipsiz) geçti */
+  blackId: string | null;
+  /** Sonuç girilene kadar beklemede kalır (bay eşleşmelerde her zaman '1-0') */
+  result?: '1-0' | '0-1' | '1/2-1/2';
 }
 
 export interface TournamentStanding {
@@ -707,6 +711,8 @@ export interface TournamentStanding {
   draws: number;
   losses: number;
   points: number;
+  /** Sonneborn-Berger derece ayırıcı puanı (lichess İsviçre sistemiyle aynı formül) */
+  tieBreak: number;
 }
 
 /** WhatsApp API sağlayıcısı — varsayılan WaMessage (app.wamessage.app) */

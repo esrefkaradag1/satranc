@@ -1902,11 +1902,11 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                             <div className="space-y-1.5">
                               {r.pairings.map((p, i) => {
                                 const w = students.find((s) => s.id === p.whiteId)?.name ?? p.whiteId;
-                                const b = students.find((s) => s.id === p.blackId)?.name ?? p.blackId;
+                                const b = p.blackId == null ? 'BAY' : (students.find((s) => s.id === p.blackId)?.name ?? p.blackId);
                                 const mine = p.whiteId === studentId || p.blackId === studentId;
                                 return (
                                   <div key={`${r.id}-${i}`} className={`text-xs px-2.5 py-2 rounded-lg border ${mine ? 'bg-indigo-600/10 border-indigo-600/30 text-indigo-200' : 'bg-slate-800/50 border-slate-700/50 text-slate-300'}`}>
-                                    {w} vs {b} · <span className="font-bold">{p.result}</span>
+                                    {w} vs {b} · <span className="font-bold">{p.result ?? 'bekleniyor'}</span>
                                   </div>
                                 );
                               })}
