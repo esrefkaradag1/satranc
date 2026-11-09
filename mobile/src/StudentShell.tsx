@@ -12,6 +12,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
+import type { WebViewErrorEvent, WebViewHttpErrorEvent, WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 import type { MobileRole } from './api';
 
 type StudentTab =
@@ -194,6 +195,7 @@ export default function StudentShell({ apiBase, role, studentId, name, onLogout 
             </Pressable>
           </View>
         ) : (
+          // @ts-expect-error react-native-webview@14.0.1 type defs don't yet match React 19.3's ref/JSX typing (upstream lag, SDK 58); runtime is unaffected.
           <WebView
             ref={webRef}
             source={{ uri: `${base}/?embed=app#/${SLUG.summary}` }}
@@ -202,11 +204,11 @@ export default function StudentShell({ apiBase, role, studentId, name, onLogout 
               setReady(true);
               webRef.current?.injectJavaScript(`window.location.hash=${JSON.stringify(`#/${SLUG[tabRef.current]}`)};true;`);
             }}
-            onError={(event) => setFailed(event.nativeEvent.description || 'Sunucuya ulaşılamadı')}
-            onHttpError={(event) => {
+            onError={(event: WebViewErrorEvent) => setFailed(event.nativeEvent.description || 'Sunucuya ulaşılamadı')}
+            onHttpError={(event: WebViewHttpErrorEvent) => {
               if (event.nativeEvent.statusCode >= 400) setFailed(`Sunucu ${event.nativeEvent.statusCode} döndü`);
             }}
-            onNavigationStateChange={(nav) => {
+            onNavigationStateChange={(nav: WebViewNavigation) => {
               const next = tabFromUrl(nav.url);
               if (!next || next === tabRef.current) return;
               tabRef.current = next;

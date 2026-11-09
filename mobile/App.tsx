@@ -324,8 +324,8 @@ export default function App() {
               </View>
             ))}
           </View>
-        ) : null}
-        ListEmptyComponent={session.studentId ? <Text style={styles.empty}>Henüz bildirim yok.</Text> : null}
+        ) : undefined}
+        ListEmptyComponent={session.studentId ? <Text style={styles.empty}>Henüz bildirim yok.</Text> : undefined}
         renderItem={({ item }) => (
           <View style={[styles.card, !item.read && styles.cardUnread]}>
             <Text style={styles.cardTitle}>{item.title}</Text>
