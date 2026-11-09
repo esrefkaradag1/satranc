@@ -763,34 +763,44 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     if (idx >= 0) followCoachChapter(pendingId);
   }, [selectedStudy?.chapters, selectedStudy?.syncEnabled, sticky, followCoachChapter]);
 
+  const followCoachChapterRef = useRef(followCoachChapter);
+  followCoachChapterRef.current = followCoachChapter;
+  const shouldFollowPresenceRowRef = useRef(shouldFollowPresenceRow);
+  shouldFollowPresenceRowRef.current = shouldFollowPresenceRow;
+
   useEffect(() => {
-    if (!selectedStudy?.id) { setPresenceByUserId({}); return; }
+    const studyId = selectedStudy?.id;
+    const syncEnabled = selectedStudy?.syncEnabled;
+    if (!studyId) { setPresenceByUserId({}); return; }
     let mounted = true;
-    loadStudyPresence(selectedStudy.id).then((rows) => {
+    loadStudyPresence(studyId).then((rows) => {
       if (!mounted) return;
       const next: Record<string, any> = {};
       for (const r of rows) next[String(r.user_id)] = r;
       setPresenceByUserId(next);
-      if (selectedStudy.syncEnabled && sticky && studentId) {
+      if (syncEnabled && sticky && studentId) {
         for (const r of rows) {
-          if (!shouldFollowPresenceRow(r)) continue;
-          followCoachChapter(String(r.chapter_id));
+          if (!shouldFollowPresenceRowRef.current(r)) continue;
+          followCoachChapterRef.current(String(r.chapter_id));
           break;
         }
       }
     }).catch(() => {});
     const unsub = subscribeStudyPresence({
-      studyId: selectedStudy.id,
+      studyId,
       onRow: (row) => {
         if (!mounted) return;
         setPresenceByUserId((prev) => ({ ...prev, [String(row.user_id)]: row }));
-        if (!selectedStudy.syncEnabled || !sticky || !studentId) return;
-        if (!shouldFollowPresenceRow(row)) return;
-        followCoachChapter(String(row.chapter_id));
+        if (!syncEnabled || !sticky || !studentId) return;
+        if (!shouldFollowPresenceRowRef.current(row)) return;
+        followCoachChapterRef.current(String(row.chapter_id));
       },
     });
     return () => { mounted = false; unsub(); };
-  }, [selectedStudy?.id, selectedStudy?.syncEnabled, sticky, studentId, followCoachChapter, shouldFollowPresenceRow]);
+    // selectedStudy objesinin referansı her liste güncellemesinde değiştiği için
+    // sadece ihtiyaç duyulan primitive alanlar bağımlılık olarak kullanılıyor;
+    // güncel callback'lere ref üzerinden erişiliyor (gereksiz resubscribe'ı önler).
+  }, [selectedStudy?.id, selectedStudy?.syncEnabled, sticky, studentId]);
 
   // Öğrenci presence (antrenör bölüm takibi için) — payload gönderme; vsComputer state silinmesin.
   useEffect(() => {

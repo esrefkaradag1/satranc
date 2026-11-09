@@ -224,14 +224,43 @@ export async function deleteStudyAsync(studyId: string): Promise<void> {
   }
 }
 
-/** Supabase Realtime aboneliği — çalışmalar değiştiğinde callback çağrılır */
+/**
+ * Supabase Realtime aboneliği — çalışmalar değiştiğinde callback çağrılır.
+ *
+ * Her değişiklikte tüm tabloyu yeniden çekmek (eski davranış), çok sayıda eş zamanlı
+ * bağlantı + sık hamle olduğunda her istemciyi O(N) tam-tablo reload'a zorlayıp ana
+ * thread'i kilitliyordu. Bunun yerine değişen satırı realtime payload'ından alıp
+ * yerel cache üzerinde O(1) olarak güncelliyoruz; tam tablo sadece ilk olayda bir kez
+ * yüklenir.
+ */
 export function subscribeToStudies(callback: (studies: Study[]) => void): () => void {
   if (!isSupabaseBackend()) return () => {};
+  let cache: Study[] | null = null;
+  let loading: Promise<Study[]> | null = null;
+
+  const ensureLoaded = async (): Promise<Study[]> => {
+    if (cache) return cache;
+    if (!loading) loading = loadStudiesAsync();
+    cache = await loading;
+    return cache;
+  };
+
   const channel = supabase
     .channel('chess_studies_changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, async () => {
-      const fresh = await loadStudiesAsync();
-      callback(fresh);
+    .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, async (payload) => {
+      const list = await ensureLoaded();
+      if (payload.eventType === 'DELETE') {
+        const oldId = (payload.old as { id?: string } | null)?.id;
+        if (!oldId) return;
+        cache = list.filter((s) => s.id !== oldId);
+      } else {
+        const row = payload.new as Record<string, unknown> | null;
+        if (!row) return;
+        const updated = rowToStudy(row);
+        const idx = list.findIndex((s) => s.id === updated.id);
+        cache = idx === -1 ? [...list, updated] : list.map((s, i) => (i === idx ? updated : s));
+      }
+      callback(cache);
     })
     .subscribe();
   return () => { supabase.removeChannel(channel); };

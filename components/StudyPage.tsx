@@ -963,27 +963,15 @@ const StudyPage: React.FC = () => {
   }, [selectedStudy, chapterSearch]);
 
   // --- Presence & Global Sync (Chapter Sync) ---
-  useEffect(() => {
-    if (!selectedStudyId || !authUserId) return;
-    
-    // Subscribe to presence updates for this study
-    const unsub = subscribeStudyPresence({
-      studyId: selectedStudyId,
-      onRow: (row) => {
-        // If someone else is driving (coach/admin) and we are sticky, follow their chapter
-        if (row.user_id !== authUserId && row.chapter_id && sticky) {
-          // Identify if the user is a coach (optional, but good if we can)
-          // For now, if we see a chapter change and we are in sync mode, we check if it's different
-          const chapterIdx = selectedStudy?.chapters?.findIndex(c => c.id === row.chapter_id);
-          if (chapterIdx !== undefined && chapterIdx !== -1 && chapterIdx !== selectedChapterIndex) {
-            setSelectedChapterIndex(chapterIdx);
-          }
-        }
-      }
-    });
-
-    return () => unsub();
-  }, [selectedStudyId, authUserId, sticky, selectedChapterIndex, selectedStudy?.chapters]);
+  // Not: bu değerler sık değiştiği için ref üzerinden okunuyor; aksi halde presence
+  // kanalı her bölüm/hamle değişiminde kapatılıp yeniden açılır (resubscribe storm),
+  // özellikle çok sayıda eş zamanlı bağlantı olduğunda gereksiz websocket yüküne yol açar.
+  const presenceStickyRef = useRef(sticky);
+  presenceStickyRef.current = sticky;
+  const presenceChaptersRef = useRef(selectedStudy?.chapters);
+  presenceChaptersRef.current = selectedStudy?.chapters;
+  const presenceChapterIndexRef = useRef(selectedChapterIndex);
+  presenceChapterIndexRef.current = selectedChapterIndex;
 
   // Upsert our own presence periodically
   useEffect(() => {
@@ -1077,6 +1065,15 @@ const StudyPage: React.FC = () => {
       studyId: selectedStudy.id,
       onRow: (row) => {
         if (!mounted) return;
+
+        // Birisi (koç/admin) sürüyorsa ve biz sticky isek onun bölümünü takip et.
+        if (row.user_id !== authUserId && row.chapter_id && presenceStickyRef.current) {
+          const chapterIdx = presenceChaptersRef.current?.findIndex(c => c.id === row.chapter_id);
+          if (chapterIdx !== undefined && chapterIdx !== -1 && chapterIdx !== presenceChapterIndexRef.current) {
+            setSelectedChapterIndex(chapterIdx);
+          }
+        }
+
         setPresenceByUserId((prev) => {
           const userId = String(row.user_id);
           const prevRow = prev[userId];
@@ -1093,7 +1090,7 @@ const StudyPage: React.FC = () => {
       },
     });
     return () => { mounted = false; unsub(); };
-  }, [selectedStudy?.id]);
+  }, [selectedStudy?.id, authUserId]);
 
   const getVsComputerHistory = useCallback((payload: any): string[] => {
     if (!payload) return [];
