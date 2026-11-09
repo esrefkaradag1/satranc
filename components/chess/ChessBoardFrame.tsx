@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { EVAL_BAR_DECISIVE_SCORE, evalBarWhitePercent, formatEvalLabel } from '../../lib/chessBoardUi';
 
 const RANK_SIZE = '1.25rem';
@@ -100,7 +100,14 @@ export function ChessBoardFrame({
   shellClassName = '',
   onShellClick,
 }: ChessBoardFrameProps) {
+  const outerRef = useRef<HTMLDivElement>(null);
   const boardContainerRef = useRef<HTMLDivElement>(null);
+  // Tablet tarayıcılarda (Android WebView, iPadOS Safari) CSS Grid'in esnek (fr) bir
+  // sütununda `aspect-square` bazı reflow'larda (yön değişimi, adres çubuğu kayması)
+  // 0 boyuta çözülüp tahtayı tamamen görünmez bırakabiliyor. Bunu önlemek için tahta
+  // boyutunu JS ile ölçüp piksel cinsinden açıkça veriyoruz; aspect-square yalnızca
+  // ilk render'daki (ölçüm gelene kadar) geçici görünüm için kalıyor.
+  const [measuredBoardPx, setMeasuredBoardPx] = useState<number | null>(null);
   const ranks = boardOrientation === 'white' ? [8, 7, 6, 5, 4, 3, 2, 1] : [1, 2, 3, 4, 5, 6, 7, 8];
   const files = boardOrientation === 'white'
     ? ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
@@ -120,8 +127,30 @@ export function ChessBoardFrame({
   const rankCol = hasEval ? 2 : 1;
   const fileRow = showCoords ? 2 : 1;
 
+  useEffect(() => {
+    const outerEl = outerRef.current;
+    if (!outerEl) return;
+
+    const rootFontPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const remToPx = (rem: string) => parseFloat(rem) * rootFontPx;
+    const fixedColsPx = (showCoords ? remToPx(RANK_SIZE) : 0) + (hasEval ? remToPx(evalW) : 0);
+
+    const recompute = () => {
+      const totalW = outerEl.clientWidth;
+      if (!totalW) return;
+      const px = Math.max(Math.round(totalW - fixedColsPx), 0);
+      if (px > 0) setMeasuredBoardPx(px);
+    };
+
+    recompute();
+    const ro = new ResizeObserver(recompute);
+    ro.observe(outerEl);
+    return () => ro.disconnect();
+  }, [showCoords, hasEval, evalW]);
+
   return (
     <div
+      ref={outerRef}
       data-chess-pointer-root
       className={`w-full min-w-0 ${className}`}
       style={{
@@ -161,8 +190,12 @@ export function ChessBoardFrame({
 
       <div
         ref={boardContainerRef}
-        className={`relative w-full min-w-0 aspect-square ${boardClassName}`}
-        style={{ gridColumn: boardCol, gridRow: 1 }}
+        className={`relative w-full min-w-0 ${measuredBoardPx ? '' : 'aspect-square'} ${boardClassName}`}
+        style={{
+          gridColumn: boardCol,
+          gridRow: 1,
+          ...(measuredBoardPx ? { width: measuredBoardPx, height: measuredBoardPx } : null),
+        }}
       >
         {children}
       </div>
