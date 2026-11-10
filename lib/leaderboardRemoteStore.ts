@@ -77,6 +77,60 @@ export async function loadRemoteLeaderboardSnapshot(opts: {
   }
 }
 
+export type RemoteLeaderboardMonthOption = {
+  periodStartMs: number;
+  /** Örn. "Ekim 2026" */
+  label: string;
+  cachedAt: number;
+};
+
+/**
+ * Bu kulüp + sıralama modu için arşivlenmiş (geçmiş dahil) aylık snapshot'ların listesi —
+ * "geçmiş ay raporu al" seçicisini doldurmak için. Her ay kendi `snapshot_key`'i altında
+ * saklandığından (bkz. leaderboardSnapshotKey) bir sonraki ayın yazması eskisini silmez;
+ * bu liste o yüzden doğal bir arşiv görevi görür.
+ */
+export async function listRemoteLeaderboardMonths(
+  clubScope: string,
+  rankMode: LeaderboardRankMode,
+): Promise<RemoteLeaderboardMonthOption[]> {
+  const sb = readClient();
+  if (!sb) return [];
+  try {
+    const { data, error } = await sb
+      .from(TABLE)
+      .select('period_start_ms, cached_at, club_scope')
+      .eq('period', 'month')
+      .eq('rank_mode', rankMode)
+      .order('period_start_ms', { ascending: false })
+      .limit(60);
+    if (error || !data?.length) return [];
+
+    const scoped = data.filter((row) => String((row as { club_scope?: string }).club_scope ?? '') === clubScope);
+    const rows = scoped.length > 0 ? scoped : data;
+
+    const byMonth = new Map<number, number>();
+    for (const row of rows) {
+      const periodStartMs = Number((row as { period_start_ms?: unknown }).period_start_ms);
+      if (!Number.isFinite(periodStartMs)) continue;
+      const cachedAt = parseCachedAt((row as { cached_at?: unknown }).cached_at);
+      const prev = byMonth.get(periodStartMs);
+      if (prev === undefined || cachedAt > prev) byMonth.set(periodStartMs, cachedAt);
+    }
+
+    return Array.from(byMonth.entries())
+      .sort((a, b) => b[0] - a[0])
+      .map(([periodStartMs, cachedAt]) => ({
+        periodStartMs,
+        cachedAt,
+        label: new Date(periodStartMs).toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }),
+      }));
+  } catch (e) {
+    console.warn('[leaderboard] listRemoteLeaderboardMonths failed:', e);
+    return [];
+  }
+}
+
 export async function saveRemoteLeaderboardSnapshot(opts: {
   snapshotKey: string;
   clubScope: string;

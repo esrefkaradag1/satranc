@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  FileDown,
   Loader2,
   Medal,
   RefreshCw,
@@ -33,7 +34,13 @@ import {
   writeLeaderboardSnapshot,
   entriesHaveActivity,
 } from '../../lib/leaderboardSnapshotCache';
-import { loadRemoteLeaderboardSnapshot, saveRemoteLeaderboardSnapshot } from '../../lib/leaderboardRemoteStore';
+import {
+  loadRemoteLeaderboardSnapshot,
+  saveRemoteLeaderboardSnapshot,
+  listRemoteLeaderboardMonths,
+  type RemoteLeaderboardMonthOption,
+} from '../../lib/leaderboardRemoteStore';
+import ClubLeaderboardPrintView from './ClubLeaderboardPrintView';
 import { ResponsiveTable } from '../ui/ResponsiveTable';
 import { useApp } from '../../AppContext';
 import { normalizeClubKey } from '../../lib/clubScope';
@@ -177,6 +184,13 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState('');
+
+  // Rapor (Yazdır/PDF) — bu ayın GÜNCEL tablosu veya arşivlenmiş geçmiş aylardan biri.
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [monthOptions, setMonthOptions] = useState<RemoteLeaderboardMonthOption[]>([]);
+  const [monthOptionsLoading, setMonthOptionsLoading] = useState(false);
+  const [printReport, setPrintReport] = useState<{ periodLabel: string; entries: LeaderboardEntry[]; generatedAt: number } | null>(null);
+  const [reportLoadingMs, setReportLoadingMs] = useState<number | null>(null);
 
   const peers = useMemo(
     () => peerStudentsOverride ?? getClubPeerStudents(allStudents, anchorStudent),
@@ -569,6 +583,44 @@ export const ClubLeaderboard: React.FC<Props> = ({
       ? `${bounds.label} · ${pointSettings ? formatLeaderboardPointsSummary(pointSettings) : 'bulmaca 1p, galibiyet 10p, beraberlik 5p, mağlubiyet 1p'}`
       : `${bounds.label} · ${leaderboardModeLabel(rankMode)} sıralaması · Lichess + Chess.com`;
 
+  const openMonthPicker = useCallback(async () => {
+    setShowMonthPicker((v) => !v);
+    if (monthOptions.length > 0 || monthOptionsLoading) return;
+    setMonthOptionsLoading(true);
+    try {
+      const months = await listRemoteLeaderboardMonths(clubScope, rankMode);
+      setMonthOptions(months);
+    } finally {
+      setMonthOptionsLoading(false);
+    }
+  }, [clubScope, rankMode, monthOptions.length, monthOptionsLoading]);
+
+  const openCurrentReport = useCallback(() => {
+    setShowMonthPicker(false);
+    setPrintReport({ periodLabel: `${bounds.label} (güncel)`, entries, generatedAt: Date.now() });
+  }, [bounds.label, entries]);
+
+  const openMonthReport = useCallback(async (opt: RemoteLeaderboardMonthOption) => {
+    setShowMonthPicker(false);
+    setReportLoadingMs(opt.periodStartMs);
+    try {
+      const snapshot = await loadRemoteLeaderboardSnapshot({
+        preferredKey: '',
+        clubScope,
+        period: 'month',
+        rankMode,
+        periodStartMs: opt.periodStartMs,
+      });
+      setPrintReport({
+        periodLabel: opt.label,
+        entries: snapshot?.entries ?? [],
+        generatedAt: snapshot?.cachedAt ?? opt.cachedAt,
+      });
+    } finally {
+      setReportLoadingMs(null);
+    }
+  }, [clubScope, rankMode]);
+
   return (
     <div className={`space-y-5 ${compact ? '' : 'animate-in fade-in duration-300'}`}>
       <div className="rounded-2xl bg-[#1e293b] border border-white/5 p-5">
@@ -609,6 +661,53 @@ export const ClubLeaderboard: React.FC<Props> = ({
               >
                 <RefreshCw className={`w-4 h-4 ${fetching ? 'animate-spin' : ''}`} />
               </button>
+            ) : null}
+            {canRefreshLeaderboard ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => void openMonthPicker()}
+                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-800 border border-white/10 text-slate-300 hover:text-white text-xs font-bold"
+                  title="Lider tablosunu yazdır / PDF olarak al (bu ay veya geçmiş aylardan biri)"
+                >
+                  <FileDown className="w-4 h-4" />
+                  Rapor Al
+                </button>
+                {showMonthPicker && (
+                  <div className="absolute right-0 top-full mt-2 z-20 w-64 rounded-xl bg-slate-900 border border-white/10 shadow-2xl p-2">
+                    <button
+                      type="button"
+                      onClick={openCurrentReport}
+                      className="w-full text-left px-3 py-2 rounded-lg text-sm font-semibold text-white hover:bg-white/10"
+                    >
+                      {bounds.label} (güncel)
+                    </button>
+                    <div className="px-3 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">Geçmiş aylar</div>
+                    {monthOptionsLoading ? (
+                      <div className="px-3 py-2 text-xs text-slate-500 flex items-center gap-2">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Yükleniyor…
+                      </div>
+                    ) : monthOptions.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-slate-500">Henüz arşivlenmiş ay yok.</p>
+                    ) : (
+                      <div className="max-h-56 overflow-y-auto">
+                        {monthOptions.map((opt) => (
+                          <button
+                            key={opt.periodStartMs}
+                            type="button"
+                            onClick={() => void openMonthReport(opt)}
+                            disabled={reportLoadingMs === opt.periodStartMs}
+                            className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-white/10 hover:text-white capitalize disabled:opacity-50 flex items-center justify-between gap-2"
+                          >
+                            {opt.label}
+                            {reportLoadingMs === opt.periodStartMs && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             ) : null}
           </div>
         </div>
@@ -801,6 +900,15 @@ export const ClubLeaderboard: React.FC<Props> = ({
               : 'Sistem ödevleri + Lichess + Chess.com. Aynı tablo tüm panellerde paylaşılır. Lichess günde bir kez, öğrenci girişi beklemeden çekilir; puanlar sıfırlanmaz.'}
           </p>
         </div>
+      )}
+      {printReport && (
+        <ClubLeaderboardPrintView
+          clubName={clubName}
+          periodLabel={printReport.periodLabel}
+          entries={printReport.entries}
+          generatedAt={printReport.generatedAt}
+          onClose={() => setPrintReport(null)}
+        />
       )}
     </div>
   );

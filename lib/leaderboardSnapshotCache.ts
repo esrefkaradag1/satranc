@@ -1,8 +1,12 @@
 import type { LeaderboardEntry, LeaderboardPeriod, LeaderboardRankMode } from './leaderboardUtils';
 import type { LeaderboardPointSettings } from './leaderboardPointSettings';
 
-const STORAGE_KEY = 'netchess_leaderboard_snapshot_v2';
-const LEGACY_STORAGE_KEY = 'netchess_leaderboard_snapshot_v1';
+// v3: findBestLeaderboardSnapshot artık farklı bir dönemin (örn. geçen ayın) snapshot'ına
+// hiç düşmüyor (bkz. fonksiyonun kendi açıklaması). v2 anahtarındaki veriler eski hatayla
+// kirlenmiş olabileceğinden (geçen ayın sayıları yeni ayın tabanına "asla azalma" kuralıyla
+// kilitlenmiş olabilir) bilerek yeni bir anahtara geçiyoruz — v2 bir daha okunmuyor/yazılmıyor,
+// her istemci sunucudaki doğru (dönemle doğru kapsamlı) veriden temiz başlıyor.
+const STORAGE_KEY = 'netchess_leaderboard_snapshot_v3';
 /** Eski sabit (footer/metin uyumu). Lichess tarama günde bir. */
 export const LEADERBOARD_DAILY_REFRESH_HOUR = 6;
 /** Antrenör/admin tarayıcısında Lichess tarama aralığı: günde bir. */
@@ -43,31 +47,9 @@ function readFile(): SnapshotFile {
   } catch {
     /* ignore */
   }
-
-  // Eski v1 anahtarlarını mümkün olduğunca aktar
-  try {
-    const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!legacyRaw) return { version: 2, snapshots: {} };
-    const legacy = JSON.parse(legacyRaw) as { snapshots?: Record<string, SnapshotRecord> };
-    const snapshots: Record<string, SnapshotRecord> = {};
-    for (const [key, value] of Object.entries(legacy.snapshots ?? {})) {
-      if (!value?.entries?.length) continue;
-      // v1: periodStart|period|rankMode|settingsHash|peerHash
-      const parts = key.split('|');
-      if (parts.length >= 4) {
-        const migratedKey = `legacy|${parts[0]}|${parts[1]}|${parts[2]}|${parts[3]}`;
-        const existing = snapshots[migratedKey];
-        if (!existing || (value.cachedAt ?? 0) >= (existing.cachedAt ?? 0)) {
-          snapshots[migratedKey] = value;
-        }
-      }
-    }
-    const file: SnapshotFile = { version: 2, snapshots };
-    writeFile(file);
-    return file;
-  } catch {
-    return { version: 2, snapshots: {} };
-  }
+  // Eski v2 anahtarından (ay sıfırlama hatasıyla kirlenmiş olabilir) KASITLI olarak
+  // aktarım yapmıyoruz — her istemci sunucudaki doğru veriden temiz başlasın.
+  return { version: 2, snapshots: {} };
 }
 
 function writeFile(file: SnapshotFile) {
@@ -140,7 +122,20 @@ function snapshotKeyParts(key: string): { periodStart: string; period: string; r
   return { periodStart, period, rankMode };
 }
 
-/** Aynı dönem+mod için en güncel snapshot (kulüp anahtarı farklı olsa bile). */
+/**
+ * Aynı dönem+mod VE aynı dönem başlangıcı (periodStartMs) için en güncel snapshot
+ * (kulüp anahtarı farklı olsa bile).
+ *
+ * ÖNEMLİ: Burada kasıtlı olarak sadece TAM dönem eşleşmesi (`exact`) döner — farklı
+ * bir ayın/haftanın snapshot'ına ASLA düşülmez. Eskiden burada bir "samePeriod"
+ * yedeği vardı (aynı `period`/`rankMode` ama farklı `periodStartMs`); ay değişince
+ * henüz yeni ay için hiç snapshot yokken bu yedek geçen ayın BİTMİŞ, tam birikmiş
+ * tablosunu döndürüyordu. Çağıran taraf (`ClubLeaderboard.tsx`) bunu "bu dönemin
+ * tabanı" sayıp üstüne "asla azalma" (max-merge) kuralıyla birleştirdiğinden, geçen
+ * ayın sayıları yeni ayın tabanına kilitleniyor ve tablo hiç sıfırlanmış gibi
+ * görünmüyordu. `null` dönmesi callers tarafından zaten doğru şekilde ele alınıyor
+ * (ham veriden taze bir önizleme kurulur) — bu yüzden burada "yedek" gerekmiyor.
+ */
 export function findBestLeaderboardSnapshot(opts: {
   preferredKey: string;
   period: LeaderboardPeriod;
@@ -152,17 +147,15 @@ export function findBestLeaderboardSnapshot(opts: {
 
   const file = readFile();
   let exact: SnapshotRecord | null = null;
-  let samePeriod: SnapshotRecord | null = null;
   for (const [key, value] of Object.entries(file.snapshots)) {
     if (!value?.entries?.length) continue;
     const parts = snapshotKeyParts(key);
     if (!parts) continue;
     if (parts.period !== opts.period || parts.rankMode !== opts.rankMode) continue;
-    if (!samePeriod || value.cachedAt > samePeriod.cachedAt) samePeriod = value;
     if (parts.periodStart !== String(opts.periodStartMs)) continue;
     if (!exact || value.cachedAt > exact.cachedAt) exact = value;
   }
-  return exact ?? samePeriod;
+  return exact;
 }
 
 /**
