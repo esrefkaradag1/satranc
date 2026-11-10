@@ -20,7 +20,12 @@ type CacheFile = {
   entries: Record<string, CachedStudentPeriodStats>;
 };
 
-const STORAGE_KEY = 'netchess_leaderboard_period_v1';
+// v2: lib/leaderboardSnapshotCache.ts'teki çapraz-dönem sızıntısı düzeltilmeden önce,
+// bu öğrenci bazlı önbellek de (aynı "asla azalma" max-merge kuralıyla) yanlışlıkla
+// geçmiş bir ayın şişkin sayılarıyla kilitlenmiş olabilir — doğru `periodKey` altında
+// bile, çünkü sorun okuma tarafında değil, önceden besleyen veride. v1'den asla
+// göç etmiyoruz (olası kirli veriyi taşımamak için); her tarayıcı temiz başlar.
+const STORAGE_KEY = 'netchess_leaderboard_period_v2';
 /** Haftalık dönem boyunca sakla (8 gün tampon). */
 const CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000;
 
