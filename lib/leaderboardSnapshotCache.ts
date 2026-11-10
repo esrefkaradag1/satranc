@@ -6,7 +6,11 @@ import type { LeaderboardPointSettings } from './leaderboardPointSettings';
 // kirlenmiş olabileceğinden (geçen ayın sayıları yeni ayın tabanına "asla azalma" kuralıyla
 // kilitlenmiş olabilir) bilerek yeni bir anahtara geçiyoruz — v2 bir daha okunmuyor/yazılmıyor,
 // her istemci sunucudaki doğru (dönemle doğru kapsamlı) veriden temiz başlıyor.
-const STORAGE_KEY = 'netchess_leaderboard_snapshot_v3';
+// v4: v3'teki "asla azalma" birleştirme (mergeLeaderboardEntryRow → mergePeriodStatsMax),
+// Supabase'deki eski/kirli leaderboard_snapshots satırlarını her yüklemede yeniden
+// yerel önbelleğe yazıp kalıcı hale getiriyordu — doğru per-öğrenci sayılar hesaplansa
+// bile tablo satırı hep eski (daha büyük) değerde kilitli kalıyordu. v3'ten taşımıyoruz.
+const STORAGE_KEY = 'netchess_leaderboard_snapshot_v4';
 /** Eski sabit (footer/metin uyumu). Lichess tarama günde bir. */
 export const LEADERBOARD_DAILY_REFRESH_HOUR = 6;
 /** Antrenör/admin tarayıcısında Lichess tarama aralığı: günde bir. */
