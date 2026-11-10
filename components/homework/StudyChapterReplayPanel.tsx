@@ -10,6 +10,8 @@ import {
   buildReplayTableRows,
   chapterReplayOrientation,
   chapterReplayStartFen,
+  isVsComputerChapter,
+  vsComputerOutcome,
   type VsMoveListSource,
 } from '../../lib/studyReplayUtils';
 
@@ -83,6 +85,12 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
   const tableRows = useMemo(
     () => buildReplayTableRows(chapter, events, vsMoveHistory, { estimatedOpponent }),
     [events, chapter, vsMoveHistory, estimatedOpponent],
+  );
+
+  const isVsComputer = isVsComputerChapter(chapter);
+  const matchOutcome = useMemo(
+    () => (isVsComputer ? vsComputerOutcome(chapter, events, vsMoveHistory) : null),
+    [isVsComputer, chapter, events, vsMoveHistory],
   );
 
   const steps = useMemo(
@@ -184,6 +192,26 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
     setPlaying(true);
   };
 
+  // Klavye ile hamle gezinme (yukarı/aşağı ve sağ/sol ok tuşları — önceki/sonraki hamle).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setPlaying(false);
+        setStepIndex((i) => Math.max(0, i - 1));
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        setPlaying(false);
+        setStepIndex((i) => Math.min(steps.length - 1, i + 1));
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [steps.length]);
+
   const navBtn =
     'p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30';
 
@@ -200,11 +228,13 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
         <ChessBoardFrame
           boardOrientation={orientation}
           hideCoordinates
-          className="w-full max-w-[min(100%,320px)] md:max-w-none aspect-square rounded-lg overflow-hidden border border-white/10 shadow-inner shrink-0 mx-auto"
+          className="w-full max-w-[min(100%,320px)] md:max-w-none aspect-square rounded-lg border border-white/10 shadow-inner shrink-0 mx-auto"
+          boardClassName="overflow-visible rounded-lg"
         >
           <Chessboard
+            key={chessboardDomId('study-replay', studyId, chapter?.id ?? 'x', studentId, stepIndex)}
             options={{
-              id: chessboardDomId('study-replay', studyId, chapter?.id ?? 'x', studentId, stepIndex),
+              id: chessboardDomId('study-replay', studyId, chapter?.id ?? 'x', studentId),
               position: current?.fen ?? startFen,
               allowDragging: false,
               ...CHESSBOARD_ANIMATION,
@@ -213,6 +243,10 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
               boardOrientation: orientation,
               darkSquareStyle: { backgroundColor: '#779952' },
               lightSquareStyle: { backgroundColor: '#edeed1' },
+              // react-chessboard varsayılanı: her pozisyon değişiminde çizilen okları siler.
+              // Bu panelde amaç tam da adım adım gezinmek olduğundan, kullanıcının çizdiği
+              // oklar her "sonraki hamle" tıklamasında anında kayboluyordu — kapatıyoruz.
+              clearArrowsOnPositionChange: false,
               ...CHESSBOARD_NO_NOTATION,
             }}
           />
@@ -255,10 +289,23 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
 
       <div className="min-h-0 min-w-0 flex-1 flex flex-col overflow-hidden">
         <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02] shrink-0">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-            Tüm hamleler · {tableRows.length} ply
-            {estimatedOpponent ? ' · rakip hamleleri tahmini' : ''}
-          </p>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Tüm hamleler · {tableRows.length} ply
+              {estimatedOpponent ? ' · rakip hamleleri tahmini' : ''}
+            </p>
+            {isVsComputer && matchOutcome ? (
+              <span className={`inline-flex rounded-lg px-2.5 py-1 text-[11px] font-bold border ${
+                matchOutcome === 'win'
+                  ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                  : matchOutcome === 'loss'
+                    ? 'border-rose-500/30 bg-rose-500/15 text-rose-300'
+                    : 'border-slate-500/30 bg-slate-500/15 text-slate-300'
+              }`}>
+                {matchOutcome === 'win' ? 'Kazandı' : matchOutcome === 'loss' ? 'Kaybetti' : 'Berabere'}
+              </span>
+            ) : null}
+          </div>
           {estimatedOpponent ? (
             <p className="mt-1 text-[11px] leading-snug text-amber-300/90">
               Bu bölümün gerçek oyun kaydı yok. Öğrencinin hamleleri gerçek; rakip
@@ -326,27 +373,31 @@ export const StudyChapterReplayPanel: React.FC<Props> = ({
                         ) : null}
                       </td>
                       <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-lg px-2 py-0.5 text-[10px] font-bold border ${
-                          row.result === 'wrong'
-                            ? 'border-rose-500/30 bg-rose-500/15 text-rose-300'
-                            : row.result === 'hint'
-                              ? 'border-violet-500/30 bg-violet-500/15 text-violet-200'
-                              : row.result === 'solution'
-                                ? 'border-sky-500/30 bg-sky-500/15 text-sky-300'
-                                : row.result === 'engine'
-                                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-                                  : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
-                        }`}>
-                          {row.result === 'wrong'
-                            ? 'Yanlış'
-                            : row.result === 'hint'
-                              ? 'İpucu'
-                              : row.result === 'solution'
-                                ? 'Çözüm'
-                                : row.result === 'engine'
-                                  ? 'Rakip'
-                                  : 'Doğru'}
-                        </span>
+                        {row.result === 'none' ? (
+                          <span className="text-slate-600">—</span>
+                        ) : (
+                          <span className={`inline-flex rounded-lg px-2 py-0.5 text-[10px] font-bold border ${
+                            row.result === 'wrong'
+                              ? 'border-rose-500/30 bg-rose-500/15 text-rose-300'
+                              : row.result === 'hint'
+                                ? 'border-violet-500/30 bg-violet-500/15 text-violet-200'
+                                : row.result === 'solution'
+                                  ? 'border-sky-500/30 bg-sky-500/15 text-sky-300'
+                                  : row.result === 'engine'
+                                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                                    : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                          }`}>
+                            {row.result === 'wrong'
+                              ? 'Yanlış'
+                              : row.result === 'hint'
+                                ? 'İpucu'
+                                : row.result === 'solution'
+                                  ? 'Çözüm'
+                                  : row.result === 'engine'
+                                    ? 'Rakip'
+                                    : 'Doğru'}
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-slate-300">
                         {row.isStudent ? `${Math.max(0, Math.round(row.thinkMs / 1000))} sn` : '—'}

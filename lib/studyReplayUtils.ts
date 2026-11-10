@@ -52,8 +52,43 @@ export function chapterReplayStartFen(chapter: StudyChapter | undefined): string
   return chapter.fen?.trim() || DEFAULT_FEN;
 }
 
-function isVsComputerChapter(chapter: StudyChapter | undefined): boolean {
+export function isVsComputerChapter(chapter: StudyChapter | undefined): boolean {
   return chapter?.lessonMode === 'interactive' && chapter.interactiveType === 'vsComputer';
+}
+
+export type VsComputerOutcome = 'win' | 'loss' | 'draw';
+
+/**
+ * Bilgisayara karşı oynanan bir bölümün MAÇ SONUCU (hamle başına değil) —
+ * `chess.js` ile tüm hamleler oynatılarak final pozisyonun mat/pat/berabere
+ * durumu tespit edilir. Oyun henüz bitmemişse (devam ediyor) null döner.
+ */
+export function vsComputerOutcome(
+  chapter: StudyChapter | undefined,
+  events: StudyEvent[],
+  vsMoveHistory: string[] = [],
+): VsComputerOutcome | null {
+  if (!isVsComputerChapter(chapter)) return null;
+  const fullMoves = resolveFullVsMoveList(chapter, events, vsMoveHistory);
+  if (fullMoves.length === 0) return null;
+
+  const startFen = chapterReplayStartFen(chapter);
+  const game = makeBuilderGame(startFen || DEFAULT_FEN);
+  for (const san of fullMoves) {
+    const move = san.trim();
+    if (!move) continue;
+    applyPuzzleMove(game, move);
+  }
+  if (!game.isGameOver()) return null;
+
+  const studentOrientation = chapter?.orientation ?? 'white';
+  if (game.isCheckmate()) {
+    // Mat olduğunda sırası gelen (turn()) taraf kaybeder.
+    const loserIsWhite = game.turn() === 'w';
+    const studentLost = (studentOrientation === 'white') === loserIsWhite;
+    return studentLost ? 'loss' : 'win';
+  }
+  return 'draw'; // pat, yetersiz materyal, 3 tekrar, 50 hamle kuralı
 }
 
 function isPuzzleChapter(chapter: StudyChapter | undefined): boolean {
@@ -559,7 +594,7 @@ export type ReplayTableRow = {
   isStudent: boolean;
   playedMove: string;
   expectedLabel: string;
-  result: 'correct' | 'wrong' | 'solution' | 'engine' | 'hint';
+  result: 'correct' | 'wrong' | 'solution' | 'engine' | 'hint' | 'none';
   thinkMs: number;
   createdAt: string | null;
   /** Rakip hamlesi gerçek oyun kaydından değil, tahminle yeniden kuruldu. */
@@ -586,9 +621,10 @@ export function buildReplayTableRows(
       const isStudent = studentOrientation === 'white' ? isWhitePly : !isWhitePly;
       let thinkMs = 0;
       let createdAt: string | null = null;
-      // Yasal vs-computer geçmişindeki öğrenci hamlesi "yanlış" değildir;
-      // eski parti artıkları veya SAN kayması bütün satırları kirletmesin.
-      let result: ReplayTableRow['result'] = isStudent ? 'correct' : 'engine';
+      // Bilgisayara karşı serbest oyunda hamle başına "doğru/yanlış" anlamsızdır
+      // (puzzle değil); yalnızca maç sonunda tek bir kazandı/kaybetti/berabere
+      // gösterilir (bkz. vsComputerOutcome). Satır başına sonuç rozeti yok.
+      const result: ReplayTableRow['result'] = 'none';
       let expectedLabel = isStudent ? 'Öğrenci' : 'Bilgisayar';
       if (isStudent) {
         const matched = takeMatchingStudentEvent(studentEvents, studentEventCursor, move);
@@ -597,9 +633,6 @@ export function buildReplayTableRows(
           thinkMs = matched.event.thinkMs ?? 0;
           createdAt = matched.event.createdAt ?? null;
           expectedLabel = matched.event.playedMove || expectedLabel;
-          if (matched.event.result === 'solution' || isSolutionApplyEvent(matched.event)) {
-            result = 'solution';
-          }
         }
       }
       return {
