@@ -281,6 +281,23 @@ export async function chessduelloAttempt(
   return request('GET', { resource: 'attempt', tournamentId, memberId, clubId });
 }
 
+/**
+ * /tournaments/{id}/report — bitmiş turnuvanın raporu (sıralama, bulmaca
+ * içgörüleri, hata temaları). Dokümanda `/attempt`'ten AYRI, daha zengin bir
+ * uç nokta olarak tanımlı; şekli henüz tam doğrulanmadığı için gevşek
+ * (Record<string, unknown>) bırakıldı — ChessDuelloPanel.tsx birden çok olası
+ * alan adını deniyor (bkz. valueOf).
+ */
+export type ChessDuelloReport = Record<string, unknown>;
+
+export async function chessduelloReport(
+  tournamentId: string,
+  clubId?: string,
+  lang: 'tr' | 'en' = 'tr',
+): Promise<Envelope<ChessDuelloReport>> {
+  return request('GET', { resource: 'report', tournamentId, clubId, lang });
+}
+
 export function matchChessDuelloMember<T extends {
   id: string;
   name: string;

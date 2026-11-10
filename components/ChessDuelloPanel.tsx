@@ -19,6 +19,7 @@ import {
   chessduelloAttempt,
   chessduelloClearKey,
   chessduelloClan,
+  chessduelloReport,
   chessduelloResults,
   chessduelloSaveKey,
   chessduelloStatus,
@@ -29,6 +30,7 @@ import {
   tournamentTitle,
   type ChessDuelloAnalytics,
   type ChessDuelloAttempt,
+  type ChessDuelloReport,
   type ChessDuelloClan,
   type ChessDuelloMember,
   type ChessDuelloResult,
@@ -75,15 +77,29 @@ function displayValue(value: unknown): string {
   return String(value);
 }
 
-function attemptItems(attempt: ChessDuelloAttempt | null): Record<string, unknown>[] {
-  if (!attempt) return [];
-  const source = asRecord(attempt.attempt) ?? attempt;
-  const candidates = ['puzzles', 'answers', 'attempts', 'items', 'details'];
+function itemsArray(source: Record<string, unknown> | null, candidates: string[]): Record<string, unknown>[] {
+  if (!source) return [];
   for (const key of candidates) {
     const value = source[key];
     if (Array.isArray(value)) return value.map(asRecord).filter((item): item is Record<string, unknown> => Boolean(item));
   }
   return [];
+}
+
+function attemptItems(attempt: ChessDuelloAttempt | null): Record<string, unknown>[] {
+  if (!attempt) return [];
+  const source = asRecord(attempt.attempt) ?? attempt;
+  // 'results' dokümanda answers[] ile birlikte bireysel sonuçlar için anılıyor
+  // (bkz. chessduello.pdf "Use answers[].isCorrect and results..."); 'positions'
+  // ise turnuva/rapor tarafında bulmaca listesi için kullanılan terim.
+  return itemsArray(source, ['answers', 'results', 'puzzles', 'positions', 'attempts', 'items', 'details']);
+}
+
+/** /report'un turnuva geneli bulmaca listesi — tema bilgisini index'e göre eşlemek için. */
+function reportPuzzles(report: ChessDuelloReport | null): Record<string, unknown>[] {
+  if (!report) return [];
+  const source = asRecord((report as Record<string, unknown>).report) ?? report;
+  return itemsArray(source, ['puzzles', 'positions', 'puzzleInsights', 'insights']);
 }
 
 const inputCls =
@@ -121,6 +137,7 @@ const ChessDuelloPanel: React.FC = () => {
   const [results, setResults] = useState<ChessDuelloResult[]>([]);
   const [selectedResult, setSelectedResult] = useState<ChessDuelloResult | null>(null);
   const [attemptReport, setAttemptReport] = useState<ChessDuelloAttempt | null>(null);
+  const [tournamentReport, setTournamentReport] = useState<ChessDuelloReport | null>(null);
   const [attemptLoading, setAttemptLoading] = useState(false);
   const [attemptError, setAttemptError] = useState('');
 
@@ -220,11 +237,21 @@ const ChessDuelloPanel: React.FC = () => {
     setSelectedResult(null);
     setAttemptReport(null);
     setAttemptError('');
+    setTournamentReport(null);
     try {
       const res = await chessduelloResults(tournament.id, activeClubId || undefined);
       setResults(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Turnuva sonuçları alınamadı', 'error');
+    }
+    // /report turnuva geneli (bulmaca temaları, içgörüler, sıralama) — üye bazlı
+    // /attempt'ten ayrı. Bulmaca temaları bir üyenin görünümünde de aynı olduğu
+    // için burada bir kez çekilip tüm oyuncu raporlarında yeniden kullanılır.
+    try {
+      const rep = await chessduelloReport(tournament.id, activeClubId || undefined, 'tr');
+      setTournamentReport(rep.data ?? null);
+    } catch {
+      setTournamentReport(null);
     }
   };
 
@@ -597,7 +624,7 @@ const ChessDuelloPanel: React.FC = () => {
                   <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{attemptError}</p>
                 ) : null}
 
-                {attemptReport ? <AttemptReport attempt={attemptReport} /> : null}
+                {attemptReport ? <AttemptReport attempt={attemptReport} report={tournamentReport} /> : null}
               </section>
             ) : null}
           </div>
@@ -616,9 +643,10 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function AttemptReport({ attempt }: { attempt: ChessDuelloAttempt }) {
+function AttemptReport({ attempt, report }: { attempt: ChessDuelloAttempt; report?: ChessDuelloReport | null }) {
   const data = asRecord(attempt.attempt) ?? attempt;
-  const rows = attemptItems(data);
+  const rows = attemptItems(attempt);
+  const puzzles = reportPuzzles(report ?? null);
   const accuracy = valueOf(data, ['accuracy', 'correctPercent', 'accuracyPercent']);
   const correct = valueOf(data, ['correct', 'correctCount']);
   const elapsed = valueOf(data, ['timeSpent', 'timeSpentMs', 'durationMs', 'duration']);
@@ -647,7 +675,8 @@ function AttemptReport({ attempt }: { attempt: ChessDuelloAttempt }) {
             <tbody>
               {rows.map((row, index) => {
                 const solved = valueOf(row, ['correct', 'isCorrect', 'solved']);
-                const theme = valueOf(row, ['theme', 'themeName', 'tags']);
+                const reportTheme = valueOf(puzzles[index] ?? null, ['theme', 'themeName', 'tags', 'mistakeTheme']);
+                const theme = valueOf(row, ['theme', 'themeName', 'tags']) ?? reportTheme;
                 const move = valueOf(row, ['move', 'answerMove', 'selectedMove', 'wrongMove']);
                 const spent = valueOf(row, ['timeSpentMs', 'durationMs', 'timeSpent', 'duration']);
                 const spentSeconds = typeof spent === 'number' ? Math.round(spent > 1000 ? spent / 1000 : spent) : null;
