@@ -22,6 +22,16 @@ const OFF: EvalBarDisplay = {
 };
 
 const MIN_DEPTH_TO_SHOW = 6;
+/**
+ * Pozisyon değişince çubuk önce nötr (%50, geçişsiz) olur, sonra gerçek motor
+ * sonucu gelince CSS geçişiyle (1sn) hedefe kayar. Modern/hızlı bir motorla
+ * (örn. Stockfish 18 NNUE) bu iki adım bazen birkaç milisaniye içinde art arda
+ * gelebiliyor — tarayıcı "nötr" karesini hiç boyamadan direkt hedefe atlıyor,
+ * yani geçiş hiç görünmüyor, çubuk sert bir şekilde zıplıyormuş gibi hissettiriyor.
+ * Nötr durumda en az bu kadar kalmaya zorlayarak tarayıcıya ara kareyi boyaması
+ * için zaman tanıyoruz, böylece asıl geçiş her zaman görünür oluyor.
+ */
+const MIN_PENDING_MS = 180;
 
 export function evalBarEqual(a: EvalBarDisplay, b: EvalBarDisplay): boolean {
   return (
@@ -78,9 +88,21 @@ export function useStableEvalDisplay(
   const fenRef = useRef(fen);
   const committedDepthRef = useRef(0);
   const lockedMateRef = useRef<number | null>(null);
+  const pendingSinceRef = useRef(0);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!enabled) {
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
       if (!evalBarEqual(displayRef.current, OFF)) {
         committedDepthRef.current = 0;
         lockedMateRef.current = null;
@@ -93,6 +115,11 @@ export function useStableEvalDisplay(
       fenRef.current = fen;
       committedDepthRef.current = 0;
       lockedMateRef.current = null;
+      pendingSinceRef.current = Date.now();
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
       commitDisplay({
         whitePercent: 50,
         label: '…',
@@ -134,14 +161,33 @@ export function useStableEvalDisplay(
         ? { ...line, mate: turn === 'b' ? -lockedMateRef.current : lockedMateRef.current }
         : line;
 
-    commitDisplay({
-      whitePercent: rawPercent,
-      label: labelOverride ?? formatEngineEvalLabel(labelLine, turn),
-      winningChances: chances,
-      pending: false,
-    });
+    const commitReal = () => {
+      commitDisplay({
+        whitePercent: rawPercent,
+        label: labelOverride ?? formatEngineEvalLabel(labelLine, turn),
+        winningChances: chances,
+        pending: false,
+      });
+      committedDepthRef.current = depth;
+    };
 
-    committedDepthRef.current = depth;
+    // İlk gerçek değer (bu pozisyon için henüz hiç commit edilmediyse): nötr
+    // kareyi tarayıcının boyaması için en az MIN_PENDING_MS bekle, aksi halde
+    // geçiş hiç tetiklenmeyebilir (bkz. MIN_PENDING_MS yorumu).
+    if (committedDepthRef.current === 0) {
+      const elapsed = Date.now() - pendingSinceRef.current;
+      if (elapsed < MIN_PENDING_MS) {
+        if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = setTimeout(commitReal, MIN_PENDING_MS - elapsed);
+        return;
+      }
+    }
+
+    if (pendingTimerRef.current) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
+    commitReal();
   }, [enabled, fen, turn, line, line?.depth, line?.score, line?.mate, labelOverride]);
 
   return display;

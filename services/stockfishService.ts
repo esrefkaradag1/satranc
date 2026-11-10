@@ -231,6 +231,27 @@ export async function initStockfish(): Promise<boolean> {
   return false;
 }
 
+/**
+ * Motorun kendi iç "sert" zaman aşımı — `getBestMoveFromStockfish` tam olarak bu
+ * kadar sürede vazgeçer. Çağıranlar (örn. bir `Promise.race` ile dış zaman aşımı
+ * koyan kod) bu süreden KISA bir dış zaman aşımı kullanmamalı; aksi halde gerçek
+ * motor sonucu her seferinde boşa düşer, dış yarış kaybeder ve motor arka planda
+ * askıda kalırken koda her zaman zayıf yerel (JS minimax) hamle döner — "Stockfish
+ * çalışmıyor" hissi tam olarak bu yüzden oluşuyordu.
+ */
+export function stockfishHardTimeoutMs(movetimeMs: number, searchDepth?: number): number {
+  const depth = searchDepth != null && searchDepth > 0 ? Math.round(searchDepth) : 0;
+  return depth > 0 ? Math.max(movetimeMs, 6000) + 800 : movetimeMs + 800;
+}
+
+// Üst üste sessiz zaman aşımı sayacı — motor çökmeden (onerror tetiklemeden) donup
+// `bestmove` üretmeyi bırakabilir ("sessiz çökme"). Bu durumda `worker`/`ready`
+// değişmediği için sonraki her hamle isteği de aynı donmuş worker'a gider ve sonsuza
+// kadar zayıf yerel motora düşülür. Art arda birkaç zaman aşımından sonra worker'ı
+// sonlandırıp sıfırlıyoruz ki bir sonraki istek `initStockfish()` ile temiz başlasın.
+let consecutiveStalls = 0;
+const MAX_CONSECUTIVE_STALLS = 2;
+
 export function getBestMoveFromStockfish(
   fen: string,
   movetimeMs: number,
@@ -238,7 +259,7 @@ export function getBestMoveFromStockfish(
 ): Promise<string | null> {
   if (!worker || !ready) return Promise.resolve(null);
   const depth = searchDepth != null && searchDepth > 0 ? Math.round(searchDepth) : 0;
-  const maxWait = depth > 0 ? Math.max(movetimeMs, 6000) + 800 : movetimeMs + 800;
+  const maxWait = stockfishHardTimeoutMs(movetimeMs, searchDepth);
   return runOnEngineQueue(async () => {
     await stopOngoingEngineWork();
     return new Promise<string | null>((resolve, reject) => {
@@ -248,6 +269,9 @@ export function getBestMoveFromStockfish(
         settled = true;
         clearTimeout(hardTimeout);
         pending = null;
+        if (move != null) {
+          consecutiveStalls = 0;
+        }
         resolve(move);
       };
       pending = {
@@ -267,16 +291,35 @@ export function getBestMoveFromStockfish(
         worker!.postMessage(`go movetime ${Math.max(100, movetimeMs)}`);
       }
       const hardTimeout = setTimeout(() => {
-        if (!settled) worker?.postMessage('stop');
+        if (!settled) {
+          worker?.postMessage('stop');
+          consecutiveStalls += 1;
+          if (consecutiveStalls >= MAX_CONSECUTIVE_STALLS) {
+            log(`Engine stalled ${consecutiveStalls} times in a row, resetting worker`);
+            consecutiveStalls = 0;
+            worker?.terminate();
+            worker = null;
+            ready = false;
+          }
+        }
         finish(null);
       }, maxWait);
     });
   });
 }
 
+/**
+ * UCI'de `score cp`/`score mate` SIRASI GELEN tarafa görecelidir (pozitif = sırası
+ * gelen taraf iyi), beyaza göre değil. Bu uygulamadaki her yerin (yerel yedek motor,
+ * eval çubuğu, hamle kalitesi karşılaştırması) beklediği sözleşme "beyaz lehine
+ * pozitif" olduğundan, sıra siyahtaysa işareti çeviriyoruz — aksi halde siyahın
+ * sırası geldiğinde değerlendirme tam ters çıkıyordu (hamle kalitesi tespiti ve
+ * eval çubuğu yaklaşık yarı pozisyonda yanlış sonuç veriyordu).
+ */
 export function getEvalFromStockfish(fen: string, movetimeMs = 500): Promise<number> {
   if (!worker || !ready) return Promise.resolve(0);
   const w = worker;
+  const sideToMoveSign = fen.trim().split(/\s+/)[1] === 'b' ? -1 : 1;
   return runOnEngineQueue(async () => {
     await stopOngoingEngineWork();
     return new Promise<number>((resolve) => {
@@ -284,9 +327,9 @@ export function getEvalFromStockfish(fen: string, movetimeMs = 500): Promise<num
       const onMsg = (e: MessageEvent) => {
         for (const line of uciIncomingLines(e.data)) {
           const cpMatch = line.match(/\bscore cp (-?\d+)/);
-          if (cpMatch) score = parseInt(cpMatch[1], 10) / 100;
+          if (cpMatch) score = (parseInt(cpMatch[1], 10) / 100) * sideToMoveSign;
           const mateMatch = line.match(/\bscore mate (-?\d+)/);
-          if (mateMatch) score = parseInt(mateMatch[1], 10) > 0 ? 100 : -100;
+          if (mateMatch) score = (parseInt(mateMatch[1], 10) > 0 ? 100 : -100) * sideToMoveSign;
           if (line.startsWith('bestmove ')) {
             w.removeEventListener('message', onMsg);
             resolve(score);

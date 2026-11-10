@@ -4,7 +4,10 @@ import {
   getBestMoveFromStockfish,
   getEvalFromStockfish,
   isStockfishReady,
+  stockfishHardTimeoutMs,
 } from './stockfishService';
+
+export { stockfishHardTimeoutMs };
 
 /** Tahta yapıcıdan gelen geçersiz FEN (eksik kral vb.) için skipValidation fallback */
 function safeChessFromFen(fen: string): Chess {

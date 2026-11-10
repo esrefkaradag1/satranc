@@ -18,6 +18,7 @@ import {
   getBestMoveAsync,
   getEvaluationPawns,
   getEvaluationPawnsAsync,
+  stockfishHardTimeoutMs,
   VS_COMPUTER_ENGINE_LEVEL,
   VS_COMPUTER_MAX_WAIT_MS,
   VS_COMPUTER_SEARCH_DEPTH,
@@ -113,6 +114,27 @@ type Feedback = 'correct' | 'wrong' | 'solved' | null;
 const isAutomaticVcGameOver = (game: any): boolean => {
   return game.isCheckmate() || game.isStalemate() || game.isInsufficientMaterial();
 };
+
+/**
+ * Tam oyun bitiş kontrolü (mat/pat/yetersiz materyal + 3 konum tekrarı + 50 hamle
+ * kuralı) — lila/FIDE'de 3 konum tekrarı da 50 hamle de otomatik biter, oyuncunun
+ * ayrıca "berabere talep et" demesine gerek yoktur (bkz. chess.js `isDraw()`).
+ * chess.js'in konum tekrarını görebilmesi için TÜM hamlelerin başlangıç FEN'inden
+ * itibaren sırayla oynatılmış olması gerekir — sadece son hamleyi uygulayan bir
+ * `Chess` nesnesi tekrarı asla göremez (bu yüzden ayrı bir fonksiyon).
+ */
+function isVcGameOverFromHistory(startFen: string, history: string[]): boolean {
+  try {
+    const game = makeBuilderGame(startFen);
+    for (const san of history) {
+      const played = game.move(san);
+      if (!played) break;
+    }
+    return isAutomaticVcGameOver(game) || game.isThreefoldRepetition() || game.isDrawByFiftyMoves();
+  } catch {
+    return false;
+  }
+}
 type ChapterMoveAnalysisItem = {
   id: string;
   moveNo: number;
@@ -544,18 +566,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const isVcGameOver = useMemo(() => {
     if (vcManualGameOver) return true;
-    try {
-      const startFen = isInteractivePuzzle && puzzlePlayNorm
-        ? puzzlePlayNorm.startFen
-        : (effectiveChapter?.fen || DEFAULT_FEN);
-      const game = makeBuilderGame(startFen);
-      for (const move of vcHistory) {
-        game.move(move);
-      }
-      return isAutomaticVcGameOver(game);
-    } catch {
-      return false;
-    }
+    const startFen = isInteractivePuzzle && puzzlePlayNorm
+      ? puzzlePlayNorm.startFen
+      : (effectiveChapter?.fen || DEFAULT_FEN);
+    return isVcGameOverFromHistory(startFen, vcHistory);
   }, [isInteractivePuzzle, puzzlePlayNorm, effectiveChapter?.fen, vcHistory, vcManualGameOver]);
 
   const canClaimDraw = useMemo(() => {
@@ -1409,7 +1423,16 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     timeoutMs: number,
     opts?: { movetimeMs?: number; searchDepth?: number },
   ) => {
-    const timeout = new Promise<string | null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+    // Dış yarış zaman aşımı, motorun kendi iç sert zaman aşımından (bkz.
+    // stockfishHardTimeoutMs) KISA olursa gerçek Stockfish sonucu her seferinde
+    // boşa düşer: dış yarış kazanır, zayıf yerel motora düşülür, gerçek motor
+    // ise arka planda askıda kalmaya devam eder. Çağıranın verdiği süre ile
+    // motorun gerçekte ihtiyaç duyacağı süreden büyük olanını kullanıyoruz.
+    const safeTimeoutMs = Math.max(
+      timeoutMs,
+      stockfishHardTimeoutMs(opts?.movetimeMs ?? timeoutMs, opts?.searchDepth) + 500,
+    );
+    const timeout = new Promise<string | null>((resolve) => setTimeout(() => resolve(null), safeTimeoutMs));
     try {
       const g = makeBuilderGame(fen);
       const best = await Promise.race([getBestMoveAsync(g, level, opts), timeout]);
@@ -2424,7 +2447,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
            result: 'correct',
            thinkMs: 0,
          });
-         if (isAutomaticVcGameOver(game)) {
+         const vcGameOverNow = isVcGameOverFromHistory(effectiveChapter?.fen || DEFAULT_FEN, newHistory);
+         if (vcGameOverNow) {
            logStudyEvent({
              studyId: selectedStudy?.id,
              chapterId: effectiveChapter?.id ?? selectedChapter?.id,
@@ -2447,7 +2471,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
            vcHistory: newHistory,
            history: newHistory,
            thinking: false,
-           gameOver: isAutomaticVcGameOver(game) || vcManualGameOver,
+           gameOver: vcGameOverNow || vcManualGameOver,
            vcHistories,
          });
        }
@@ -2455,9 +2479,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
    }, [vcLevel, vcManualGameOver, updatePresencePayload, getBestMoveWithTimeout, selectedStudy?.id, effectiveChapter?.id, selectedChapter?.id, studentId, vcHistoriesForPresence]);
 
   useEffect(() => {
-    if (!vsComputer || vcThinking) return;
+    if (!vsComputer || vcThinking || isVcGameOver) return;
     const game = makeBuilderGame(vcFen);
-    if (isAutomaticVcGameOver(game) || vcManualGameOver) return;
     const currentTurn = game.turn();
     const studentTurn = vcOrientation === 'white' ? 'w' : 'b';
     if (currentTurn !== studentTurn) {
@@ -2466,7 +2489,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       }, 350);
       return () => clearTimeout(timer);
     }
-  }, [vsComputer, vcFen, vcOrientation, vcThinking, doComputerMove]);
+  }, [vsComputer, vcFen, vcOrientation, vcThinking, isVcGameOver, doComputerMove]);
 
   useEffect(() => {
     if (!vsComputer) return;
@@ -2539,7 +2562,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         return next;
       });
 
-      const gameOver = isAutomaticVcGameOver(game) || vcManualGameOver;
+      const gameOver = isVcGameOverFromHistory(effectiveChapter?.fen || DEFAULT_FEN, nextHistory) || vcManualGameOver;
       logStudyEvent({
         studyId: selectedStudy?.id,
         chapterId: effectiveChapter?.id ?? selectedChapter?.id,
@@ -2558,10 +2581,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         vcHistory: nextHistory,
         history: nextHistory,
         thinking: true,
-        gameOver: isAutomaticVcGameOver(game) || vcManualGameOver
+        gameOver,
       });
 
-      if (!(isAutomaticVcGameOver(game) || vcManualGameOver)) doComputerMove(nf);
+      if (!gameOver) doComputerMove(nf);
       return true;
     } catch { return false; }
   }, [vcFen, vcHistory, vcThinking, vcManualGameOver, doComputerMove, updatePresencePayload, lastActionMs, selectedStudy?.id, effectiveChapter?.id, selectedChapter?.id, studentId, persistChapterPracticeLogs]);

@@ -38,8 +38,23 @@ export function pvLineToEvalBarPawns(
 
 export { formatEngineEvalLabel, winningChancesToBarPercent };
 
-/** react-chessboard: taş hareket geçişleri (Lichess benzeri) + görünür ok uçları */
+/**
+ * react-chessboard: taş hareket geçişleri (Lichess benzeri) + görünür ok uçları.
+ *
+ * ÖNEMLİ: react-chessboard, `arrowOptions` prop'unu kendi varsayılanlarıyla
+ * BİRLEŞTİRMEZ (JS varsayılan parametre semantiği — biz obje verince varsayılan
+ * tamamen devre dışı kalır). `color`/`secondaryColor`/`tertiaryColor` burada
+ * eksik olursa her çizilen okun rengi `undefined` olur: SVG çizgisi (stroke)
+ * hiç görünmez, ok ucu (marker) ise SVG'nin varsayılan siyah dolgusuna düşer —
+ * "sadece siyah bir uçgen görünüyor, gövde yok" hatasının birebir sebebi budur.
+ */
 export const CHESSBOARD_ARROW_OPTIONS = {
+  /** Sağ tık (değiştirici yok) */
+  color: '#22c55e',
+  /** Shift + sağ tık */
+  secondaryColor: '#eab308',
+  /** Ctrl + sağ tık */
+  tertiaryColor: '#ef4444',
   /** Küçük pay → ok hedefe daha yakın biter, uç daha net görünür */
   arrowLengthReducerDenominator: 6,
   sameTargetArrowLengthReducerDenominator: 3.5,
