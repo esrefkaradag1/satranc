@@ -367,6 +367,10 @@ export const ClubLeaderboard: React.FC<Props> = ({
     const settings = pointSettingsRef.current;
     const currentPeriod = periodRef.current;
     const boundsNow = getPeriodBounds(currentPeriod);
+    // Her await sonrası dönem/mod değişmiş olabilir; o zaman entriesRef artık BAŞKA dönemin
+    // satırlarını tutar ve onları bu key altında birleştirip yazmak dönemler arası sızıntı yapar.
+    const isStale = () => snapshotKeyRef.current !== key;
+    const liveEntries = () => (displayedKeyRef.current === key ? entriesRef.current : []);
 
     const remote = await Promise.race([
       loadRemoteLeaderboardSnapshot({
@@ -381,11 +385,13 @@ export const ClubLeaderboard: React.FC<Props> = ({
       }),
     ]);
 
+    if (isStale()) return;
+
     let snapshot = localSnapshot;
     if (remote?.entries.length) {
       const mergedRemote = snapshot?.entries.length
         ? mergeLeaderboardEntryRows(snapshot.entries, remote.entries, mode, settings)
-        : mergeLeaderboardEntryRows(entriesRef.current, remote.entries, mode, settings);
+        : mergeLeaderboardEntryRows(liveEntries(), remote.entries, mode, settings);
       const keptRemote = keepBestEntries(mergedRemote, key);
       lastUpdatedAtRef.current = remote.cachedAt;
       setLastUpdatedAt(remote.cachedAt);
@@ -403,10 +409,10 @@ export const ClubLeaderboard: React.FC<Props> = ({
         homeworkAttemptsRef.current,
         currentPeriod,
         {
-          shouldAbort: () => harvestAbortRef.current,
+          shouldAbort: () => harvestAbortRef.current || isStale(),
           clubId: resolvedClubIdRef.current ?? undefined,
           onStudent: (row) => {
-            if (harvestAbortRef.current) return;
+            if (harvestAbortRef.current || isStale()) return;
             const kept = keepBestEntries([row], key);
             lastUpdatedAtRef.current = Date.now();
             setLastUpdatedAt(lastUpdatedAtRef.current);
@@ -451,10 +457,11 @@ export const ClubLeaderboard: React.FC<Props> = ({
       mode,
       settings,
     );
+    const live = liveEntries();
     const baseline = snapshot?.entries?.length
       ? snapshot.entries
-      : entriesRef.current.length
-        ? entriesRef.current
+      : live.length
+        ? live
         : previewRows;
 
     const generation = loadGenerationRef.current + 1;
@@ -477,11 +484,11 @@ export const ClubLeaderboard: React.FC<Props> = ({
         currentPeriod,
         mode,
         (done, total, partial) => {
-          if (generation !== loadGenerationRef.current) return;
+          if (generation !== loadGenerationRef.current || isStale()) return;
           setProgress({ done, total });
           if (!partial?.length) return;
           const merged = mergeLeaderboardEntryRows(
-            baseline.length > 0 ? baseline : entriesRef.current,
+            baseline.length > 0 ? baseline : liveEntries(),
             partial,
             mode,
             settings,
@@ -490,12 +497,12 @@ export const ClubLeaderboard: React.FC<Props> = ({
         },
         settings,
       );
-      if (generation !== loadGenerationRef.current) return;
+      if (generation !== loadGenerationRef.current || isStale()) return;
 
       // Mevcut tablo + API: yalnızca artışlar uygulanır (sıfırlama yok)
       const merged = baseline.length > 0
         ? mergeLeaderboardEntryRows(baseline, result, mode, settings)
-        : mergeLeaderboardEntryRows(entriesRef.current, result, mode, settings);
+        : mergeLeaderboardEntryRows(liveEntries(), result, mode, settings);
 
       const kept = keepBestEntries(merged, key);
       writeLeaderboardSnapshot(key, kept, currentPeers.length);
@@ -511,7 +518,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
       lastUpdatedAtRef.current = Date.now();
       setLastUpdatedAt(lastUpdatedAtRef.current);
     } catch {
-      if (generation !== loadGenerationRef.current) return;
+      if (generation !== loadGenerationRef.current || isStale()) return;
       setError('Sıralama yüklenemedi. Lütfen tekrar deneyin.');
       if (snapshot?.entries.length) {
         keepBestEntries(snapshot.entries, key);

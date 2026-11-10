@@ -10,7 +10,9 @@ import type { LeaderboardPointSettings } from './leaderboardPointSettings';
 // Supabase'deki eski/kirli leaderboard_snapshots satırlarını her yüklemede yeniden
 // yerel önbelleğe yazıp kalıcı hale getiriyordu — doğru per-öğrenci sayılar hesaplansa
 // bile tablo satırı hep eski (daha büyük) değerde kilitli kalıyordu. v3'ten taşımıyoruz.
-const STORAGE_KEY = 'netchess_leaderboard_snapshot_v4';
+// v5: ClubLeaderboard.load() dönem değişince bayat sonucu diğer dönemin satırlarıyla
+// birleştirip yazıyordu; v4 o sızıntıyla kirlenmiş olabilir.
+const STORAGE_KEY = 'netchess_leaderboard_snapshot_v5';
 /** Eski sabit (footer/metin uyumu). Lichess tarama günde bir. */
 export const LEADERBOARD_DAILY_REFRESH_HOUR = 6;
 /** Antrenör/admin tarayıcısında Lichess tarama aralığı: günde bir. */

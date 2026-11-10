@@ -69,8 +69,8 @@ export async function loadRemoteLeaderboardSnapshot(opts: {
     if (error || !data?.length) return null;
 
     const scoped = data.find((row) => String((row as { club_scope?: string }).club_scope ?? '') === opts.clubScope);
-    const chosen = scoped ?? data[0];
-    return rowToSnapshot(chosen as Record<string, unknown>);
+    if (!scoped) return null;
+    return rowToSnapshot(scoped as Record<string, unknown>);
   } catch (e) {
     console.warn('[leaderboard] remote load failed:', e);
     return null;
