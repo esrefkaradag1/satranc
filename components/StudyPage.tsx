@@ -12,7 +12,7 @@ import {
   ArrowLeft, Clock, Users, ListChecks, Globe, Lock, Star,
   MousePointer2, ChevronUp, ChevronDown, FileText, Video, Highlighter,
   Send, Undo2, RotateCcw, Eye, Folder, FolderPlus,
-  FileImage, Loader2, Sparkles, Import, Upload, Keyboard,
+  FileImage, Loader2, Sparkles, Import, Upload, Keyboard, GripVertical,
 } from 'lucide-react';
 import StudyCallPanel from './StudyCallPanel';
 import { createStudyCall } from '../services/studyCall';
@@ -245,6 +245,8 @@ const StudyPage: React.FC = () => {
   const [mobilePanel, setMobilePanel] = useState<'board' | 'left' | 'right'>('board');
   const [showChapterSearch, setShowChapterSearch] = useState(false);
   const [chapterSearch, setChapterSearch] = useState('');
+  const [draggingChapterId, setDraggingChapterId] = useState<string | null>(null);
+  const [dragOverChapterId, setDragOverChapterId] = useState<string | null>(null);
 
   // Chat
   const [chatEnabled, setChatEnabled] = useState(true);
@@ -4085,19 +4087,43 @@ const StudyPage: React.FC = () => {
                     {filteredChapters.map((ch) => {
                       const realIdx = selectedStudy.chapters.findIndex(c => c.id === ch.id);
                       const active = selectedChapterIndex === realIdx;
+                      const isDragging = draggingChapterId === ch.id;
+                      const isDragOver = dragOverChapterId === ch.id && draggingChapterId !== null && draggingChapterId !== ch.id;
                       return (
                         <div
                           key={ch.id}
                           role="button"
                           tabIndex={0}
+                          draggable={!showChapterSearch}
+                          onDragStart={(e) => {
+                            setDraggingChapterId(ch.id);
+                            e.dataTransfer.effectAllowed = 'move';
+                          }}
+                          onDragEnd={() => { setDraggingChapterId(null); setDragOverChapterId(null); }}
+                          onDragOver={(e) => {
+                            if (!draggingChapterId || draggingChapterId === ch.id) return;
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'move';
+                            setDragOverChapterId(ch.id);
+                          }}
+                          onDragLeave={() => { setDragOverChapterId((cur) => (cur === ch.id ? null : cur)); }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const fromIdx = selectedStudy.chapters.findIndex(c => c.id === draggingChapterId);
+                            setDraggingChapterId(null);
+                            setDragOverChapterId(null);
+                            if (fromIdx === -1 || fromIdx === realIdx) return;
+                            moveChapterTo(fromIdx, realIdx);
+                          }}
                           onClick={() => { setSelectedChapterIndex(realIdx); setCurrentMoveIndex(0); setCurrentVariation(null); }}
                           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setSelectedChapterIndex(realIdx); setCurrentMoveIndex(0); setCurrentVariation(null); } }}
-                          className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-left transition-all group cursor-pointer ${
+                          className={`w-full flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-left transition-all group cursor-pointer ${
                             active
                               ? 'bg-indigo-500/15 text-white ring-1 ring-indigo-500/25'
                               : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
-                          }`}
+                          } ${isDragging ? 'opacity-40' : ''} ${isDragOver ? 'ring-2 ring-indigo-400/70' : ''}`}
                         >
+                          <GripVertical className="w-3.5 h-3.5 shrink-0 text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing" />
                           <span className={`text-[11px] font-bold w-5 shrink-0 text-right tabular-nums ${active ? 'text-indigo-400' : 'text-slate-600'}`}>
                             {realIdx + 1}
                           </span>

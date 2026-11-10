@@ -738,27 +738,20 @@ export function chapterModeBadge(ch: StudyChapter): { label: string; cls: string
   return { label: 'Puzzle', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' };
 }
 
-/** Sidebar list label: "Bölüm 2 · Puzzle" (same as student view). */
+/**
+ * Sidebar list label: "Bölüm 2 · Puzzle" (same as student view).
+ * Not içe aktarılan bölümler genelde ayırt edici olmayan başlıklar paylaştığı
+ * (örn. birçok "Soru 1 · VS Bilgisayar") için bölüm kimliğinin baş harflerini
+ * parantez içinde ekleyen eski bir ayrıştırma eki vardı — görsel gürültü
+ * olduğu ve kullanıcıya yararlı bilgi taşımadığı için kaldırıldı.
+ */
 export function formatChapterListLabel(
   ch: StudyChapter,
   opts?: { titleOverride?: string; allChapters?: StudyChapter[] },
 ): string {
   const rawTitle = String(opts?.titleOverride ?? ch.title ?? '').trim();
   const modeLabel = chapterModeBadge(ch).label;
-  const all = opts?.allChapters;
-  let disambig = '';
-  if (all && all.length > 1) {
-    const sameMeta = (c: StudyChapter) =>
-      (c.title || '').trim() === (rawTitle || 'Adsız') &&
-      (c.lessonMode ?? 'direct') === (ch.lessonMode ?? 'direct') &&
-      (c.interactiveType ?? 'puzzle') === (ch.interactiveType ?? 'puzzle');
-    if (all.filter(sameMeta).length > 1) {
-      disambig = ` (${ch.id.slice(0, 6)})`;
-    }
-  }
-  return rawTitle
-    ? `${rawTitle} · ${modeLabel}${disambig}`
-    : `${modeLabel}${disambig}`;
+  return rawTitle ? `${rawTitle} · ${modeLabel}` : modeLabel;
 }
 
 export function chapterListLabelMatches(
