@@ -534,8 +534,8 @@ function cachedStudentLeaderboardRow(
   student: Student,
   bounds: PeriodBounds,
   homeworkAttempts: HomeworkPuzzleAttempt[],
+  cached: Omit<CachedStudentPeriodStats, 'cachedAt'> | null = readCachedStudentPeriodStats(student.id, bounds),
 ): Omit<LeaderboardEntry, 'rank' | 'score' | 'rankMetric'> {
-  const cached = readCachedStudentPeriodStats(student.id, bounds);
   const internalCorrect = homeworkAttempts.filter(
     (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && a.correct,
   ).length;
@@ -782,6 +782,30 @@ export async function harvestClubLeaderboardDaily(
     clubHarvestInFlight = false;
   }
   return updated;
+}
+
+/**
+ * Supabase'teki öğrenci+dönem kayıtlarından kurulan tablo. Tüm-tablo snapshot'larının aksine
+ * dönemle doğru kapsamlıdır; çağıran taraf bunu birleştirmeden doğrudan göstermelidir.
+ * Hiç uzak kayıt yoksa null döner.
+ */
+export async function buildClubLeaderboardFromPeriodStats(
+  peers: Student[],
+  homeworkAttempts: HomeworkPuzzleAttempt[],
+  period: LeaderboardPeriod,
+  pointSettings: LeaderboardPointSettings = DEFAULT_LEADERBOARD_POINT_SETTINGS,
+): Promise<LeaderboardEntry[] | null> {
+  if (peers.length === 0) return null;
+  const bounds = getPeriodBounds(period);
+  const remote = await loadRemotePeriodStats(peers.map((p) => String(p.id)), period, bounds.startMs);
+  if (remote.size === 0) return null;
+  const rows = peers.map((student) => {
+    const local = readCachedStudentPeriodStats(student.id, bounds);
+    const server = remote.get(String(student.id)) ?? null;
+    const stats = local && server ? mergePeriodStatsMax(local, server) : (server ?? local);
+    return cachedStudentLeaderboardRow(student, bounds, homeworkAttempts, stats);
+  });
+  return rankLeaderboardEntries(rows, 'activity', pointSettings);
 }
 
 /** API beklerken anında gösterilecek önbellek tablosu (yalnızca aktivite modu). */

@@ -24,7 +24,12 @@ import {
   leaderboardModeRating,
   mergeLeaderboardEntryRows,
 } from '../../lib/leaderboardUtils';
-import { buildClubLeaderboard, buildCachedClubLeaderboardPreview, harvestClubLeaderboardDaily } from '../../services/leaderboardService';
+import {
+  buildClubLeaderboard,
+  buildCachedClubLeaderboardPreview,
+  buildClubLeaderboardFromPeriodStats,
+  harvestClubLeaderboardDaily,
+} from '../../services/leaderboardService';
 import { scheduleDailyLeaderboardRefresh } from '../../lib/scheduleHourlyRefresh';
 import {
   formatLeaderboardSnapshotAge,
@@ -397,6 +402,29 @@ export const ClubLeaderboard: React.FC<Props> = ({
       setLastUpdatedAt(remote.cachedAt);
       writeLeaderboardSnapshot(key, keptRemote, currentPeers.length);
       snapshot = { entries: keptRemote, cachedAt: remote.cachedAt, peerCount: remote.peerCount };
+    }
+
+    // Tüm-tablo snapshot'ları "asla azalma" ile birleştirildiği için bir kez kirlenince
+    // kendini korur. Öğrenci+dönem kayıtları ise doğru kapsamlı: onlarla birleştirmeden DEĞİŞTİR.
+    if (mode === 'activity') {
+      const authoritative = await buildClubLeaderboardFromPeriodStats(
+        currentPeers,
+        homeworkAttemptsRef.current,
+        currentPeriod,
+        settings,
+      );
+      if (isStale()) return;
+      if (authoritative?.length) {
+        displayedKeyRef.current = key;
+        entriesRef.current = authoritative;
+        setEntries(authoritative);
+        writeLeaderboardSnapshot(key, authoritative, currentPeers.length);
+        snapshot = {
+          entries: authoritative,
+          cachedAt: snapshot?.cachedAt ?? Date.now(),
+          peerCount: currentPeers.length,
+        };
+      }
     }
 
     const snapshotFresh = snapshot ? isLeaderboardSnapshotFresh(snapshot.cachedAt) : false;
