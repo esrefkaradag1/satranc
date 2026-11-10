@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Trophy, Plus, Clock3, CalendarDays, Trash2, Users, Shuffle,
   ChevronLeft, Info, Swords, ChevronRight, Settings, UserPlus,
-  CheckCircle2, Lock, Check, X, Minus, Hourglass,
+  CheckCircle2, Lock, Check, X, Minus, Hourglass, Flame, Shield, Search,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { canShowStudentCounts } from '../lib/studentCountVisibility';
@@ -17,12 +17,15 @@ import {
   type ChessDuelloTournament,
 } from '../lib/chessduelloClient';
 import {
+  freeParticipants,
   pairNextRound,
   rankParticipants,
+  rankTeams,
   recalcStandings,
   type PairingPlayer,
 } from '../lib/tournamentPairing';
-import type { Tournament, TournamentPairing, TournamentStanding, Student } from '../types';
+import { createTournamentGames, subscribeToTournamentGames } from '../lib/tournamentGames';
+import type { Tournament, TournamentPairing, TournamentStanding, Student, Club } from '../types';
 
 interface TournamentsProps {
   branch?: string;
@@ -30,6 +33,13 @@ interface TournamentsProps {
 }
 
 const inputCls = 'w-full px-3 py-2.5 rounded-lg text-sm bg-slate-900 border border-slate-700/60 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50 transition-all';
+
+/** `datetime-local` input, verilen Date'i YEREL saat olarak bekler — toISOString() UTC verdiği için
+ * doğrudan kullanılırsa saat dilimi farkı kadar kayar. Önce yerel ofseti telafi edip öyle ISO'luyoruz. */
+function toLocalDatetimeInputValue(d: Date): string {
+  const localMs = d.getTime() - d.getTimezoneOffset() * 60000;
+  return new Date(localMs).toISOString().slice(0, 16);
+}
 
 function chessDuelloStatusLabel(status: string): string {
   const value = status.trim().toLowerCase();
@@ -50,6 +60,8 @@ function formatChessDuelloLimit(seconds: number): string {
   const minutes = Math.round(seconds / 60);
   return minutes > 0 ? `${minutes} dk süre sınırı` : `${seconds} sn süre sınırı`;
 }
+
+const TIME_CONTROL_PRESETS = ['3+0', '3+2', '5+0', '5+3', '10+0', '15+10', '30+0'];
 
 type TournamentStatus = 'upcoming' | 'ongoing' | 'finished';
 
@@ -80,10 +92,18 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
   const [format, setFormat] = useState<'arena' | 'swiss'>('arena');
   const [durationMinutes, setDurationMinutes] = useState(45);
   const [timeControl, setTimeControl] = useState('3+2');
-  const [startAt, setStartAt] = useState(() => new Date(Date.now() + 3600000).toISOString().slice(0, 16));
+  const [customTimeControl, setCustomTimeControl] = useState('');
+  const [startAt, setStartAt] = useState(() => toLocalDatetimeInputValue(new Date(Date.now() + 3600000)));
+  const [startAtError, setStartAtError] = useState('');
   const [description, setDescription] = useState('');
+  const minStartAt = useMemo(() => toLocalDatetimeInputValue(new Date(Date.now() - Date.now() % 60000)), [showForm]);
   const [isRated, setIsRated] = useState(true);
   const [roundLimit, setRoundLimit] = useState(7);
+  const [streakBonus, setStreakBonus] = useState(true);
+  const [teamBattleOn, setTeamBattleOn] = useState(false);
+  const [teamBattleSource, setTeamBattleSource] = useState<'club' | 'group'>('group');
+  const [teamBattleTeamIds, setTeamBattleTeamIds] = useState<string[]>([]);
+  const [teamBattleLeaders, setTeamBattleLeaders] = useState(5);
   const [chessDuelloTournaments, setChessDuelloTournaments] = useState<ChessDuelloTournament[]>([]);
   const [chessDuelloLoading, setChessDuelloLoading] = useState(true);
   const [chessDuelloError, setChessDuelloError] = useState('');
@@ -131,15 +151,26 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
     return base.filter((s) => s.status !== 'inactive');
   }, [students, branch, coaches]);
 
+  const availableGroups = useMemo(
+    () => Array.from(new Set(selectableStudents.map((s) => s.group).filter((g): g is string => !!g))).sort((a, b) => a.localeCompare(b, 'tr')),
+    [selectableStudents],
+  );
+
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    const startDate = new Date(startAt);
+    if (Number.isNaN(startDate.getTime()) || startDate.getTime() < Date.now() - 60000) {
+      setStartAtError('Başlangıç zamanı şu andan ileri bir zaman olmalı.');
+      return;
+    }
+    const resolvedTimeControl = timeControl === 'custom' ? customTimeControl.trim() : timeControl;
     addTournament({
       name: name.trim(),
       format,
       durationMinutes: Math.max(5, durationMinutes),
-      timeControl: timeControl.trim() || '3+2',
-      startAt: new Date(startAt).toISOString(),
+      timeControl: resolvedTimeControl || '3+2',
+      startAt: startDate.toISOString(),
       description: description.trim() || undefined,
       isRated,
       createdByRole: role,
@@ -147,10 +178,19 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
       branch: branch || undefined,
       participantIds: [],
       roundLimit: format === 'swiss' ? Math.max(1, roundLimit) : undefined,
+      streakBonus: format === 'arena' ? streakBonus : undefined,
+      teamBattle: format === 'arena' && teamBattleOn && teamBattleTeamIds.length > 1
+        ? { source: teamBattleSource, teamIds: teamBattleTeamIds, nbLeaders: Math.max(1, teamBattleLeaders) }
+        : undefined,
     });
     setName('');
     setDescription('');
+    setStartAtError('');
     setShowForm(false);
+  };
+
+  const toggleTeamBattleTeam = (teamId: string) => {
+    setTeamBattleTeamIds((prev) => (prev.includes(teamId) ? prev.filter((id) => id !== teamId) : [...prev, teamId]));
   };
 
   const getStatus = (t: Tournament): TournamentStatus => {
@@ -167,6 +207,7 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
       <TournamentViewer
         tournament={activeTournament}
         students={selectableStudents}
+        clubs={clubs}
         onBack={() => setActiveTournamentId(null)}
         onUpdate={(updates) => updateTournament(activeTournament.id, updates)}
         recalc={recalcStandings}
@@ -221,8 +262,21 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
                   </select>
                 </div>
                 <div>
-                  <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Tempo (3+2 vb.)</label>
-                  <input className={inputCls} value={timeControl} onChange={(e) => setTimeControl(e.target.value)} placeholder="3+2" />
+                  <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Tempo</label>
+                  <select className={inputCls} value={timeControl} onChange={(e) => setTimeControl(e.target.value)}>
+                    {TIME_CONTROL_PRESETS.map((preset) => (
+                      <option key={preset} value={preset}>{preset}</option>
+                    ))}
+                    <option value="custom">Özel…</option>
+                  </select>
+                  {timeControl === 'custom' && (
+                    <input
+                      className={`${inputCls} mt-2`}
+                      value={customTimeControl}
+                      onChange={(e) => setCustomTimeControl(e.target.value)}
+                      placeholder="Örn. 7+5"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -233,7 +287,14 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Başlangıç</label>
-                  <input className={inputCls} type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
+                  <input
+                    className={inputCls}
+                    type="datetime-local"
+                    min={minStartAt}
+                    value={startAt}
+                    onChange={(e) => { setStartAt(e.target.value); setStartAtError(''); }}
+                  />
+                  {startAtError && <p className="text-[11px] text-rose-400 mt-1">{startAtError}</p>}
                 </div>
               </div>
 
@@ -248,6 +309,65 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
                 <input type="checkbox" checked={isRated} onChange={(e) => setIsRated(e.target.checked)} className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-500 focus:ring-indigo-500/30" />
                 <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Puanlı (Rating) Turnuva</span>
               </label>
+
+              {format === 'arena' && (
+                <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-900/50 border border-slate-700/50 cursor-pointer hover:border-indigo-500/40 transition-colors group">
+                  <input type="checkbox" checked={streakBonus} onChange={(e) => setStreakBonus(e.target.checked)} className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-500 focus:ring-indigo-500/30" />
+                  <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors flex items-center gap-1.5">
+                    <Flame className="w-3.5 h-3.5 text-orange-400" /> Seri Bonusu (2 galibiyetten sonra puan ikiye katlanır)
+                  </span>
+                </label>
+              )}
+
+              {format === 'arena' && (clubs.length > 1 || availableGroups.length > 1) && (
+                <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 overflow-hidden">
+                  <label className="flex items-center gap-3 p-3 cursor-pointer hover:border-indigo-500/40 transition-colors group">
+                    <input type="checkbox" checked={teamBattleOn} onChange={(e) => setTeamBattleOn(e.target.checked)} className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-500 focus:ring-indigo-500/30" />
+                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors flex items-center gap-1.5">
+                      <Shield className="w-3.5 h-3.5 text-indigo-400" /> Takım Savaşı (lichess Team Battle)
+                    </span>
+                  </label>
+                  {teamBattleOn && (
+                    <div className="px-3 pb-3 space-y-3">
+                      {clubs.length > 1 && (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => { setTeamBattleSource('group'); setTeamBattleTeamIds([]); }}
+                            className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${teamBattleSource === 'group' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+                          >
+                            Gruplar (kendi kulübümde)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setTeamBattleSource('club'); setTeamBattleTeamIds([]); }}
+                            className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${teamBattleSource === 'club' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+                          >
+                            Kulüpler (birbirine karşı)
+                          </button>
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">
+                          {teamBattleSource === 'club' ? 'Yarışan Kulüpler (en az 2)' : 'Yarışan Gruplar (en az 2)'}
+                        </label>
+                        <div className="max-h-36 overflow-y-auto space-y-1 thin-scrollbar">
+                          {(teamBattleSource === 'club' ? clubs.map((c) => ({ id: c.id, label: c.name })) : availableGroups.map((g) => ({ id: g, label: g }))).map((opt) => (
+                            <label key={opt.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/60 cursor-pointer text-sm text-slate-300">
+                              <input type="checkbox" checked={teamBattleTeamIds.includes(opt.id)} onChange={() => toggleTeamBattleTeam(opt.id)} className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-800 text-indigo-500 focus:ring-indigo-500/30" />
+                              {opt.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Lider Sayısı (takım puanına katkıda bulunan en iyi N oyuncu)</label>
+                        <input className={inputCls} type="number" min={1} max={20} value={teamBattleLeaders} onChange={(e) => setTeamBattleLeaders(Number(e.target.value))} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Açıklama</label>
@@ -361,41 +481,115 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
 interface ViewerProps {
   tournament: Tournament;
   students: Student[];
+  clubs: Club[];
   onBack: () => void;
   onUpdate: (updates: Partial<Tournament>) => void;
   recalc: (t: Tournament) => Record<string, TournamentStanding>;
 }
 
-const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBack, onUpdate, recalc }) => {
+const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, clubs, onBack, onUpdate, recalc }) => {
   const showStudentCounts = useCanShowStudentCounts();
   const standings = useMemo(() => recalc(t), [t, recalc]);
   const ranking = useMemo(() => {
     return rankParticipants(t, standings)
-      .map(id => ({ id, s: standings[id] || { played: 0, wins: 0, draws: 0, losses: 0, points: 0, tieBreak: 0 } }));
+      .map(id => ({ id, s: standings[id] || { played: 0, wins: 0, draws: 0, losses: 0, points: 0, tieBreak: 0, winStreak: 0 } }));
   }, [t, standings]);
 
+  const teamBattleOn = !!t.teamBattle && t.teamBattle.teamIds.length > 1;
+  const teamBattleSource = t.teamBattle?.source ?? 'group';
+
   const players: PairingPlayer[] = useMemo(
-    () => students.map((s) => ({ id: s.id, rating: s.elo })),
-    [students],
+    () => students.map((s) => ({ id: s.id, rating: s.elo, team: teamBattleSource === 'club' ? s.clubId : s.group })),
+    [students, teamBattleSource],
   );
 
+  const teamRanking = useMemo(
+    () => (teamBattleOn ? rankTeams(t, standings, players) : []),
+    [teamBattleOn, t, standings, players],
+  );
+  const teamLabel = (teamId: string) => (teamBattleSource === 'club' ? (clubs.find((c) => c.id === teamId)?.name || 'Bilinmeyen Kulüp') : (teamId || 'Grup belirtilmedi'));
+
+  const isArena = t.format === 'arena';
   const rounds = t.rounds ?? [];
   const lastRound = rounds[rounds.length - 1];
   const lastRoundComplete = !lastRound || lastRound.pairings.every((p) => !!p.result);
-  const roundLimitReached = t.format === 'swiss' && !!t.roundLimit && rounds.length >= t.roundLimit;
-  const rosterLocked = t.format === 'swiss' && rounds.length > 0;
-  const canPairNextRound = (t.participantIds?.length ?? 0) >= 2 && lastRoundComplete && !roundLimitReached;
+  const roundLimitReached = !isArena && !!t.roundLimit && rounds.length >= t.roundLimit;
+  const rosterLocked = !isArena && rounds.length > 0;
+  const freeCount = useMemo(() => (isArena ? freeParticipants(t).length : 0), [isArena, t]);
+  const totalGames = useMemo(() => rounds.reduce((n, r) => n + r.pairings.filter((p) => !!p.result).length, 0), [rounds]);
+  // Arena'da (lichess Arena gibi) sürekli eşleştirme: maçı süren oyuncular beklenmez,
+  // sadece o an boşta olan (sonuçsuz eşleşmesi kalmayan) katılımcılar yeniden eşleştirilir.
+  // İsviçre'de ise klasik tur mantığı: bir sonraki tur, bu turun tüm sonuçları girilmeden açılmaz.
+  const canPairNextRound = isArena
+    ? freeCount >= 2
+    : (t.participantIds?.length ?? 0) >= 2 && lastRoundComplete && !roundLimitReached;
 
-  const pairNextRoundNow = () => {
+  // Eşleştirme anında (Arena) gerçek canlı maçlar açılır; sonuçları otomatik senkronlamak
+  // için `t`/`rounds`/`onUpdate`/`recalc`'ın her zaman güncel değerlerine ref üzerinden erişilir
+  // (aşağıdaki subscribe effect'i yeniden abone olmadan en son değerleri kullanabilsin diye).
+  // Canlı maçı olan (gameId) eşleşmeler, sonucu oynanan maçtan otomatik alır; admin
+  // bağlantı sorunu vb. bir durumda bu listeye ekleyip elle sonuç girebilir.
+  const [manualOverrideIds, setManualOverrideIds] = useState<Set<string>>(new Set());
+  const liveSyncRef = useRef({ t, rounds, onUpdate, recalc });
+  liveSyncRef.current = { t, rounds, onUpdate, recalc };
+
+  useEffect(() => {
+    if (!isArena) return;
+    const unsubscribe = subscribeToTournamentGames(t.id, (games) => {
+      const { t: curT, rounds: curRounds, onUpdate: curOnUpdate, recalc: curRecalc } = liveSyncRef.current;
+      const finishedById = new Map(
+        games.filter((g) => g.status === 'finished' && g.result).map((g) => [g.id, g.result as TournamentPairing['result']]),
+      );
+      if (finishedById.size === 0) return;
+      let changed = false;
+      const nextRounds = curRounds.map((r) => ({
+        ...r,
+        pairings: r.pairings.map((p) => {
+          if (p.gameId && finishedById.has(p.gameId) && p.result !== finishedById.get(p.gameId)) {
+            changed = true;
+            return { ...p, result: finishedById.get(p.gameId) };
+          }
+          return p;
+        }),
+      }));
+      if (changed) {
+        curOnUpdate({ rounds: nextRounds, standings: curRecalc({ ...curT, rounds: nextRounds }) });
+      }
+    });
+    return unsubscribe;
+  }, [isArena, t.id]);
+
+  const pairNextRoundNow = async () => {
     if (!canPairNextRound) return;
     const { pairings } = pairNextRound(t, players);
     if (pairings.length === 0) return;
     const roundNo = rounds.length + 1;
+
+    let pairingsWithGames = pairings;
+    if (isArena) {
+      const realPairings = pairings.filter((p): p is TournamentPairing & { blackId: string } => p.blackId != null);
+      if (realPairings.length > 0) {
+        const games = await createTournamentGames(realPairings.map((p) => ({
+          tournamentId: t.id,
+          roundNo,
+          whiteStudentId: p.whiteId,
+          blackStudentId: p.blackId,
+          timeControl: t.timeControl,
+        })));
+        const gameByPair = new Map(games.map((g) => [`${g.whiteStudentId}|${g.blackStudentId}`, g]));
+        pairingsWithGames = pairings.map((p) => {
+          if (p.blackId == null) return p;
+          const game = gameByPair.get(`${p.whiteId}|${p.blackId}`);
+          return game ? { ...p, gameId: game.id } : p;
+        });
+      }
+    }
+
     const nextRounds = [...rounds, {
       id: `${t.id}-r${roundNo}`,
       roundNo,
       createdAt: new Date().toISOString(),
-      pairings,
+      pairings: pairingsWithGames,
     }];
     onUpdate({
       rounds: nextRounds,
@@ -417,21 +611,69 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBa
     });
   };
 
-  const toggleParticipant = (studentId: string) => {
-    if (rosterLocked) return;
-    const current = new Set(t.participantIds ?? []);
-    if (current.has(studentId)) current.delete(studentId);
-    else current.add(studentId);
-    const nextIds = Array.from(current);
+  const applyParticipantIds = (nextIds: string[]) => {
     onUpdate({
       participantIds: nextIds,
       standings: recalc({ ...t, participantIds: nextIds })
     });
   };
 
+  const toggleParticipant = (studentId: string) => {
+    if (rosterLocked) return;
+    const current = new Set(t.participantIds ?? []);
+    if (current.has(studentId)) current.delete(studentId);
+    else current.add(studentId);
+    applyParticipantIds(Array.from(current));
+  };
+
+  const allJoined = students.length > 0 && students.every((s) => t.participantIds?.includes(s.id));
+  const toggleAllParticipants = () => {
+    if (rosterLocked) return;
+    applyParticipantIds(allJoined ? [] : students.map((s) => s.id));
+  };
+
+  const studentGroups = useMemo(() => {
+    const byGroup = new Map<string, Student[]>();
+    students.forEach((s) => {
+      const key = teamBattleOn ? teamLabel((teamBattleSource === 'club' ? s.clubId : s.group) || '') : (s.group || 'Grup belirtilmedi');
+      const bucket = byGroup.get(key);
+      if (bucket) bucket.push(s);
+      else byGroup.set(key, [s]);
+    });
+    return Array.from(byGroup.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], 'tr'))
+      .map(([groupName, groupStudents]) => ({
+        groupName,
+        students: [...groupStudents].sort((a, b) => a.name.localeCompare(b.name, 'tr')),
+      }));
+  }, [students, teamBattleOn, teamBattleSource]);
+
+  const [rosterSearch, setRosterSearch] = useState('');
+  const filteredStudentGroups = useMemo(() => {
+    const query = rosterSearch.trim().toLocaleLowerCase('tr');
+    if (!query) return studentGroups;
+    return studentGroups
+      .map(({ groupName, students: groupStudents }) => ({
+        groupName,
+        students: groupStudents.filter((s) => s.name.toLocaleLowerCase('tr').includes(query)),
+      }))
+      .filter(({ students: groupStudents }) => groupStudents.length > 0);
+  }, [studentGroups, rosterSearch]);
+
+  const toggleGroupParticipants = (groupStudents: Student[]) => {
+    if (rosterLocked) return;
+    const current = new Set(t.participantIds ?? []);
+    const allInGroupJoined = groupStudents.every((s) => current.has(s.id));
+    groupStudents.forEach((s) => {
+      if (allInGroupJoined) current.delete(s.id);
+      else current.add(s.id);
+    });
+    applyParticipantIds(Array.from(current));
+  };
+
   const statusPill = roundLimitReached
     ? { label: 'Turnuva tamamlandı', cls: 'bg-slate-700/50 text-slate-300' }
-    : !lastRoundComplete
+    : !isArena && !lastRoundComplete
       ? { label: 'Sonuç bekleniyor', cls: 'bg-amber-500/15 text-amber-300' }
       : { label: 'Katılım açık', cls: 'bg-emerald-500/15 text-emerald-300' };
 
@@ -462,17 +704,21 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBa
                 <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-0.5">Oyuncu</div>
               </div>
               <div className="text-center">
-                <div className="font-bold text-white leading-none">{rounds.length}{t.format === 'swiss' && t.roundLimit ? `/${t.roundLimit}` : ''}</div>
-                <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-0.5">Tur</div>
+                <div className="font-bold text-white leading-none">{isArena ? totalGames : rounds.length}{!isArena && t.roundLimit ? `/${t.roundLimit}` : ''}</div>
+                <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-0.5">{isArena ? 'Maç' : 'Tur'}</div>
               </div>
             </div>
             <button
               onClick={pairNextRoundNow}
               disabled={!canPairNextRound}
-              title={!lastRoundComplete ? 'Önce bu turun tüm sonuçlarını girin' : roundLimitReached ? 'Planlanan tur sayısına ulaşıldı' : undefined}
+              title={
+                isArena
+                  ? (!canPairNextRound ? 'Eşleşmesi tamamlanmış en az 2 boşta oyuncu gerekiyor' : undefined)
+                  : (!lastRoundComplete ? 'Önce bu turun tüm sonuçlarını girin' : roundLimitReached ? 'Planlanan tur sayısına ulaşıldı' : undefined)
+              }
               className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700/60 disabled:cursor-not-allowed disabled:text-slate-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-indigo-950/30 whitespace-nowrap"
             >
-              <Shuffle className="w-4 h-4" /> {rounds.length === 0 ? '1. Turu Eşleştir' : 'Sıradaki Turu Eşleştir'}
+              <Shuffle className="w-4 h-4" /> {isArena ? 'Boşta Olanları Eşleştir' : (rounds.length === 0 ? '1. Turu Eşleştir' : 'Sıradaki Turu Eşleştir')}
             </button>
           </div>
         </div>
@@ -481,10 +727,35 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBa
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column */}
         <div className="lg:col-span-8 space-y-6">
+          {/* Team Battle standings */}
+          {teamBattleOn && (
+            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-slate-700/50 flex items-center gap-2">
+                <Shield className="w-4 h-4 text-indigo-400" />
+                <h2 className="text-sm font-bold text-white">Takım Sıralaması</h2>
+                <span className="text-[11px] text-slate-500 font-medium">· en iyi {t.teamBattle!.nbLeaders} oyuncunun puan toplamı</span>
+              </div>
+              <div className="divide-y divide-slate-700/40">
+                {teamRanking.map((team, i) => (
+                  <div key={team.teamId} className="flex items-center gap-4 px-5 py-3">
+                    <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold shrink-0 ${
+                      i === 0 ? 'bg-amber-500 text-slate-950' : i === 1 ? 'bg-slate-300 text-slate-900' : i === 2 ? 'bg-amber-700/70 text-amber-50' : 'bg-slate-900 text-slate-500'
+                    }`}>{i + 1}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-white truncate">{teamLabel(team.teamId)}</div>
+                      <div className="text-[11px] text-slate-500 truncate">{team.playerCount} oyuncu · liderler: {team.leaders.map((id) => students.find((s) => s.id === id)?.name || '—').join(', ') || '—'}</div>
+                    </div>
+                    <span className="font-bold text-white tabular-nums shrink-0">{team.score}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Standings */}
           <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 overflow-hidden">
             <div className="px-5 py-3.5 border-b border-slate-700/50">
-              <h2 className="text-sm font-bold text-white">Turnuva Sıralaması</h2>
+              <h2 className="text-sm font-bold text-white">{teamBattleOn ? 'Bireysel Sıralama' : 'Turnuva Sıralaması'}</h2>
             </div>
 
             {ranking.length === 0 ? (
@@ -519,8 +790,13 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBa
                           <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold ${rankCls}`}>{i + 1}</span>
                         </td>
                         <td className="py-2.5 px-2">
-                          <div className="font-semibold text-white truncate max-w-[14rem]">{student?.name || 'Anonim'}</div>
-                          <div className="text-[11px] text-slate-500 truncate max-w-[14rem]">{student?.group || 'Grup belirtilmedi'}</div>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-semibold text-white truncate max-w-[14rem]">{student?.name || 'Anonim'}</span>
+                            {isArena && t.streakBonus !== false && r.s.winStreak >= 2 && (
+                              <Flame className="w-3.5 h-3.5 text-orange-400 shrink-0" aria-label="Seride, sıradaki galibiyet 4 puan eder" />
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate max-w-[14rem]">{teamBattleOn ? teamLabel((teamBattleSource === 'club' ? student?.clubId : student?.group) || '') : (student?.group || 'Grup belirtilmedi')}</div>
                         </td>
                         <td className="py-2.5 px-2 text-center tabular-nums text-slate-300">{r.s.played}</td>
                         <td className="py-2.5 px-2 text-center tabular-nums text-emerald-400">{r.s.wins}</td>
@@ -543,7 +819,58 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBa
             {(!rounds || rounds.length === 0) ? (
               <div className="px-5 py-14 text-center">
                 <Swords className="w-8 h-8 text-slate-700 mx-auto mb-3" />
-                <p className="text-slate-500 text-sm font-medium">Henüz hiçbir tur eşleştirilmedi.</p>
+                <p className="text-slate-500 text-sm font-medium">{isArena ? 'Henüz hiçbir maç eşleştirilmedi.' : 'Henüz hiçbir tur eşleştirilmedi.'}</p>
+              </div>
+            ) : isArena ? (
+              // Arena'da (lichess Arena gibi) sabit tur yok: tüm maçlar, oynanma sırasına göre
+              // en yeniden en eskiye, sürekli tek bir akış halinde gösterilir.
+              <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {[...rounds].reverse().flatMap((round) =>
+                  round.pairings.map((p, idx) => ({ round, idx, p })),
+                ).map(({ round, idx, p }) => {
+                  const whiteName = students.find(s => s.id === p.whiteId)?.name ?? 'Bilinmiyor';
+                  const blackName = p.blackId == null ? null : (students.find(s => s.id === p.blackId)?.name ?? 'Bilinmiyor');
+                  return (
+                    <div key={`${round.id}-${idx}`} className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-slate-900/50 border border-slate-700/40">
+                      <div className="w-[36%] text-sm font-medium text-slate-200 truncate">{whiteName}</div>
+                      {blackName === null ? (
+                        <span className="shrink-0 rounded-md bg-emerald-500/15 text-emerald-400 font-semibold text-[10px] uppercase tracking-wide px-2 py-1">BAY</span>
+                      ) : p.result ? (
+                        <button
+                          type="button"
+                          onClick={() => setPairingResult(round.id, idx, undefined)}
+                          title="Sonucu düzenle"
+                          className="shrink-0 px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs tabular-nums transition-colors"
+                        >
+                          {p.result}
+                        </button>
+                      ) : p.gameId && !manualOverrideIds.has(p.gameId) ? (
+                        <button
+                          type="button"
+                          onClick={() => setManualOverrideIds((prev) => new Set(prev).add(p.gameId!))}
+                          title="Maç canlı oynanıyor — elle sonuç girmek için tıklayın"
+                          className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold text-[10px] uppercase tracking-wide transition-colors"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" /> Canlı
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="hidden sm:flex items-center gap-1 text-[10px] font-semibold text-amber-400 mr-1"><Hourglass className="w-3 h-3" /></span>
+                          <button type="button" onClick={() => setPairingResult(round.id, idx, '1-0')} title={`${whiteName} kazandı`} className="w-6 h-6 rounded-md bg-slate-800 hover:bg-emerald-600 text-slate-500 hover:text-white flex items-center justify-center transition-colors">
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                          <button type="button" onClick={() => setPairingResult(round.id, idx, '1/2-1/2')} title="Berabere" className="w-6 h-6 rounded-md bg-slate-800 hover:bg-slate-500 text-slate-500 hover:text-white flex items-center justify-center transition-colors">
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <button type="button" onClick={() => setPairingResult(round.id, idx, '0-1')} title={`${blackName} kazandı`} className="w-6 h-6 rounded-md bg-slate-800 hover:bg-rose-600 text-slate-500 hover:text-white flex items-center justify-center transition-colors">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                      <div className="w-[36%] text-sm font-medium text-slate-200 truncate text-right">{blackName ?? '—'}</div>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div className="divide-y divide-slate-700/50">
@@ -606,43 +933,88 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBa
         <div className="lg:col-span-4 space-y-6">
           {/* Participants */}
           <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 overflow-hidden">
-            <div className="px-5 py-3.5 border-b border-slate-700/50 flex items-center justify-between">
+            <div className="px-5 py-3.5 border-b border-slate-700/50 flex items-center justify-between gap-3">
               <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
                 <UserPlus className="w-4 h-4 text-slate-400" /> Sporcu Kaydı
               </h3>
-              {showStudentCounts ? (
-                <span className="text-xs font-semibold text-slate-500 tabular-nums">{(t.participantIds?.length || 0)} / {students.length}</span>
-              ) : null}
+              <div className="flex items-center gap-3 shrink-0">
+                {showStudentCounts ? (
+                  <span className="text-xs font-semibold text-slate-500 tabular-nums">{(t.participantIds?.length || 0)} / {students.length}</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={toggleAllParticipants}
+                  disabled={rosterLocked || students.length === 0}
+                  className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {allJoined ? 'Tümünü Kaldır' : 'Tümünü Ekle'}
+                </button>
+              </div>
             </div>
             {rosterLocked && (
               <div className="px-5 py-2 bg-slate-900/40 border-b border-slate-700/50 flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
                 <Lock className="w-3 h-3" /> İsviçre turnuvası başladı, kayıt listesi kilitlendi
               </div>
             )}
-            <div className="p-2 max-h-[420px] overflow-y-auto space-y-1 thin-scrollbar">
-              {students.map(s => {
-                const isJoined = t.participantIds?.includes(s.id);
+            <div className="px-3 pt-3">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={rosterSearch}
+                  onChange={(e) => setRosterSearch(e.target.value)}
+                  placeholder="Sporcu ara…"
+                  className="w-full pl-8 pr-3 py-2 rounded-lg text-sm bg-slate-900 border border-slate-700/60 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50 transition-all"
+                />
+              </div>
+            </div>
+            <div className="p-2 max-h-[420px] overflow-y-auto space-y-3 thin-scrollbar">
+              {filteredStudentGroups.length === 0 && (
+                <p className="px-3 py-6 text-center text-xs text-slate-500">Eşleşen sporcu bulunamadı.</p>
+              )}
+              {filteredStudentGroups.map(({ groupName, students: groupStudents }) => {
+                const allInGroupJoined = groupStudents.every((s) => t.participantIds?.includes(s.id));
                 return (
-                  <button
-                    key={s.id}
-                    onClick={() => toggleParticipant(s.id)}
-                    disabled={rosterLocked}
-                    className={`flex items-center justify-between w-full px-3 py-2.5 rounded-xl border transition-colors text-left ${
-                      rosterLocked ? 'opacity-50 cursor-not-allowed' : ''
-                    } ${
-                      isJoined
-                        ? 'bg-indigo-500/10 border-indigo-500/30'
-                        : 'bg-transparent border-transparent hover:bg-slate-700/30'
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className={`font-medium text-sm truncate ${isJoined ? 'text-indigo-300' : 'text-slate-300'}`}>{s.name}</div>
-                      <div className="text-[11px] text-slate-500 truncate">{s.group}</div>
+                  <div key={groupName}>
+                    <div className="flex items-center justify-between px-3 py-1">
+                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide truncate">{groupName}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleGroupParticipants(groupStudents)}
+                        disabled={rosterLocked}
+                        className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+                      >
+                        {allInGroupJoined ? 'Grubu Kaldır' : 'Grubu Ekle'}
+                      </button>
                     </div>
-                    <div className={`p-1 rounded-md shrink-0 ${isJoined ? 'text-indigo-400' : 'text-slate-600'}`}>
-                      {isJoined ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                    <div className="space-y-1">
+                      {groupStudents.map(s => {
+                        const isJoined = t.participantIds?.includes(s.id);
+                        return (
+                          <button
+                            key={s.id}
+                            onClick={() => toggleParticipant(s.id)}
+                            disabled={rosterLocked}
+                            className={`flex items-center justify-between w-full px-3 py-2.5 rounded-xl border transition-colors text-left ${
+                              rosterLocked ? 'opacity-50 cursor-not-allowed' : ''
+                            } ${
+                              isJoined
+                                ? 'bg-indigo-500/10 border-indigo-500/30'
+                                : 'bg-transparent border-transparent hover:bg-slate-700/30'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className={`font-medium text-sm truncate ${isJoined ? 'text-indigo-300' : 'text-slate-300'}`}>{s.name}</div>
+                              <div className="text-[11px] text-slate-500 truncate">{s.group}</div>
+                            </div>
+                            <div className={`p-1 rounded-md shrink-0 ${isJoined ? 'text-indigo-400' : 'text-slate-600'}`}>
+                              {isJoined ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -655,7 +1027,26 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, onBa
             </h4>
             <ul className="space-y-3 text-[13px] leading-relaxed text-slate-400">
               <li>Bu bir <b className="text-slate-200">{t.format === 'swiss' ? 'İsviçre' : 'Arena'}</b> turnuvasıdır.</li>
-              <li>Sıralama toplanan puanlara göre yapılır. Galibiyet 1, beraberlik 0.5 puandır.</li>
+              <li>
+                {isArena
+                  ? <>Sıralama toplanan puanlara göre yapılır. Galibiyet <b className="text-slate-200">2 puan</b>, beraberlik <b className="text-slate-200">1 puan</b>, mağlubiyet 0 puandır.</>
+                  : <>Sıralama toplanan puanlara göre yapılır. Galibiyet 1, beraberlik 0.5 puandır.</>}
+              </li>
+              {isArena && (
+                <li>
+                  {t.streakBonus !== false ? (
+                    <>Üst üste <b className="text-slate-200">2 galibiyetten</b> sonra seri (ateşte) başlar; seri sürdükçe galibiyet <b className="text-slate-200 inline-flex items-center gap-1">4 puan <Flame className="w-3 h-3 text-orange-400 inline" /></b>, beraberlik ise 2 puan eder. Bir kayıp seriyi sıfırlar.</>
+                  ) : (
+                    <>Bu turnuvada seri bonusu kapalı — her galibiyet 1 puandır.</>
+                  )}
+                </li>
+              )}
+              {isArena && (
+                <li>Maçı süren oyuncu beklenmez: boşta kalan oyuncular, diğerlerinin maçı bitmeden eşleştirilebilir (lichess Arena gibi sürekli akış).</li>
+              )}
+              {teamBattleOn && (
+                <li className="flex items-start gap-1.5"><Shield className="w-3.5 h-3.5 text-indigo-400 mt-0.5 shrink-0" /><span>Bu bir <b className="text-slate-200">Takım Savaşı</b> ({teamBattleSource === 'club' ? 'kulüpler' : 'gruplar'} birbirine karşı): aynı takımdan iki oyuncu asla eşleşmez, her takımın puanı o takımın en iyi <b className="text-slate-200">{t.teamBattle!.nbLeaders}</b> oyuncusunun bireysel puan toplamıdır.</span></li>
+              )}
               <li>Turnuva süresi <b className="text-slate-200">{t.durationMinutes} dakikadır</b>.</li>
             </ul>
             <div className="pt-3 border-t border-slate-700/50 flex items-center justify-between">

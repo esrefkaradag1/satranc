@@ -688,6 +688,21 @@ export interface Tournament {
   standings?: Record<string, TournamentStanding>;
   /** İsviçre sistemi için planlanan toplam tur sayısı (Arena'da kullanılmaz) */
   roundLimit?: number;
+  /** Arena'da üst üste galibiyette puanın ikiye katlanması (lichess "streak" bonusu). Sadece Arena'da kullanılır. */
+  streakBonus?: boolean;
+  /**
+   * Arena "Takım Savaşı" (lichess `TeamBattle`) — katılımcılar takımlara bölünür
+   * (kulübe veya kendi kulübündeki gruba/sınıfa göre), aynı takımdan oyuncular
+   * birbirine eşleştirilmez, her takımın puanı o takımın en iyi `nbLeaders`
+   * oyuncusunun toplam bireysel puanıdır.
+   */
+  teamBattle?: {
+    /** 'club': farklı kulüpler birbirine karşı. 'group': aynı kulüp içinde gruplar/sınıflar birbirine karşı. */
+    source: 'club' | 'group';
+    /** source='club' ise clubId listesi, source='group' ise Student.group değerleri */
+    teamIds: string[];
+    nbLeaders: number;
+  };
 }
 
 export interface TournamentRound {
@@ -703,6 +718,8 @@ export interface TournamentPairing {
   blackId: string | null;
   /** Sonuç girilene kadar beklemede kalır (bay eşleşmelerde her zaman '1-0') */
   result?: '1-0' | '0-1' | '1/2-1/2';
+  /** Varsa, bu eşleşmenin canlı maçının kimliği (tournament_games.id) — gerçek zamanlı tahta için */
+  gameId?: string;
 }
 
 export interface TournamentStanding {
@@ -713,6 +730,8 @@ export interface TournamentStanding {
   points: number;
   /** Sonneborn-Berger derece ayırıcı puanı (lichess İsviçre sistemiyle aynı formül) */
   tieBreak: number;
+  /** Mevcut üst üste galibiyet sayısı (Arena streak bonusu için; 2+ ise sıradaki galibiyet 2 puan eder) */
+  winStreak: number;
 }
 
 /** WhatsApp API sağlayıcısı — varsayılan WaMessage (app.wamessage.app) */

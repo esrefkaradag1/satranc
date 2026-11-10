@@ -1625,8 +1625,40 @@ function tournamentToDb(t: Tournament): Record<string, unknown> {
     rounds: t.rounds ?? [],
     standings: t.standings ?? {},
     round_limit: t.roundLimit ?? null,
+    streak_bonus: t.streakBonus ?? null,
+    team_battle: t.teamBattle ?? null,
   };
 }
+
+/**
+ * `tournamentToDb`'nin yalnızca `patch`'te VERİLEN alanları Supabase sütun adlarına
+ * çevirip döndüren kısmi sürümü. `updateTournament`'ın Supabase yazması bunu kullanır
+ * — eski (stale) bir `current` anlık görüntüsüyle tüm satırı yeniden yazmak yerine,
+ * yalnızca gerçekten değişen alanları UPDATE eder; böylece yarışan iki güncelleme
+ * birbirinin değişikliğini sessizce geri almaz (örn. biri katılımcı eklerken diğeri
+ * turları güncelliyorsa, katılımcı listesi eski boş haliyle üzerine yazılmaz).
+ */
+function tournamentPatchToDb(patch: Partial<Tournament>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if ('name' in patch) out.name = patch.name;
+  if ('format' in patch) out.format = patch.format;
+  if ('durationMinutes' in patch) out.duration_minutes = patch.durationMinutes;
+  if ('timeControl' in patch) out.time_control = patch.timeControl;
+  if ('startAt' in patch) out.start_at = patch.startAt;
+  if ('description' in patch) out.description = patch.description ?? null;
+  if ('isRated' in patch) out.is_rated = patch.isRated;
+  if ('createdByRole' in patch) out.created_by_role = patch.createdByRole;
+  if ('createdBy' in patch) out.created_by = patch.createdBy;
+  if ('branch' in patch) out.branch = patch.branch ?? null;
+  if ('participantIds' in patch) out.participant_ids = patch.participantIds ?? [];
+  if ('rounds' in patch) out.rounds = patch.rounds ?? [];
+  if ('standings' in patch) out.standings = patch.standings ?? {};
+  if ('roundLimit' in patch) out.round_limit = patch.roundLimit ?? null;
+  if ('streakBonus' in patch) out.streak_bonus = patch.streakBonus ?? null;
+  if ('teamBattle' in patch) out.team_battle = patch.teamBattle ?? null;
+  return out;
+}
+
 function dbToTournament(row: Record<string, unknown>): Tournament {
   const r = row as any;
   return {
@@ -1645,6 +1677,8 @@ function dbToTournament(row: Record<string, unknown>): Tournament {
     rounds: Array.isArray(r.rounds) ? r.rounds : [],
     standings: (r.standings && typeof r.standings === 'object') ? r.standings : {},
     roundLimit: r.round_limit != null ? Number(r.round_limit) : (r.roundLimit != null ? Number(r.roundLimit) : undefined),
+    streakBonus: r.streak_bonus != null ? Boolean(r.streak_bonus) : undefined,
+    teamBattle: (r.team_battle && typeof r.team_battle === 'object') ? r.team_battle : undefined,
   };
 }
 
@@ -3354,24 +3388,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const sb = getServiceSupabase();
     if (sb) {
       sb.from('tournaments').insert(tournamentToDb(full)).then(({ error }) => {
-        if (error) console.error('Supabase tournaments insert error:', error);
+        if (error) {
+          console.error('Supabase tournaments insert error:', error);
+          showToast('Turnuva sunucuya kaydedilemedi (sayfa yenilenince kaybolur). Supabase migration dosyasını (supabase_live_tournaments.sql) çalıştırdığınızdan emin olun.', 'error');
+        }
       }).then(undefined, (err) => console.error('Supabase tournaments insert throw:', err));
     }
-  }, [addActivityLog]);
+  }, [addActivityLog, showToast]);
 
   const updateTournament = useCallback((id: string, patch: Partial<Tournament>) => {
     setTournaments((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
     const sb = getServiceSupabase();
     if (sb) {
-      const current = tournaments.find((t) => t.id === id);
-      if (current) {
-        const merged = { ...current, ...patch };
-        sb.from('tournaments').update(tournamentToDb(merged)).eq('id', id).then(({ error }) => {
-          if (error) console.error('Supabase tournaments update error:', error);
-        }).then(undefined, (err) => console.error('Supabase tournaments update throw:', err));
-      }
+      sb.from('tournaments').update(tournamentPatchToDb(patch)).eq('id', id).then(({ error }) => {
+        if (error) {
+          console.error('Supabase tournaments update error:', error);
+          showToast('Turnuva değişikliği sunucuya kaydedilemedi (sayfa yenilenince kaybolur). Supabase migration dosyasını (supabase_live_tournaments.sql) çalıştırdığınızdan emin olun.', 'error');
+        }
+      }).then(undefined, (err) => console.error('Supabase tournaments update throw:', err));
     }
-  }, [tournaments]);
+  }, [showToast]);
 
   const deleteTournament = useCallback((id: string) => {
     setTournaments((prev) => {

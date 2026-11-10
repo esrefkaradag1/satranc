@@ -41,6 +41,7 @@ import {
   MessageCircle,
   ArrowLeft,
   Eye,
+  UserPlus,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { analyzeStudentHomework } from '../services/geminiService';
@@ -67,6 +68,8 @@ import { StudentDuesCalendar } from './student/StudentDuesCalendar';
 import { UkdFideRatingsPanel } from './student/UkdFideRatingsPanel';
 import { LichessOAuthConnect } from './student/LichessOAuthConnect';
 import LichessGameViewerModal from './LichessGameViewerModal';
+import { LiveTournamentGame } from './student/LiveTournamentGame';
+import { joinTournamentSelf, subscribeToStudentActiveGames, type TournamentGame } from '../lib/tournamentGames';
 import ChessComGameViewerModal from './ChessComGameViewerModal';
 import StudentMessagesPanel from './StudentMessagesPanel';
 import ParentNotificationsPanel from './student/ParentNotificationsPanel';
@@ -339,7 +342,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs, isStaffImpersonating } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, updateTournament, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs, isStaffImpersonating } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
@@ -839,6 +842,44 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       .filter((t) => (t.participantIds ?? []).includes(studentId))
       .sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime());
   }, [tournaments, student, studentId]);
+
+  const joinableTournaments = useMemo(() => {
+    if (!student) return [];
+    return tournaments
+      .filter((t) => !(t.participantIds ?? []).includes(studentId))
+      .filter((t) => !t.branch || t.branch === student.branch)
+      .filter((t) => {
+        const start = new Date(t.startAt).getTime();
+        const end = start + Math.max(0, t.durationMinutes || 0) * 60000;
+        return Date.now() < end; // henüz bitmemiş
+      })
+      .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
+  }, [tournaments, student, studentId]);
+
+  const [joiningTournamentId, setJoiningTournamentId] = useState<string | null>(null);
+  const handleJoinTournament = useCallback(async (tournamentId: string) => {
+    setJoiningTournamentId(tournamentId);
+    const ok = await joinTournamentSelf(tournamentId, studentId);
+    if (ok) {
+      const target = tournaments.find((t) => t.id === tournamentId);
+      if (target) {
+        updateTournament(tournamentId, { participantIds: [...(target.participantIds ?? []), studentId] });
+      }
+    }
+    setJoiningTournamentId(null);
+  }, [studentId, tournaments, updateTournament]);
+
+  // Eşleştirme bulununca (Arena) öğrencinin önüne canlı maç gelir — lichess Arena'daki gibi.
+  const [activeLiveGame, setActiveLiveGame] = useState<TournamentGame | null>(null);
+  const [dismissedGameIds, setDismissedGameIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!studentId) return () => {};
+    const unsub = subscribeToStudentActiveGames(studentId, (games) => {
+      const candidate = games.find((g) => g.status === 'active' && !dismissedGameIds.has(g.id));
+      setActiveLiveGame(candidate ?? null);
+    });
+    return unsub;
+  }, [studentId, dismissedGameIds]);
 
   const selectedTournament = useMemo(
     () => joinedTournaments.find((t) => t.id === selectedTournamentId) ?? null,
@@ -1801,6 +1842,33 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
               </h2>
               <p className="text-sm text-slate-400 mt-1">Admin veya kulüp tarafından eklendiğiniz turnuvalar burada görünür.</p>
             </div>
+
+            {joinableTournaments.length > 0 && (
+              <div className="rounded-2xl bg-slate-800/40 border border-slate-700/50 overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-700/50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">Katılabileceğim turnuvalar</div>
+                <ul className="divide-y divide-white/5">
+                  {joinableTournaments.map((t) => (
+                    <li key={t.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="font-bold text-white truncate">{t.name}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          {new Date(t.startAt).toLocaleString('tr-TR')} · {t.timeControl} · {t.format === 'swiss' ? 'İsviçre' : 'Arena'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleJoinTournament(t.id)}
+                        disabled={joiningTournamentId === t.id}
+                        className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-wait text-white text-xs font-bold transition-colors"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" /> {joiningTournamentId === t.id ? 'Katılıyor…' : 'Katıl'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <div className="rounded-2xl bg-slate-800/40 border border-slate-700/50 overflow-hidden">
               {joinedTournaments.length === 0 ? (
                 <p className="p-5 text-sm text-slate-500">Henüz katıldığınız turnuva yok.</p>
@@ -2890,6 +2958,18 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         <ChessComGameViewerModal
           game={chessComViewerGame}
           onClose={() => setChessComViewerGame(null)}
+        />
+      )}
+      {activeLiveGame && (
+        <LiveTournamentGame
+          game={activeLiveGame}
+          studentId={studentId}
+          whiteName={students.find((s) => s.id === activeLiveGame.whiteStudentId)?.name ?? 'Beyaz'}
+          blackName={students.find((s) => s.id === activeLiveGame.blackStudentId)?.name ?? 'Siyah'}
+          onClose={() => {
+            setDismissedGameIds((prev) => new Set(prev).add(activeLiveGame.id));
+            setActiveLiveGame(null);
+          }}
         />
       )}
     </div>
