@@ -260,6 +260,12 @@ export const ClubLeaderboard: React.FC<Props> = ({
       ? mergeLeaderboardEntryRows(live, next, mode, settings)
       : next;
     displayedKeyRef.current = key;
+    // entriesRef, `entries` state'ine bağlı bir useEffect ile güncellenir — bu da bir
+    // render turu gecikmeye yol açar. Dönem değişince aynı tick içinde restoreCachedTable()
+    // iki kez çağrılıyor (biri doğrudan, biri load() içinden); ikinci çağrı bu ref'i hemen
+    // burada güncellemezsek hâlâ ÖNCEKİ dönemin verisini görür ve "aynı key" sanıp onunla
+    // birleştirir — bir dönemin sayısı diğerine sızar.
+    entriesRef.current = merged;
     setEntries(merged);
     return merged;
   }, []);
@@ -322,6 +328,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
     setLastUpdatedAt(null);
 
     if (currentPeers.length === 0) {
+      entriesRef.current = [];
       setEntries([]);
       return null;
     }
@@ -336,6 +343,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
     if (preview.length > 0) {
       keepBestEntries(preview, key);
     } else if (displayedKeyRef.current !== key) {
+      entriesRef.current = [];
       setEntries([]);
     }
     return null;
@@ -344,6 +352,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const load = useCallback(async (force = false) => {
     const currentPeers = peersRef.current;
     if (currentPeers.length === 0) {
+      entriesRef.current = [];
       setEntries([]);
       lastUpdatedAtRef.current = null;
       setLastUpdatedAt(null);
