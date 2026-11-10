@@ -241,6 +241,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const entriesRef = useRef(entries);
   const snapshotKeyRef = useRef(snapshotKey);
   const clubScopeRef = useRef(clubScope);
+  const resolvedClubIdRef = useRef(resolvedClubId);
   const pointSettingsRef = useRef(pointSettings);
   const periodRef = useRef(period);
   const rankModeRef = useRef(rankMode);
@@ -275,6 +276,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
   useEffect(() => { entriesRef.current = entries; }, [entries]);
   useEffect(() => { snapshotKeyRef.current = snapshotKey; }, [snapshotKey]);
   useEffect(() => { clubScopeRef.current = clubScope; }, [clubScope]);
+  useEffect(() => { resolvedClubIdRef.current = resolvedClubId; }, [resolvedClubId]);
   useEffect(() => { canRefreshRef.current = canRefreshLeaderboard; }, [canRefreshLeaderboard]);
   useEffect(() => { pointSettingsRef.current = pointSettings; }, [pointSettings]);
   useEffect(() => { periodRef.current = period; }, [period]);
@@ -402,6 +404,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
         currentPeriod,
         {
           shouldAbort: () => harvestAbortRef.current,
+          clubId: resolvedClubIdRef.current ?? undefined,
           onStudent: (row) => {
             if (harvestAbortRef.current) return;
             const kept = keepBestEntries([row], key);

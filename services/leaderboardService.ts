@@ -16,6 +16,7 @@ import {
   type LichessActivity,
   type LichessUserProfile,
 } from './chessPlatformService';
+import { chessduelloAnalytics } from '../lib/chessduelloClient';
 import { loadPlatformDayStatsFromDb } from './platformStatsCacheService';
 import type { PlatformDayStats } from '../lib/homeworkPlatformUtils';
 import { istanbulDayKey } from '../lib/homeworkDayUtils';
@@ -648,11 +649,45 @@ export async function persistLeaderboardStatsFromDays(
   await saveRemotePeriodStats(student.id, period, bounds.startMs, merged);
 }
 
+/** ChessDuello bir bulmaca düellosu platformu (maç değil) — süre penceresi (days)
+ * bazlı analytics döner, Lichess gibi tarih aralığıyla filtrelenebilir ham satır
+ * vermez. Dönem uzunluğuna en yakın gün sayısını isteyip o pencerenin toplamını
+ * bulmaca sayacına ekliyoruz. */
+async function chessDuelloPuzzlesForBounds(
+  student: Student,
+  bounds: PeriodBounds,
+  clubId: string | undefined,
+): Promise<{ correct: number; wrong: number }> {
+  const memberId = student.chessDuelloMemberId?.trim();
+  if (!memberId || !clubId) return { correct: 0, wrong: 0 };
+  const days = Math.max(1, Math.ceil((bounds.endMs - bounds.startMs) / 86_400_000));
+  try {
+    const res = await chessduelloAnalytics(memberId, clubId, days);
+    const attempts = Math.max(0, res.data?.attempts ?? 0);
+    const correct = Math.max(0, Math.min(attempts, res.data?.correct ?? 0));
+    return { correct, wrong: Math.max(0, attempts - correct) };
+  } catch {
+    return { correct: 0, wrong: 0 };
+  }
+}
+
+function addChessDuelloPuzzles(
+  stats: Omit<CachedStudentPeriodStats, 'cachedAt'>,
+  duello: { correct: number; wrong: number },
+): Omit<CachedStudentPeriodStats, 'cachedAt'> {
+  if (duello.correct === 0 && duello.wrong === 0) return stats;
+  return {
+    ...stats,
+    puzzles: stats.puzzles + duello.correct,
+    puzzleWrong: stats.puzzleWrong + duello.wrong,
+  };
+}
+
 export async function persistLeaderboardStatsFromActivity(
   student: Student,
   activities: LichessActivity[],
   homeworkAttempts: HomeworkPuzzleAttempt[] = [],
-  opts?: { stampEmpty?: boolean },
+  opts?: { stampEmpty?: boolean; clubId?: string },
 ): Promise<void> {
   if (!student.id) return;
   if (activities.length === 0 && !opts?.stampEmpty) return;
@@ -664,8 +699,9 @@ export async function persistLeaderboardStatsFromActivity(
     const internalWrong = homeworkAttempts.filter(
       (a) => a.studentId === student.id && isTimestampInPeriod(a.timestamp, bounds) && !a.correct,
     ).length;
+    const duello = await chessDuelloPuzzlesForBounds(student, bounds, opts?.clubId);
     const fromActivity = withHomeworkInternals(
-      statsFromLichessActivity(activities, bounds),
+      addChessDuelloPuzzles(statsFromLichessActivity(activities, bounds), duello),
       internalCorrect,
       internalWrong,
     );
@@ -699,13 +735,14 @@ export async function harvestClubLeaderboardDaily(
     limit?: number;
     shouldAbort?: () => boolean;
     onStudent?: (entry: LeaderboardEntry) => void;
+    clubId?: string;
   },
 ): Promise<LeaderboardEntry[]> {
   if (clubHarvestInFlight || isLichessGloballyRateLimited()) return [];
   const bounds = getPeriodBounds(period);
   const remote = await loadRemotePeriodStats(peers.map((p) => String(p.id)), period, bounds.startMs);
   const due = peers.filter((peer) => {
-    if (!peer.lichessUsername?.trim()) return false;
+    if (!peer.lichessUsername?.trim() && !peer.chessDuelloMemberId?.trim()) return false;
     if (wasHarvestedToday(remote.get(String(peer.id))?.cachedAt)) return false;
     return !wasHarvestedToday(readCachedStudentPeriodStats(peer.id, bounds)?.cachedAt);
   });
@@ -718,11 +755,17 @@ export async function harvestClubLeaderboardDaily(
     for (const student of due.slice(0, cap)) {
       if (opts?.shouldAbort?.() || isLichessGloballyRateLimited()) break;
       const username = student.lichessUsername?.trim();
-      if (!username) continue;
-      const activities = await fetchLichessActivity(username).catch(() => [] as LichessActivity[]);
-      if (isLichessGloballyRateLimited() && activities.length === 0) break;
-      if (!lichessActivityFetchWasOk(username)) continue;
-      await persistLeaderboardStatsFromActivity(student, activities, homeworkAttempts, { stampEmpty: true });
+      const activities = username
+        ? await fetchLichessActivity(username).catch(() => [] as LichessActivity[])
+        : [];
+      if (username) {
+        if (isLichessGloballyRateLimited() && activities.length === 0) break;
+        if (!lichessActivityFetchWasOk(username)) continue;
+      }
+      await persistLeaderboardStatsFromActivity(student, activities, homeworkAttempts, {
+        stampEmpty: true,
+        clubId: opts?.clubId,
+      });
       const ranked = rankLeaderboardEntries(
         [await buildStudentLeaderboardRow(student, bounds, homeworkAttempts, 'activity', {
           allowLiveLichess: false,
