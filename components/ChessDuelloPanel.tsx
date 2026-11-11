@@ -86,20 +86,94 @@ function itemsArray(source: Record<string, unknown> | null, candidates: string[]
   return [];
 }
 
-function attemptItems(attempt: ChessDuelloAttempt | null): Record<string, unknown>[] {
-  if (!attempt) return [];
-  const source = asRecord(attempt.attempt) ?? attempt;
-  // 'results' dokümanda answers[] ile birlikte bireysel sonuçlar için anılıyor
-  // (bkz. chessduello.pdf "Use answers[].isCorrect and results..."); 'positions'
-  // ise turnuva/rapor tarafında bulmaca listesi için kullanılan terim.
-  return itemsArray(source, ['answers', 'results', 'puzzles', 'positions', 'attempts', 'items', 'details']);
+function numOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-/** /report'un turnuva geneli bulmaca listesi — tema bilgisini index'e göre eşlemek için. */
-function reportPuzzles(report: ChessDuelloReport | null): Record<string, unknown>[] {
-  if (!report) return [];
-  const source = asRecord((report as Record<string, unknown>).report) ?? report;
-  return itemsArray(source, ['puzzles', 'positions', 'puzzleInsights', 'insights']);
+function strOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+/** API birimi belirtmiyor; 1000'den büyükse ms kabul edip saniyeye çevir. */
+function secondsLabel(value: unknown): string {
+  const n = numOrNull(value);
+  if (n == null) return '—';
+  return `${Math.round(n > 1000 ? n / 1000 : n)} sn`;
+}
+
+type AttemptPuzzleRow = {
+  key: string;
+  questionId: string | null;
+  turn: string | null;
+  fen: string | null;
+  available: boolean;
+  isCorrect: boolean | null;
+  timeMs: number | null;
+  moves: string[];
+};
+
+/**
+ * Coach API 1.2.0 Attempt: puzzles[] (id, order, fen, turn, available) ve
+ * answers[] (questionId, isCorrect, timeMs, boardMoves) questionId ile eşleşir;
+ * results[] ise sıraya göre boolean|null sonuçlardır.
+ */
+function attemptRows(attempt: ChessDuelloAttempt | null): AttemptPuzzleRow[] {
+  if (!attempt) return [];
+  const source = asRecord(attempt.attempt) ?? attempt;
+  const answers = itemsArray(source, ['answers']);
+  const puzzles = itemsArray(source, ['puzzles'])
+    .sort((a, b) => (numOrNull(a.order) ?? 0) - (numOrNull(b.order) ?? 0));
+  const results = Array.isArray(source.results) ? source.results : [];
+  const answerById = new Map(answers.map((a) => [strOrNull(a.questionId) ?? '', a]));
+  const base = puzzles.length ? puzzles : answers;
+
+  return base.map((item, index) => {
+    const questionId = strOrNull(puzzles.length ? item.id : item.questionId);
+    const answer = puzzles.length
+      ? (questionId ? answerById.get(questionId) : undefined) ?? null
+      : item;
+    const fromResults = results[index];
+    const isCorrect = typeof answer?.isCorrect === 'boolean'
+      ? answer.isCorrect
+      : typeof fromResults === 'boolean' ? fromResults : null;
+    const moves = Array.isArray(answer?.boardMoves)
+      ? (answer.boardMoves as unknown[]).filter((m): m is string => typeof m === 'string')
+      : [];
+    return {
+      key: questionId ?? String(index),
+      questionId,
+      turn: puzzles.length ? strOrNull(item.turn) : null,
+      fen: puzzles.length ? strOrNull(item.fen) : null,
+      available: puzzles.length ? item.available !== false : true,
+      isCorrect,
+      timeMs: numOrNull(answer?.timeMs),
+      moves,
+    };
+  });
+}
+
+function reportRecord(report: ChessDuelloReport | null | undefined): Record<string, unknown> | null {
+  if (!report) return null;
+  return asRecord((report as Record<string, unknown>).report) ?? (report as Record<string, unknown>);
+}
+
+/** ReportQuestion şeması serbest (additionalProperties) — tema alanını birkaç adla dene. */
+function questionThemes(question: Record<string, unknown> | null | undefined): string[] {
+  const raw = valueOf(question, ['tags', 'themes', 'theme', 'themeName', 'tag']);
+  if (Array.isArray(raw)) return raw.map((t) => (typeof t === 'string' ? t : displayValue(valueOf(asRecord(t), ['title', 'name', 'slug'])))).filter((t) => t && t !== '—');
+  return typeof raw === 'string' && raw.trim() ? [raw] : [];
+}
+
+function questionKey(question: Record<string, unknown> | null | undefined): string | null {
+  return strOrNull(valueOf(question, ['questionId', 'id', 'puzzleId']));
+}
+
+function turnLabel(turn: string | null): string {
+  if (!turn) return '';
+  const t = turn.toLowerCase();
+  if (t === 'w' || t === 'white') return 'Beyaz oynar';
+  if (t === 'b' || t === 'black') return 'Siyah oynar';
+  return turn;
 }
 
 const inputCls =
@@ -570,13 +644,18 @@ const ChessDuelloPanel: React.FC = () => {
               <Stat label="Bulmaca" value={String(selectedTournament.totalPuzzles)} />
               <Stat label="Durum" value={selectedTournament.status === 'ended' ? 'Tamamlandı' : selectedTournament.status} />
             </div>
-            <table className="w-full text-sm">
+            {tournamentReport ? <TournamentSummary report={tournamentReport} /> : null}
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[520px] text-sm">
               <thead className="text-[10px] uppercase tracking-wider text-slate-500">
                 <tr>
                   <th className="text-left py-1">Sıra</th>
                   <th className="text-left py-1">Üye</th>
                   <th className="text-left py-1">Puan</th>
                   <th className="text-left py-1">Cevap</th>
+                  <th className="text-left py-1">D / Y</th>
+                  <th className="text-left py-1">Doğruluk</th>
+                  <th className="text-left py-1">Süre</th>
                   <th className="py-1" aria-label="Rapor" />
                 </tr>
               </thead>
@@ -587,6 +666,13 @@ const ChessDuelloPanel: React.FC = () => {
                     <td className="py-1.5 text-white font-medium">{r.member?.username || (r.isFormerMember ? 'Ayrılmış üye' : '—')}</td>
                     <td className="py-1.5 text-slate-200">{r.score}</td>
                     <td className="py-1.5 text-slate-400">{r.answeredCount}</td>
+                    <td className="py-1.5 tabular-nums">
+                      <span className="text-emerald-300">{displayValue(r.correctCount)}</span>
+                      <span className="text-slate-600"> / </span>
+                      <span className="text-rose-300">{displayValue(r.incorrectCount)}</span>
+                    </td>
+                    <td className="py-1.5 text-slate-300 tabular-nums">{pct(r.accuracy)}</td>
+                    <td className="py-1.5 text-slate-400 tabular-nums">{secondsLabel(r.timeSpentMs)}</td>
                     <td className="py-1.5 text-right">
                       {r.member?.id ? (
                         <button
@@ -602,6 +688,7 @@ const ChessDuelloPanel: React.FC = () => {
                 ))}
               </tbody>
             </table>
+            </div>
             {results.length === 0 ? <p className="text-sm text-slate-400">Sonuç yok veya turnuva bitmemiş.</p> : null}
 
             {selectedResult ? (
@@ -624,7 +711,7 @@ const ChessDuelloPanel: React.FC = () => {
                   <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{attemptError}</p>
                 ) : null}
 
-                {attemptReport ? <AttemptReport attempt={attemptReport} report={tournamentReport} /> : null}
+                {attemptReport ? <AttemptReport attempt={attemptReport} report={tournamentReport} result={selectedResult} /> : null}
               </section>
             ) : null}
           </div>
@@ -643,26 +730,101 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function AttemptReport({ attempt, report }: { attempt: ChessDuelloAttempt; report?: ChessDuelloReport | null }) {
+function TournamentSummary({ report }: { report: ChessDuelloReport }) {
+  const data = reportRecord(report);
+  if (!data) return null;
+  const questions = itemsArray(data, ['questionStats']);
+  const indexOf = (q: Record<string, unknown> | null) => {
+    const key = questionKey(q);
+    const i = key ? questions.findIndex((x) => questionKey(x) === key) : -1;
+    return i >= 0 ? `#${i + 1}` : '';
+  };
+  const highlights: Array<[string, Record<string, unknown> | null]> = [
+    ['En zor', asRecord(data.hardest)],
+    ['En çok kaçırılan', asRecord(data.mostMissed)],
+    ['En uzun düşünülen', asRecord(data.mostPondered)],
+  ];
+  const topTags = Array.isArray(data.topTags)
+    ? (data.topTags as unknown[]).filter(Array.isArray) as unknown[][]
+    : [];
+  const accuracy = numOrNull(data.overallAccuracy) ?? numOrNull(data.avgAccuracy);
+
+  return (
+    <section className="space-y-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Stat label="Ort. doğruluk" value={pct(accuracy)} />
+        <Stat label="Tamamlama" value={pct(numOrNull(data.completionRate))} />
+        <Stat label="En yüksek puan" value={displayValue(data.topScore)} />
+        <Stat label="Bulmaca başı süre" value={secondsLabel(data.avgTimePerPuzzle)} />
+      </div>
+
+      {highlights.some(([, q]) => q) ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {highlights.map(([label, q]) => q ? (
+            <div key={label} className="rounded-2xl border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{label}</div>
+              <div className="text-sm font-black text-white mt-1">{indexOf(q) || 'Bulmaca'}</div>
+              {questionThemes(q).length ? (
+                <div className="text-xs text-slate-400 mt-0.5 truncate">{questionThemes(q).join(', ')}</div>
+              ) : null}
+            </div>
+          ) : null)}
+        </div>
+      ) : null}
+
+      {topTags.length ? (
+        <div>
+          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Hata yapılan temalar</div>
+          <div className="flex flex-wrap gap-1.5">
+            {topTags.map(([tag, mistakes, total]) => (
+              <span key={String(tag)} className="rounded-lg bg-rose-500/10 px-2 py-1 text-xs font-bold text-rose-200">
+                {String(tag)} · {displayValue(mistakes)}/{displayValue(total)} hata
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <details className="rounded-xl border border-white/[0.06] bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+        <summary className="cursor-pointer font-bold text-slate-300">ChessDuello'nun gönderdiği tüm rapor verisi</summary>
+        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-slate-300">
+          {JSON.stringify(data, null, 2)}
+        </pre>
+      </details>
+    </section>
+  );
+}
+
+function AttemptReport({
+  attempt,
+  report,
+  result,
+}: {
+  attempt: ChessDuelloAttempt;
+  report?: ChessDuelloReport | null;
+  result?: ChessDuelloResult | null;
+}) {
   const data = asRecord(attempt.attempt) ?? attempt;
-  const rows = attemptItems(attempt);
-  const puzzles = reportPuzzles(report ?? null);
-  const accuracy = valueOf(data, ['accuracy', 'correctPercent', 'accuracyPercent']);
-  const correct = valueOf(data, ['correct', 'correctCount']);
-  const elapsed = valueOf(data, ['timeSpent', 'timeSpentMs', 'durationMs', 'duration']);
-  const seconds = typeof elapsed === 'number' ? (elapsed > 1000 ? Math.round(elapsed / 1000) : Math.round(elapsed)) : null;
+  const rows = attemptRows(attempt);
+  const questions = itemsArray(reportRecord(report), ['questionStats']);
+  const questionById = new Map(questions.map((q) => [questionKey(q) ?? '', q]));
+  const answered = rows.filter((r) => r.isCorrect !== null);
+  const correct = result?.correctCount ?? (answered.length ? answered.filter((r) => r.isCorrect).length : null);
+  const wrong = result?.incorrectCount ?? (answered.length ? answered.filter((r) => r.isCorrect === false).length : null);
+  const accuracy = result?.accuracy ?? (answered.length && correct != null ? (correct / answered.length) * 100 : null);
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        <Stat label="Doğruluk" value={typeof accuracy === 'number' ? pct(accuracy <= 1 ? accuracy * 100 : accuracy) : '—'} />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Stat label="Doğruluk" value={pct(accuracy)} />
         <Stat label="Doğru" value={displayValue(correct)} />
-        <Stat label="Süre" value={seconds == null ? '—' : `${seconds} sn`} />
+        <Stat label="Yanlış" value={displayValue(wrong)} />
+        <Stat label="Süre" value={secondsLabel(data.timeSpentMs ?? result?.timeSpentMs)} />
       </div>
 
       {rows.length ? (
         <div className="overflow-x-auto rounded-xl border border-white/[0.06]">
-          <table className="w-full min-w-[580px] text-sm">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-slate-900/70 text-[10px] uppercase tracking-wider text-slate-400">
               <tr>
                 <th className="px-3 py-2 text-left">Bulmaca</th>
@@ -670,23 +832,38 @@ function AttemptReport({ attempt, report }: { attempt: ChessDuelloAttempt; repor
                 <th className="px-3 py-2 text-left">Sonuç</th>
                 <th className="px-3 py-2 text-left">Hamle</th>
                 <th className="px-3 py-2 text-left">Süre</th>
+                <th className="px-3 py-2 text-left">Pozisyon</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row, index) => {
-                const solved = valueOf(row, ['correct', 'isCorrect', 'solved']);
-                const reportTheme = valueOf(puzzles[index] ?? null, ['theme', 'themeName', 'tags', 'mistakeTheme']);
-                const theme = valueOf(row, ['theme', 'themeName', 'tags']) ?? reportTheme;
-                const move = valueOf(row, ['move', 'answerMove', 'selectedMove', 'wrongMove']);
-                const spent = valueOf(row, ['timeSpentMs', 'durationMs', 'timeSpent', 'duration']);
-                const spentSeconds = typeof spent === 'number' ? Math.round(spent > 1000 ? spent / 1000 : spent) : null;
+                const themes = questionThemes(
+                  (row.questionId ? questionById.get(row.questionId) : undefined) ?? questions[index] ?? null,
+                );
                 return (
-                  <tr key={String(valueOf(row, ['id', 'puzzleId', 'attemptId']) ?? index)} className="border-t border-white/[0.05]">
-                    <td className="px-3 py-2 text-slate-300 tabular-nums">#{index + 1} {displayValue(valueOf(row, ['elo', 'rating']) ?? '')}</td>
-                    <td className="px-3 py-2 text-slate-300">{Array.isArray(theme) ? theme.map(displayValue).join(', ') : displayValue(theme)}</td>
-                    <td className={`px-3 py-2 font-bold ${solved === true ? 'text-emerald-300' : solved === false ? 'text-rose-300' : 'text-slate-400'}`}>{solved === true ? 'Doğru' : solved === false ? 'Yanlış' : '—'}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-200">{displayValue(move)}</td>
-                    <td className="px-3 py-2 text-slate-400 tabular-nums">{spentSeconds == null ? '—' : `${spentSeconds} sn`}</td>
+                  <tr key={row.key} className="border-t border-white/[0.05]">
+                    <td className="px-3 py-2 text-slate-300 tabular-nums">
+                      #{index + 1}
+                      {row.turn ? <span className="ml-1.5 text-[11px] text-slate-500">{turnLabel(row.turn)}</span> : null}
+                    </td>
+                    <td className="px-3 py-2 text-slate-300">{themes.length ? themes.join(', ') : '—'}</td>
+                    <td className={`px-3 py-2 font-bold ${row.isCorrect === true ? 'text-emerald-300' : row.isCorrect === false ? 'text-rose-300' : 'text-slate-400'}`}>
+                      {row.isCorrect === true ? 'Doğru' : row.isCorrect === false ? 'Yanlış' : 'Cevapsız'}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-200">{row.moves.length ? row.moves.join(' ') : '—'}</td>
+                    <td className="px-3 py-2 text-slate-400 tabular-nums">{secondsLabel(row.timeMs)}</td>
+                    <td className="px-3 py-2">
+                      {row.fen && row.available ? (
+                        <a
+                          href={`https://lichess.org/analysis/${row.fen.replace(/ /g, '_')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs font-bold text-violet-300 hover:text-violet-200"
+                        >
+                          Aç
+                        </a>
+                      ) : <span className="text-slate-600">—</span>}
+                    </td>
                   </tr>
                 );
               })}

@@ -111,6 +111,10 @@ export type ChessDuelloResult = {
   member: { id: string; username: string } | null;
   isFormerMember: boolean;
   answeredCount: number;
+  /** Doğruluk kaydı eksikse null — tahmin etmeyin (Coach API 1.2.0). */
+  correctCount?: number | null;
+  incorrectCount?: number | null;
+  accuracy?: number | null;
 };
 
 /** Turnuva tamamlandıktan sonra ChessDuello'nun döndürdüğü oyuncu denemesi.
