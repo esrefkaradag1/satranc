@@ -1,14 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
+  Check,
   CheckCircle2,
   ChevronRight,
+  ExternalLink,
   KeyRound,
   Loader2,
+  Minus,
   RefreshCw,
   Swords,
   Trophy,
   Unlink,
   Users,
+  X,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { resolveAuthClubId } from '../lib/supabaseClubContext';
@@ -94,10 +99,11 @@ function strOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-/** API birimi belirtmiyor; 1000'den büyükse ms kabul edip saniyeye çevir. */
-function secondsLabel(value: unknown): string {
+/** `ms` verilirse değer kesin milisaniyedir (…Ms alanları); aksi halde birim bilinmiyor, 1000'den büyükse ms kabul edilir. */
+function secondsLabel(value: unknown, ms = false): string {
   const n = numOrNull(value);
   if (n == null) return '—';
+  if (ms) return n < 1000 ? '<1 sn' : `${Math.round(n / 1000)} sn`;
   return `${Math.round(n > 1000 ? n / 1000 : n)} sn`;
 }
 
@@ -214,6 +220,7 @@ const ChessDuelloPanel: React.FC = () => {
   const [tournamentReport, setTournamentReport] = useState<ChessDuelloReport | null>(null);
   const [attemptLoading, setAttemptLoading] = useState(false);
   const [attemptError, setAttemptError] = useState('');
+  const attemptReqRef = useRef(0);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -331,17 +338,21 @@ const ChessDuelloPanel: React.FC = () => {
 
   const openAttemptReport = async (result: ChessDuelloResult) => {
     if (!selectedTournament || !result.member?.id) return;
+    const req = attemptReqRef.current + 1;
+    attemptReqRef.current = req;
     setSelectedResult(result);
     setAttemptReport(null);
     setAttemptError('');
     setAttemptLoading(true);
     try {
       const response = await chessduelloAttempt(selectedTournament.id, result.member.id, activeClubId || undefined);
+      if (req !== attemptReqRef.current) return;
       setAttemptReport(response.data);
     } catch (err) {
+      if (req !== attemptReqRef.current) return;
       setAttemptError(err instanceof Error ? err.message : 'Oyuncu raporu alınamadı');
     } finally {
-      setAttemptLoading(false);
+      if (req === attemptReqRef.current) setAttemptLoading(false);
     }
   };
 
@@ -623,99 +634,25 @@ const ChessDuelloPanel: React.FC = () => {
       ) : null}
 
       {selectedTournament ? (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-3" onClick={() => setSelectedTournament(null)}>
-          <div
-            className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-slate-950 border border-white/10 p-5 space-y-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-lg font-black text-white">{tournamentTitle(selectedTournament)}</h3>
-                <p className="mt-1 text-xs text-slate-400">
-                  {selectedTournament.totalPuzzles} bulmaca · {fmtDay(selectedTournament.startDate)} – {fmtDay(selectedTournament.endDate)}
-                </p>
-              </div>
-              <button type="button" onClick={() => setSelectedTournament(null)} className="text-slate-400 text-sm font-bold">
-                Kapat
-              </button>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <Stat label="Katılımcı" value={String(results.length)} />
-              <Stat label="Bulmaca" value={String(selectedTournament.totalPuzzles)} />
-              <Stat label="Durum" value={selectedTournament.status === 'ended' ? 'Tamamlandı' : selectedTournament.status} />
-            </div>
-            {tournamentReport ? <TournamentSummary report={tournamentReport} /> : null}
-            <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] text-sm">
-              <thead className="text-[10px] uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="text-left py-1">Sıra</th>
-                  <th className="text-left py-1">Üye</th>
-                  <th className="text-left py-1">Puan</th>
-                  <th className="text-left py-1">Cevap</th>
-                  <th className="text-left py-1">D / Y</th>
-                  <th className="text-left py-1">Doğruluk</th>
-                  <th className="text-left py-1">Süre</th>
-                  <th className="py-1" aria-label="Rapor" />
-                </tr>
-              </thead>
-              <tbody>
-                {results.map((r) => (
-                  <tr key={r.id} className="border-t border-white/[0.05]">
-                    <td className="py-1.5 text-slate-300">{r.rank}</td>
-                    <td className="py-1.5 text-white font-medium">{r.member?.username || (r.isFormerMember ? 'Ayrılmış üye' : '—')}</td>
-                    <td className="py-1.5 text-slate-200">{r.score}</td>
-                    <td className="py-1.5 text-slate-400">{r.answeredCount}</td>
-                    <td className="py-1.5 tabular-nums">
-                      <span className="text-emerald-300">{displayValue(r.correctCount)}</span>
-                      <span className="text-slate-600"> / </span>
-                      <span className="text-rose-300">{displayValue(r.incorrectCount)}</span>
-                    </td>
-                    <td className="py-1.5 text-slate-300 tabular-nums">{pct(r.accuracy)}</td>
-                    <td className="py-1.5 text-slate-400 tabular-nums">{secondsLabel(r.timeSpentMs)}</td>
-                    <td className="py-1.5 text-right">
-                      {r.member?.id ? (
-                        <button
-                          type="button"
-                          onClick={() => void openAttemptReport(r)}
-                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-violet-200 hover:bg-violet-500/15 focus:outline-none focus:ring-2 focus:ring-violet-500/50"
-                        >
-                          Rapor <ChevronRight className="h-3.5 w-3.5" />
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-            {results.length === 0 ? <p className="text-sm text-slate-400">Sonuç yok veya turnuva bitmemiş.</p> : null}
-
-            {selectedResult ? (
-              <section className="border-t border-white/[0.08] pt-4 space-y-3" aria-live="polite">
-                <div className="flex flex-wrap items-end justify-between gap-2">
-                  <div>
-                    <h4 className="font-black text-white">{selectedResult.member?.username} · Turnuva raporu</h4>
-                    <p className="mt-1 text-xs text-slate-400">Bulmaca ayrıntıları turnuva tamamlandığında ChessDuello tarafından açılır.</p>
-                  </div>
-                  <span className="text-xs font-bold text-slate-300 tabular-nums">{selectedResult.answeredCount}/{selectedTournament.totalPuzzles} cevap</span>
-                </div>
-
-                {attemptLoading ? (
-                  <div className="grid grid-cols-3 gap-2 animate-pulse" aria-label="Rapor yükleniyor">
-                    {[1, 2, 3].map((i) => <div key={i} className="h-16 rounded-xl bg-slate-800/70" />)}
-                  </div>
-                ) : null}
-
-                {attemptError ? (
-                  <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{attemptError}</p>
-                ) : null}
-
-                {attemptReport ? <AttemptReport attempt={attemptReport} report={tournamentReport} result={selectedResult} /> : null}
-              </section>
-            ) : null}
-          </div>
-        </div>
+        <TournamentDialog
+          key={selectedTournament.id}
+          tournament={selectedTournament}
+          results={results}
+          report={tournamentReport}
+          selectedResult={selectedResult}
+          attempt={attemptReport}
+          attemptLoading={attemptLoading}
+          attemptError={attemptError}
+          onClose={() => setSelectedTournament(null)}
+          onOpenResult={(r) => void openAttemptReport(r)}
+          onBack={() => {
+            attemptReqRef.current += 1;
+            setSelectedResult(null);
+            setAttemptReport(null);
+            setAttemptError("");
+            setAttemptLoading(false);
+          }}
+        />
       ) : null}
     </div>
   );
@@ -727,6 +664,97 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{label}</div>
       <div className="text-sm font-black text-white mt-1 truncate">{value}</div>
     </div>
+  );
+}
+
+type KeyFigure = { label: string; value: string; tone?: 'good' | 'bad' };
+
+function KeyFigures({ items }: { items: KeyFigure[] }) {
+  return (
+    <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.06] sm:grid-cols-4">
+      {items.map((item) => (
+        <div key={item.label} className="bg-slate-950 px-4 py-3">
+          <dt className="text-xs font-medium text-slate-400">{item.label}</dt>
+          <dd
+            className={`mt-0.5 text-lg font-black tabular-nums ${
+              item.tone === 'good' ? 'text-emerald-300' : item.tone === 'bad' ? 'text-rose-300' : 'text-white'
+            }`}
+          >
+            {item.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ResultPill({ value }: { value: boolean | null }) {
+  const cfg = value === true
+    ? { label: 'Doğru', cls: 'bg-emerald-500/[0.15] text-emerald-300', Icon: Check }
+    : value === false
+      ? { label: 'Yanlış', cls: 'bg-rose-500/[0.15] text-rose-300', Icon: X }
+      : { label: 'Cevapsız', cls: 'bg-slate-700/40 text-slate-400', Icon: Minus };
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold ${cfg.cls}`}>
+      <cfg.Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      {cfg.label}
+    </span>
+  );
+}
+
+function RankBadge({ rank }: { rank: number }) {
+  const tone = rank === 1 ? 'text-amber-300' : rank === 2 ? 'text-slate-200' : rank === 3 ? 'text-orange-300' : 'text-slate-500';
+  return (
+    <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/[0.04] text-sm font-black tabular-nums ${tone}`}>
+      {rank}
+    </span>
+  );
+}
+
+function ResultRow({ result, onOpen }: { result: ChessDuelloResult; onOpen: (r: ChessDuelloResult) => void }) {
+  const name = result.member?.username || (result.isFormerMember ? 'Ayrılmış üye' : '—');
+  const accuracy = typeof result.accuracy === 'number' ? result.accuracy : null;
+  const clickable = Boolean(result.member?.id);
+
+  const content = (
+    <>
+      <RankBadge rank={result.rank} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-bold text-white">{name}</div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
+          <span><b className="font-bold text-emerald-300">{displayValue(result.correctCount)}</b> doğru</span>
+          <span><b className="font-bold text-rose-300">{displayValue(result.incorrectCount)}</b> yanlış</span>
+          <span>{secondsLabel(result.timeSpentMs, true)}</span>
+        </div>
+        {accuracy != null ? (
+          <div className="mt-2 h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-slate-800" aria-hidden="true">
+            <div className="h-full rounded-full bg-emerald-400/80" style={{ width: `${Math.min(100, Math.max(0, accuracy))}%` }} />
+          </div>
+        ) : null}
+      </div>
+      <div className="text-right">
+        <div className="text-base font-black tabular-nums text-white">{result.score}</div>
+        <div className="text-xs tabular-nums text-slate-400">{pct(accuracy)}</div>
+      </div>
+      {clickable ? <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" /> : <span className="w-4 shrink-0" />}
+    </>
+  );
+
+  return (
+    <li>
+      {clickable ? (
+        <button
+          type="button"
+          onClick={() => onOpen(result)}
+          aria-label={`${name} raporunu aç`}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/50"
+        >
+          {content}
+        </button>
+      ) : (
+        <div className="flex w-full items-center gap-3 px-4 py-3">{content}</div>
+      )}
+    </li>
   );
 }
 
@@ -744,56 +772,80 @@ function TournamentSummary({ report }: { report: ChessDuelloReport }) {
     ['En çok kaçırılan', asRecord(data.mostMissed)],
     ['En uzun düşünülen', asRecord(data.mostPondered)],
   ];
+  const shownHighlights = highlights.filter(([, q]) => q);
   const topTags = Array.isArray(data.topTags)
     ? (data.topTags as unknown[]).filter(Array.isArray) as unknown[][]
     : [];
   const accuracy = numOrNull(data.overallAccuracy) ?? numOrNull(data.avgAccuracy);
 
   return (
-    <section className="space-y-3">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Stat label="Ort. doğruluk" value={pct(accuracy)} />
-        <Stat label="Tamamlama" value={pct(numOrNull(data.completionRate))} />
-        <Stat label="En yüksek puan" value={displayValue(data.topScore)} />
-        <Stat label="Bulmaca başı süre" value={secondsLabel(data.avgTimePerPuzzle)} />
-      </div>
+    <div className="space-y-6">
+      <KeyFigures
+        items={[
+          { label: 'Ortalama doğruluk', value: pct(accuracy) },
+          { label: 'Tamamlama', value: pct(numOrNull(data.completionRate)) },
+          { label: 'En yüksek puan', value: displayValue(data.topScore) },
+          { label: 'Bulmaca başı süre', value: secondsLabel(data.avgTimePerPuzzle) },
+        ]}
+      />
 
-      {highlights.some(([, q]) => q) ? (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          {highlights.map(([label, q]) => q ? (
-            <div key={label} className="rounded-2xl border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{label}</div>
-              <div className="text-sm font-black text-white mt-1">{indexOf(q) || 'Bulmaca'}</div>
-              {questionThemes(q).length ? (
-                <div className="text-xs text-slate-400 mt-0.5 truncate">{questionThemes(q).join(', ')}</div>
-              ) : null}
-            </div>
-          ) : null)}
-        </div>
+      {shownHighlights.length ? (
+        <section>
+          <h4 className="text-sm font-bold text-white">Dikkat çeken bulmacalar</h4>
+          <ul className="mt-2 divide-y divide-white/[0.06] rounded-2xl border border-white/[0.06]">
+            {shownHighlights.map(([label, q]) => {
+              const themes = questionThemes(q);
+              return (
+                <li key={label} className="flex items-baseline justify-between gap-4 px-4 py-3">
+                  <span className="text-sm text-slate-400">{label}</span>
+                  <span className="text-right text-sm font-medium text-white">
+                    {indexOf(q) || 'Bulmaca'}
+                    {themes.length ? <span className="text-slate-400"> · {themes.join(', ')}</span> : null}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       ) : null}
 
       {topTags.length ? (
-        <div>
-          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Hata yapılan temalar</div>
-          <div className="flex flex-wrap gap-1.5">
-            {topTags.map(([tag, mistakes, total]) => (
-              <span key={String(tag)} className="rounded-lg bg-rose-500/10 px-2 py-1 text-xs font-bold text-rose-200">
-                {String(tag)} · {displayValue(mistakes)}/{displayValue(total)} hata
-              </span>
-            ))}
-          </div>
-        </div>
+        <section>
+          <h4 className="text-sm font-bold text-white">Hata yapılan temalar</h4>
+          <ul className="mt-2 space-y-3">
+            {topTags.map(([tag, mistakes, total]) => {
+              const m = numOrNull(mistakes);
+              const t = numOrNull(total);
+              const ratio = m != null && t ? Math.min(100, Math.max(0, (m / t) * 100)) : 0;
+              return (
+                <li key={String(tag)}>
+                  <div className="flex items-baseline justify-between gap-3 text-sm">
+                    <span className="font-medium text-slate-200">{String(tag)}</span>
+                    <span className="tabular-nums text-slate-400">
+                      <b className="font-bold text-rose-300">{displayValue(mistakes)}</b> hata · {displayValue(total)} cevap
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-800" aria-hidden="true">
+                    <div className="h-full rounded-full bg-rose-400/80" style={{ width: `${ratio}%` }} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       ) : null}
 
-      <details className="rounded-xl border border-white/[0.06] bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+      <details className="rounded-xl border border-white/[0.06] px-3 py-2 text-xs text-slate-400">
         <summary className="cursor-pointer font-bold text-slate-300">ChessDuello'nun gönderdiği tüm rapor verisi</summary>
         <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-slate-300">
           {JSON.stringify(data, null, 2)}
         </pre>
       </details>
-    </section>
+    </div>
   );
 }
+
+const PUZZLE_COLS = 'sm:grid-cols-[5.5rem_minmax(0,1fr)_6.5rem_3.5rem_6.5rem_3.5rem]';
 
 function AttemptReport({
   attempt,
@@ -814,61 +866,75 @@ function AttemptReport({
   const accuracy = result?.accuracy ?? (answered.length && correct != null ? (correct / answered.length) * 100 : null);
 
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Stat label="Doğruluk" value={pct(accuracy)} />
-        <Stat label="Doğru" value={displayValue(correct)} />
-        <Stat label="Yanlış" value={displayValue(wrong)} />
-        <Stat label="Süre" value={secondsLabel(data.timeSpentMs ?? result?.timeSpentMs)} />
-      </div>
+    <div className="space-y-4">
+      <KeyFigures
+        items={[
+          { label: 'Doğruluk', value: pct(accuracy) },
+          { label: 'Doğru', value: displayValue(correct), tone: 'good' },
+          { label: 'Yanlış', value: displayValue(wrong), tone: 'bad' },
+          { label: 'Süre', value: secondsLabel(data.timeSpentMs ?? result?.timeSpentMs, true) },
+        ]}
+      />
 
       {rows.length ? (
-        <div className="overflow-x-auto rounded-xl border border-white/[0.06]">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="bg-slate-900/70 text-[10px] uppercase tracking-wider text-slate-400">
-              <tr>
-                <th className="px-3 py-2 text-left">Bulmaca</th>
-                <th className="px-3 py-2 text-left">Tema</th>
-                <th className="px-3 py-2 text-left">Sonuç</th>
-                <th className="px-3 py-2 text-left">Hamle</th>
-                <th className="px-3 py-2 text-left">Süre</th>
-                <th className="px-3 py-2 text-left">Pozisyon</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => {
-                const themes = questionThemes(
-                  (row.questionId ? questionById.get(row.questionId) : undefined) ?? questions[index] ?? null,
-                );
-                return (
-                  <tr key={row.key} className="border-t border-white/[0.05]">
-                    <td className="px-3 py-2 text-slate-300 tabular-nums">
-                      #{index + 1}
-                      {row.turn ? <span className="ml-1.5 text-[11px] text-slate-500">{turnLabel(row.turn)}</span> : null}
-                    </td>
-                    <td className="px-3 py-2 text-slate-300">{themes.length ? themes.join(', ') : '—'}</td>
-                    <td className={`px-3 py-2 font-bold ${row.isCorrect === true ? 'text-emerald-300' : row.isCorrect === false ? 'text-rose-300' : 'text-slate-400'}`}>
-                      {row.isCorrect === true ? 'Doğru' : row.isCorrect === false ? 'Yanlış' : 'Cevapsız'}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-200">{row.moves.length ? row.moves.join(' ') : '—'}</td>
-                    <td className="px-3 py-2 text-slate-400 tabular-nums">{secondsLabel(row.timeMs)}</td>
-                    <td className="px-3 py-2">
+        <div className="overflow-hidden rounded-2xl border border-white/[0.06]">
+          <div className={`hidden gap-x-3 border-b border-white/[0.06] bg-slate-900/60 px-4 py-2 text-xs font-bold text-slate-400 sm:grid ${PUZZLE_COLS}`}>
+            <span>Bulmaca</span>
+            <span>Tema</span>
+            <span>Hamle</span>
+            <span>Süre</span>
+            <span>Sonuç</span>
+            <span className="sr-only">Pozisyon</span>
+          </div>
+          <ol className="divide-y divide-white/[0.06]">
+            {rows.map((row, index) => {
+              const themes = questionThemes(
+                (row.questionId ? questionById.get(row.questionId) : undefined) ?? questions[index] ?? null,
+              );
+              const side = turnLabel(row.turn);
+              return (
+                <li
+                  key={row.key}
+                  className={`grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3 ${PUZZLE_COLS} ${
+                    row.isCorrect === false ? 'bg-rose-500/[0.06]' : ''
+                  }`}
+                >
+                  <div className="flex items-baseline gap-2 sm:block">
+                    <span className="text-sm font-black tabular-nums text-white">#{index + 1}</span>
+                    {side ? <span className="text-xs text-slate-400 sm:block">{side}</span> : null}
+                  </div>
+                  <div className="col-start-2 row-start-1 justify-self-end sm:col-start-5 sm:justify-self-start">
+                    <ResultPill value={row.isCorrect} />
+                  </div>
+                  <div className="col-span-2 text-sm text-slate-300 sm:col-span-1 sm:col-start-2 sm:row-start-1">
+                    {themes.length ? themes.join(', ') : <span className="text-slate-500">Tema bilgisi yok</span>}
+                  </div>
+                  <div className="col-span-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400 sm:contents">
+                    <span className="sm:col-start-3 sm:row-start-1">
+                      <span className="sm:hidden">Hamle: </span>
+                      <span className="font-mono text-slate-200">{row.moves.length ? row.moves.join(' ') : '—'}</span>
+                    </span>
+                    <span className="tabular-nums sm:col-start-4 sm:row-start-1">{secondsLabel(row.timeMs, true)}</span>
+                    <span className="sm:col-start-6 sm:row-start-1 sm:justify-self-end">
                       {row.fen && row.available ? (
                         <a
                           href={`https://lichess.org/analysis/${row.fen.replace(/ /g, '_')}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-xs font-bold text-violet-300 hover:text-violet-200"
+                          aria-label={`#${index + 1} pozisyonunu Lichess'te aç`}
+                          className="inline-flex items-center gap-1 rounded-md py-1 font-bold text-violet-300 hover:text-violet-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
                         >
-                          Aç
+                          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span className="sm:hidden">Pozisyonu aç</span>
+                          <span className="hidden sm:inline">Aç</span>
                         </a>
-                      ) : <span className="text-slate-600">—</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      ) : null}
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
         </div>
       ) : (
         <p className="rounded-xl bg-slate-900/55 px-3 py-2 text-sm text-slate-400">
@@ -878,6 +944,171 @@ function AttemptReport({
     </div>
   );
 }
+
+type DialogView = 'ranking' | 'summary';
+
+function TournamentDialog({
+  tournament,
+  results,
+  report,
+  selectedResult,
+  attempt,
+  attemptLoading,
+  attemptError,
+  onClose,
+  onOpenResult,
+  onBack,
+}: {
+  tournament: ChessDuelloTournament;
+  results: ChessDuelloResult[];
+  report: ChessDuelloReport | null;
+  selectedResult: ChessDuelloResult | null;
+  attempt: ChessDuelloAttempt | null;
+  attemptLoading: boolean;
+  attemptError: string;
+  onClose: () => void;
+  onOpenResult: (r: ChessDuelloResult) => void;
+  onBack: () => void;
+}) {
+  const [view, setView] = useState<DialogView>('ranking');
+  const ended = tournament.status === 'ended';
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (selectedResult) onBack();
+      else onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedResult, onBack, onClose]);
+
+  const playerName = selectedResult?.member?.username || 'Oyuncu';
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cd-tournament-title"
+        className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-slate-950 sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="shrink-0 border-b border-white/[0.08] px-5 pb-4 pt-5 sm:px-6">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 id="cd-tournament-title" className="truncate text-lg font-black text-white">
+                {tournamentTitle(tournament)}
+              </h3>
+              <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-400">
+                <span
+                  className={`rounded-md px-2 py-0.5 text-xs font-bold ${
+                    ended ? 'bg-emerald-500/[0.15] text-emerald-300' : 'bg-amber-500/[0.15] text-amber-200'
+                  }`}
+                >
+                  {ended ? 'Tamamlandı' : tournament.status}
+                </span>
+                <span>{tournament.totalPuzzles} bulmaca</span>
+                <span aria-hidden="true">·</span>
+                <span>{results.length} katılımcı</span>
+                <span aria-hidden="true">·</span>
+                <span>{fmtDay(tournament.startDate)} – {fmtDay(tournament.endDate)}</span>
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Kapat"
+              className="-mr-2 -mt-1 grid h-10 w-10 shrink-0 place-items-center rounded-xl text-slate-400 hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
+            >
+              <X className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </div>
+
+          {!selectedResult && report ? (
+            <div role="tablist" aria-label="Turnuva görünümü" className="mt-4 inline-flex rounded-xl bg-slate-900/70 p-1">
+              {([['ranking', 'Sıralama'], ['summary', 'Turnuva özeti']] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === id}
+                  onClick={() => setView(id)}
+                  className={`rounded-lg px-4 py-2 text-sm font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 ${
+                    view === id ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6" role={!selectedResult && report ? "tabpanel" : undefined}>
+          {selectedResult ? (
+            <section className="space-y-4" aria-live="polite">
+              <button
+                type="button"
+                onClick={onBack}
+                autoFocus
+                className="-ml-2 inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-bold text-violet-200 hover:bg-violet-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                Sıralamaya dön
+              </button>
+              <div>
+                <h4 className="text-lg font-black text-white">{playerName}</h4>
+                <p className="mt-0.5 text-sm text-slate-400">
+                  {selectedResult.rank}. sıra · {selectedResult.score} puan · {selectedResult.answeredCount}/{tournament.totalPuzzles} cevap
+                </p>
+              </div>
+
+              {attemptLoading ? (
+                <div className="space-y-3 animate-pulse" aria-label="Rapor yükleniyor">
+                  <div className="h-16 rounded-2xl bg-slate-800/70" />
+                  <div className="h-48 rounded-2xl bg-slate-800/50" />
+                </div>
+              ) : null}
+
+              {attemptError ? (
+                <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{attemptError}</p>
+              ) : null}
+
+              {attempt ? <AttemptReport attempt={attempt} report={report} result={selectedResult} /> : null}
+            </section>
+          ) : view === 'summary' && report ? (
+            <TournamentSummary report={report} />
+          ) : (
+            <div className="space-y-3">
+              {!ended ? (
+                <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                  Turnuva henüz bitmedi. Bulmaca ayrıntıları ve final sıralaması bitince açılır.
+                </p>
+              ) : null}
+              {results.length === 0 ? (
+                <p className="text-sm text-slate-400">Sonuç yok veya turnuva bitmemiş.</p>
+              ) : (
+                <>
+                  <p className="text-sm text-slate-400">Bulmaca ayrıntıları için bir oyuncuya dokunun.</p>
+                  <ol className="divide-y divide-white/[0.06] overflow-hidden rounded-2xl border border-white/[0.06] bg-slate-900/30">
+                    {results.map((r) => (
+                      <ResultRow key={r.id} result={r} onOpen={onOpenResult} />
+                    ))}
+                  </ol>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function TabBtn({
   active,
