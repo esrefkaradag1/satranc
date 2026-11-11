@@ -6322,31 +6322,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       && boardExploreMode,
     /** Dokunmatikte sürükleme yerine tap-to-move; yüksek eşik yanlışlıkla sürüklemeyi azaltır */
     dragActivationDistance: prefersCoarsePointer ? 24 : 8,
-    onPieceClick: ({
-      piece,
-      square,
-      isSparePiece,
-    }: {
-      isSparePiece?: boolean;
-      piece?: { pieceType?: string };
-      square?: string | null;
-    }) => {
-      if (!square) return;
-      /** İkinci dokunuş hedefte taş varsa (alma) — mobil/masaüstü tap-to-move */
-      if (
-        moveHintsToolOk &&
-        boardExploreMode &&
-        moveHintSquare &&
-        moveHintSquare !== square &&
-        legalMoveHintDests.has(square)
-      ) {
-        const ok = handleDrop(moveHintSquare, square);
-        if (ok) setMoveHintSquare(null);
-        return;
-      }
-      if (!liveLessonPieceEligibleForMoveHints(square, piece, !!isSparePiece)) return;
-      setMoveHintSquare((prev) => (prev === square ? null : square));
-    },
+    // onPieceClick yok: onSquareClick taş seçme/almayı da yapar. İkisi birden bağlıyken taşa
+    // tıklamak seçimi açıp hemen geri kapatıyor, taş alırken hamle iki kez deneniyordu.
     onSquareRightClick: !isStudentView && drawingTool === 'mouse' ? handleBoardSquareRightClick : undefined,
     onSquareClick: (arg: unknown) => {
       const square = pickSquare(arg);

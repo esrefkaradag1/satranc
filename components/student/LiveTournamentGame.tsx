@@ -4,6 +4,7 @@ import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { Flag, X } from 'lucide-react';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
+import { useClickToMove } from '../../hooks/useClickToMove';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, chessboardDomId } from '../../lib/chessBoardUi';
 import {
   finishTournamentGame,
@@ -146,10 +147,20 @@ export const LiveTournamentGame: React.FC<LiveTournamentGameProps> = ({ game: in
   const topIsTurn = (myColor === 'white' ? chess.turn() === 'b' : chess.turn() === 'w') && game.status === 'active';
   const bottomIsTurn = !topIsTurn && game.status === 'active';
 
+  // Tıkla-oynat: sürükle-bırak ile aynı işleyici (handleDrop) — saat ve sonuç aynı şekilde yazılır.
+  const clickMove = useClickToMove({
+    fen: chess.fen(),
+    enabled: isMyTurn,
+    playerColor: myColor === 'white' ? 'w' : 'b',
+    onMove: (from, to) => handleDrop({ sourceSquare: from, targetSquare: to }),
+  });
+
   const boardOptions = {
     id: chessboardDomId('tournament-live', game.id),
     position: chess.fen(),
     boardOrientation: myColor,
+    squareStyles: clickMove.squareStyles,
+    onSquareClick: clickMove.onSquareClick,
     darkSquareStyle: { backgroundColor: '#779952' },
     lightSquareStyle: { backgroundColor: '#edeed1' },
     ...CHESSBOARD_ANIMATION,

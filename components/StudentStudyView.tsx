@@ -3394,9 +3394,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                         onSquareClick: boardDraggingEnabled
                           ? ({ square }: { square: string }) => handleStudyBoardClick(square)
                           : undefined,
-                        onPieceClick: boardDraggingEnabled
-                          ? ({ square }: { square: string }) => handleStudyBoardClick(square)
-                          : undefined,
+                        // onPieceClick bilerek yok: taş tıklaması kareye yayılır; ikisi birden bağlıyken
+                        // taş alırken hamle iki kez deneniyordu (bulmacada yanlış sayılabiliyordu).
                         squareStyles: studentMainMergedSquareStyles,
                         allowDrawingArrows: true,
                         arrows: (() => {

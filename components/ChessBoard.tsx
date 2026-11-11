@@ -470,10 +470,6 @@ const ChessBoard: React.FC = () => {
     handleClick(args.square);
   }, [handleClick]);
 
-  const handlePieceClick = useCallback((args: any) => {
-    handleClick(args.square);
-  }, [handleClick]);
-
   // AI Response — Stockfish (veya yerel motor) ile bilgisayar hamlesi
   useEffect(() => {
     if (puzzlePlayMode !== 'computer' || !vsComputer || game.isGameOver() || isThinking) return;
@@ -1258,7 +1254,7 @@ const ChessBoard: React.FC = () => {
     ...CHESSBOARD_ANIMATION,
     allowDragging: !isBrowsing,
     onPieceDrop: isBrowsing ? undefined : handlePieceDrop,
-    onPieceClick: isBrowsing ? undefined : handlePieceClick,
+    // onPieceClick bağlanmaz: taşa tıklama karenin tıklamasına da yayılır, tek tıklama iki kez işlenirdi.
     onSquareClick: isBrowsing ? undefined : handleSquareClick,
   };
 

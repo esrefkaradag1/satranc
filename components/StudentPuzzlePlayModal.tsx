@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Chessboard } from 'react-chessboard';
+import { useClickToMove } from '../hooks/useClickToMove';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, chessboardDomId } from '../lib/chessBoardUi';
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
@@ -526,11 +527,20 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     return '';
   }, [currentPly, solutionMoves, game.fen(), studentColor, studentMoveIndex]);
 
+  // Tıkla-oynat: taşa tıkla → yasal kareler → hedefe tıkla (sürükle-bırak ile aynı değerlendirme).
+  const clickMove = useClickToMove({
+    fen: game.fen(),
+    enabled: isStudentTurn,
+    playerColor: studentColor,
+    onMove: (from, to) => handleDrop({ sourceSquare: from, targetSquare: to }),
+  });
+
   const boardOptions = {
     id: chessboardDomId('puzzle-play', playPuzzle?.id),
     position: game.fen(),
     boardOrientation: puzzleModalBoardOrientation,
-    squareStyles: lastMoveSquares,
+    squareStyles: { ...lastMoveSquares, ...clickMove.squareStyles },
+    onSquareClick: clickMove.onSquareClick,
     darkSquareStyle: { backgroundColor: '#779952' },
     lightSquareStyle: { backgroundColor: '#edeed1' },
     ...CHESSBOARD_ANIMATION,

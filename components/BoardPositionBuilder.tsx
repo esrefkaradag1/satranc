@@ -150,11 +150,7 @@ export function BoardPositionBuilder({
         const square = pickSquare(arg);
         if (square) applyBuilderAtSquare(square);
       },
-      onPieceClick: (arg: unknown) => {
-        const p = arg as { isSparePiece?: boolean; square?: string } | null;
-        if (!p?.square || p.isSparePiece) return;
-        applyBuilderAtSquare(p.square);
-      },
+      // onPieceClick yok: taş tıklaması kareye yayılır, aynı işlem iki kez uygulanırdı.
       onSquareRightClick: (arg: unknown) => {
         const square = pickSquare(arg);
         if (!square) return;

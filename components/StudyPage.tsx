@@ -2463,34 +2463,6 @@ const StudyPage: React.FC = () => {
     applySquareMarkAt(square, markType);
   }, [canEditStudy, arrowCtrlShortcutHeld, applySquareMarkAt]);
 
-  const handleBoardPieceClick = useCallback((arg: unknown) => {
-    if (drawingTool !== 'mouse') return;
-    const p = arg as { isSparePiece?: boolean; square?: string } | null;
-    if (!p?.square || p.isSparePiece) return;
-    if (bottomTab === 'annotations' && canAnnotateMoves && selectedChapter) {
-      const ply = findPlyByDestinationSquare(
-        selectedChapter.fen || DEFAULT_FEN,
-        chapterMovesForUi,
-        p.square,
-        makeBuilderGame,
-        applyMove,
-      );
-      if (ply != null) {
-        selectMoveForAnnotation(ply);
-        return;
-      }
-    }
-    handleSquareClickInner(p.square);
-  }, [
-    drawingTool,
-    handleSquareClickInner,
-    bottomTab,
-    canAnnotateMoves,
-    selectedChapter,
-    chapterMovesForUi,
-    selectMoveForAnnotation,
-  ]);
-
   useEffect(() => {
     if (drawingTool !== 'mouse') {
       setOptionSquares({});
@@ -4507,7 +4479,7 @@ const StudyPage: React.FC = () => {
                         },
                         onSquareClick: (arg: unknown) => handleBoardSquareClick(arg),
                         onSquareRightClick: (arg: unknown) => handleBoardSquareRightClick(arg),
-                        onPieceClick: (arg: unknown) => handleBoardPieceClick(arg),
+                        // onPieceClick yok: kare tıklaması taş karelerini de kapsar (çift işleme önlenir).
                         allowDrawingArrows:
                           canEditStudy &&
                           (drawingTool === 'mouse' || drawingTool === 'arrow' || arrowCtrlShortcutHeld),
@@ -5339,11 +5311,6 @@ const StudyPage: React.FC = () => {
                             const square = pickSquare(arg);
                             if (square) applyNcEditorAtSquare(square);
                           },
-                          onPieceClick: (arg: unknown) => {
-                            const p = arg as { isSparePiece?: boolean; square?: string } | null;
-                            if (!p?.square || p.isSparePiece) return;
-                            applyNcEditorAtSquare(p.square);
-                          },
                           onSquareRightClick: (arg: unknown) => {
                             const sq = pickSquare(arg);
                             if (!sq) return;
@@ -6006,11 +5973,6 @@ const StudyPage: React.FC = () => {
                               onSquareClick: (arg: unknown) => {
                                 const square = pickSquare(arg);
                                 if (square) applyBuilderAtSquare(square);
-                              },
-                              onPieceClick: (arg: unknown) => {
-                                const p = arg as { isSparePiece?: boolean; square?: string } | null;
-                                if (!p?.square || p.isSparePiece) return;
-                                applyBuilderAtSquare(p.square);
                               },
                               onSquareRightClick: (arg: unknown) => {
                                 const square = pickSquare(arg);
