@@ -65,16 +65,24 @@ type Props = {
 
 function PlatformBadges({ entry }: { entry: LeaderboardEntry }) {
   const { platform } = entry;
-  if (platform.primaryPlatform === 'none') {
+  if (platform.primaryPlatform === 'none' && !platform.chessDuelloMemberId) {
     return <span className="text-[9px] text-slate-600">—</span>;
   }
   return (
     <div className="flex items-center gap-1">
       {platform.lichessUsername ? (
-        <span className="text-[8px] px-1 py-0.5 rounded bg-sky-500/20 text-sky-400 font-black">L</span>
+        <span title="Lichess" className="text-[8px] px-1 py-0.5 rounded bg-sky-500/20 text-sky-400 font-black">L</span>
       ) : null}
       {platform.chessComUsername ? (
-        <span className="text-[8px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-black">C</span>
+        <span title="Chess.com" className="text-[8px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-black">C</span>
+      ) : null}
+      {platform.chessDuelloMemberId ? (
+        <span
+          title="ChessDuello — çözülen bulmacalar bulmaca sayısına dahil"
+          className="text-[8px] px-1 py-0.5 rounded bg-fuchsia-500/20 text-fuchsia-400 font-black"
+        >
+          D
+        </span>
       ) : null}
     </div>
   );

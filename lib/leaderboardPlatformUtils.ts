@@ -40,6 +40,7 @@ export interface LeaderboardPlatformSnapshot {
   primaryPlatform: 'lichess' | 'chesscom' | 'both' | 'none';
   lichessUsername?: string;
   chessComUsername?: string;
+  chessDuelloMemberId?: string;
   rapid?: PlatformModeRating;
   blitz?: PlatformModeRating;
   bullet?: PlatformModeRating;
@@ -142,6 +143,7 @@ export function buildLeaderboardPlatformSnapshot(
     primaryPlatform,
     lichessUsername: student.lichessUsername?.trim() || undefined,
     chessComUsername: student.chessComUsername?.trim() || undefined,
+    chessDuelloMemberId: student.chessDuelloMemberId?.trim() || undefined,
     rapid,
     blitz,
     bullet,

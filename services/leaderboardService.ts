@@ -92,6 +92,7 @@ function minimalPlatformSnapshot(student: Student): LeaderboardPlatformSnapshot 
       hasLichess && hasChessCom ? 'both' : hasLichess ? 'lichess' : hasChessCom ? 'chesscom' : 'none',
     lichessUsername: student.lichessUsername?.trim() || undefined,
     chessComUsername: student.chessComUsername?.trim() || undefined,
+    chessDuelloMemberId: student.chessDuelloMemberId?.trim() || undefined,
     ukd: student.ukd != null && student.ukd > 0 ? student.ukd : undefined,
     fideElo: student.elo != null && student.elo > 0 ? student.elo : undefined,
   };

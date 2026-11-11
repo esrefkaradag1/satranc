@@ -296,6 +296,7 @@ function mergePlatformSnapshots(
     ...base,
     lichessUsername: base.lichessUsername || other.lichessUsername,
     chessComUsername: base.chessComUsername || other.chessComUsername,
+    chessDuelloMemberId: base.chessDuelloMemberId || other.chessDuelloMemberId,
     rapid: pickModeRating(base.rapid, other.rapid),
     blitz: pickModeRating(base.blitz, other.blitz),
     bullet: pickModeRating(base.bullet, other.bullet),
