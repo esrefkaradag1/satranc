@@ -319,6 +319,27 @@ function lastOpponentMap(t: Tournament): Map<string, string> {
   return map;
 }
 
+/** İki oyuncunun bu turnuvada kaç kez karşılaştığı (anahtar: sıralı "a|b"). */
+function meetingCounts(t: Tournament): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const p of playedPairings(t)) {
+    if (p.blackId == null) continue;
+    const key = pairKey(p.whiteId, p.blackId);
+    map.set(key, (map.get(key) ?? 0) + 1);
+  }
+  return map;
+}
+
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+/**
+ * Daha önce karşılaşmış ikiliye her karşılaşma için eklenen ceza. Sıra/Elo maliyetinin
+ * (en fazla birkaç yüz bin) çok üstünde: başka uygun rakip varken tekrar eşleşme seçilmez.
+ */
+const REMATCH_PENALTY = 50_000_000;
+
 /**
  * lila `arena.PairingSystem.rankFactorFor`: en üst sıralar için eşleştirme kalitesi
  * daha önemli sayılır (sıra 1 vs 5, sıra 300 vs 310'dan daha "yakın" kabul edilir).
@@ -351,15 +372,19 @@ function arenaPairScore(
   colors: Map<string, ArenaColorHistory>,
   lastOpponents: Map<string, string>,
   teamBattle: boolean,
+  meetings: Map<string, number> = new Map(),
 ): number | null {
   if (teamBattle && teamOf(players, aId) === teamOf(players, bId)) return null;
   if (lastOpponents.get(aId) === bId || lastOpponents.get(bId) === aId) return null;
+  const rematchPenalty = (meetings.get(pairKey(aId, bId)) ?? 0) * REMATCH_PENALTY;
   const ca = colors.get(aId) ?? { strike: 0, balance: 0 };
   const cb = colors.get(bId) ?? { strike: 0, balance: 0 };
   if (!couldPlayColors(ca, cb)) return null;
   const rankA = ranks.get(aId) ?? 0;
   const rankB = ranks.get(bId) ?? 0;
-  return Math.abs(rankA - rankB) * arenaRankFactor(maxRank, rankA, rankB) + Math.abs(ratingOf(players, aId) - ratingOf(players, bId));
+  return rematchPenalty
+    + Math.abs(rankA - rankB) * arenaRankFactor(maxRank, rankA, rankB)
+    + Math.abs(ratingOf(players, aId) - ratingOf(players, bId));
 }
 
 /**
@@ -375,34 +400,37 @@ function arenaPairScore(
 function solveArenaMatching(
   ids: string[],
   cost: (a: string, b: string) => number | null,
+  relaxedCost: (a: string, b: string, i: number, j: number) => number | null = (_a, _b, i, j) => Math.abs(i - j),
 ): { pairs: Array<[string, string]>; unmatched: string[] } {
-  const buildEdges = (candidateIds: string[], relaxed: boolean) => {
-    const edges: Array<{ a: string; b: string; cost: number }> = [];
-    for (let i = 0; i < candidateIds.length; i++) {
-      for (let j = i + 1; j < candidateIds.length; j++) {
-        const a = candidateIds[i];
-        const b = candidateIds[j];
-        const c = relaxed ? (cost(a, b) ?? Math.abs(i - j)) : cost(a, b);
-        if (c != null) edges.push({ a, b, cost: c });
-      }
-    }
-    return edges.sort((x, y) => x.cost - y.cost);
+  const index = new Map(ids.map((id, i) => [id, i]));
+  // Kısıtlı (null) kenarlar silinmez, "son çare" olarak çok pahalı kalır: böylece kısıta uyan
+  // her eşleşme önce denenir, ama kimse gereksiz yere dışarıda kalmaz. Eskiden kalanlar ayrı bir
+  // geçişte kendi aralarında eşleşiyordu — kalanlar çoğu zaman az önce oynamış ikili oluyordu.
+  const LAST_RESORT = 1e12;
+  const eff = (a: string, b: string): number | null => {
+    const c = cost(a, b);
+    if (c != null) return c;
+    const r = relaxedCost(a, b, index.get(a) ?? 0, index.get(b) ?? 0);
+    return r == null ? null : LAST_RESORT + r;
   };
 
-  const greedyMatch = (candidateIds: string[], relaxed: boolean) => {
-    const used = new Set<string>();
-    const pairs: Array<[string, string]> = [];
-    for (const e of buildEdges(candidateIds, relaxed)) {
-      if (used.has(e.a) || used.has(e.b)) continue;
-      used.add(e.a);
-      used.add(e.b);
-      pairs.push([e.a, e.b]);
+  const edges: Array<{ a: string; b: string; cost: number }> = [];
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const c = eff(ids[i], ids[j]);
+      if (c != null) edges.push({ a: ids[i], b: ids[j], cost: c });
     }
-    return { pairs, unmatched: candidateIds.filter((id) => !used.has(id)) };
-  };
+  }
+  edges.sort((x, y) => x.cost - y.cost);
 
-  const first = greedyMatch(ids, false);
-  const pairs = first.pairs;
+  const used = new Set<string>();
+  const pairs: Array<[string, string]> = [];
+  for (const e of edges) {
+    if (used.has(e.a) || used.has(e.b)) continue;
+    used.add(e.a);
+    used.add(e.b);
+    pairs.push([e.a, e.b]);
+  }
 
   // 2'li takas ile yerel iyileştirme: iki çiftin eşlerini değiştirmek toplam maliyeti düşürüyorsa uygula.
   let improved = true;
@@ -414,17 +442,17 @@ function solveArenaMatching(
       for (let j = i + 1; j < pairs.length && !improved; j++) {
         const [a1, b1] = pairs[i];
         const [a2, b2] = pairs[j];
-        const current = (cost(a1, b1) ?? Infinity) + (cost(a2, b2) ?? Infinity);
-        const swapA = cost(a1, a2);
-        const swapB = cost(b1, b2);
+        const current = (eff(a1, b1) ?? Infinity) + (eff(a2, b2) ?? Infinity);
+        const swapA = eff(a1, a2);
+        const swapB = eff(b1, b2);
         if (swapA != null && swapB != null && swapA + swapB < current) {
           pairs[i] = [a1, a2];
           pairs[j] = [b1, b2];
           improved = true;
           break;
         }
-        const crossA = cost(a1, b2);
-        const crossB = cost(b1, a2);
+        const crossA = eff(a1, b2);
+        const crossB = eff(b1, a2);
         if (crossA != null && crossB != null && crossA + crossB < current) {
           pairs[i] = [a1, b2];
           pairs[j] = [b1, a2];
@@ -435,15 +463,7 @@ function solveArenaMatching(
     }
   }
 
-  // Kısıt yüzünden hiç eşleşemeyenler: aralarında (kısıtlar gevşetilerek) son bir deneme.
-  let unmatched = first.unmatched;
-  if (unmatched.length >= 2) {
-    const relaxed = greedyMatch(unmatched, true);
-    pairs.push(...relaxed.pairs);
-    unmatched = relaxed.unmatched;
-  }
-
-  return { pairs, unmatched };
+  return { pairs, unmatched: ids.filter((id) => !used.has(id)) };
 }
 
 /**
@@ -498,8 +518,19 @@ export function pairArenaRound(tournament: Tournament, players: PairingPlayer[])
   const maxRank = Math.max(...pool.map((id) => ranks.get(id) ?? ranking.length), 1);
 
   const teamBattleOn = !!tournament.teamBattle && tournament.teamBattle.teamIds.length > 1;
-  const cost = (a: string, b: string) => arenaPairScore(a, b, ranks, maxRank, players, colors, lastOpponents, teamBattleOn);
-  const { pairs } = solveArenaMatching(pool, cost);
+  const meetings = meetingCounts(tournament);
+  const cost = (a: string, b: string) =>
+    arenaPairScore(a, b, ranks, maxRank, players, colors, lastOpponents, teamBattleOn, meetings);
+  // Gevşetilmiş geçiş: az önce oynamış ikili, maçı süren başka oyuncular varken yeniden
+  // eşleştirilmez — onlar bitince farklı rakip çıkar (lichess de bekletir). Herkes boştaysa
+  // (ör. 2 kişilik turnuva) mecburen eşleşir; yine de en az karşılaşmış ikili tercih edilir.
+  const othersBusy = (tournament.participantIds ?? []).length > pool.length;
+  const relaxedCost = (a: string, b: string, i: number, j: number) => {
+    const isLast = lastOpponents.get(a) === b || lastOpponents.get(b) === a;
+    if (isLast && othersBusy) return null;
+    return (isLast ? 1000 : 0) * REMATCH_PENALTY + (meetings.get(pairKey(a, b)) ?? 0) * REMATCH_PENALTY + Math.abs(i - j);
+  };
+  const { pairs } = solveArenaMatching(pool, cost, relaxedCost);
 
   const pairings: TournamentPairing[] = pairs.map(([a, b]) => {
     const [white, black] = assignColorsArena(a, b, colors);

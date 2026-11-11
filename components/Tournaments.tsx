@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Trophy, Plus, Clock3, CalendarDays, Trash2, Users, Shuffle,
   ChevronLeft, Info, Swords, ChevronRight, Settings, UserPlus,
-  CheckCircle2, Lock, Check, X, Minus, Hourglass, Flame, Shield, Search,
+  CheckCircle2, Lock, Check, X, Minus, Hourglass, Flame, Shield, Search, Eye, Pencil,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { canShowStudentCounts } from '../lib/studentCountVisibility';
@@ -24,7 +24,10 @@ import {
   recalcStandings,
   type PairingPlayer,
 } from '../lib/tournamentPairing';
-import { createTournamentGames, subscribeToTournamentGames } from '../lib/tournamentGames';
+import { createTournamentGames, subscribeToTournamentGames, type TournamentGame } from '../lib/tournamentGames';
+import { LiveGamesGrid, type PlayerInfo } from './tournament/LiveGamesGrid';
+import { TournamentGameWatch } from './tournament/TournamentGameWatch';
+import { useArenaDirector } from '../hooks/useArenaDirector';
 import type { Tournament, TournamentPairing, TournamentStanding, Student, Club } from '../types';
 
 interface TournamentsProps {
@@ -156,15 +159,104 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
     [selectableStudents],
   );
 
+  // Düzenleme: aynı form, turnuvanın bilgileriyle dolu açılır; yalnızca ayarlar güncellenir
+  // (katılımcılar, eşleşmeler, sıralama korunur).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editingTournament = useMemo(
+    () => (editingId ? tournaments.find((x) => x.id === editingId) ?? null : null),
+    [editingId, tournaments],
+  );
+  /** Eşleşme yapılmış turnuvada format değişirse puanlama/eşleştirme bozulur. */
+  const formatLocked = (editingTournament?.rounds?.length ?? 0) > 0;
+
+  const resetForm = () => {
+    setEditingId(null);
+    setName('');
+    setFormat('arena');
+    setDurationMinutes(45);
+    setTimeControl('3+2');
+    setCustomTimeControl('');
+    setStartAt(toLocalDatetimeInputValue(new Date(Date.now() + 3600000)));
+    setStartAtError('');
+    setDescription('');
+    setIsRated(true);
+    setRoundLimit(7);
+    setStreakBonus(true);
+    setTeamBattleOn(false);
+    setTeamBattleSource('group');
+    setTeamBattleTeamIds([]);
+    setTeamBattleLeaders(5);
+  };
+
+  const closeForm = () => {
+    setShowForm(false);
+    resetForm();
+  };
+
+  const openCreate = () => {
+    resetForm();
+    setShowForm(true);
+  };
+
+  const openEdit = (t: Tournament) => {
+    setEditingId(t.id);
+    setName(t.name);
+    setFormat(t.format);
+    setDurationMinutes(t.durationMinutes);
+    if (TIME_CONTROL_PRESETS.includes(t.timeControl)) {
+      setTimeControl(t.timeControl);
+      setCustomTimeControl('');
+    } else {
+      setTimeControl('custom');
+      setCustomTimeControl(t.timeControl);
+    }
+    setStartAt(toLocalDatetimeInputValue(new Date(t.startAt)));
+    setStartAtError('');
+    setDescription(t.description ?? '');
+    setIsRated(t.isRated);
+    setRoundLimit(t.roundLimit ?? 7);
+    setStreakBonus(t.streakBonus !== false);
+    setTeamBattleOn(!!t.teamBattle && t.teamBattle.teamIds.length > 1);
+    setTeamBattleSource(t.teamBattle?.source ?? 'group');
+    setTeamBattleTeamIds(t.teamBattle?.teamIds ?? []);
+    setTeamBattleLeaders(t.teamBattle?.nbLeaders ?? 5);
+    setShowForm(true);
+  };
+
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
     const startDate = new Date(startAt);
-    if (Number.isNaN(startDate.getTime()) || startDate.getTime() < Date.now() - 60000) {
+    // Düzenlemede başlangıç değişmediyse (turnuva başlamış olabilir) geçmiş zaman kabul edilir.
+    const startUnchanged = !!editingTournament
+      && Math.abs(new Date(editingTournament.startAt).getTime() - startDate.getTime()) < 60000;
+    if (Number.isNaN(startDate.getTime()) || (!startUnchanged && startDate.getTime() < Date.now() - 60000)) {
       setStartAtError('Başlangıç zamanı şu andan ileri bir zaman olmalı.');
       return;
     }
     const resolvedTimeControl = timeControl === 'custom' ? customTimeControl.trim() : timeControl;
+    const effectiveFormat = formatLocked && editingTournament ? editingTournament.format : format;
+    const settings = {
+      name: name.trim(),
+      format: effectiveFormat,
+      durationMinutes: Math.max(5, durationMinutes),
+      timeControl: resolvedTimeControl || '3+2',
+      startAt: startUnchanged && editingTournament ? editingTournament.startAt : startDate.toISOString(),
+      description: description.trim() || undefined,
+      isRated,
+      roundLimit: effectiveFormat === 'swiss' ? Math.max(1, roundLimit) : undefined,
+      streakBonus: effectiveFormat === 'arena' ? streakBonus : undefined,
+      teamBattle: effectiveFormat === 'arena' && teamBattleOn && teamBattleTeamIds.length > 1
+        ? { source: teamBattleSource, teamIds: teamBattleTeamIds, nbLeaders: Math.max(1, teamBattleLeaders) }
+        : undefined,
+    };
+    if (editingTournament) {
+      const next = { ...editingTournament, ...settings };
+      // Seri bonusu / takım ayarı puanı etkiler → sıralama yeni ayarla yeniden hesaplanır.
+      updateTournament(editingTournament.id, { ...settings, standings: recalcStandings(next) });
+      closeForm();
+      return;
+    }
     addTournament({
       name: name.trim(),
       format,
@@ -183,10 +275,7 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
         ? { source: teamBattleSource, teamIds: teamBattleTeamIds, nbLeaders: Math.max(1, teamBattleLeaders) }
         : undefined,
     });
-    setName('');
-    setDescription('');
-    setStartAtError('');
-    setShowForm(false);
+    closeForm();
   };
 
   const toggleTeamBattleTeam = (teamId: string) => {
@@ -202,47 +291,13 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
     return 'finished';
   };
 
-  if (activeTournament) {
-    return (
-      <TournamentViewer
-        tournament={activeTournament}
-        students={selectableStudents}
-        clubs={clubs}
-        onBack={() => setActiveTournamentId(null)}
-        onUpdate={(updates) => updateTournament(activeTournament.id, updates)}
-        recalc={recalcStandings}
-      />
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            <Trophy className="w-5 h-5 text-indigo-400" />
-            Turnuva Salonu
-          </h1>
-          <p className="text-slate-400 text-sm mt-1">
-            {branch ? `${branch} Şubesi Turnuvaları` : 'Akademi Geneli Turnuva Yönetimi'}
-          </p>
-        </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-indigo-950/30"
-        >
-          <Plus className="w-4 h-4" /> Turnuva Oluştur
-        </button>
-      </div>
-
-      {/* Create Form Modal */}
-      {showForm && (
+  // Oluşturma/düzenleme formu — liste ve turnuva ayrıntı ekranında ortak.
+  const formModal = showForm ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
           <form onSubmit={handleCreate} className="bg-slate-800 border border-slate-700/60 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between border-b border-slate-700/50 pb-4">
-              <h3 className="text-base font-bold text-white">Yeni Turnuva Oluştur</h3>
-              <button type="button" onClick={() => setShowForm(false)} className="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors">
+              <h3 className="text-base font-bold text-white">{editingTournament ? 'Turnuvayı Düzenle' : 'Yeni Turnuva Oluştur'}</h3>
+              <button type="button" onClick={closeForm} className="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors">
                 <Plus className="w-4 h-4 rotate-45" />
               </button>
             </div>
@@ -256,7 +311,13 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Format</label>
-                  <select className={inputCls} value={format} onChange={(e) => setFormat(e.target.value as 'arena' | 'swiss')}>
+                  <select
+                    className={`${inputCls} disabled:opacity-50 disabled:cursor-not-allowed`}
+                    value={format}
+                    disabled={formatLocked}
+                    title={formatLocked ? 'Eşleşme yapılmış turnuvanın formatı değiştirilemez' : undefined}
+                    onChange={(e) => setFormat(e.target.value as 'arena' | 'swiss')}
+                  >
                     <option value="arena">Arena</option>
                     <option value="swiss">Swiss</option>
                   </select>
@@ -290,7 +351,7 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
                   <input
                     className={inputCls}
                     type="datetime-local"
-                    min={minStartAt}
+                    min={editingTournament ? undefined : minStartAt}
                     value={startAt}
                     onChange={(e) => { setStartAt(e.target.value); setStartAtError(''); }}
                   />
@@ -376,12 +437,52 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
             </div>
 
             <div className="flex gap-3 pt-2">
-              <button type="button" onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold text-sm transition-colors">İptal</button>
-              <button type="submit" className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-indigo-950/30">Turnuvayı Başlat</button>
+              <button type="button" onClick={closeForm} className="flex-1 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold text-sm transition-colors">İptal</button>
+              <button type="submit" className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-indigo-950/30">{editingTournament ? 'Değişiklikleri Kaydet' : 'Turnuvayı Başlat'}</button>
             </div>
           </form>
         </div>
-      )}
+      ) : null;
+
+  if (activeTournament) {
+    return (
+      <>
+      {formModal}
+      <TournamentViewer
+        tournament={activeTournament}
+        onEdit={() => openEdit(activeTournament)}
+        students={selectableStudents}
+        clubs={clubs}
+        onBack={() => setActiveTournamentId(null)}
+        onUpdate={(updates) => updateTournament(activeTournament.id, updates)}
+        recalc={recalcStandings}
+      />
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold text-white flex items-center gap-2">
+            <Trophy className="w-5 h-5 text-indigo-400" />
+            Turnuva Salonu
+          </h1>
+          <p className="text-slate-400 text-sm mt-1">
+            {branch ? `${branch} Şubesi Turnuvaları` : 'Akademi Geneli Turnuva Yönetimi'}
+          </p>
+        </div>
+        <button
+          onClick={openCreate}
+          className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-indigo-950/30"
+        >
+          <Plus className="w-4 h-4" /> Turnuva Oluştur
+        </button>
+      </div>
+
+      {formModal}
 
       {/* ChessDuello (external, read-only) */}
       <section className="rounded-2xl border border-slate-700/50 bg-slate-800/30">
@@ -460,6 +561,14 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
                   </div>
 
                   <button
+                    onClick={(e) => { e.stopPropagation(); openEdit(t); }}
+                    className="p-2 rounded-lg text-slate-500 hover:text-indigo-300 hover:bg-indigo-500/10 transition-all shrink-0"
+                    title="Turnuvayı düzenle"
+                    aria-label={`${t.name} turnuvasını düzenle`}
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
                     onClick={(e) => { e.stopPropagation(); deleteTournament(t.id); }}
                     className="p-2 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 opacity-0 group-hover:opacity-100 transition-all shrink-0"
                     title="Turnuvayı sil"
@@ -485,9 +594,10 @@ interface ViewerProps {
   onBack: () => void;
   onUpdate: (updates: Partial<Tournament>) => void;
   recalc: (t: Tournament) => Record<string, TournamentStanding>;
+  onEdit?: () => void;
 }
 
-const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, clubs, onBack, onUpdate, recalc }) => {
+const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, clubs, onBack, onUpdate, recalc, onEdit }) => {
   const showStudentCounts = useCanShowStudentCounts();
   const standings = useMemo(() => recalc(t), [t, recalc]);
   const ranking = useMemo(() => {
@@ -524,40 +634,38 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
     ? freeCount >= 2
     : (t.participantIds?.length ?? 0) >= 2 && lastRoundComplete && !roundLimitReached;
 
-  // Eşleştirme anında (Arena) gerçek canlı maçlar açılır; sonuçları otomatik senkronlamak
-  // için `t`/`rounds`/`onUpdate`/`recalc`'ın her zaman güncel değerlerine ref üzerinden erişilir
-  // (aşağıdaki subscribe effect'i yeniden abone olmadan en son değerleri kullanabilsin diye).
-  // Canlı maçı olan (gameId) eşleşmeler, sonucu oynanan maçtan otomatik alır; admin
-  // bağlantı sorunu vb. bir durumda bu listeye ekleyip elle sonuç girebilir.
+  // Canlı maçı olan (gameId) eşleşmeler sonucu oynanan maçtan otomatik alır (arena yöneticisi);
+  // admin bağlantı sorunu vb. bir durumda bu listeye ekleyip elle sonuç girebilir.
   const [manualOverrideIds, setManualOverrideIds] = useState<Set<string>>(new Set());
-  const liveSyncRef = useRef({ t, rounds, onUpdate, recalc });
-  liveSyncRef.current = { t, rounds, onUpdate, recalc };
 
+  // Canlı izleme: turnuvanın maçları (mini tahtalar + izleme penceresi).
+  const [liveGames, setLiveGames] = useState<TournamentGame[]>([]);
+  const [watchGameId, setWatchGameId] = useState<string | null>(null);
+  const activeGames = useMemo(
+    () => liveGames
+      .filter((g) => g.status === 'active')
+      .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()),
+    [liveGames],
+  );
+  const watchGame = useMemo(() => liveGames.find((g) => g.id === watchGameId) ?? null, [liveGames, watchGameId]);
+  const rankById = useMemo(() => new Map(ranking.map((r, i) => [r.id, i + 1])), [ranking]);
+  const playerInfo = useCallback(
+    (id: string): PlayerInfo => ({
+      name: students.find((s) => s.id === id)?.name ?? 'Bilinmiyor',
+      rank: rankById.get(id) ?? null,
+    }),
+    [students, rankById],
+  );
+
+  // Maç listesi yalnızca canlı tahtalar için; sonuçların sıralamaya işlenmesi ve eşleştirme
+  // lib/arenaDirector.ts'te (antrenör olmasa da öğrenci panelleri yürütür).
   useEffect(() => {
     if (!isArena) return;
-    const unsubscribe = subscribeToTournamentGames(t.id, (games) => {
-      const { t: curT, rounds: curRounds, onUpdate: curOnUpdate, recalc: curRecalc } = liveSyncRef.current;
-      const finishedById = new Map(
-        games.filter((g) => g.status === 'finished' && g.result).map((g) => [g.id, g.result as TournamentPairing['result']]),
-      );
-      if (finishedById.size === 0) return;
-      let changed = false;
-      const nextRounds = curRounds.map((r) => ({
-        ...r,
-        pairings: r.pairings.map((p) => {
-          if (p.gameId && finishedById.has(p.gameId) && p.result !== finishedById.get(p.gameId)) {
-            changed = true;
-            return { ...p, result: finishedById.get(p.gameId) };
-          }
-          return p;
-        }),
-      }));
-      if (changed) {
-        curOnUpdate({ rounds: nextRounds, standings: curRecalc({ ...curT, rounds: nextRounds }) });
-      }
-    });
-    return unsubscribe;
+    return subscribeToTournamentGames(t.id, setLiveGames);
   }, [isArena, t.id]);
+
+  const { applyRemoteTournament } = useApp();
+  useArenaDirector(isArena ? [t] : [], applyRemoteTournament, { allowWithoutLease: true });
 
   const pairNextRoundNow = async () => {
     if (!canPairNextRound) return;
@@ -596,6 +704,19 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
       standings: recalc({ ...t, rounds: nextRounds }),
     });
   };
+
+  // Arena durumu (başlık etiketi için); otomatik eşleştirmeyi useArenaDirector yürütür.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isArena) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 5000);
+    return () => window.clearInterval(id);
+  }, [isArena]);
+  const arenaStartMs = new Date(t.startAt).getTime();
+  const arenaEndMs = arenaStartMs + Math.max(0, t.durationMinutes || 0) * 60000;
+  const arenaPhase: 'upcoming' | 'running' | 'over' = !Number.isFinite(arenaStartMs) || nowMs < arenaStartMs
+    ? 'upcoming'
+    : nowMs < arenaEndMs ? 'running' : 'over';
 
   const setPairingResult = (roundId: string, pairingIdx: number, result: TournamentPairing['result']) => {
     const nextRounds = rounds.map((r) => {
@@ -660,6 +781,17 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
       .filter(({ students: groupStudents }) => groupStudents.length > 0);
   }, [studentGroups, rosterSearch]);
 
+  // Gruplar akordeon: varsayılan hepsi kapalı; arama yapılırken eşleşen gruplar açık gösterilir.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
+  const toggleGroupOpen = (groupName: string) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupName)) next.delete(groupName);
+      else next.add(groupName);
+      return next;
+    });
+  };
+
   const toggleGroupParticipants = (groupStudents: Student[]) => {
     if (rosterLocked) return;
     const current = new Set(t.participantIds ?? []);
@@ -692,6 +824,16 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                 <span className="shrink-0 rounded-full bg-slate-700/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">{t.format === 'swiss' ? 'İsviçre' : 'Arena'}</span>
                 <span className="shrink-0 rounded-full bg-slate-700/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">{t.timeControl}</span>
                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusPill.cls}`}>{statusPill.label}</span>
+                {onEdit && (
+                  <button
+                    type="button"
+                    onClick={onEdit}
+                    className="shrink-0 flex items-center gap-1 rounded-full bg-slate-700/60 hover:bg-indigo-500/20 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:text-indigo-200 transition-colors"
+                    title="Turnuva ayarlarını düzenle"
+                  >
+                    <Pencil className="w-3 h-3" /> Düzenle
+                  </button>
+                )}
               </div>
               {t.description && <p className="text-slate-400 text-sm mt-1.5 max-w-xl">{t.description}</p>}
             </div>
@@ -708,6 +850,25 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                 <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-0.5">{isArena ? 'Maç' : 'Tur'}</div>
               </div>
             </div>
+            {isArena && (
+              <div
+                className={`flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold whitespace-nowrap ${
+                  arenaPhase === 'running'
+                    ? 'bg-emerald-500/15 text-emerald-300'
+                    : arenaPhase === 'upcoming'
+                      ? 'bg-amber-500/15 text-amber-300'
+                      : 'bg-slate-700/50 text-slate-400'
+                }`}
+                title="Maçı biten oyuncular birkaç saniye içinde yeni rakiple otomatik eşleşir; aynı rakiple tekrar eşleşme en son seçenektir."
+              >
+                <Shuffle className="w-4 h-4" />
+                {arenaPhase === 'running'
+                  ? `Otomatik eşleştirme açık${freeCount > 0 ? ` · ${freeCount} boşta` : ''}`
+                  : arenaPhase === 'upcoming'
+                    ? `Başlayınca otomatik eşleşir · ${new Date(t.startAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
+                    : 'Turnuva süresi doldu'}
+              </div>
+            )}
             <button
               onClick={pairNextRoundNow}
               disabled={!canPairNextRound}
@@ -716,9 +877,11 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                   ? (!canPairNextRound ? 'Eşleşmesi tamamlanmış en az 2 boşta oyuncu gerekiyor' : undefined)
                   : (!lastRoundComplete ? 'Önce bu turun tüm sonuçlarını girin' : roundLimitReached ? 'Planlanan tur sayısına ulaşıldı' : undefined)
               }
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700/60 disabled:cursor-not-allowed disabled:text-slate-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-indigo-950/30 whitespace-nowrap"
+              className={isArena
+                ? 'px-3 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/60 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors whitespace-nowrap'
+                : 'flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700/60 disabled:cursor-not-allowed disabled:text-slate-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-indigo-950/30 whitespace-nowrap'}
             >
-              <Shuffle className="w-4 h-4" /> {isArena ? 'Boşta Olanları Eşleştir' : (rounds.length === 0 ? '1. Turu Eşleştir' : 'Sıradaki Turu Eşleştir')}
+              {isArena ? 'Şimdi eşleştir' : <><Shuffle className="w-4 h-4" /> {rounds.length === 0 ? '1. Turu Eşleştir' : 'Sıradaki Turu Eşleştir'}</>}
             </button>
           </div>
         </div>
@@ -814,6 +977,12 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
             )}
           </div>
 
+          {/* Süren maçlar — lichess Arena'daki gibi küçük tahtalar */}
+          {isArena && <LiveGamesGrid games={activeGames} player={playerInfo} onOpen={(g) => setWatchGameId(g.id)} />}
+          {watchGame && (
+            <TournamentGameWatch game={watchGame} player={playerInfo} onClose={() => setWatchGameId(null)} />
+          )}
+
           {/* Pairings */}
           <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40">
             {(!rounds || rounds.length === 0) ? (
@@ -845,6 +1014,15 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                           {p.result}
                         </button>
                       ) : p.gameId && !manualOverrideIds.has(p.gameId) ? (
+                        <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setWatchGameId(p.gameId!)}
+                          title="Maçı canlı izle"
+                          className="flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 font-semibold text-[10px] uppercase tracking-wide transition-colors"
+                        >
+                          <Eye className="w-3 h-3" /> İzle
+                        </button>
                         <button
                           type="button"
                           onClick={() => setManualOverrideIds((prev) => new Set(prev).add(p.gameId!))}
@@ -853,6 +1031,7 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                         >
                           <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" /> Canlı
                         </button>
+                        </div>
                       ) : (
                         <div className="flex items-center gap-1 shrink-0">
                           <span className="hidden sm:flex items-center gap-1 text-[10px] font-semibold text-amber-400 mr-1"><Hourglass className="w-3 h-3" /></span>
@@ -968,16 +1147,33 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                 />
               </div>
             </div>
-            <div className="p-2 max-h-[420px] overflow-y-auto space-y-3 thin-scrollbar">
+            <div className="p-2 max-h-[420px] overflow-y-auto space-y-1 thin-scrollbar">
               {filteredStudentGroups.length === 0 && (
                 <p className="px-3 py-6 text-center text-xs text-slate-500">Eşleşen sporcu bulunamadı.</p>
               )}
               {filteredStudentGroups.map(({ groupName, students: groupStudents }) => {
                 const allInGroupJoined = groupStudents.every((s) => t.participantIds?.includes(s.id));
+                const joinedInGroup = groupStudents.filter((s) => t.participantIds?.includes(s.id)).length;
+                const isOpen = rosterSearch.trim() !== '' || openGroups.has(groupName);
+                const panelId = `roster-group-${groupName.replace(/[^\w-]/g, '_')}`;
                 return (
-                  <div key={groupName}>
-                    <div className="flex items-center justify-between px-3 py-1">
-                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide truncate">{groupName}</span>
+                  <div key={groupName} className="rounded-xl border border-slate-700/40 bg-slate-900/30">
+                    <div className="flex items-center justify-between gap-2 pr-3">
+                      <button
+                        type="button"
+                        onClick={() => toggleGroupOpen(groupName)}
+                        aria-expanded={isOpen}
+                        aria-controls={panelId}
+                        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left rounded-xl hover:bg-slate-700/20 transition-colors"
+                      >
+                        <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-slate-500 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                        <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wide truncate">{groupName}</span>
+                        <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                          joinedInGroup > 0 ? 'bg-indigo-500/15 text-indigo-300' : 'bg-slate-700/50 text-slate-500'
+                        }`}>
+                          {joinedInGroup}/{groupStudents.length}
+                        </span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => toggleGroupParticipants(groupStudents)}
@@ -987,7 +1183,8 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                         {allInGroupJoined ? 'Grubu Kaldır' : 'Grubu Ekle'}
                       </button>
                     </div>
-                    <div className="space-y-1">
+                    {isOpen && (
+                    <div id={panelId} className="space-y-1 px-1 pb-1">
                       {groupStudents.map(s => {
                         const isJoined = t.participantIds?.includes(s.id);
                         return (
@@ -1014,6 +1211,7 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                         );
                       })}
                     </div>
+                    )}
                   </div>
                 );
               })}

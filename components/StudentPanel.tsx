@@ -46,6 +46,7 @@ import {
 import { useApp } from '../AppContext';
 import { analyzeStudentHomework } from '../services/geminiService';
 import { Student } from '../types';
+import type { Tournament } from '../types';
 import type { PerformanceAnalysis } from '../types';
 import type { Puzzle, GalleryItem } from '../types';
 import type { ScheduleEntryStatus } from '../types';
@@ -69,6 +70,7 @@ import { UkdFideRatingsPanel } from './student/UkdFideRatingsPanel';
 import { LichessOAuthConnect } from './student/LichessOAuthConnect';
 import LichessGameViewerModal from './LichessGameViewerModal';
 import { LiveTournamentGame } from './student/LiveTournamentGame';
+import { useArenaDirector } from '../hooks/useArenaDirector';
 import { joinTournamentSelf, subscribeToStudentActiveGames, type TournamentGame } from '../lib/tournamentGames';
 import ChessComGameViewerModal from './ChessComGameViewerModal';
 import StudentMessagesPanel from './StudentMessagesPanel';
@@ -212,6 +214,42 @@ function parentDisplayNameFor(student: Student): string {
   return student.parentName?.trim() || student.fatherName?.trim() || student.motherName?.trim() || 'Veli';
 }
 
+type TournamentRankRow = {
+  id: string;
+  rank: number;
+  points: number;
+  tieBreak: number;
+  played: number;
+  wins: number;
+  draws: number;
+  losses: number;
+};
+
+/** Koç ekranıyla aynı kural (lib/tournamentPairing rankParticipants): puan, sonra Sonneborn-Berger.
+ *  Puan ve SB eşitse aynı sıra paylaşılır (1, 2, 2, 4). */
+function rankTournamentParticipants(t: Tournament): TournamentRankRow[] {
+  const standings = t.standings ?? {};
+  const rows = (t.participantIds ?? []).map((id) => {
+    const s = standings[id];
+    return {
+      id,
+      rank: 0,
+      points: s?.points ?? 0,
+      tieBreak: s?.tieBreak ?? 0,
+      played: s?.played ?? 0,
+      wins: s?.wins ?? 0,
+      draws: s?.draws ?? 0,
+      losses: s?.losses ?? 0,
+    };
+  });
+  rows.sort((a, b) => b.points - a.points || b.tieBreak - a.tieBreak || b.wins - a.wins);
+  rows.forEach((row, i) => {
+    const prev = rows[i - 1];
+    row.rank = prev && prev.points === row.points && prev.tieBreak === row.tieBreak ? prev.rank : i + 1;
+  });
+  return rows;
+}
+
 type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'puzzle-practice' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages' | 'notifications';
 
 
@@ -342,7 +380,7 @@ interface StudentPanelProps {
 }
 
 const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs = 'parent' }) => {
-  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, updateTournament, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs, isStaffImpersonating } = useApp();
+  const { students, attendanceRecords, transactions, scheduleEntries, lessons, homeworks, puzzles, gallery, tournaments, updateTournament, applyRemoteTournament, updateStudent, addActivityLog, addHomeworkAttempt, homeworkSubmissions, addHomeworkSubmission, refreshFromStorage, apiStudent, updateScheduleEntry, performanceAnalyses, coachAiReports, homeworkAttempts, initialDataLoaded, authPermissions, rolesLoaded, trainingGroups, scopedDisciplineBranches, scopedTrainingGroups, clubs, isStaffImpersonating } = useApp();
   const initialPanel = typeof window !== 'undefined' ? parsePanelHash() : { tab: 'summary' as PanelTab, liveRoomId: null as string | null };
   const [activeTab, setActiveTabState] = useState<PanelTab>(initialPanel.tab);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
@@ -856,6 +894,10 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
       .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
   }, [tournaments, student, studentId]);
 
+  // Antrenör ekranı açık olmasa da turnuva akar: öğrencinin paneli de arena yöneticisine adaydır
+  // (eşleştirme, sonuç işleme, süre bitişi). Aynı anda yalnızca biri çalışır (DB kirası).
+  useArenaDirector(joinedTournaments, applyRemoteTournament);
+
   const [joiningTournamentId, setJoiningTournamentId] = useState<string | null>(null);
   const handleJoinTournament = useCallback(async (tournamentId: string) => {
     setJoiningTournamentId(tournamentId);
@@ -896,18 +938,23 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     return 'finished' as const;
   }, []);
 
-  const selectedTournamentRanking = useMemo(() => {
-    if (!selectedTournament) return [];
-    const standings = selectedTournament.standings ?? {};
-    return (selectedTournament.participantIds ?? [])
-      .map((id) => ({
-        id,
-        points: standings[id]?.points ?? 0,
-        wins: standings[id]?.wins ?? 0,
-        played: standings[id]?.played ?? 0,
-      }))
-      .sort((a, b) => b.points - a.points || b.wins - a.wins || a.id.localeCompare(b.id));
-  }, [selectedTournament]);
+  const selectedTournamentRanking = useMemo(
+    () => (selectedTournament ? rankTournamentParticipants(selectedTournament) : []),
+    [selectedTournament],
+  );
+  const myTournamentRow = useMemo(
+    () => selectedTournamentRanking.find((r) => r.id === studentId) ?? null,
+    [selectedTournamentRanking, studentId],
+  );
+  const myTournamentRowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Uzun listede öğrencinin kendi satırı görünür olsun (sayfayı değil yalnızca listeyi kaydırır).
+    const el = myTournamentRowRef.current;
+    const box = el?.parentElement;
+    if (!el || !box) return;
+    // Liste `relative` olduğu için el.offsetTop zaten listeye göre.
+    box.scrollTop = Math.max(0, el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2);
+  }, [activeTab, selectedTournamentId, myTournamentRow?.rank]);
 
   const panelPermissions = authPermissions;
 
@@ -1905,8 +1952,23 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                               </div>
                             </div>
                             <div className="text-right shrink-0">
-                              <p className="text-xs text-slate-500">Puan</p>
-                              <p className="text-sm font-black text-indigo-300">{(mine?.points ?? 0).toFixed(1)}</p>
+                              {(() => {
+                                const ranking = rankTournamentParticipants(t);
+                                const myRank = ranking.find((r) => r.id === studentId)?.rank;
+                                return myRank && (mine?.played ?? 0) > 0 ? (
+                                  <>
+                                    <p className="text-xs text-slate-500">Sıram</p>
+                                    <p className="text-sm font-black text-amber-300 tabular-nums">
+                                      {myRank}.<span className="text-slate-500 font-bold"> / {ranking.length}</span>
+                                    </p>
+                                  </>
+                                ) : (
+                                  <>
+                                    <p className="text-xs text-slate-500">Puan</p>
+                                    <p className="text-sm font-black text-indigo-300">{(mine?.points ?? 0).toFixed(1)}</p>
+                                  </>
+                                );
+                              })()}
                             </div>
                           </div>
                         </button>
@@ -1932,29 +1994,121 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 overflow-hidden">
-                    <div className="px-4 py-3 border-b border-slate-700/50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">Sıralama</div>
-                    {selectedTournamentRanking.length === 0 ? (
-                      <p className="p-4 text-xs text-slate-500">Henüz eşleşme/puan yok.</p>
-                    ) : (
-                      <div className="max-h-64 overflow-y-auto divide-y divide-slate-700/40">
-                        {selectedTournamentRanking.map((row, idx) => {
-                          const st = students.find((s) => s.id === row.id);
-                          const isMe = row.id === studentId;
-                          return (
-                            <div key={row.id} className={`px-4 py-2.5 text-sm flex items-center justify-between ${isMe ? 'bg-indigo-600/10' : ''}`}>
-                              <div className="min-w-0">
-                                <p className={`font-semibold truncate ${isMe ? 'text-indigo-300' : 'text-slate-200'}`}>
-                                  #{idx + 1} {st?.name ?? row.id}
-                                </p>
-                                <p className="text-[11px] text-slate-500 mt-0.5">{row.played} maç · {row.wins} galibiyet</p>
-                              </div>
-                              <span className="font-black text-amber-300">{row.points.toFixed(1)}</span>
-                            </div>
-                          );
-                        })}
+                {/* Öğrencinin kendi yeri — ekranın ana bilgisi */}
+                {myTournamentRow && (() => {
+                  const total = selectedTournamentRanking.length;
+                  const myIdx = selectedTournamentRanking.findIndex((r) => r.id === studentId);
+                  const above = myIdx > 0 ? selectedTournamentRanking[myIdx - 1] : null;
+                  const leader = selectedTournamentRanking[0];
+                  const notStarted = myTournamentRow.played === 0 && selectedTournamentRanking.every((r) => r.played === 0);
+                  const gapAbove = above ? above.points - myTournamentRow.points : 0;
+                  const medal =
+                    myTournamentRow.rank === 1 ? 'text-amber-300' : myTournamentRow.rank === 2 ? 'text-slate-200' : myTournamentRow.rank === 3 ? 'text-orange-300' : 'text-white';
+                  return (
+                    <div className="rounded-xl bg-gradient-to-br from-indigo-600/20 to-slate-900/60 border border-indigo-500/30 p-4 sm:p-5">
+                      <div className="flex flex-wrap items-end justify-between gap-4">
+                        <div>
+                          <p className="text-[11px] font-bold text-indigo-300 uppercase tracking-wider">Senin sıran</p>
+                          {notStarted ? (
+                            <p className="text-2xl font-black text-slate-300 mt-1">Turnuva henüz başlamadı</p>
+                          ) : (
+                            <p className="mt-1 tabular-nums">
+                              <span className={`text-5xl font-black ${medal}`}>{myTournamentRow.rank}.</span>
+                              <span className="text-lg font-bold text-slate-400"> / {total} oyuncu</span>
+                            </p>
+                          )}
+                          {!notStarted && (
+                            <p className="text-xs text-slate-300 mt-2">
+                              {myTournamentRow.rank === 1
+                                ? 'Liderliktesin!'
+                                : above && gapAbove > 0
+                                  ? `Bir üst sıraya ${gapAbove.toFixed(1)} puan uzaktasın · Lidere fark ${(leader.points - myTournamentRow.points).toFixed(1)}`
+                                  : 'Üstündeki oyuncuyla puanın eşit — eşitlik bozmada geride kaldın.'}
+                            </p>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="rounded-lg bg-slate-900/60 px-3 py-2">
+                            <p className="text-[10px] text-slate-500 uppercase">Puan</p>
+                            <p className="text-lg font-black text-amber-300 tabular-nums">{myTournamentRow.points.toFixed(1)}</p>
+                          </div>
+                          <div className="rounded-lg bg-slate-900/60 px-3 py-2">
+                            <p className="text-[10px] text-slate-500 uppercase">Maç</p>
+                            <p className="text-lg font-black text-slate-200 tabular-nums">{myTournamentRow.played}</p>
+                          </div>
+                          <div className="rounded-lg bg-slate-900/60 px-3 py-2">
+                            <p className="text-[10px] text-slate-500 uppercase">G/B/M</p>
+                            <p className="text-sm font-black tabular-nums mt-1">
+                              <span className="text-emerald-400">{myTournamentRow.wins}</span>
+                              <span className="text-slate-600">/</span>
+                              <span className="text-slate-300">{myTournamentRow.draws}</span>
+                              <span className="text-slate-600">/</span>
+                              <span className="text-rose-400">{myTournamentRow.losses}</span>
+                            </p>
+                          </div>
+                        </div>
                       </div>
+                    </div>
+                  );
+                })()}
+
+                <div className="space-y-4">
+                  <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Sıralama</span>
+                      <span className="text-[10px] text-slate-500">Puan · eşitlikte Sonneborn-Berger</span>
+                    </div>
+                    {selectedTournamentRanking.length === 0 ? (
+                      <p className="p-4 text-xs text-slate-500">Henüz katılımcı yok.</p>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-[2.5rem_1fr_3rem_4.5rem_3.5rem] gap-2 px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/40">
+                          <span>#</span>
+                          <span>Oyuncu</span>
+                          <span className="text-center">Maç</span>
+                          <span className="text-center">G/B/M</span>
+                          <span className="text-right">Puan</span>
+                        </div>
+                        <div className="relative max-h-[28rem] overflow-y-auto divide-y divide-slate-700/40">
+                          {selectedTournamentRanking.map((row) => {
+                            const st = students.find((s) => s.id === row.id);
+                            const isMe = row.id === studentId;
+                            const rankColor =
+                              row.rank === 1 ? 'bg-amber-400/20 text-amber-300' : row.rank === 2 ? 'bg-slate-300/15 text-slate-200' : row.rank === 3 ? 'bg-orange-400/15 text-orange-300' : 'text-slate-400';
+                            return (
+                              <div
+                                key={row.id}
+                                ref={isMe ? myTournamentRowRef : undefined}
+                                aria-current={isMe ? 'true' : undefined}
+                                className={`grid grid-cols-[2.5rem_1fr_3rem_4.5rem_3.5rem] gap-2 items-center px-4 py-2.5 text-sm ${
+                                  isMe ? 'bg-indigo-600/20 border-l-2 border-l-indigo-400' : ''
+                                }`}
+                              >
+                                <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-xs font-black tabular-nums ${rankColor}`}>
+                                  {row.rank}
+                                </span>
+                                <span className="min-w-0 flex items-center gap-2">
+                                  <span className={`truncate font-semibold ${isMe ? 'text-indigo-200' : 'text-slate-200'}`}>
+                                    {st?.name ?? 'Katılımcı'}
+                                  </span>
+                                  {isMe && (
+                                    <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-indigo-500 text-white font-black">SEN</span>
+                                  )}
+                                </span>
+                                <span className="text-center text-slate-400 tabular-nums">{row.played}</span>
+                                <span className="text-center text-xs tabular-nums">
+                                  <span className="text-emerald-400 font-bold">{row.wins}</span>
+                                  <span className="text-slate-600">/</span>
+                                  <span className="text-slate-400 font-bold">{row.draws}</span>
+                                  <span className="text-slate-600">/</span>
+                                  <span className="text-rose-400 font-bold">{row.losses}</span>
+                                </span>
+                                <span className="text-right font-black text-amber-300 tabular-nums">{row.points.toFixed(1)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
                     )}
                   </div>
 
