@@ -6,6 +6,7 @@ import {
   fetchChessComPlayer,
   fetchChessComStats,
   fetchLichessActivity,
+  fetchLichessGamesForRange,
   fetchLichessUser,
   fetchLichessUsers,
   isChessPlatformBackendAvailable,
@@ -18,6 +19,7 @@ import {
 } from './chessPlatformService';
 import { chessduelloAnalytics } from '../lib/chessduelloClient';
 import { loadPlatformDayStatsFromDb } from './platformStatsCacheService';
+import { addLichessGameToByMode, lichessGameTimestampMs } from '../lib/lichessGameResults';
 import type { PlatformDayStats } from '../lib/homeworkPlatformUtils';
 import { istanbulDayKey } from '../lib/homeworkDayUtils';
 import {
@@ -133,10 +135,12 @@ function chessComGameResult(game: ChessComGame, username: string): 'win' | 'draw
   if (!isWhite && !isBlack) return null;
   const myResult = isWhite ? game.white?.result : game.black?.result;
   if (myResult === 'win') return 'win';
-  if (myResult === 'draw' || myResult === 'agreed' || myResult === 'repetition' || myResult === 'stalemate' || myResult === 'insufficient') {
+  if (myResult === 'draw' || myResult === 'agreed' || myResult === 'repetition' || myResult === 'stalemate' || myResult === 'insufficient'
+    || myResult === 'timevsinsufficient' || myResult === '50move') {
     return 'draw';
   }
-  if (myResult === 'lose' || myResult === 'resigned' || myResult === 'timeout' || myResult === 'checkmated' || myResult === 'abandoned') {
+  if (myResult === 'lose' || myResult === 'resigned' || myResult === 'timeout' || myResult === 'checkmated' || myResult === 'abandoned'
+    || myResult === 'kingofthehill' || myResult === 'threecheck' || myResult === 'bughousepartnerlose') {
     return 'loss';
   }
   return null;
@@ -684,6 +688,97 @@ function addChessDuelloPuzzles(
   };
 }
 
+function hasMissingGameResults(
+  stats: { games: number; gameResultsByMode: GameResultsByMode } | null | undefined,
+): boolean {
+  return !!stats && stats.games > sumGameResultsByMode(stats.gameResultsByMode).games;
+}
+
+const RESULTS_FILL_KEY = 'lb-results-fill-v1';
+
+/** Aynı öğrenci+dönem için sonuç taraması günde bir kez denenir (bulunamazsa sonsuz döngü olmasın). */
+function resultsFillAttemptedToday(studentId: string, bounds: PeriodBounds): boolean {
+  try {
+    const raw = window.localStorage.getItem(RESULTS_FILL_KEY);
+    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    return map[`${studentId}:${bounds.startMs}`] === istanbulDayKey(new Date());
+  } catch {
+    return false;
+  }
+}
+
+function markResultsFillAttempted(studentId: string, bounds: PeriodBounds): void {
+  try {
+    const raw = window.localStorage.getItem(RESULTS_FILL_KEY);
+    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    const today = istanbulDayKey(new Date());
+    for (const k of Object.keys(map)) if (map[k] !== today) delete map[k];
+    map[`${studentId}:${bounds.startMs}`] = today;
+    window.localStorage.setItem(RESULTS_FILL_KEY, JSON.stringify(map));
+  } catch {
+    /* depolama yoksa yine çalışır */
+  }
+}
+
+/**
+ * Maç sayısı günlük platform özetlerinden (yalnızca sayı) ve Lichess aktivitesinden
+ * (turnuva maçları sonuçsuz) gelir; G/B/M bu yüzden 0 kalır. Dönemin oyun listelerinden
+ * (Lichess + Chess.com) kesin sonuçları hesaplayıp tamamlar.
+ */
+async function fillGameResultsFromGameLists(
+  stats: Omit<CachedStudentPeriodStats, 'cachedAt'>,
+  student: Student,
+  bounds: PeriodBounds,
+): Promise<Omit<CachedStudentPeriodStats, 'cachedAt'>> {
+  if (!hasMissingGameResults(stats) || !student.id) return stats;
+  if (resultsFillAttemptedToday(String(student.id), bounds)) return stats;
+  const lichessUsername = student.lichessUsername?.trim();
+  const chessComUsername = student.chessComUsername?.trim();
+  if (!lichessUsername && !chessComUsername) return stats;
+
+  const lichessSkipped = !!lichessUsername && isLichessGloballyRateLimited();
+  const [lichessGames, chessComGames] = await Promise.all([
+    lichessUsername && !lichessSkipped
+      ? raceWithTimeout(
+        fetchLichessGamesForRange(lichessUsername, bounds.startMs, bounds.endMs).catch(() => []),
+        12_000,
+        () => [],
+      )
+      : Promise.resolve([]),
+    chessComUsername
+      ? raceWithTimeout(fetchChessComGamesForPeriod(chessComUsername, bounds), 12_000, () => [] as ChessComGame[])
+      : Promise.resolve([] as ChessComGame[]),
+  ]);
+
+  const byMode = emptyGameResultsByMode();
+  if (lichessUsername) {
+    for (const g of lichessGames) {
+      if (g.status === 'started' || g.status === 'created') continue; // süren maç: sonuç yok
+      const ts = lichessGameTimestampMs(g);
+      if (ts > 0 && !isEpochMsInPeriod(ts, bounds)) continue;
+      addLichessGameToByMode(byMode, g, lichessUsername);
+    }
+  }
+  if (chessComUsername) {
+    for (const g of chessComGames) addChessComGameToByMode(byMode, g, chessComUsername);
+  }
+  // Lichess limit yüzünden atlandı/yarıda kaldıysa "denendi" sayma; sonraki taramada tekrar dene.
+  if (!lichessSkipped && !(lichessUsername && isLichessGloballyRateLimited())) {
+    markResultsFillAttempted(String(student.id), bounds);
+  }
+
+  const t = sumGameResultsByMode(byMode);
+  if (t.games <= sumGameResultsByMode(stats.gameResultsByMode).games) return stats;
+  return {
+    ...stats,
+    games: Math.max(stats.games, t.games),
+    wins: t.wins,
+    draws: t.draws,
+    losses: t.losses,
+    gameResultsByMode: byMode,
+  };
+}
+
 export async function persistLeaderboardStatsFromActivity(
   student: Student,
   activities: LichessActivity[],
@@ -707,7 +802,11 @@ export async function persistLeaderboardStatsFromActivity(
       internalWrong,
     );
     const cached = readCachedStudentPeriodStats(student.id, bounds);
-    const merged = cached ? mergePeriodStatsMax(cached, fromActivity) : fromActivity;
+    // Sunucudaki satır günlük özetlerden gelen maç sayısını taşır; sonuç eksikliğini görmek için gerekli.
+    const remote = (await loadRemotePeriodStats([String(student.id)], period, bounds.startMs)).get(String(student.id)) ?? null;
+    let merged = cached ? mergePeriodStatsMax(cached, fromActivity) : fromActivity;
+    if (remote) merged = mergePeriodStatsMax(merged, remote);
+    merged = await fillGameResultsFromGameLists(merged, student, bounds);
     writeCachedStudentPeriodStats(student.id, bounds, merged);
     await saveRemotePeriodStats(student.id, period, bounds.startMs, merged);
   }
@@ -739,13 +838,23 @@ export async function harvestClubLeaderboardDaily(
     clubId?: string;
   },
 ): Promise<LeaderboardEntry[]> {
-  if (clubHarvestInFlight || isLichessGloballyRateLimited()) return [];
+  if (clubHarvestInFlight) return [];
   const bounds = getPeriodBounds(period);
   const remote = await loadRemotePeriodStats(peers.map((p) => String(p.id)), period, bounds.startMs);
   const due = peers.filter((peer) => {
-    if (!peer.lichessUsername?.trim() && !peer.chessDuelloMemberId?.trim()) return false;
-    if (wasHarvestedToday(remote.get(String(peer.id))?.cachedAt)) return false;
-    return !wasHarvestedToday(readCachedStudentPeriodStats(peer.id, bounds)?.cachedAt);
+    if (!peer.lichessUsername?.trim() && !peer.chessComUsername?.trim() && !peer.chessDuelloMemberId?.trim()) {
+      return false;
+    }
+    const r = remote.get(String(peer.id));
+    const c = readCachedStudentPeriodStats(peer.id, bounds);
+    if (
+      (hasMissingGameResults(r) || hasMissingGameResults(c))
+      && !resultsFillAttemptedToday(String(peer.id), bounds)
+    ) {
+      return true;
+    }
+    if (wasHarvestedToday(r?.cachedAt)) return false;
+    return !wasHarvestedToday(c?.cachedAt);
   });
   if (due.length === 0) return [];
 
@@ -754,13 +863,15 @@ export async function harvestClubLeaderboardDaily(
   const cap = Math.max(1, opts?.limit ?? due.length);
   try {
     for (const student of due.slice(0, cap)) {
-      if (opts?.shouldAbort?.() || isLichessGloballyRateLimited()) break;
+      if (opts?.shouldAbort?.()) break;
       const username = student.lichessUsername?.trim();
+      // Lichess limitteyken Lichess'li öğrenciyi atla; Chess.com/ChessDuello'lular yine işlensin.
+      if (username && isLichessGloballyRateLimited()) continue;
       const activities = username
         ? await fetchLichessActivity(username).catch(() => [] as LichessActivity[])
         : [];
       if (username) {
-        if (isLichessGloballyRateLimited() && activities.length === 0) break;
+        if (isLichessGloballyRateLimited() && activities.length === 0) continue;
         if (!lichessActivityFetchWasOk(username)) continue;
       }
       await persistLeaderboardStatsFromActivity(student, activities, homeworkAttempts, {
