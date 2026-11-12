@@ -1,5 +1,5 @@
 import type { Student } from '../types';
-import { fetchFidePlayer, searchFidePlayer } from './fideService';
+import { fetchFidePlayer, pickFideMatchForStudent, searchFidePlayer } from './fideService';
 import { fetchUkdFromTsf } from './ukdService';
 
 export type StudentRatingsSyncResult = {
@@ -10,7 +10,9 @@ export type StudentRatingsSyncResult = {
 
 /**
  * Öğrenci eklendikten sonra UKD (TSF) ve FIDE bilgilerini otomatik çeker.
- * TC yoksa FIDE ad araması ile devam eder.
+ * FIDE numarasının asıl kaynağı TSF'dir: TC ile bulunan satırın "FIDE ID" sütunu kişiye özeldir.
+ * TSF öğrenciyi bulduysa ve FIDE ID boşsa öğrencinin FIDE kaydı yoktur — isimle tahmin yapılmaz.
+ * İsim araması yalnızca TC yoksa / TSF'de bulunamadıysa ve ad+soyad+doğum yılı tek kişiyle eşleşirse.
  */
 export async function syncStudentRatingsFromExternal(
   student: Pick<Student, 'id' | 'name' | 'birthDate' | 'tcNo' | 'fideId' | 'elo' | 'ukd'>
@@ -18,6 +20,7 @@ export async function syncStudentRatingsFromExternal(
   const patch: Partial<Student> = {};
   let ukdSynced = false;
   let fideSynced = false;
+  let tsfFound = false;
 
   const tc = student.tcNo?.replace(/\D/g, '') || '';
   const soyad = (student.name || '').trim().split(/\s+/).slice(-1)[0] || undefined;
@@ -26,6 +29,7 @@ export async function syncStudentRatingsFromExternal(
     try {
       const res = await fetchUkdFromTsf({ tc, soyad });
       if (res && 'ok' in res && res.ok) {
+        tsfFound = true;
         if (res.ukd != null && res.ukd > 0) {
           patch.ukd = res.ukd;
           ukdSynced = true;
@@ -48,16 +52,12 @@ export async function syncStudentRatingsFromExternal(
 
   let fideId = (patch.fideId ?? student.fideId)?.trim().replace(/\D/g, '') || '';
 
-  if (!fideId && student.name?.trim()) {
+  if (!fideId && !tsfFound && student.name?.trim()) {
     try {
       const birthYear = student.birthDate ? Number(student.birthDate.slice(0, 4)) : null;
       const searchResults = await searchFidePlayer(student.name);
-      if (searchResults.length > 0) {
-        const matched = birthYear
-          ? searchResults.find((p) => p.year === birthYear)
-          : searchResults[0];
-        if (matched?.id) fideId = String(matched.id);
-      }
+      const matched = pickFideMatchForStudent(searchResults, student.name, birthYear);
+      if (matched?.id) fideId = String(matched.id);
     } catch (e) {
       console.warn('[RatingsSync] FIDE search failed:', e);
     }

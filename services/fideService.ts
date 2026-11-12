@@ -73,8 +73,49 @@ export async function searchFidePlayer(query: string): Promise<FidePlayer[]> {
   }
 }
 
+/** Türkçe harfleri sadeleştirip küçük harfe çevirir: "GÖGER" -> "goger" */
+function foldName(value: string): string {
+  return value
+    .replace(/İ/g, 'i')
+    .replace(/I/g, 'ı')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/ç/g, 'c').replace(/ğ/g, 'g').replace(/ı/g, 'i')
+    .replace(/ö/g, 'o').replace(/ş/g, 's').replace(/ü/g, 'u')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z\s,]/g, ' ');
+}
+
+function nameTokens(value: string): string[] {
+  return foldName(value).replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+}
+
 /**
- * Öğrenci kaydından FIDE profilini çözer (ID yoksa ad + doğum yılı ile arar).
+ * İsim aramasının sonuçlarından öğrenciye ait FIDE kaydını seçer.
+ * FIDE adı "Soyad, Ad" biçimindedir. Ad VE soyad eşleşmeli, doğum yılı biliniyorsa o da tutmalı;
+ * birden fazla aday kalırsa (ya da hiç yoksa) otomatik atama yapılmaz — yanlış kişiyi bağlamaktansa boş bırak.
+ * Eski hata: yalnızca doğum yılına bakılıyordu; "Defne Göger" araması "Karaman, Defne"yi bağlıyordu.
+ */
+export function pickFideMatchForStudent(
+  results: FidePlayer[],
+  studentName: string,
+  birthYear: number | null,
+): FidePlayer | null {
+  const studentTokens = new Set(nameTokens(studentName));
+  if (studentTokens.size < 2) return null;
+  const candidates = results.filter((p) => {
+    if (!p.id) return false;
+    if (birthYear && p.year && p.year !== birthYear) return false;
+    const [surnamePart = '', givenPart = ''] = foldName(p.name).split(',');
+    const surnames = surnamePart.split(/\s+/).filter(Boolean);
+    const givens = givenPart.split(/\s+/).filter(Boolean);
+    if (surnames.length === 0 || givens.length === 0) return false;
+    return surnames.every((t) => studentTokens.has(t)) && givens.some((t) => studentTokens.has(t));
+  });
+  return candidates.length === 1 ? candidates[0]! : null;
+}
+
+/**
+ * Öğrenci kaydından FIDE profilini çözer (ID yoksa ad + soyad + doğum yılı ile arar).
  */
 export async function resolveFideProfileForStudent(
   student: { fideId?: string; name?: string; birthDate?: string },
@@ -83,12 +124,8 @@ export async function resolveFideProfileForStudent(
   if (!id && student.name?.trim()) {
     const birthYear = student.birthDate ? Number(student.birthDate.slice(0, 4)) : null;
     const searchResults = await searchFidePlayer(student.name);
-    if (searchResults.length > 0) {
-      const matched = birthYear
-        ? searchResults.find((p) => p.year === birthYear)
-        : searchResults[0];
-      if (matched?.id) id = String(matched.id);
-    }
+    const matched = pickFideMatchForStudent(searchResults, student.name, birthYear);
+    if (matched?.id) id = String(matched.id);
   }
   if (!id) return { profile: null };
   const profile = await fetchFidePlayer(id);

@@ -92,7 +92,7 @@ import LichessOpeningsSection from './LichessOpeningsSection';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
 import type { Puzzle } from '../types';
 import { ResponsiveTable } from './ui/ResponsiveTable';
-import { fetchFidePlayer, searchFidePlayer, federationLabel, type FidePlayer } from '../services/fideService';
+import { fetchFidePlayer, pickFideMatchForStudent, searchFidePlayer, federationLabel, type FidePlayer } from '../services/fideService';
 import { fetchUkdFromTsf } from '../services/ukdService';
 import { syncStudentRatingsFromExternal } from '../services/studentRatingsSync';
 import { getServiceSupabase } from '../services/supabase';
@@ -1489,22 +1489,32 @@ const StudentDetail: React.FC<{
     setLoadingFide(true);
 
     try {
-      // Eğer ID yoksa, isim ve doğum yılı ile ara
-      if (!id) {
+      // ID yoksa önce TSF: TC ile bulunan kişinin "FIDE ID" sütunu kesin kaynaktır.
+      // TSF öğrenciyi bulup FIDE ID vermiyorsa öğrencinin FIDE kaydı yoktur; isimle tahmin yapılmaz.
+      let tsfFound = false;
+      const tc = student.tcNo?.replace(/\D/g, '') || '';
+      if (!id && tc.length === 11) {
+        const tsf = await fetchUkdFromTsf({ tc });
+        if (tsf && 'ok' in tsf && tsf.ok) {
+          tsfFound = true;
+          const tsfFideId = tsf.fideId?.replace(/\D/g, '') || '';
+          if (tsfFideId) {
+            id = tsfFideId;
+            setFideIdInput(id);
+          }
+        }
+      }
+
+      // TC yoksa / TSF'de yoksa: ad + soyad + doğum yılı tek kişiyle eşleşirse
+      if (!id && !tsfFound) {
         const birthYear = student.birthDate ? Number(student.birthDate.slice(0, 4)) : null;
         const searchResults = await searchFidePlayer(student.name);
-        
-        if (searchResults.length > 0) {
-          const matched = birthYear 
-            ? searchResults.find(p => p.year === birthYear) 
-            : searchResults[0];
-
-          if (matched) {
-            const newId = String(matched.id);
-            if (newId !== fideIdInput) {
-              id = newId;
-              setFideIdInput(id);
-            }
+        const matched = pickFideMatchForStudent(searchResults, student.name, birthYear);
+        if (matched) {
+          const newId = String(matched.id);
+          if (newId !== fideIdInput) {
+            id = newId;
+            setFideIdInput(id);
           }
         }
       }
