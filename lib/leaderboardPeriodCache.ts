@@ -12,8 +12,16 @@ export type CachedStudentPeriodStats = {
   draws: number;
   losses: number;
   gameResultsByMode: GameResultsByMode;
+  /**
+   * Maç sayısı hesap sürümü. PERIOD_GAME_COUNT_VERSION'dan eski (ya da hiç olmayan)
+   * kayıtlarda Lichess turnuva maçları çift sayılmış olabilir.
+   */
+  countVersion?: number;
   cachedAt: number;
 };
+
+/** 2: turnuva maçları artık çift sayılmıyor. */
+export const PERIOD_GAME_COUNT_VERSION = 2;
 
 type CacheFile = {
   version: 1;
@@ -109,15 +117,31 @@ export function mergePeriodStatsMax(
   prev: Omit<CachedStudentPeriodStats, 'cachedAt'>,
   next: Omit<CachedStudentPeriodStats, 'cachedAt'>,
 ): Omit<CachedStudentPeriodStats, 'cachedAt'> {
+  const wins = Math.max(prev.wins, next.wins);
+  const draws = Math.max(prev.draws, next.draws);
+  const losses = Math.max(prev.losses, next.losses);
+  const prevVersion = prev.countVersion ?? 0;
+  const nextVersion = next.countVersion ?? 0;
+  // Sürümler farklıysa eski taraftaki maç sayısı şişkin olabilir (turnuva maçları çift sayılmış).
+  // "Asla azalma" kuralı onu sonsuza dek taşımasın: yeni tarafın sayısı ile sonuçlu maç
+  // toplamından büyük olanı alınır.
+  const games = prevVersion === nextVersion
+    ? Math.max(prev.games, next.games)
+    : Math.max(
+      (nextVersion > prevVersion ? next : prev).games,
+      wins + draws + losses,
+    );
+  const countVersion = Math.max(prevVersion, nextVersion);
   return {
     puzzles: Math.max(prev.puzzles, next.puzzles),
     puzzleWrong: Math.max(prev.puzzleWrong, next.puzzleWrong),
-    games: Math.max(prev.games, next.games),
+    games,
     internalPuzzles: Math.max(prev.internalPuzzles, next.internalPuzzles),
-    wins: Math.max(prev.wins, next.wins),
-    draws: Math.max(prev.draws, next.draws),
-    losses: Math.max(prev.losses, next.losses),
+    wins,
+    draws,
+    losses,
     gameResultsByMode: mergeGameResultsByMode(prev.gameResultsByMode, next.gameResultsByMode),
+    ...(countVersion > 0 ? { countVersion } : {}),
   };
 }
 

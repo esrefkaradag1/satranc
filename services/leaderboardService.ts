@@ -28,7 +28,7 @@ import {
   saveRemotePeriodStats,
   wasHarvestedToday,
 } from '../lib/leaderboardPeriodRemoteStore';
-import type { CachedStudentPeriodStats } from '../lib/leaderboardPeriodCache';
+import { PERIOD_GAME_COUNT_VERSION, type CachedStudentPeriodStats } from '../lib/leaderboardPeriodCache';
 import {
   buildLeaderboardPlatformSnapshot,
   leaderboardModeRating,
@@ -219,6 +219,7 @@ function statsFromLichessActivity(
     draws: totals.draws,
     losses: totals.losses,
     gameResultsByMode,
+    countVersion: PERIOD_GAME_COUNT_VERSION,
   };
 }
 
@@ -234,6 +235,7 @@ function statsFromPlatformDays(
     draws: 0,
     losses: 0,
     gameResultsByMode: emptyGameResultsByMode(),
+    countVersion: PERIOD_GAME_COUNT_VERSION,
   };
   if (!byDay) return empty;
   for (const stats of Object.values(byDay)) {
@@ -402,6 +404,7 @@ async function studentPeriodStats(
     draws: totals.draws,
     losses: totals.losses,
     gameResultsByMode,
+    countVersion: PERIOD_GAME_COUNT_VERSION,
   };
 
   const hasPlatformAccount = !!(lichessUsername || chessComUsername);

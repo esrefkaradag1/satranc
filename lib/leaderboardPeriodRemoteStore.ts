@@ -31,6 +31,15 @@ function asModeMap(raw: unknown): GameResultsByMode {
   return out;
 }
 
+/** Sürüm, ayrı sütun gerektirmesin diye game_results_by_mode JSON'unda `_countVersion` olarak tutulur. */
+const COUNT_VERSION_JSON_KEY = '_countVersion';
+
+function countVersionFromModeJson(raw: unknown): { countVersion?: number } {
+  if (!raw || typeof raw !== 'object') return {};
+  const v = Number((raw as Record<string, unknown>)[COUNT_VERSION_JSON_KEY]);
+  return Number.isFinite(v) && v > 0 ? { countVersion: v } : {};
+}
+
 function rowToStats(row: Record<string, unknown>): CachedStudentPeriodStats {
   return {
     puzzles: Math.max(0, Number(row.puzzles) || 0),
@@ -41,6 +50,7 @@ function rowToStats(row: Record<string, unknown>): CachedStudentPeriodStats {
     draws: Math.max(0, Number(row.draws) || 0),
     losses: Math.max(0, Number(row.losses) || 0),
     gameResultsByMode: asModeMap(row.game_results_by_mode),
+    ...(countVersionFromModeJson(row.game_results_by_mode)),
     cachedAt: Date.parse(String(row.fetched_at ?? row.updated_at ?? '')) || Date.now(),
   };
 }
@@ -116,7 +126,9 @@ export async function saveRemotePeriodStats(
         wins: merged.wins,
         draws: merged.draws,
         losses: merged.losses,
-        game_results_by_mode: merged.gameResultsByMode,
+        game_results_by_mode: merged.countVersion
+          ? { ...merged.gameResultsByMode, [COUNT_VERSION_JSON_KEY]: merged.countVersion }
+          : merged.gameResultsByMode,
         fetched_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
