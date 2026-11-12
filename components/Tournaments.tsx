@@ -28,6 +28,7 @@ import { createTournamentGames, subscribeToTournamentGames, type TournamentGame 
 import { LiveGamesGrid, type PlayerInfo } from './tournament/LiveGamesGrid';
 import { TournamentGameWatch } from './tournament/TournamentGameWatch';
 import { useArenaDirector } from '../hooks/useArenaDirector';
+import { getTournamentLifecycle, tournamentLengthLabel } from '../lib/tournamentStatus';
 import type { Tournament, TournamentPairing, TournamentStanding, Student, Club } from '../types';
 
 interface TournamentsProps {
@@ -282,14 +283,7 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
     setTeamBattleTeamIds((prev) => (prev.includes(teamId) ? prev.filter((id) => id !== teamId) : [...prev, teamId]));
   };
 
-  const getStatus = (t: Tournament): TournamentStatus => {
-    const start = new Date(t.startAt).getTime();
-    const end = start + (t.durationMinutes || 0) * 60000;
-    const now = Date.now();
-    if (now < start) return 'upcoming';
-    if (now < end) return 'ongoing';
-    return 'finished';
-  };
+  const getStatus = (t: Tournament): TournamentStatus => getTournamentLifecycle(t);
 
   // Oluşturma/düzenleme formu — liste ve turnuva ayrıntı ekranında ortak.
   const formModal = showForm ? (
@@ -342,10 +336,18 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Süre (Dakika)</label>
-                  <input className={inputCls} type="number" value={durationMinutes} onChange={(e) => setDurationMinutes(Number(e.target.value))} />
-                </div>
+                {/* İsviçre süreyle değil tur sayısıyla biter; süre yalnızca Arena'da sorulur */}
+                {format === 'arena' ? (
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Süre (Dakika)</label>
+                    <input className={inputCls} type="number" value={durationMinutes} onChange={(e) => setDurationMinutes(Number(e.target.value))} />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Tur Sayısı</label>
+                    <input className={inputCls} type="number" min={1} max={30} value={roundLimit} onChange={(e) => setRoundLimit(Number(e.target.value))} />
+                  </div>
+                )}
                 <div>
                   <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Başlangıç</label>
                   <input
@@ -360,10 +362,9 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
               </div>
 
               {format === 'swiss' && (
-                <div>
-                  <label className="text-[11px] font-semibold text-slate-500 uppercase ml-1 block mb-1">Tur Sayısı (İsviçre)</label>
-                  <input className={inputCls} type="number" min={1} max={30} value={roundLimit} onChange={(e) => setRoundLimit(Number(e.target.value))} />
-                </div>
+                <p className="text-[11px] text-slate-500 -mt-2 ml-1">
+                  İsviçre sisteminde süre yoktur: turnuva, belirlenen tur sayısı oynanıp son turun sonuçları girilince biter.
+                </p>
               )}
 
               <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-900/50 border border-slate-700/50 cursor-pointer hover:border-indigo-500/40 transition-colors group">
@@ -555,7 +556,7 @@ const Tournaments: React.FC<TournamentsProps> = ({ branch, role = 'admin' }) => 
                     <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
                       <span className={`font-semibold ${meta.text}`}>{meta.label}</span>
                       <span className="flex items-center gap-1"><CalendarDays className="w-3 h-3" />{new Date(t.startAt).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                      <span className="flex items-center gap-1"><Clock3 className="w-3 h-3" />{t.timeControl} · {t.durationMinutes}dk</span>
+                      <span className="flex items-center gap-1"><Clock3 className="w-3 h-3" />{t.timeControl} · {tournamentLengthLabel(t)}</span>
                       <span className="flex items-center gap-1"><Users className="w-3 h-3" />{t.participantIds?.length || 0} oyuncu</span>
                     </div>
                   </div>
@@ -1245,7 +1246,11 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
               {teamBattleOn && (
                 <li className="flex items-start gap-1.5"><Shield className="w-3.5 h-3.5 text-indigo-400 mt-0.5 shrink-0" /><span>Bu bir <b className="text-slate-200">Takım Savaşı</b> ({teamBattleSource === 'club' ? 'kulüpler' : 'gruplar'} birbirine karşı): aynı takımdan iki oyuncu asla eşleşmez, her takımın puanı o takımın en iyi <b className="text-slate-200">{t.teamBattle!.nbLeaders}</b> oyuncusunun bireysel puan toplamıdır.</span></li>
               )}
-              <li>Turnuva süresi <b className="text-slate-200">{t.durationMinutes} dakikadır</b>.</li>
+              {isArena || !t.roundLimit ? (
+                <li>Turnuva süresi <b className="text-slate-200">{t.durationMinutes} dakikadır</b>.</li>
+              ) : (
+                <li>Turnuva <b className="text-slate-200">{t.roundLimit} tur</b> oynanır; süre sınırı yoktur, son turun maçları bitince turnuva tamamlanır.</li>
+              )}
             </ul>
             <div className="pt-3 border-t border-slate-700/50 flex items-center justify-between">
               <div>

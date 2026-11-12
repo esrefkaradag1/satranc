@@ -81,6 +81,7 @@ import Sidebar from './Sidebar';
 import AccountDropdown, { type AccountDropdownItem } from './ui/AccountDropdown';
 import { filterDuesTransactions } from '../lib/transactionUtils';
 import { parseDuesPeriodFromTransaction } from '../lib/duesCalendarUtils';
+import { getTournamentLifecycle, tournamentLengthLabel } from '../lib/tournamentStatus';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { STUDENT_NAV_CATEGORIES } from '../constants';
 import { clubDisplayForStudent } from '../lib/clubDisplay';
@@ -882,11 +883,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     return tournaments
       .filter((t) => !(t.participantIds ?? []).includes(studentId))
       .filter((t) => !t.branch || t.branch === student.branch)
-      .filter((t) => {
-        const start = new Date(t.startAt).getTime();
-        const end = start + Math.max(0, t.durationMinutes || 0) * 60000;
-        return Date.now() < end; // henüz bitmemiş
-      })
+      .filter((t) => getTournamentLifecycle(t) !== 'finished') // henüz bitmemiş
       .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
   }, [tournaments, student, studentId]);
 
@@ -924,15 +921,6 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     [joinedTournaments, selectedTournamentId]
   );
 
-  const getTournamentStatus = useCallback((startAt: string, durationMinutes: number) => {
-    const start = new Date(startAt).getTime();
-    const end = start + Math.max(0, durationMinutes || 0) * 60000;
-    const now = Date.now();
-    if (!Number.isFinite(start)) return 'unknown' as const;
-    if (now < start) return 'upcoming' as const;
-    if (now < end) return 'ongoing' as const;
-    return 'finished' as const;
-  }, []);
 
   const selectedTournamentRanking = useMemo(
     () => (selectedTournament ? rankTournamentParticipants(selectedTournament) : []),
@@ -1919,7 +1907,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                 <ul className="divide-y divide-white/5">
                   {joinedTournaments.map((t) => {
                     const mine = t.standings?.[studentId];
-                    const status = getTournamentStatus(t.startAt, t.durationMinutes);
+                    const status = getTournamentLifecycle(t);
                     return (
                       <li key={t.id}>
                         <button
@@ -1935,7 +1923,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                             <div className="min-w-0">
                               <p className="font-bold text-white truncate">{t.name}</p>
                               <p className="text-xs text-slate-400 mt-0.5">
-                                {new Date(t.startAt).toLocaleString('tr-TR')} · {t.timeControl} · {t.durationMinutes} dk
+                                {new Date(t.startAt).toLocaleString('tr-TR')} · {t.timeControl} · {tournamentLengthLabel(t)}
                               </p>
                               <div className="mt-1">
                                 {status === 'ongoing' ? (
@@ -1981,7 +1969,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                   <div>
                     <h3 className="text-base font-black text-white">{selectedTournament.name}</h3>
                     <p className="text-xs text-slate-400 mt-1">
-                      {selectedTournament.format.toUpperCase()} · {selectedTournament.timeControl} · {selectedTournament.durationMinutes} dk
+                      {selectedTournament.format.toUpperCase()} · {selectedTournament.timeControl} · {tournamentLengthLabel(selectedTournament)}
                     </p>
                   </div>
                   <div className="text-right">
