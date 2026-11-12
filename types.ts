@@ -388,6 +388,8 @@ export interface Transaction {
   personalCash?: boolean;
   /** Kişisel kasa işleminin genel kasa toplamlarına da yansıması */
   includeInGeneralCash?: boolean;
+  /** Kişisel kasanın adı (birden fazla kişisel kasa için); boşsa varsayılan "Kişisel Kasa" */
+  personalCashName?: string;
 }
 
 /** İşlem geçmişi (log) kaydı */

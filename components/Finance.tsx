@@ -12,6 +12,60 @@ import SalePaymentCell from './SalePaymentCell';
 
 const CATEGORY_PRESETS = ['Aidat', 'Özel Ders', 'Paket', 'Kira', 'Malzeme', 'Diğer'] as const;
 
+/** Adı verilmemiş kişisel kasa işlemleri bu kasada toplanır */
+const DEFAULT_PERSONAL_BOX = 'Kişisel Kasa';
+const NEW_BOX_OPTION = '__new__';
+
+function personalBoxOf(t: Pick<Transaction, 'personalCashName'>): string {
+  return t.personalCashName?.trim() || DEFAULT_PERSONAL_BOX;
+}
+
+/** Kasa adını kayda yazılacak hale getirir: varsayılan kasa adı boş tutulur */
+function personalBoxToStored(name: string): string | undefined {
+  const n = name.trim();
+  return n && n !== DEFAULT_PERSONAL_BOX ? n : undefined;
+}
+
+/** Kişisel kasa seçimi: mevcut kasalardan biri ya da yeni kasa adı */
+const PersonalCashBoxPicker: React.FC<{
+  value: string;
+  onChange: (name: string) => void;
+  boxes: string[];
+  inputClassName: string;
+}> = ({ value, onChange, boxes, inputClassName }) => {
+  const [creating, setCreating] = useState(() => !!value.trim() && !boxes.includes(value));
+  return (
+    <div className="space-y-2">
+      <select
+        value={creating ? NEW_BOX_OPTION : (boxes.includes(value) ? value : boxes[0] ?? DEFAULT_PERSONAL_BOX)}
+        onChange={(e) => {
+          if (e.target.value === NEW_BOX_OPTION) {
+            setCreating(true);
+            onChange('');
+          } else {
+            setCreating(false);
+            onChange(e.target.value);
+          }
+        }}
+        className={inputClassName}
+      >
+        {boxes.map((b) => <option key={b} value={b}>{b}</option>)}
+        <option value={NEW_BOX_OPTION}>+ Yeni kasa…</option>
+      </select>
+      {creating ? (
+        <input
+          type="text"
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Yeni kasa adı (ör. Ahmet Hoca Kasası)"
+          className={inputClassName}
+        />
+      ) : null}
+    </div>
+  );
+};
+
 const Finance: React.FC = () => {
   const {
     scopedTransactions: transactions,
@@ -68,6 +122,10 @@ const Finance: React.FC = () => {
   const [editTxnStudentId, setEditTxnStudentId] = useState('');
   const [editTxnPersonalCash, setEditTxnPersonalCash] = useState(false);
   const [editTxnIncludeInGeneral, setEditTxnIncludeInGeneral] = useState(false);
+  const [editTxnPersonalCashName, setEditTxnPersonalCashName] = useState(DEFAULT_PERSONAL_BOX);
+  /** Henüz işlemi olmayan, bu oturumda eklenen kasalar */
+  const [extraPersonalBoxes, setExtraPersonalBoxes] = useState<string[]>([]);
+  const [boxDialog, setBoxDialog] = useState<{ mode: 'new' | 'rename'; from: string; name: string } | null>(null);
 
   const [formData, setFormData] = useState({
     studentId: '',
@@ -81,6 +139,7 @@ const Finance: React.FC = () => {
     processedBy: '',
     personalCash: false,
     includeInGeneralCash: false,
+    personalCashName: DEFAULT_PERSONAL_BOX,
   });
 
   const studentNameById = useMemo(() => {
@@ -121,6 +180,57 @@ const Finance: React.FC = () => {
     .reduce((acc, t) => acc + t.amount, 0);
   const personalBalance = personalIncome - personalExpense;
 
+  /** Kişisel kasalar: ad -> bakiye ve işlem sayısı */
+  const personalBoxes = useMemo(() => {
+    const map = new Map<string, { name: string; income: number; expense: number; count: number }>();
+    const ensure = (name: string) => {
+      if (!map.has(name)) map.set(name, { name, income: 0, expense: 0, count: 0 });
+      return map.get(name)!;
+    };
+    personalTransactions.forEach((t) => {
+      const box = ensure(personalBoxOf(t));
+      box.count += 1;
+      if (t.type === 'income') box.income += t.amount;
+      else box.expense += t.amount;
+    });
+    extraPersonalBoxes.forEach((name) => ensure(name));
+    if (map.size === 0) ensure(DEFAULT_PERSONAL_BOX);
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.name === DEFAULT_PERSONAL_BOX) return -1;
+      if (b.name === DEFAULT_PERSONAL_BOX) return 1;
+      return a.name.localeCompare(b.name, 'tr');
+    });
+  }, [personalTransactions, extraPersonalBoxes]);
+  const personalBoxNames = useMemo(() => personalBoxes.map((b) => b.name), [personalBoxes]);
+
+  const openNewTransactionForBox = (boxName: string) => {
+    resetForm();
+    setFormData((prev) => ({ ...prev, personalCash: true, personalCashName: boxName }));
+    setIsModalOpen(true);
+  };
+
+  const saveBoxDialog = () => {
+    if (!boxDialog) return;
+    const name = boxDialog.name.trim();
+    if (!name) return;
+    if (boxDialog.mode === 'new') {
+      if (!personalBoxNames.includes(name)) setExtraPersonalBoxes((prev) => [...prev, name]);
+      setBoxDialog(null);
+      return;
+    }
+    const from = boxDialog.from;
+    if (name !== from) {
+      personalTransactions
+        .filter((t) => personalBoxOf(t) === from)
+        .forEach((t) => updateTransaction(t.id, { personalCashName: personalBoxToStored(name) ?? '' }));
+      setExtraPersonalBoxes((prev) => {
+        const next = prev.filter((n) => n !== from);
+        return next.includes(name) ? next : [...next, name];
+      });
+    }
+    setBoxDialog(null);
+  };
+
   const filteredTransactions = transactions.filter((t) => {
     const q = searchTerm.toLowerCase();
     const studentName = t.studentId ? (studentNameById.get(String(t.studentId)) ?? '') : '';
@@ -128,7 +238,7 @@ const Finance: React.FC = () => {
       (t.description || '').toLowerCase().includes(q)
       || (t.category || '').toLowerCase().includes(q)
       || studentName.toLowerCase().includes(q)
-      || (isPersonalCashTransaction(t) && 'kişisel kasa'.includes(q))
+      || (isPersonalCashTransaction(t) && ('kişisel kasa'.includes(q) || personalBoxOf(t).toLowerCase().includes(q)))
     );
   });
 
@@ -145,11 +255,13 @@ const Finance: React.FC = () => {
       processedBy: '',
       personalCash: false,
       includeInGeneralCash: false,
+      personalCashName: DEFAULT_PERSONAL_BOX,
     });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (formData.personalCash && !formData.personalCashName.trim()) return;
     if (formData.type === 'income' && needsStudentLink(formData.category) && !formData.studentId) {
       return;
     }
@@ -164,6 +276,7 @@ const Finance: React.FC = () => {
       studentId: formData.studentId || undefined,
       personalCash: formData.personalCash || undefined,
       includeInGeneralCash: formData.personalCash ? formData.includeInGeneralCash : undefined,
+      personalCashName: formData.personalCash ? personalBoxToStored(formData.personalCashName) : undefined,
       collectedAt: normalizeDateInputYear(formData.date),
     };
     if (formData.type === 'income' && isPackageSaleCategory(formData.category) && formData.totalAmount > 0) {
@@ -186,6 +299,7 @@ const Finance: React.FC = () => {
     setEditTxnStudentId(t.studentId ? String(t.studentId) : '');
     setEditTxnPersonalCash(!!t.personalCash);
     setEditTxnIncludeInGeneral(!!t.includeInGeneralCash);
+    setEditTxnPersonalCashName(personalBoxOf(t));
   }, []);
 
   const saveEdit = () => {
@@ -206,6 +320,12 @@ const Finance: React.FC = () => {
       studentId: editTxnStudentId || undefined,
       personalCash: editTxnPersonalCash,
       includeInGeneralCash: editTxnPersonalCash ? editTxnIncludeInGeneral : false,
+      // Sadece değiştiyse gönder (sütun yoksa diğer düzenlemeler etkilenmesin)
+      ...((() => {
+        const before = editingTxn ? (editingTxn.personalCash ? personalBoxOf(editingTxn) : '') : '';
+        const after = editTxnPersonalCash ? (editTxnPersonalCashName.trim() || DEFAULT_PERSONAL_BOX) : '';
+        return before === after ? {} : { personalCashName: editTxnPersonalCash ? (personalBoxToStored(after) ?? '') : '' };
+      })()),
     });
     setEditingId(null);
   };
@@ -258,8 +378,62 @@ const Finance: React.FC = () => {
           label="Kişisel Kasa"
           value={`₺${personalBalance.toLocaleString('tr-TR')}`}
           color="amber"
-          subtitle={personalTransactions.length > 0 ? `${personalTransactions.length} işlem` : 'Kişisel işlem yok'}
+          subtitle={`${personalBoxes.length} kasa · ${personalTransactions.length} işlem`}
         />
+      </div>
+
+      <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-white/5 overflow-hidden">
+        <div className="px-6 sm:px-8 py-5 border-b border-white/5 flex items-center justify-between gap-4 bg-white/[0.02]">
+          <div className="flex items-center gap-2">
+            <Lock className="w-4 h-4 text-amber-300" />
+            <h3 className="text-base font-bold text-white tracking-tight">Kişisel Kasalar</h3>
+          </div>
+          <button
+            type="button"
+            onClick={() => setBoxDialog({ mode: 'new', from: '', name: '' })}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-200 text-xs font-bold transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" /> Yeni kasa
+          </button>
+        </div>
+        <div className="p-4 sm:p-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+          {personalBoxes.map((box) => {
+            const boxBalance = box.income - box.expense;
+            return (
+              <div key={box.name} className="rounded-lg border border-amber-500/20 bg-amber-500/[0.06] p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-amber-100 truncate">{box.name}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      {box.count > 0 ? `${box.count} işlem` : 'Henüz işlem yok'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBoxDialog({ mode: 'rename', from: box.name, name: box.name })}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-amber-500/10 shrink-0"
+                    title="Kasa adını değiştir"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className={`mt-3 text-2xl font-black tabular-nums ${boxBalance < 0 ? 'text-rose-300' : 'text-white'}`}>
+                  ₺{boxBalance.toLocaleString('tr-TR')}
+                </p>
+                <p className="text-[11px] text-slate-500 mt-1 tabular-nums">
+                  +₺{box.income.toLocaleString('tr-TR')} · −₺{box.expense.toLocaleString('tr-TR')}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => openNewTransactionForBox(box.name)}
+                  className="mt-3 w-full py-2 rounded-lg border border-amber-500/30 text-amber-200 hover:bg-amber-500/10 text-xs font-bold transition-colors"
+                >
+                  Bu kasaya işlem ekle
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-white/5 overflow-hidden">
@@ -328,7 +502,7 @@ const Finance: React.FC = () => {
                             {isPersonal ? (
                               <span className="ml-2 inline-flex items-center gap-1 text-amber-300 normal-case tracking-normal">
                                 <Lock className="w-3 h-3" />
-                                Kişisel
+                                {personalBoxOf(transaction)}
                                 {transaction.includeInGeneralCash ? ' · genele yansır' : ''}
                               </span>
                             ) : null}
@@ -457,6 +631,18 @@ const Finance: React.FC = () => {
                     </span>
                   </label>
                   {formData.personalCash ? (
+                    <div className="pl-7 space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Kasa</label>
+                      <PersonalCashBoxPicker
+                        key={`new-${isModalOpen}`}
+                        value={formData.personalCashName}
+                        onChange={(name) => setFormData((prev) => ({ ...prev, personalCashName: name }))}
+                        boxes={personalBoxNames}
+                        inputClassName="w-full px-4 py-2.5 bg-slate-900/50 border border-white/10 rounded-lg text-white text-sm focus:ring-2 focus:ring-amber-500/40 outline-none"
+                      />
+                    </div>
+                  ) : null}
+                  {formData.personalCash ? (
                     <label className="flex items-start gap-3 cursor-pointer pl-7">
                       <input
                         type="checkbox"
@@ -550,6 +736,17 @@ const Finance: React.FC = () => {
                   Kişisel kasa
                 </label>
                 {editTxnPersonalCash ? (
+                  <div className="pl-6">
+                    <PersonalCashBoxPicker
+                      key={`edit-${editingId}`}
+                      value={editTxnPersonalCashName}
+                      onChange={setEditTxnPersonalCashName}
+                      boxes={personalBoxNames}
+                      inputClassName="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm"
+                    />
+                  </div>
+                ) : null}
+                {editTxnPersonalCash ? (
                   <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-200 pl-6">
                     <input
                       type="checkbox"
@@ -605,6 +802,50 @@ const Finance: React.FC = () => {
                 <button type="button" onClick={saveEdit} className="flex-1 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm">Kaydet</button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {boxDialog && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4" onClick={() => setBoxDialog(null)}>
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden />
+          <div className="relative w-full max-w-sm bg-[#1e293b] border border-slate-700/60 rounded-xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-700/60 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Lock className="w-5 h-5 text-amber-400" />
+                {boxDialog.mode === 'new' ? 'Yeni kişisel kasa' : 'Kasa adını değiştir'}
+              </h3>
+              <button type="button" onClick={() => setBoxDialog(null)} className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10"><X className="w-5 h-5" /></button>
+            </div>
+            <form
+              className="p-5 space-y-4"
+              onSubmit={(e) => { e.preventDefault(); saveBoxDialog(); }}
+            >
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Kasa adı</label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={boxDialog.name}
+                  onChange={(e) => setBoxDialog({ ...boxDialog, name: e.target.value })}
+                  placeholder="ör. Ahmet Hoca Kasası"
+                  className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm"
+                />
+              </div>
+              {boxDialog.mode === 'rename' ? (
+                <p className="text-xs text-slate-400">
+                  Bu kasadaki tüm işlemler yeni ada taşınır. Var olan bir kasanın adını yazarsanız iki kasa birleşir.
+                </p>
+              ) : (
+                <p className="text-xs text-slate-400">
+                  Kasa, ilk işlemi eklendiğinde kalıcı olarak kaydedilir.
+                </p>
+              )}
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setBoxDialog(null)} className="flex-1 py-2.5 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800 font-bold text-sm">İptal</button>
+                <button type="submit" disabled={!boxDialog.name.trim()} className="flex-1 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm">Kaydet</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

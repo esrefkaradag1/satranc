@@ -1582,6 +1582,11 @@ function dbToTransaction(row: Record<string, unknown>): Transaction {
     studentId: r.student_id != null && r.student_id !== '' ? String(r.student_id) : undefined,
     personalCash: r.personal_cash === true || r.personalCash === true,
     includeInGeneralCash: r.include_in_general_cash === true || r.includeInGeneralCash === true,
+    personalCashName: r.personal_cash_name != null && String(r.personal_cash_name).trim() !== ''
+      ? String(r.personal_cash_name)
+      : r.personalCashName != null && String(r.personalCashName).trim() !== ''
+        ? String(r.personalCashName)
+        : undefined,
   };
 }
 function transactionToDb(t: Transaction): Record<string, unknown> {
@@ -1608,6 +1613,8 @@ function transactionToDb(t: Transaction): Record<string, unknown> {
     branch: t.branch ?? null,
     personal_cash: !!t.personalCash,
     include_in_general_cash: !!t.includeInGeneralCash,
+    // Sütun yalnızca doluyken gönderilir: migration uygulanmamış veritabanında normal kayıtlar bozulmasın
+    ...(t.personalCashName ? { personal_cash_name: t.personalCashName } : {}),
   };
 }
 
@@ -3536,7 +3543,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const { error } = await sb.from('transactions').insert(row);
       if (error) {
         const msg = String(error.message || '');
-        if (msg.includes('collected_at') && 'collected_at' in row) {
+        if (msg.includes('personal_cash_name') && 'personal_cash_name' in row) {
+          console.error('transactions.personal_cash_name sütunu yok — supabase_transactions_personal_cash_name.sql çalıştırılmalı. Kasa adı olmadan kaydediliyor.');
+          const { personal_cash_name: _omitName, ...withoutName } = row;
+          const retry = await sb.from('transactions').insert(withoutName);
+          if (retry.error) console.error('Supabase transactions insert error:', retry.error);
+        } else if (msg.includes('collected_at') && 'collected_at' in row) {
           const { collected_at: _omit, ...withoutCollected } = row;
           const retry = await sb.from('transactions').insert(withoutCollected);
           if (retry.error) console.error('Supabase transactions insert error:', retry.error);
@@ -3572,9 +3584,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (transaction.studentId !== undefined) payload.student_id = transaction.studentId ?? null;
       if (transaction.personalCash !== undefined) payload.personal_cash = !!transaction.personalCash;
       if (transaction.includeInGeneralCash !== undefined) payload.include_in_general_cash = !!transaction.includeInGeneralCash;
+      if (transaction.personalCashName !== undefined) payload.personal_cash_name = transaction.personalCashName?.trim() || null;
       if (Object.keys(payload).length === 0) return;
       const { error } = await sb.from('transactions').update(payload).eq('id', id);
-      if (error) console.error('Supabase transactions update error:', error);
+      if (error && String(error.message || '').includes('personal_cash_name') && 'personal_cash_name' in payload) {
+        console.error('transactions.personal_cash_name sütunu yok — supabase_transactions_personal_cash_name.sql çalıştırılmalı.');
+        const { personal_cash_name: _omitName, ...withoutName } = payload;
+        if (Object.keys(withoutName).length > 0) {
+          const retry = await sb.from('transactions').update(withoutName).eq('id', id);
+          if (retry.error) console.error('Supabase transactions update error:', retry.error);
+        }
+      } else if (error) console.error('Supabase transactions update error:', error);
     } catch (err) { console.error('Supabase transactions update throw:', err); }
   }, []);
 
