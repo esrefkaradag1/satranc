@@ -138,7 +138,7 @@ import {
   lessonPackageNamesForSelection,
   trainingGroupNamesForSelection,
 } from '../lib/trainingGroupUtils';
-import { getDuesMonthCell, parseDuesPeriodFromTransaction } from '../lib/duesCalendarUtils';
+import { formatTransactionDateTR, getDuesMonthCell, parseDuesPeriodFromTransaction } from '../lib/duesCalendarUtils';
 import type { GroupLessonSlot } from '../types';
 
 const MONTHS_TR = [
@@ -1659,6 +1659,34 @@ const StudentDetail: React.FC<{
     return studentTransactions.filter((t) => t.category === 'Paket' || t.category === 'Özel Ders');
   }, [studentTransactions]);
 
+  /**
+   * Ödeme geçmişi ay ay: aidat kayıtları ait olduğu döneme (Ekim 2026 aidat → Ekim),
+   * diğer kayıtlar tahsilat ayına göre gruplanır. En yeni ay en üstte.
+   */
+  const paymentHistoryByMonth = useMemo(() => {
+    const groups = new Map<string, { key: string; year: number; month: number; items: typeof studentTransactions; total: number }>();
+    studentTransactions.forEach((t) => {
+      let year = 0;
+      let month = 0;
+      if (isDuesPeriodCategory(t.category)) {
+        const period = parseDuesPeriodFromTransaction(t);
+        if (period) { year = period.year; month = period.month; }
+      }
+      if (!year) {
+        const m = /^(\d{4})-(\d{2})/.exec(String(t.collectedAt || t.date || ''));
+        if (m) { year = Number(m[1]); month = Number(m[2]); }
+      }
+      const key = year ? `${year}-${String(month).padStart(2, '0')}` : 'diger';
+      const g = groups.get(key) ?? { key, year, month, items: [], total: 0 };
+      g.items.push(t);
+      g.total += t.amount || 0;
+      groups.set(key, g);
+    });
+    const list = Array.from(groups.values()).sort((a, b) => b.key.localeCompare(a.key));
+    list.forEach((g) => g.items.sort((a, b) => String(b.collectedAt || b.date).localeCompare(String(a.collectedAt || a.date))));
+    return list;
+  }, [studentTransactions]);
+
   /** Sadece Özel Ders satışları (Özel Ders sekmesi için) */
   const privateLessonTransactions = useMemo(() => {
     return packageTransactions.filter((t) => t.category === 'Özel Ders');
@@ -1812,21 +1840,102 @@ const StudentDetail: React.FC<{
   const calendarYear = new Date().getFullYear();
 
   /** Takvim yılı için aylık aidat toplamları: ay numarası (1-12) -> toplam tutar (gerçek işlemlerden) */
+  // Dönem (açıklamadaki "Ekim 2026 aidat") esas alınır; tahsilat tarihi değil.
+  // Böylece Kasım'da tahsil edilen Ekim aidatı Ekim kutusuna işlenir.
   const duesByMonth = useMemo(() => {
-    const yearStr = String(calendarYear);
     const map: Record<number, number> = {};
     for (let m = 1; m <= 12; m++) map[m] = 0;
     filterDuesTransactions(studentTransactions).forEach((t) => {
-      const d = t.date;
-      const y = d.length >= 4 ? d.slice(0, 4) : '';
-      const monthStr = d.length >= 7 ? d.slice(5, 7) : '';
-      const monthNum = monthStr ? parseInt(monthStr, 10) : 0;
-      if (y === yearStr && monthNum >= 1 && monthNum <= 12) {
-        map[monthNum] = (map[monthNum] || 0) + (t.amount || 0);
-      }
+      const period = parseDuesPeriodFromTransaction(t);
+      if (!period || period.year !== calendarYear) return;
+      map[period.month] = (map[period.month] || 0) + (t.amount || 0);
     });
     return map;
   }, [calendarYear, studentTransactions]);
+
+  /** Takvim kutularında gösterilecek ödeme günleri: ay -> tahsilat tarihleri (eskiden yeniye) */
+  const duesPaidDatesByMonth = useMemo(() => {
+    const map: Record<number, string[]> = {};
+    filterDuesTransactions(studentTransactions).forEach((t) => {
+      const period = parseDuesPeriodFromTransaction(t);
+      if (!period || period.year !== calendarYear) return;
+      const iso = String(t.collectedAt || t.date || '').slice(0, 10);
+      if (!iso) return;
+      (map[period.month] ??= []).push(iso);
+    });
+    Object.values(map).forEach((list) => list.sort());
+    return map;
+  }, [calendarYear, studentTransactions]);
+
+  /** Takvim yılında belirli bir döneme (aya) işlenmiş aidat tahsilatları */
+  const getDuesPaymentsForMonth = (monthIndex: number) => {
+    if (!monthIndex) return [];
+    return filterDuesTransactions(studentTransactions).filter((t) => {
+      const period = parseDuesPeriodFromTransaction(t);
+      return !!period && period.year === calendarYear && period.month === monthIndex;
+    });
+  };
+
+  /** Ayın tahsilatlarını listeler; tek tek silme veya ayı "Ödenmedi" yapma imkânı verir */
+  const renderMonthPaymentsBlock = (monthIndex: number, onDone: () => void) => {
+    if (!student) return null;
+    const payments = getDuesPaymentsForMonth(monthIndex);
+    if (payments.length === 0) return null;
+    return (
+           <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-2">
+             <div className="text-[10px] font-bold text-emerald-300/80 uppercase tracking-wider">Bu aya işlenen tahsilatlar</div>
+             {payments.map((t) => (
+               <div key={t.id} className="flex items-center justify-between gap-2 text-xs">
+                 <div className="min-w-0 text-slate-300">
+                   <span className="font-bold text-white">₺{Number(t.amount || 0).toLocaleString('tr-TR')}</span>
+                   <span className="text-slate-500"> · {formatTransactionDateTR(t)} · {t.paymentType}</span>
+                 </div>
+                 <button
+                   type="button"
+                   onClick={async () => {
+                     const ok = await confirmDialog({
+                       title: 'Tahsilatı sil',
+                       message: `₺${Number(t.amount || 0).toLocaleString('tr-TR')} tutarındaki "${(t.description || t.category).slice(0, 40)}" tahsilatı silinecek ve ay ödenmedi olarak görünecek. Emin misiniz?`,
+                       confirmLabel: 'Sil',
+                       variant: 'danger',
+                     });
+                     if (ok) removeTransaction(t.id);
+                   }}
+                   className="p-1.5 rounded-md text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 shrink-0"
+                   title="Tahsilatı sil"
+                 >
+                   <Trash2 className="w-3.5 h-3.5" />
+                 </button>
+               </div>
+             ))}
+             <button
+               type="button"
+               onClick={async () => {
+                 const total = payments.reduce((sum, t) => sum + (t.amount || 0), 0);
+                 const monthName = MONTHS_TR[monthIndex - 1] || '';
+                 const ok = await confirmDialog({
+                   title: 'Ödenmedi olarak işaretle',
+                   message: `${monthName} ayına işlenen ${payments.length} tahsilat (toplam ₺${total.toLocaleString('tr-TR')}) silinecek. Emin misiniz?`,
+                   confirmLabel: 'Ödenmedi yap',
+                   variant: 'danger',
+                 });
+                 if (!ok) return;
+                 payments.forEach((t) => removeTransaction(t.id));
+                 if (student.registrationType !== 'package' && derived.expectedThisYear > 0) {
+                   const newTotal = Math.max(0, derived.totalPaidThisYear - total);
+                   updateStudent(student.id, {
+                     paymentStatus: newTotal >= derived.expectedThisYear ? 'Paid' : newTotal > 0 ? 'Partial' : 'Unpaid',
+                   });
+                 }
+                 onDone();
+               }}
+               className="w-full py-2 rounded-lg border border-rose-500/40 text-rose-300 hover:bg-rose-500/10 font-bold text-xs"
+             >
+               Ödenmedi olarak işaretle
+             </button>
+           </div>
+    );
+  };
 
   /**
    * Pasif dönemde kalan aylar: dondurma tarihinden bugüne kadar olan aylar.
@@ -2405,6 +2514,14 @@ const StudentDetail: React.FC<{
        {cell.paidLabel && (
          <div className="mt-1 text-center text-[10px] text-slate-500">{cell.paidLabel}</div>
        )}
+       {(duesPaidDatesByMonth[monthNum]?.length ?? 0) > 0 && (
+         <div className="mt-0.5 text-center text-[10px] font-semibold text-emerald-300/80">
+           Ödeme: {duesPaidDatesByMonth[monthNum].map((iso) => {
+             const d = new Date(`${iso}T00:00:00`);
+             return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' });
+           }).join(', ')}
+         </div>
+       )}
        {cell.remainingLabel && cell.state === 'Dondu' && (
          <div className="mt-1 text-center text-[10px] text-slate-500">{cell.remainingLabel}</div>
        )}
@@ -2560,7 +2677,21 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
  {studentTransactions.length === 0 ? (
  <tr><td colSpan={6} className="py-6 text-center text-slate-400 text-sm">Henüz ödeme kaydı bulunmuyor.</td></tr>
  ) : (
- studentTransactions.slice(0, 12).map((t) => (
+ paymentHistoryByMonth.map((group) => (
+ <React.Fragment key={group.key}>
+ <tr className="bg-slate-900/60">
+   <td colSpan={6} className="py-2.5 px-3">
+     <div className="flex items-center justify-between gap-2">
+       <span className="text-xs font-black uppercase tracking-widest text-indigo-300">
+         {group.year ? `${monthLabelTr(group.month)} ${group.year}` : 'Tarihsiz'}
+       </span>
+       <span className="text-[11px] font-bold text-slate-400">
+         {group.items.length} ödeme · <span className="text-emerald-300 tabular-nums">₺{group.total.toLocaleString('tr-TR')}</span>
+       </span>
+     </div>
+   </td>
+ </tr>
+ {group.items.map((t) => (
  <tr key={t.id} className="text-sm border-l-[3px] border-l-emerald-500 bg-emerald-500/[0.06] odd:bg-emerald-500/[0.09] hover:bg-emerald-500/[0.14] transition-colors">
  <td data-label="Dönem" className="py-3 pr-4 font-bold text-white">{(() => {
    if (!isDuesPeriodCategory(t.category)) return formatDateTR(t.collectedAt || t.date);
@@ -2595,6 +2726,8 @@ className="min-w-[120px] px-3 py-2 rounded-lg bg-slate-800 border border-slate-6
 </div>
 </td>
 </tr>
+ ))}
+ </React.Fragment>
  ))
  )}
 </tbody>
@@ -3250,6 +3383,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
              ))}
            </select>
          </div>
+         {renderMonthPaymentsBlock(Number(duesMonth) || 0, () => setShowDuesModal(false))}
          <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Tutar (₺)</label>
            <input
@@ -3381,6 +3515,7 @@ className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 h
              className="w-full px-4 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium"
            />
          </div>
+         {renderMonthPaymentsBlock(Number(duesPlanMonth) || 0, () => setShowDuesPlanModal(false))}
          <div>
            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Not (opsiyonel)</label>
            <input

@@ -80,6 +80,7 @@ import PlatformViewTabs, { type PlatformViewTab } from './PlatformViewTabs';
 import Sidebar from './Sidebar';
 import AccountDropdown, { type AccountDropdownItem } from './ui/AccountDropdown';
 import { filterDuesTransactions } from '../lib/transactionUtils';
+import { parseDuesPeriodFromTransaction } from '../lib/duesCalendarUtils';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { STUDENT_NAV_CATEGORIES } from '../constants';
 import { clubDisplayForStudent } from '../lib/clubDisplay';
@@ -751,17 +752,12 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
 
   const calendarYear = new Date().getFullYear();
   const duesByMonth = useMemo(() => {
-    const yearStr = String(calendarYear);
     const map: Record<number, number> = {};
     for (let m = 1; m <= 12; m++) map[m] = 0;
     filterDuesTransactions(studentTransactions).forEach((t) => {
-      const d = t.date ?? '';
-      const y = d.length >= 4 ? d.slice(0, 4) : '';
-      const monthStr = d.length >= 7 ? d.slice(5, 7) : '';
-      const monthNum = monthStr ? parseInt(monthStr, 10) : 0;
-      if (y === yearStr && monthNum >= 1 && monthNum <= 12) {
-        map[monthNum] = (map[monthNum] || 0) + (t.amount || 0);
-      }
+      const period = parseDuesPeriodFromTransaction(t);
+      if (!period || period.year !== calendarYear) return;
+      map[period.month] = (map[period.month] || 0) + (t.amount || 0);
     });
     return map;
   }, [calendarYear, studentTransactions]);
