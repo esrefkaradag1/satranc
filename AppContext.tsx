@@ -141,6 +141,8 @@ interface AppContextType {
 
   attendanceRecords: AttendanceRecord[];
   addAttendanceRecord: (record: Omit<AttendanceRecord, 'id'>) => void;
+  /** Yoklama kaydını siler (yanlış işaretlenen öğrencinin seçimi kaldırıldığında) */
+  removeAttendanceRecord: (id: string) => void;
   
   lessons: Lesson[];
   addLesson: (lesson: Omit<Lesson, 'id'>) => void;
@@ -3607,6 +3609,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) { console.error('Supabase transactions delete throw:', err); }
   }, []);
 
+  const removeAttendanceRecord = useCallback(async (id: string) => {
+    setAttendanceRecords(prev => prev.filter(r => r.id !== id));
+    const sb = getServiceSupabase();
+    if (sb) try {
+      const { error } = await sb.from('attendance_records').delete().eq('id', id);
+      if (error) console.error('Supabase attendance_records delete error:', error);
+    } catch (err) { console.error('Supabase attendance_records delete throw:', err); }
+  }, []);
+
   const addAttendanceRecord = useCallback(async (record: Omit<AttendanceRecord, 'id'>) => {
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : genId();
     const newRecord = { ...record, id } as AttendanceRecord;
@@ -4794,7 +4805,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addStudent, updateStudent, deleteStudent,
       bulkDeleteStudents, bulkUpdateStudentGroup, bulkUpdateStudentCoach,
       transactions, addTransaction, updateTransaction, removeTransaction,
-      attendanceRecords, addAttendanceRecord,
+      attendanceRecords, addAttendanceRecord, removeAttendanceRecord,
       lessons, addLesson,
       puzzles, addPuzzle, importPuzzles, clearPuzzles, deletePuzzle, lichessPuzzlesLoaded,
       homeworks, addHomework, updateHomework, deleteHomework,

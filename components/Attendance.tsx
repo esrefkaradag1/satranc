@@ -272,6 +272,7 @@ const Attendance: React.FC = () => {
     auth,
     scopedTransactions: transactions,
     addAttendanceRecord,
+    removeAttendanceRecord,
     scopedAttendanceRecords: attendanceRecords,
     scopedTrainingGroups: trainingGroups,
     scopedLessonPackages: lessonPackages,
@@ -741,7 +742,15 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
      const currentStatus = attendance[id] ?? null;
      if (balance && balance.remainingLessons <= 0 && currentStatus !== 'Present') return;
    }
-   setAttendance((prev) => ({ ...prev, [id]: status }));
+   // Seçili duruma tekrar tıklamak seçimi kaldırır (yanlış işaretlemeyi geri almak için)
+   setAttendance((prev) => {
+     if (prev[id] === status) {
+       const next = { ...prev };
+       delete next[id];
+       return next;
+     }
+     return { ...prev, [id]: status };
+   });
  };
 
   const blockedPresentStudentIds = useMemo(() => {
@@ -846,8 +855,20 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
     const resolvedTime = sessionTime.trim() || derivedSessionTime;
     const lessonLabel = group.trim() || branch.trim() || 'Ders';
     const dateLabel = isoDateToTr(date) || date;
+    const dateNorm = date.slice(0, 10);
     filteredStudents.forEach((s) => {
       const st = attendance[s.id];
+      // Seçim yapılmayan öğrenci "Katılmadı" sayılmaz: kayıt yazılmaz.
+      // Düzenlemede seçimi kaldırılan öğrencinin bu oturumdaki eski kaydı silinir.
+      if (!st) {
+        attendanceRecords
+          .filter((r) =>
+            r.studentId === s.id
+            && String(r.date ?? '').slice(0, 10) === dateNorm
+            && attendanceRecordsShareSession(r, sessionDraftRecord))
+          .forEach((r) => removeAttendanceRecord(r.id));
+        return;
+      }
       addAttendanceRecord({
         date,
         studentId: s.id,
@@ -857,7 +878,7 @@ const handleStatus = (id: string, status: AttendanceStatus) => {
         branch: branch.trim() || undefined,
         branchOffice: branchOffice.trim() || undefined,
         sessionTime: resolvedTime,
-        status: st ? statusMap[st] : 'absent',
+        status: statusMap[st],
         teacherName: teacherName || undefined,
         lessonSummary: lessonSummary.trim() || undefined,
       });
