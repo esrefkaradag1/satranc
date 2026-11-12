@@ -25,7 +25,8 @@ type CacheFile = {
 // geçmiş bir ayın şişkin sayılarıyla kilitlenmiş olabilir — doğru `periodKey` altında
 // bile, çünkü sorun okuma tarafında değil, önceden besleyen veride. v1'den asla
 // göç etmiyoruz (olası kirli veriyi taşımamak için); her tarayıcı temiz başlar.
-const STORAGE_KEY = 'netchess_leaderboard_period_v2';
+// v3: turnuva maçları çift sayılmış (şişkin maç sayısı) eski önbellek bırakılır
+const STORAGE_KEY = 'netchess_leaderboard_period_v3';
 /** Haftalık dönem boyunca sakla (8 gün tampon). */
 const CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000;
 

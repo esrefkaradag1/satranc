@@ -30,6 +30,7 @@ import { chessComPuzzleTimeEstimateForDay } from './platformActivityTime';
 import { isHomeworkAssignedToStudent } from '../homeworkUtils';
 import { homeworkHasPlatformGoals } from './homeworkStatsBuilders';
 import {
+  LICHESS_GAME_COUNT_FIX_VERSION,
   lichessCountVersionAfterFetch,
   mergedLichessCountVersion,
 } from './lichessCountGuard';
@@ -658,7 +659,15 @@ export function mergePlatformDayStats(
   }
 
   // Gün içinde sayılar düşmez — her zaman bilinen en yüksek değeri koru.
-  const lichessGames = Math.max(prev.lichessGames ?? 0, next.lichessGames ?? 0);
+  // İstisna: eski sürümle (turnuva maçları çift sayılmış) yazılmış Lichess sayısı, düzeltilmiş
+  // sürümle başarıyla çekilen sayıyla değiştirilir.
+  const replaceStaleLichessGames =
+    (prev.lichessCountVersion ?? 0) < LICHESS_GAME_COUNT_FIX_VERSION
+    && (next.lichessCountVersion ?? 0) >= LICHESS_GAME_COUNT_FIX_VERSION
+    && !next.lichessError;
+  const lichessGames = replaceStaleLichessGames
+    ? (next.lichessGames ?? 0)
+    : Math.max(prev.lichessGames ?? 0, next.lichessGames ?? 0);
   const chessComGames = Math.max(prev.chessComGames ?? 0, next.chessComGames ?? 0);
   const lichessPuzzles = Math.max(prev.lichessPuzzles ?? 0, next.lichessPuzzles ?? 0);
   const chessComPuzzles = Math.max(prev.chessComPuzzles ?? 0, next.chessComPuzzles ?? 0);

@@ -5,7 +5,13 @@
  * "tamam" sayılıp bir daha çekilmiyordu. Bu sürüm damgası olmadan kayıt
  * güvenilir değildir; 429 kaydı da güvenilir değildir.
  */
-export const PLATFORM_LICHESS_COUNT_VERSION = 3;
+export const PLATFORM_LICHESS_COUNT_VERSION = 4;
+
+/**
+ * v4: turnuva maçları artık iki kez sayılmıyor. Bu sürümden eski Lichess maç sayıları
+ * şişkin olabilir; yeni sürümle çekilen sayı eskisinin üzerine yazılır (max alınmaz).
+ */
+export const LICHESS_GAME_COUNT_FIX_VERSION = 4;
 
 export type LichessCountTrustInput = {
   lichessError?: boolean;
@@ -63,12 +69,15 @@ export function assertLichessCountGuard(): void {
   if (isTrustedPlatformDayStats({ lichessError: true, lichessCountVersion: 3, lichessGames: 24 })) {
     fail.push('error-trusted');
   }
-  if (!isTrustedPlatformDayStats({ lichessCountVersion: 3, lichessGames: 0 })) fail.push('real-zero');
+  if (!isTrustedPlatformDayStats({ lichessCountVersion: PLATFORM_LICHESS_COUNT_VERSION, lichessGames: 0 })) fail.push('real-zero');
+  if (isTrustedPlatformDayStats({ lichessCountVersion: PLATFORM_LICHESS_COUNT_VERSION - 1, lichessGames: 22 })) {
+    fail.push('stale-version-trusted');
+  }
   if (pickLichessGameCount(0, 11, 24) !== 24) fail.push('pick-max');
   if (lichessCountVersionAfterFetch({ hasLichessUser: true, lichessError: true }) != null) {
     fail.push('stamp-on-error');
   }
-  if (lichessCountVersionAfterFetch({ hasLichessUser: true, lichessError: false }) !== 3) {
+  if (lichessCountVersionAfterFetch({ hasLichessUser: true, lichessError: false }) !== PLATFORM_LICHESS_COUNT_VERSION) {
     fail.push('stamp-ok');
   }
   if (fail.length > 0) {

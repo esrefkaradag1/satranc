@@ -108,9 +108,16 @@ export function lichessActivityRatedGameCount(row: LichessActivityLike): number 
   return total;
 }
 
-/** Aktivite `games` + turnuva maçları (turnuva Lichess'te ayrı satırdadır). */
+/**
+ * Bir aktivite satırındaki maç sayısı.
+ * Lichess `games` alanı o günün puanlı maçlarının tamamıdır ve puanlı turnuva maçlarını
+ * zaten içerir; `tournaments.best[].nbGames` ise aynı maçların turnuva özetidir.
+ * İkisini toplamak turnuva maçlarını iki kez sayar (G/B/M toplamı maç sayısını tutmaz).
+ * Büyük olanı alınır: puanlı turnuvada `games` zaten kapsar, puansız turnuvada
+ * `games`'te görünmeyen maçlar turnuva sayısından gelir.
+ */
 export function lichessActivityTotalGameCount(row: LichessActivityLike): number {
-  return lichessActivityRatedGameCount(row) + lichessTournamentGameCount(row);
+  return Math.max(lichessActivityRatedGameCount(row), lichessTournamentGameCount(row));
 }
 
 export function activityIntervalOverlapsIstanbulDay(row: LichessActivityLike, day: string): boolean {

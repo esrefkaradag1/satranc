@@ -134,7 +134,8 @@ export function lichessActivityGameCount(row: LichessActivity): number {
     (sum, item) => sum + Math.max(0, Number(item?.nbGames) || 0),
     0,
   );
-  return total + tournamentGames;
+  // Puanlı turnuva maçları `games` içinde zaten var; toplamak çift sayar (bkz. lichessActivityTotalGameCount)
+  return Math.max(total, tournamentGames);
 }
 
 /** Aynı kulüp/şube içindeki öğrenciler (yoksa grup, o da yoksa tüm liste) */
