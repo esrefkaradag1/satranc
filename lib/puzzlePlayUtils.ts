@@ -156,9 +156,13 @@ export type CoachStyleSession = {
   rawFen: string;
 };
 
+/**
+ * Rok UCI'si yalnızca şahın başlangıç karesinden çıkar: e1g1, e1c1, e8g8, e8c8.
+ * Eski hata: c1/c8/g1/g8'e giden HER hamle (ör. kale c3c8) rok sayılıp geçersiz ilan ediliyordu.
+ */
 function looksLikeCastlingUci(moveStr: string): boolean {
   const s = moveStr.trim().toLowerCase();
-  return looksLikeUciMove(s) && (s.endsWith('g1') || s.endsWith('g8') || s.endsWith('c1') || s.endsWith('c8'));
+  return looksLikeUciMove(s) && ['e1g1', 'e1c1', 'e8g8', 'e8c8'].includes(s.slice(0, 4));
 }
 
 /** Hamle bu FEN'de sıradaki taraf tarafından oynanabilir mi? */
@@ -291,12 +295,65 @@ export function puzzleMoveHighlightStyles(
 }
 
 /**
+ * Doğrulanmış Lichess kaydı: kurulum öncesi FEN'e kurulum hamlesi uygulanınca tam olarak kayıtlı
+ * FEN çıkıyor ve çözüm hattı bu FEN'den oynanabiliyorsa kayıt kesin doğrudur — hiçbir tahmin
+ * kuralı (solution[0] kurulum mu?) uygulanmaz. API'den doğru alınan bulmacalar bu biçimdedir.
+ */
+function verifiedLichessPlayState(
+  puzzle: Partial<Pick<Puzzle, 'fen' | 'solution' | 'lichessSetupMove' | 'lichessSourceFen' | 'gamePgn'>>,
+): { playFen: string; solutionMoves: string[]; setupMoveSan?: string } | null {
+  const fen = puzzle.fen?.trim();
+  const sourceFen = puzzle.lichessSourceFen?.trim();
+  const setupMove = puzzle.lichessSetupMove?.trim().toLowerCase();
+  const solution = Array.isArray(puzzle.solution) ? puzzle.solution.map((m) => String(m).trim()).filter(Boolean) : [];
+  if (!fen || !setupMove || solution.length === 0) return null;
+  const head = (f: string) => f.split(' ').slice(0, 4).join(' ');
+  try {
+    if (!canReplayMovesFrom(fen, solution)) return null;
+    // 1) Kurulum öncesi FEN saklıysa: kurulum hamlesi tam olarak kayıtlı FEN'i vermeli
+    if (sourceFen && sourceFen !== fen) {
+      const g = new Chess(sourceFen);
+      const setup = applyPuzzleMove(g, setupMove);
+      if (setup && head(g.fen()) === head(fen)) {
+        return { playFen: fen, solutionMoves: solution, setupMoveSan: setup.san };
+      }
+    }
+    // 2) Veritabanında kurulum öncesi FEN sütunu yok: oyunun PGN'inde kurulum hamlesi
+    //    oynandığında tam olarak kayıtlı FEN'e varılıyorsa kayıt doğrudur.
+    const pgn = puzzle.gamePgn?.trim();
+    if (pgn) {
+      const temp = new Chess();
+      temp.loadPgn(pgn, { strict: false });
+      const replay = new Chess();
+      for (const mv of temp.history({ verbose: true })) {
+        const played = replay.move(mv);
+        const uci = `${played.from}${played.to}${played.promotion ?? ''}`;
+        if (uci === setupMove && head(replay.fen()) === head(fen)) {
+          return { playFen: fen, solutionMoves: solution, setupMoveSan: played.san };
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
  * Supabase / bellekteki Lichess kaydı → oynanış oturumu.
  * Import sonrası kayıtlar doğrudan kullanılır; eski ham kayıtlar onarılır.
  */
 export function lichessPlayStateFromStored(
-  puzzle: Pick<Puzzle, 'fen' | 'solution' | 'hint' | 'lichessSetupMove' | 'source' | 'lichessId' | 'lichessThemes' | 'gamePgn'>,
+  puzzle: Pick<Puzzle, 'fen' | 'solution' | 'hint' | 'lichessSetupMove' | 'source' | 'lichessId' | 'lichessThemes' | 'gamePgn'> & Partial<Pick<Puzzle, 'lichessSourceFen'>>,
 ): { playFen: string; solutionMoves: string[]; setupMoveSan?: string; studentColor: 'w' | 'b'; lichessSetupMove?: string } {
+  const verified = verifiedLichessPlayState(puzzle);
+  if (verified) {
+    return {
+      ...verified,
+      studentColor: safeTurnAtFen(verified.playFen),
+      lichessSetupMove: puzzle.lichessSetupMove?.trim(),
+    };
+  }
   const rawFen = puzzle.fen?.trim() || DEFAULT_FEN;
   const rawSolution = Array.isArray(puzzle.solution)
     ? puzzle.solution.map((m) => String(m).trim()).filter(Boolean)
@@ -1020,8 +1077,20 @@ function tryLichessOpponentSetup(
  * Öğretmen editörü (custom): FEN'de öğrenci oynar, solution[0] öğrenci hamlesi.
  */
 export function normalizePuzzleForStudentPlay(
-  puzzle: Pick<Puzzle, 'fen' | 'solution' | 'source' | 'gamePgn' | 'lichessThemes' | 'lichessId'>,
+  puzzle: Pick<Puzzle, 'fen' | 'solution' | 'source' | 'gamePgn' | 'lichessThemes' | 'lichessId'>
+    & Partial<Pick<Puzzle, 'lichessSetupMove' | 'lichessSourceFen'>>,
 ): NormalizedPuzzlePlay {
+  if (puzzle.source !== 'custom') {
+    const verified = verifiedLichessPlayState(puzzle);
+    if (verified) {
+      return {
+        startFen: verified.playFen,
+        studentMoves: verified.solutionMoves,
+        studentColor: safeTurnAtFen(verified.playFen),
+        setupMoveSan: verified.setupMoveSan,
+      };
+    }
+  }
   const rawFen = puzzle.fen?.trim() || DEFAULT_FEN;
   const rawSolution = Array.isArray(puzzle.solution) ? puzzle.solution.filter(Boolean) : [];
 

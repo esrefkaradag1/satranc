@@ -221,17 +221,41 @@ export async function lichessPuzzleFileToText(file: File): Promise<string> {
   return await file.text();
 }
 
-function fenFromPgnAndPly(pgn: string, initialPly: number): string | null {
+/**
+ * Lichess API bulmacasını oyunun PGN'inden kurar.
+ * Lichess tanımı: PGN'de `initialPly` (0 tabanlı) indeksli yarım hamle rakibin kurulum hamlesidir;
+ * öğrenci bu hamleden SONRAKİ pozisyonu görür ve `solution` (kurulum hamlesini içermez) öğrencinin
+ * hattıdır. Eski hata: `initialPly` yarım hamle oynatılıyordu (bir eksik), ardından tahminle
+ * solution[0] kurulum sanılıp uygulanıyordu → öğrenci rakip tarafı oynuyor, "2 hamlede mat"ta mat oluyordu.
+ */
+/** Yalnızca satranç kuralları: UCI hamlesi bu pozisyonda oynanabilir mi? */
+function isLegalUci(fen: string, uci: string): boolean {
+  try {
+    return !!new Chess(fen).move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || undefined });
+  } catch {
+    return false;
+  }
+}
+
+function lichessApiSetupFromPgn(
+  pgn: string,
+  initialPly: number,
+): { sourceFen: string; setupUci: string; playFen: string } | null {
   try {
     const temp = new Chess();
     temp.loadPgn(pgn, { strict: false });
     const history = temp.history({ verbose: true });
+    if (initialPly < 0 || initialPly >= history.length) return null;
     const board = new Chess();
-    const ply = Math.max(0, Math.min(initialPly, history.length));
-    for (let i = 0; i < ply; i++) {
-      board.move(history[i]);
-    }
-    return board.fen();
+    for (let i = 0; i < initialPly; i++) board.move(history[i]);
+    const sourceFen = board.fen();
+    const setup = history[initialPly]!;
+    board.move(setup);
+    return {
+      sourceFen,
+      setupUci: `${setup.from}${setup.to}${setup.promotion ?? ''}`,
+      playFen: board.fen(),
+    };
   } catch {
     return null;
   }
@@ -264,11 +288,6 @@ function lichessApiResponseToPuzzle(
   const puzzle = data.puzzle;
   if (!puzzle || typeof puzzle !== 'object') return null;
   const id = String(puzzle.id ?? '');
-  let fen = typeof puzzle.fen === 'string' ? puzzle.fen.trim() : '';
-  if (!fen && typeof data.game?.pgn === 'string' && typeof puzzle.initialPly === 'number') {
-    fen = fenFromPgnAndPly(data.game.pgn, puzzle.initialPly) || '';
-  }
-  if (!fen) return null;
   const rating = Number(puzzle.rating);
   const r = Number.isFinite(rating) ? rating : 1500;
   const sol = Array.isArray(puzzle.solution)
@@ -278,21 +297,46 @@ function lichessApiResponseToPuzzle(
   const themes = themeList.join(' ');
   const { category, theme } = translateThemes(themes);
   const title = titleOverride?.trim() || puzzleTitleFromThemes(themeList, r);
-  const imported = lichessImportToPlayState(fen, sol);
+
+  // Kesin yol: PGN + initialPly varsa kurulum hamlesi PGN'den alınır, solution olduğu gibi öğrencinin hattıdır.
+  let playFen = '';
+  let sourceFen = '';
+  let setupMove: string | undefined;
+  let solutionMoves = sol;
+  const pgn = typeof data.game?.pgn === 'string' ? data.game.pgn : '';
+  if (pgn && typeof puzzle.initialPly === 'number') {
+    const setup = lichessApiSetupFromPgn(pgn, puzzle.initialPly);
+    if (setup && (sol.length === 0 || isLegalUci(setup.playFen, sol[0]!))) {
+      playFen = setup.playFen;
+      sourceFen = setup.sourceFen;
+      setupMove = setup.setupUci;
+    }
+  }
+  // Yedek: yalnızca FEN verilen kaynaklar (kurulum öncesi FEN + tam hat varsayımı)
+  if (!playFen) {
+    const fen = typeof puzzle.fen === 'string' ? puzzle.fen.trim() : '';
+    if (!fen) return null;
+    const imported = lichessImportToPlayState(fen, sol);
+    playFen = imported.playFen;
+    sourceFen = fen;
+    setupMove = imported.lichessSetupMove;
+    solutionMoves = imported.solutionMoves;
+  }
+
   return {
     id,
     lichessId: id,
-    fen: imported.playFen,
-    lichessSourceFen: fen,
-    solution: imported.solutionMoves,
+    fen: playFen,
+    lichessSourceFen: sourceFen,
+    solution: solutionMoves,
     title,
     difficulty: ratingToDifficulty(r),
     points: ratingToPoints(r),
     category,
     theme,
-    hint: imported.solutionMoves[0] || sol[0] || '',
-    lichessSetupMove: imported.lichessSetupMove,
-    gamePgn: typeof data.game?.pgn === 'string' ? data.game.pgn : undefined,
+    hint: solutionMoves[0] || '',
+    lichessSetupMove: setupMove,
+    gamePgn: pgn || undefined,
     lichessThemes: themes,
     source: 'lichess',
   };
