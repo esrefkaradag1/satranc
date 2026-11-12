@@ -13,7 +13,8 @@ import type { LeaderboardPointSettings } from './leaderboardPointSettings';
 // v5: ClubLeaderboard.load() dönem değişince bayat sonucu diğer dönemin satırlarıyla
 // birleştirip yazıyordu; v4 o sızıntıyla kirlenmiş olabilir.
 // v6: v5, temizlenmemiş uzak snapshot'tan kirli satırları almış olabilir.
-const STORAGE_KEY = 'netchess_leaderboard_snapshot_v6';
+// v7: turnuva maçları çift sayılmış (şişkin maç sayılı) eski anlık görüntüler bırakılır
+const STORAGE_KEY = 'netchess_leaderboard_snapshot_v7';
 /** Eski sabit (footer/metin uyumu). Lichess tarama günde bir. */
 export const LEADERBOARD_DAILY_REFRESH_HOUR = 6;
 /** Antrenör/admin tarayıcısında Lichess tarama aralığı: günde bir. */
