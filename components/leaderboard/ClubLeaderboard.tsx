@@ -437,7 +437,11 @@ export const ClubLeaderboard: React.FC<Props> = ({
 
     const snapshotFresh = snapshot ? isLeaderboardSnapshotFresh(snapshot.cachedAt) : false;
     const snapshotHasScores = entriesHaveActivity(snapshot?.entries) || (snapshot?.entries.length ?? 0) > 0;
-    const allowScan = canRefreshRef.current;
+    // Öğrenci/veli yalnızca "Aktivite"yi taramaz (Lichess aktivite limiti). Reyting sekmeleri
+    // (Rapid/Blitz/Bullet/Klasik/Bulmaca/UKD/FIDE) döneme bağlı tarama gerektirmez; antrenör o
+    // sekmeye hiç girmediyse paylaşılan tablo boş kalıyordu. Bunları izleyici de oluşturur;
+    // sonuç paylaşılan tabloya yazılır, taze olduğu sürece sonraki izleyiciler yeniden taramaz.
+    const allowScan = canRefreshRef.current || mode !== 'activity';
 
     if (mode === 'activity' && allowScan) {
       void harvestClubLeaderboardDaily(
