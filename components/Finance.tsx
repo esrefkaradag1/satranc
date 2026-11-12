@@ -1,19 +1,43 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { Wallet, TrendingUp, TrendingDown, Landmark, Search, Plus, Filter, Download, X, Edit2, Trash2, Lock } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, Landmark, Search, Plus, Filter, Download, X, Edit2, Trash2, Lock, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { useApp } from '../AppContext';
 import type { Transaction } from '../types';
 import { DATE_INPUT_MAX, DATE_INPUT_MIN, normalizeDateInputYear } from '../lib/dateInputUtils';
 import { ResponsiveTable } from './ui/ResponsiveTable';
 import { isPackageSaleCategory } from '../lib/salePaymentUtils';
 import { countsTowardGeneralCash, isDuesPaymentTransaction, isPersonalCashTransaction } from '../lib/transactionUtils';
-import { formatTransactionDateTR } from '../lib/duesCalendarUtils';
+import { formatTransactionDateTR, MONTHS_TR, transactionDisplayDate } from '../lib/duesCalendarUtils';
 import SalePaymentCell from './SalePaymentCell';
 
 const CATEGORY_PRESETS = ['Aidat', 'Özel Ders', 'Paket', 'Kira', 'Malzeme', 'Diğer'] as const;
 
 /** Adı verilmemiş kişisel kasa işlemleri bu kasada toplanır */
 const DEFAULT_PERSONAL_BOX = 'Kişisel Kasa';
+
+type PeriodMode = 'month' | 'custom' | 'all';
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+/** "2026-11" -> { from: "2026-11-01", to: "2026-11-30" } */
+function monthRange(ym: string): { from: string; to: string } {
+  const [y, m] = ym.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return { from: `${y}-${pad2(m)}-01`, to: `${y}-${pad2(m)}-${pad2(last)}` };
+}
+
+function shiftMonth(ym: string, delta: number): string {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+}
+
+function isoToTR(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  return y && m && d ? `${d}.${m}.${y}` : iso;
+}
 const NEW_BOX_OPTION = '__new__';
 
 function personalBoxOf(t: Pick<Transaction, 'personalCashName'>): string {
@@ -110,6 +134,14 @@ const Finance: React.FC = () => {
   }
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  // Banka ekstresi gibi dönem filtresi: varsayılan içinde bulunulan ay
+  const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
+  const [periodMonth, setPeriodMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
+  });
+  const [customFrom, setCustomFrom] = useState(() => monthRange(`${new Date().getFullYear()}-${pad2(new Date().getMonth() + 1)}`).from);
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [searchTerm, setSearchTerm] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTxnAmount, setEditTxnAmount] = useState('');
@@ -231,7 +263,7 @@ const Finance: React.FC = () => {
     setBoxDialog(null);
   };
 
-  const filteredTransactions = transactions.filter((t) => {
+  const searchedTransactions = transactions.filter((t) => {
     const q = searchTerm.toLowerCase();
     const studentName = t.studentId ? (studentNameById.get(String(t.studentId)) ?? '') : '';
     return (
@@ -241,6 +273,42 @@ const Finance: React.FC = () => {
       || (isPersonalCashTransaction(t) && ('kişisel kasa'.includes(q) || personalBoxOf(t).toLowerCase().includes(q)))
     );
   });
+
+  const periodRange = useMemo(() => {
+    if (periodMode === 'month') return monthRange(periodMonth);
+    if (periodMode === 'custom') {
+      const from = customFrom || '0000-01-01';
+      const to = customTo || '9999-12-31';
+      return from <= to ? { from, to } : { from: to, to: from };
+    }
+    return null;
+  }, [periodMode, periodMonth, customFrom, customTo]);
+
+  const periodLabel = useMemo(() => {
+    if (periodMode === 'all') return 'Tüm zamanlar';
+    if (!periodRange) return '';
+    return `${isoToTR(periodRange.from)} – ${isoToTR(periodRange.to)}`;
+  }, [periodMode, periodRange]);
+
+  /** Seçili dönemdeki işlemler; işlem (tahsilat) tarihine göre yeniden eskiye */
+  const filteredTransactions = searchedTransactions
+    .filter((t) => {
+      if (!periodRange) return true;
+      const d = transactionDisplayDate(t);
+      return !!d && d >= periodRange.from && d <= periodRange.to;
+    })
+    .sort((a, b) => transactionDisplayDate(b).localeCompare(transactionDisplayDate(a)));
+
+  const periodTotals = useMemo(() => {
+    let income = 0;
+    let expense = 0;
+    filteredTransactions.forEach((t) => {
+      if (!countsTowardGeneralCash(t)) return;
+      if (t.type === 'income') income += t.amount;
+      else expense += t.amount;
+    });
+    return { income, expense, net: income - expense };
+  }, [filteredTransactions]);
 
   const resetForm = () => {
     setFormData({
@@ -438,7 +506,12 @@ const Finance: React.FC = () => {
 
       <div className="bg-[#1e293b]/90 backdrop-blur-2xl rounded-lg border border-white/5 overflow-hidden">
         <div className="p-8 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-6 bg-white/[0.02]">
-          <h3 className="text-lg font-bold text-white tracking-tight">Son İşlemler</h3>
+          <div>
+            <h3 className="text-lg font-bold text-white tracking-tight">Hesap Hareketleri</h3>
+            <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5">
+              <CalendarDays className="w-3.5 h-3.5" /> {periodLabel} · {filteredTransactions.length} işlem
+            </p>
+          </div>
           <div className="flex items-center gap-3">
             <div className="relative group">
               <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-400 transition-colors" />
@@ -453,6 +526,59 @@ const Finance: React.FC = () => {
             <button type="button" className="p-3 bg-white/5 border border-white/10 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all">
               <Filter className="w-5 h-5" />
             </button>
+          </div>
+        </div>
+
+        <div className="px-6 sm:px-8 py-4 border-b border-white/5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-white/10 bg-slate-900/50 p-0.5">
+              {([['month', 'Aylık'], ['custom', 'Tarih aralığı'], ['all', 'Tümü']] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setPeriodMode(mode)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                    periodMode === mode ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {periodMode === 'month' ? (
+              <div className="inline-flex items-center gap-1">
+                <button type="button" onClick={() => setPeriodMonth((m) => shiftMonth(m, -1))} className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5" title="Önceki ay">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="min-w-[8.5rem] text-center text-sm font-bold text-white">
+                  {MONTHS_TR[Number(periodMonth.slice(5, 7)) - 1]} {periodMonth.slice(0, 4)}
+                </span>
+                <button type="button" onClick={() => setPeriodMonth((m) => shiftMonth(m, 1))} className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5" title="Sonraki ay">
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            ) : null}
+            {periodMode === 'custom' ? (
+              <div className="inline-flex flex-wrap items-center gap-2">
+                <input type="date" min={DATE_INPUT_MIN} max={DATE_INPUT_MAX} value={customFrom} onChange={(e) => setCustomFrom(normalizeDateInputYear(e.target.value))} className="px-3 py-1.5 bg-slate-900/50 border border-white/10 rounded-lg text-sm text-white [color-scheme:dark]" aria-label="Başlangıç tarihi" />
+                <span className="text-slate-500 text-sm">–</span>
+                <input type="date" min={DATE_INPUT_MIN} max={DATE_INPUT_MAX} value={customTo} onChange={(e) => setCustomTo(normalizeDateInputYear(e.target.value))} className="px-3 py-1.5 bg-slate-900/50 border border-white/10 rounded-lg text-sm text-white [color-scheme:dark]" aria-label="Bitiş tarihi" />
+              </div>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-3 gap-2 sm:gap-3 text-right">
+            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-300/80">Giriş</div>
+              <div className="text-sm font-black text-emerald-200 tabular-nums">+₺{periodTotals.income.toLocaleString('tr-TR')}</div>
+            </div>
+            <div className="rounded-lg bg-rose-500/10 border border-rose-500/20 px-3 py-2">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-rose-300/80">Çıkış</div>
+              <div className="text-sm font-black text-rose-200 tabular-nums">−₺{periodTotals.expense.toLocaleString('tr-TR')}</div>
+            </div>
+            <div className="rounded-lg bg-indigo-500/10 border border-indigo-500/20 px-3 py-2">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-300/80">Net</div>
+              <div className={`text-sm font-black tabular-nums ${periodTotals.net < 0 ? 'text-rose-200' : 'text-white'}`}>₺{periodTotals.net.toLocaleString('tr-TR')}</div>
+            </div>
           </div>
         </div>
 
@@ -563,7 +689,9 @@ const Finance: React.FC = () => {
                 <tr>
                   <td colSpan={8} className="px-8 py-20 text-center">
                     <Wallet className="w-12 h-12 text-slate-200 mx-auto mb-4 opacity-20" />
-                    <p className="text-slate-400 font-medium">Henüz bir işlem bulunmamaktadır.</p>
+                    <p className="text-slate-400 font-medium">
+                      {periodMode === 'all' ? 'Henüz bir işlem bulunmamaktadır.' : 'Bu dönemde işlem bulunmuyor.'}
+                    </p>
                   </td>
                 </tr>
               )}
