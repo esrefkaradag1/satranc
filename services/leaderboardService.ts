@@ -20,6 +20,7 @@ import {
 import { chessduelloAnalytics } from '../lib/chessduelloClient';
 import { loadPlatformDayStatsFromDb } from './platformStatsCacheService';
 import { addLichessGameToByMode, lichessGameTimestampMs } from '../lib/lichessGameResults';
+import { LICHESS_GAME_COUNT_FIX_VERSION } from '../lib/lichessCountGuard';
 import type { PlatformDayStats } from '../lib/homeworkPlatformUtils';
 import { istanbulDayKey } from '../lib/homeworkDayUtils';
 import {
@@ -244,9 +245,14 @@ function statsFromPlatformDays(
       0,
       stats.puzzleFailed || ((stats.lichessPuzzleFailed || 0) + (stats.chessComPuzzleFailed || 0)),
     );
+    // Eski sürümle (turnuva maçları çift sayılmış) yazılan günlerin Lichess maç sayısı güvenilmez;
+    // gün yeniden çekilene kadar yalnızca Chess.com sayısı alınır, Lichess maçları aktiviteden gelir.
+    const lichessGamesTrusted = (stats.lichessCountVersion ?? 0) >= LICHESS_GAME_COUNT_FIX_VERSION;
     empty.games += Math.max(
       0,
-      stats.games || ((stats.lichessGames || 0) + (stats.chessComGames || 0)),
+      lichessGamesTrusted
+        ? stats.games || ((stats.lichessGames || 0) + (stats.chessComGames || 0))
+        : (stats.chessComGames || 0),
     );
   }
   return empty;
