@@ -358,12 +358,14 @@ export async function fetchLichessDailyPuzzle(): Promise<Puzzle | null> {
     const res = await fetch(`${LICHESS_API}/puzzle/daily`, {
       headers: { Accept: 'application/json' },
     });
+    if (res.status === 429) throw new Error(LICHESS_RATE_LIMIT_MESSAGE);
     if (!res.ok) return null;
     const data = (await res.json()) as { game?: { pgn?: string }; puzzle: Record<string, unknown> };
     const r = Number(data.puzzle?.rating);
     const title = `Günün Bulmacası (${Number.isFinite(r) ? r : '?'})`;
     return lichessApiResponseToPuzzle(data, title);
-  } catch {
+  } catch (e) {
+    if (e instanceof Error && e.message === LICHESS_RATE_LIMIT_MESSAGE) throw e;
     return null;
   }
 }
@@ -411,6 +413,9 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export const LICHESS_RATE_LIMIT_MESSAGE =
+  'Lichess şu an çok fazla istek nedeniyle geçici olarak yanıt vermiyor (429). Birkaç dakika sonra tekrar deneyin; filtrelerde sorun yok.';
+
 /** Lichess API ile filtreli toplu bulmaca çekme (CSV gerekmez, max 50/istek). */
 export async function fetchLichessPuzzlesFiltered(options: FetchBatchOptions): Promise<Puzzle[]> {
   const {
@@ -433,6 +438,8 @@ export async function fetchLichessPuzzlesFiltered(options: FetchBatchOptions): P
   let attempts = 0;
   let consecutiveEmpty = 0;
   const maxConsecutiveEmpty = target <= 10 ? 5 : 8;
+  // Lichess 429 (Cloudflare 1015): aynı IP'den çok istek — beklemeden tekrar denemek süreyi uzatır.
+  let rateLimited = false;
 
   onProgress?.(0, target, 'Lichess API bağlantısı kuruluyor...');
 
@@ -456,6 +463,10 @@ export async function fetchLichessPuzzlesFiltered(options: FetchBatchOptions): P
         signal: controller.signal,
       });
       clearTimeout(timeout);
+      if (res.status === 429) {
+        rateLimited = true;
+        break;
+      }
       if (!res.ok) {
         consecutiveEmpty += 1;
         await delay(250);
@@ -491,6 +502,9 @@ export async function fetchLichessPuzzlesFiltered(options: FetchBatchOptions): P
     await delay(180);
   }
 
+  if (rateLimited && result.length === 0) {
+    throw new Error(LICHESS_RATE_LIMIT_MESSAGE);
+  }
   return result;
 }
 

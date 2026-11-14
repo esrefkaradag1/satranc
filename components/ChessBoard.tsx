@@ -17,6 +17,7 @@ import {
   csvRowToPuzzle,
   fetchLichessDailyPuzzle,
   fetchLichessPuzzlesFiltered,
+  LICHESS_RATE_LIMIT_MESSAGE,
   puzzleHasLichessTheme,
   lichessPuzzleFileToText,
   THEME_TR,
@@ -978,7 +979,11 @@ const ChessBoard: React.FC = () => {
 
   const handleFetchDaily = useCallback(async () => {
     setImportProgress({ loading: true, message: 'Günün bulmacası çekiliyor...', count: 0, total: 1 });
-    const puzzle = await fetchLichessDailyPuzzle();
+    const puzzle = await fetchLichessDailyPuzzle().catch((e: unknown) => {
+      setImportProgress({ loading: false, message: e instanceof Error ? e.message : 'Bulmaca çekilemedi.', count: 0, total: 1 });
+      return undefined;
+    });
+    if (puzzle === undefined) return;
     if (puzzle) {
       await importPuzzles([puzzle]);
       setImportProgress({ loading: false, message: 'Günün bulmacası eklendi!', count: 1, total: 1 });
@@ -1032,7 +1037,9 @@ const ChessBoard: React.FC = () => {
       console.error('[LichessImport] API fetch failed:', err);
       setImportProgress({
         loading: false,
-        message: 'API bağlantısı başarısız. İnternet bağlantınızı kontrol edip tekrar deneyin.',
+        message: err instanceof Error && err.message === LICHESS_RATE_LIMIT_MESSAGE
+          ? LICHESS_RATE_LIMIT_MESSAGE
+          : 'API bağlantısı başarısız. İnternet bağlantınızı kontrol edip tekrar deneyin.',
         count: 0,
         total: target,
       });
