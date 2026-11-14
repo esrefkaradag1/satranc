@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react';
 import type { Tournament } from '../types';
-import { ARENA_TICK_MS, arenaPhase, runArenaTick } from '../lib/arenaDirector';
+import { ARENA_TICK_MS, arenaPhase, runArenaTick, swissNeedsDirector } from '../lib/arenaDirector';
 
 /** Bitişten sonra da kısa süre çalış: süren son maçların sonucu sıralamaya işlensin. */
 const AFTER_END_MS = 15 * 60 * 1000;
 
 function needsDirector(t: Tournament, now: number): boolean {
+  if (t.format === 'swiss') return swissNeedsDirector(t, now);
   if (t.format !== 'arena') return false;
   const phase = arenaPhase(t, now);
   if (phase === 'running') return true;
@@ -33,8 +34,8 @@ export function useArenaDirector(
 
   // Yalnızca aday kümesi değişince zamanlayıcıyı yeniden kur (her render'da değil).
   const key = tournaments
-    .filter((t) => t.format === 'arena')
-    .map((t) => `${t.id}@${t.startAt}+${t.durationMinutes}`)
+    .filter((t) => t.format === 'arena' || t.format === 'swiss')
+    .map((t) => `${t.id}@${t.startAt}+${t.durationMinutes}+${t.roundLimit ?? ''}`)
     .sort()
     .join(',');
 

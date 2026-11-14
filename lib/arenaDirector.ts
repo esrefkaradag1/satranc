@@ -1,7 +1,10 @@
 import type { Tournament, TournamentPairing } from '../types';
 import { getServiceSupabase, isSupabaseBackend, supabase } from '../services/supabase';
 import { dbToTournament } from './tournamentDb';
-import { pairArenaRound, recalcStandings, type PairingPlayer } from './tournamentPairing';
+import { pairArenaRound, pairSwissRound, recalcStandings, type PairingPlayer } from './tournamentPairing';
+import { swissRoundIntervalMs } from './tournamentStatus';
+
+export { swissNeedsDirector, swissRoundIntervalMs } from './tournamentStatus';
 import {
   createTournamentGames,
   fetchTournamentGames,
@@ -119,7 +122,7 @@ export async function runArenaTick(tournamentId: string, opts?: { allowWithoutLe
   }
 
   const t = await loadTournament(tournamentId);
-  if (!t || t.format !== 'arena') return { tournament: t, ran: false };
+  if (!t || (t.format !== 'arena' && t.format !== 'swiss')) return { tournament: t, ran: false };
 
   const now = Date.now();
   let games = await fetchTournamentGames(t.id);
@@ -151,8 +154,81 @@ export async function runArenaTick(tournamentId: string, opts?: { allowWithoutLe
     }),
   }));
 
-  // 3) Süre içindeyse boştakileri eşleştir.
-  if (arenaPhase(t, now) === 'running') {
+  // 3b) İsviçre (lichess Swiss gibi): başlangıçta 1. tur; tur tamamen bitince, tempoya göre
+  //     kısa bir aradan sonra sıradaki tur; tur sayısına ulaşınca turnuva biter. Elle eşleştirme gerekmez.
+  if (t.format === 'swiss') {
+    const roundLimit = t.roundLimit ?? 0;
+    const start = new Date(t.startAt).getTime();
+
+    // Eski elle eşleştirme İsviçre için canlı maç açmıyordu: süren turda oyunu olmayan,
+    // sonucu girilmemiş eşleşmelere canlı maçı sonradan aç (yoksa tur sonsuza dek sonuçsuz bekler).
+    const current = rounds[rounds.length - 1];
+    const missing = current
+      ? current.pairings.filter((p): p is TournamentPairing & { blackId: string } => p.blackId != null && !p.gameId && !p.result)
+      : [];
+    if (current && missing.length > 0) {
+      const created = await createTournamentGames(missing.map((p) => ({
+        tournamentId: t.id,
+        roundNo: current.roundNo,
+        whiteStudentId: p.whiteId,
+        blackStudentId: p.blackId,
+        timeControl: t.timeControl,
+      })));
+      if (created.length > 0) {
+        const byPair = new Map(created.map((g) => [`${g.whiteStudentId}|${g.blackStudentId}`, g.id]));
+        rounds = rounds.map((r) => (r.id !== current.id ? r : {
+          ...r,
+          pairings: r.pairings.map((p) => {
+            if (p.blackId == null || p.gameId || p.result) return p;
+            const gameId = byPair.get(`${p.whiteId}|${p.blackId}`);
+            return gameId ? { ...p, gameId } : p;
+          }),
+        }));
+        changed = true;
+      }
+    }
+
+    const last = rounds[rounds.length - 1];
+    const lastComplete = !last || last.pairings.every((p) => !!p.result);
+    let due = false;
+    if (roundLimit > 0 && Number.isFinite(start) && now >= start && rounds.length < roundLimit && lastComplete) {
+      if (!last) {
+        due = true;
+      } else {
+        const lastFinishedAt = Math.max(
+          new Date(last.createdAt).getTime() || 0,
+          ...last.pairings.map((p) => (p.gameId ? finishedAt.get(p.gameId) ?? 0 : 0)),
+        );
+        due = now - lastFinishedAt >= swissRoundIntervalMs(t.timeControl);
+      }
+    }
+    if (due && (t.participantIds?.length ?? 0) >= 2) {
+      const candidate: Tournament = { ...t, rounds };
+      const players = await loadPlayers(candidate);
+      const { pairings } = pairSwissRound(candidate, players);
+      const real = pairings.filter((p): p is TournamentPairing & { blackId: string } => p.blackId != null);
+      if (real.length > 0) {
+        const roundNo = rounds.length + 1;
+        const created = await createTournamentGames(real.map((p) => ({
+          tournamentId: t.id,
+          roundNo,
+          whiteStudentId: p.whiteId,
+          blackStudentId: p.blackId,
+          timeControl: t.timeControl,
+        })));
+        // Maçlar tek toplu kayıtla açılır (hepsi ya da hiçbiri). Açılamadıysa turu yazma; sonraki adım tekrar dener.
+        if (created.length === real.length) {
+          const byPair = new Map(created.map((g) => [`${g.whiteStudentId}|${g.blackStudentId}`, g.id]));
+          const withGames = pairings.map((p) => (p.blackId == null ? p : { ...p, gameId: byPair.get(`${p.whiteId}|${p.blackId}`) }));
+          rounds = [...rounds, { id: `${t.id}-r${roundNo}`, roundNo, createdAt: new Date().toISOString(), pairings: withGames }];
+          changed = true;
+        }
+      }
+    }
+  }
+
+  // 3) Arena: süre içindeyse boştakileri eşleştir.
+  if (t.format === 'arena' && arenaPhase(t, now) === 'running') {
     // Az önce maçı biten oyuncu birkaç saniye beklesin.
     const justFinished = new Set<string>();
     for (const r of rounds) {

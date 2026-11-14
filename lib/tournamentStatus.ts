@@ -32,3 +32,32 @@ export function tournamentLengthLabel(t: Pick<Tournament, 'format' | 'durationMi
   if (t.format === 'swiss' && t.roundLimit) return `${t.roundLimit} tur`;
   return `${t.durationMinutes} dk`;
 }
+
+/**
+ * İsviçre turları arası bekleme — lichess (lila SwissForm.autoInterval) "auto" değerleri:
+ * UltraBullet 5 sn, Bullet 10 sn, Blitz <5 dk 20 sn / diğer 30 sn, Rapid 60 sn, Klasik 300 sn.
+ */
+export function swissRoundIntervalMs(timeControl: string): number {
+  const [baseRaw, incRaw] = String(timeControl || '').split('+');
+  const base = Number(baseRaw);
+  const inc = Number(incRaw) || 0;
+  if (!Number.isFinite(base)) return 60_000;
+  const estimate = base * 60 + inc * 40; // lichess: tahmini toplam süre (sn)
+  if (estimate < 30) return 5_000;
+  if (estimate < 180) return 10_000;
+  if (estimate < 300) return 20_000;
+  if (estimate < 480) return 30_000;
+  if (estimate < 1500) return 60_000;
+  return 300_000;
+}
+
+/** İsviçre: başladı mı ve hâlâ oynanacak tur var mı (yönetici gerekli mi)? */
+export function swissNeedsDirector(t: Pick<Tournament, 'format' | 'roundLimit' | 'startAt' | 'rounds'>, now = Date.now()): boolean {
+  if (t.format !== 'swiss' || !t.roundLimit) return false;
+  const start = new Date(t.startAt).getTime();
+  if (!Number.isFinite(start) || now < start) return false;
+  const rounds = t.rounds ?? [];
+  const last = rounds[rounds.length - 1];
+  const lastComplete = !last || last.pairings.every((p) => !!p.result);
+  return !(rounds.length >= t.roundLimit && lastComplete);
+}

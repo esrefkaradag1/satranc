@@ -660,13 +660,11 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
 
   // Maç listesi yalnızca canlı tahtalar için; sonuçların sıralamaya işlenmesi ve eşleştirme
   // lib/arenaDirector.ts'te (antrenör olmasa da öğrenci panelleri yürütür).
-  useEffect(() => {
-    if (!isArena) return;
-    return subscribeToTournamentGames(t.id, setLiveGames);
-  }, [isArena, t.id]);
+  useEffect(() => subscribeToTournamentGames(t.id, setLiveGames), [t.id]);
 
   const { applyRemoteTournament } = useApp();
-  useArenaDirector(isArena ? [t] : [], applyRemoteTournament, { allowWithoutLease: true });
+  // Arena ve İsviçre (lichess gibi) otomatik yürür: eşleştirme, canlı maçlar, sonuçlar.
+  useArenaDirector([t], applyRemoteTournament, { allowWithoutLease: true });
 
   const pairNextRoundNow = async () => {
     if (!canPairNextRound) return;
@@ -675,7 +673,7 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
     const roundNo = rounds.length + 1;
 
     let pairingsWithGames = pairings;
-    if (isArena) {
+    {
       const realPairings = pairings.filter((p): p is TournamentPairing & { blackId: string } => p.blackId != null);
       if (realPairings.length > 0) {
         const games = await createTournamentGames(realPairings.map((p) => ({
@@ -706,13 +704,12 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
     });
   };
 
-  // Arena durumu (başlık etiketi için); otomatik eşleştirmeyi useArenaDirector yürütür.
+  // Arena/İsviçre durumu (başlık etiketi için); otomatik eşleştirmeyi useArenaDirector yürütür.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    if (!isArena) return;
     const id = window.setInterval(() => setNowMs(Date.now()), 5000);
     return () => window.clearInterval(id);
-  }, [isArena]);
+  }, []);
   const arenaStartMs = new Date(t.startAt).getTime();
   const arenaEndMs = arenaStartMs + Math.max(0, t.durationMinutes || 0) * 60000;
   const arenaPhase: 'upcoming' | 'running' | 'over' = !Number.isFinite(arenaStartMs) || nowMs < arenaStartMs
@@ -851,6 +848,31 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                 <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-0.5">{isArena ? 'Maç' : 'Tur'}</div>
               </div>
             </div>
+            {!isArena && (
+              <div
+                className={`flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold whitespace-nowrap ${
+                  roundLimitReached && lastRoundComplete
+                    ? 'bg-slate-700/50 text-slate-400'
+                    : arenaPhase === 'upcoming'
+                      ? 'bg-amber-500/15 text-amber-300'
+                      : 'bg-emerald-500/15 text-emerald-300'
+                }`}
+                title="Lichess İsviçre gibi: başlangıçta 1. tur, her tur bitince kısa bir aradan sonra sıradaki tur otomatik eşleşir."
+              >
+                <Shuffle className="w-4 h-4" />
+                {roundLimitReached && lastRoundComplete
+                  ? 'Turnuva tamamlandı'
+                  : arenaPhase === 'upcoming'
+                    ? `Başlayınca 1. tur otomatik eşleşir · ${new Date(t.startAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
+                    : (t.participantIds?.length ?? 0) < 2
+                      ? 'En az 2 oyuncu gerekiyor'
+                      : rounds.length === 0
+                        ? '1. tur birazdan otomatik eşleşir'
+                        : lastRoundComplete
+                          ? `${rounds.length + 1}. tur birazdan otomatik başlar`
+                          : `${rounds.length}. tur oynanıyor · bitince sıradaki tur otomatik`}
+              </div>
+            )}
             {isArena && (
               <div
                 className={`flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold whitespace-nowrap ${
@@ -878,11 +900,9 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                   ? (!canPairNextRound ? 'Eşleşmesi tamamlanmış en az 2 boşta oyuncu gerekiyor' : undefined)
                   : (!lastRoundComplete ? 'Önce bu turun tüm sonuçlarını girin' : roundLimitReached ? 'Planlanan tur sayısına ulaşıldı' : undefined)
               }
-              className={isArena
-                ? 'px-3 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/60 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors whitespace-nowrap'
-                : 'flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700/60 disabled:cursor-not-allowed disabled:text-slate-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-indigo-950/30 whitespace-nowrap'}
+              className="px-3 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-700/60 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors whitespace-nowrap"
             >
-              {isArena ? 'Şimdi eşleştir' : <><Shuffle className="w-4 h-4" /> {rounds.length === 0 ? '1. Turu Eşleştir' : 'Sıradaki Turu Eşleştir'}</>}
+              Şimdi eşleştir
             </button>
           </div>
         </div>
