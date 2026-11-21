@@ -3,7 +3,7 @@ import { normalizeApplicationPersonNames, formatPersonName } from '../lib/person
 import type { Student } from '../types';
 import { isDisplayablePhotoUrl } from '../lib/studentPhotoUpload';
 import { normalizeClubKey } from '../lib/clubScope';
-import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './supabase';
+import { canWriteSupabase, getServiceSupabase, hasSessionToken, isSupabaseBackend, supabase } from './supabase';
 
 const TABLE = 'student_applications';
 const LOCAL_KEY = 'netchess_student_applications_v1';
@@ -751,6 +751,30 @@ export async function createApplicationAsync(
       ? formatPersonName(input.registrarSignatureName)
       : input.registrarSignatureName,
   };
+
+  // Giriş yapmamış ziyaretçi (herkese açık başvuru formu): mükerrer kontrol, numara ve kayıt sunucuda.
+  // Veritabanı yetkileri (RLS) ziyaretçiye başvuru tablosunu açmaz; eski akış ayrıca TC ile başkasının
+  // başvurusunu tarayıcıya döndürüyordu.
+  if (isSupabaseBackend() && !hasSessionToken()) {
+    const res = await fetch('/api/submit-application', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ application: { ...normalizedInput, status: 'pending' } }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { id?: string; applicationNo?: string; error?: string };
+    if (!res.ok || !body.applicationNo) throw new Error(body.error || 'Başvuru gönderilemedi.');
+    const now = new Date().toISOString();
+    const app: StudentApplication = {
+      ...normalizedInput,
+      id: body.id || genId(),
+      applicationNo: body.applicationNo,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+    };
+    upsertLocalApplication(app);
+    return app;
+  }
 
   if (!opts?.skipDuplicateCheck) {
   // 1. Local duplicate check (instantly catches double-submits and page refreshes)

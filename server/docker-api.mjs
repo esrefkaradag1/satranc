@@ -29,6 +29,7 @@ import { chessduelloApiHandler } from '../lib/chessduelloCoachApi.mjs';
 import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch.mjs';
 import { aiHandler } from '../lib/aiProxy.mjs';
 import { loginHandler, legacyParentLoginHandler } from '../lib/authLogin.mjs';
+import { submitApplicationHandler } from '../lib/publicApplication.mjs';
 
 function syncServerEnv() {
   const pairs = [
@@ -561,6 +562,12 @@ export async function dispatchApi(req, res, url) {
 
     if (path === '/api/health') {
       sendJson(res, 200, { ok: true });
+      return true;
+    }
+    if (path === '/api/submit-application' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const result = await submitApplicationHandler(body, process.env, { ip: clientIp(req) });
+      sendJson(res, result.status, result.body);
       return true;
     }
     if (path === '/api/login' && req.method === 'POST') {

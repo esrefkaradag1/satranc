@@ -20,7 +20,7 @@ import {
 } from './lib/orgScope';
 import { Student, StudentLessonLogEntry, Transaction, Lesson, Puzzle, HomeworkAssignment, HomeworkPuzzleAttempt, HomeworkSubmission, InventoryItem, GalleryItem, ActivityLog, AttendanceRecord, AuthUser, ScheduleEntry, ScheduleEntryStatus, Coach, Club, PerformanceAnalysis, CoachAiReport, Tournament, StudentDailyTarget, DisciplineBranch, LessonPackage, TrainingGroup, AppRole } from './types';
 import { MOCK_STUDENTS } from './constants';
-import { canWriteSupabase, getServiceSupabase, isSupabaseBackend, supabase } from './services/supabase';
+import { canWriteSupabase, getServiceSupabase, hasSessionToken, isSupabaseBackend, readSessionToken, SESSION_TOKEN_KEY, supabase } from './services/supabase';
 import { homeworkAssigneesOverlap } from './lib/homeworkPanelUtils';
 import { homeworkAssignmentCategory } from './lib/homeworkStatsBuilders';
 import { looksLikeLichessPuzzleId, materializeLichessPuzzleRecord } from './lib/puzzlePlayUtils';
@@ -36,7 +36,8 @@ import {
 import { writePanelHash } from './lib/panelRouting';
 import { apiLocalAuthParentLogin } from './services/backendApi';
 import { findClubForLogin } from './lib/clubLoginUtils';
-import { ensurePasswordHash } from './lib/passwordHash';
+import { ensurePasswordHash } from './lib/passwordHashBrowser';
+import { selectStudentRows } from './services/studentRows';
 import { buildClubDefaultOrgStructure, persistDefaultOrgStructure } from './lib/seedDefaultOrgStructure';
 import { createStudentLoginCredentials } from './lib/studentCredentials';
 import { sortLessonLogEntries } from './lib/lessonLogUtils';
@@ -279,9 +280,16 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const AUTH_STORAGE_KEY = 'netchess_auth';
+/**
+ * Giriş yapılmamışken (başvuru formu, tanıtım sitesi) kulüpler şifre sütunları olmadan okunur:
+ * veritabanı yetkileri ziyaretçiye login_password / login_username vermez, `*` hata döner.
+ */
+function clubSelectColumns(): string {
+  return hasSessionToken() ? '*' : 'id,name,address,active_days,role_id,leaderboard_points,profile';
+}
+
 // Ortak/varsayılan şifreler ('admin', 'antrenor', 'kulup') kaldırıldı — giriş sunucuda (/api/login).
-/** Sunucunun verdiği imzalı oturum belirteci (Faz 2: veritabanı yetkileri bununla çalışacak). */
-const SESSION_TOKEN_KEY = 'netchess_session_token';
+
 
 const MOCK_DATA_VERSION = 2;
 
@@ -1927,6 +1935,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const raw = localStorage.getItem(AUTH_STORAGE_KEY);
       if (!raw) return null;
+      // Veritabanı yetkileri oturum belirteciyle çalışır: belirteci olmayan/süresi dolan eski
+      // oturum kapatılır, kullanıcı bir kez yeniden giriş yapar.
+      if (isSupabaseBackend() && !readSessionToken()) return null;
       const data = JSON.parse(raw) as AuthUser;
       if (data.role === 'admin') return data;
       if (data.role === 'coach') return data;
@@ -2101,6 +2112,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [auth]);
 
 
+  /**
+   * Girişi tamamlar. Supabase modunda sayfa yeniden yüklenir: giriş öncesi ziyaretçi olarak
+   * yüklenen (yetkiler gereği boş) veri ve canlı bağlantılar oturum belirteciyle yeniden kurulur.
+   */
+  const completeLogin = useCallback((next: AuthUser) => {
+    try {
+      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+    setAuth(next);
+    if (isSupabaseBackend() && typeof window !== 'undefined') {
+      window.setTimeout(() => window.location.reload(), 0);
+    }
+  }, []);
+
   // ── Giriş: tüm doğrulama sunucuda (/api/login). Şifre/PIN tarayıcıda karşılaştırılmaz. ──
   // Yanlış bilgi → false. Deneme sınırı / yapılandırma hatası → açıklayıcı Error fırlatılır.
   const postLogin = useCallback(async (
@@ -2136,9 +2163,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const r = await postLogin('admin', 'admin', password);
     if (!r) return false;
     clearStaffAuthBackup();
-    setAuth({ role: 'admin' });
+    completeLogin({ role: 'admin' });
     return true;
-  }, [postLogin]);
+  }, [postLogin, completeLogin]);
 
   const loginCoach = useCallback(async (identifier: string, password: string): Promise<boolean> => {
     if (!identifier.trim() || !password.trim()) return false;
@@ -2157,7 +2184,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // "AFYON SATRANÇ SPOR KULÜBÜ"); kapsam boş kalmasın diye kulüp kimliğine
     // çözülür ve şube adı kulübün kayıtlı adına sabitlenir.
     const scope = resolveCoachAuthScope(coach.branch, coach.clubId, branchOfficeRecords, clubs);
-    setAuth({
+    completeLogin({
       role: 'coach',
       coachId: coach.id,
       coachName: coach.name || undefined,
@@ -2166,7 +2193,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       roleId: coach.roleId,
     });
     return true;
-  }, [postLogin, coaches, clubs, branchOfficeRecords, students, trainingGroups]);
+  }, [postLogin, completeLogin, coaches, clubs, branchOfficeRecords, students, trainingGroups]);
 
   const loginClub = useCallback(async (username: string, password: string): Promise<boolean> => {
     if (!username.trim() || !password.trim()) return false;
@@ -2174,14 +2201,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const club = r?.club as { id: string; name?: string; roleId?: string } | undefined;
     if (!club?.id) return false;
     const local = clubs.find((c) => c.id === club.id);
-    setAuth({
+    completeLogin({
       role: 'club',
       branch: ((local?.name ?? club.name) || 'Merkez').trim(),
       clubId: club.id,
       roleId: local?.roleId ?? club.roleId,
     });
     return true;
-  }, [postLogin, clubs]);
+  }, [postLogin, completeLogin, clubs]);
 
   /** Öğrenci/veli girişinin ortak kısmı — sunucu öğrenciyi (şifre/PIN alanları çıkarılmış) döndürür. */
   const loginStudentOrParent = useCallback(async (
@@ -2197,7 +2224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const fromServer = r.student as Student | undefined;
     if (!studentId) return false;
     if (fromServer?.status === 'inactive') return 'inactive';
-    setAuth({ role, studentId, user: { id: studentId } } as AuthUser);
+    completeLogin({ role, studentId, user: { id: studentId } } as AuthUser);
     if (fromServer) {
       setStudents((prev) => {
         const idx = prev.findIndex((s) => s.id === studentId);
@@ -2210,7 +2237,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
     return true;
-  }, [postLogin]);
+  }, [postLogin, completeLogin]);
 
   const loginParent = useCallback(
     (studentIdOrPhone: string, pin: string) => loginStudentOrParent('parent', studentIdOrPhone, pin),
@@ -2273,8 +2300,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setApiStudent(null);
     try {
       localStorage.removeItem(SESSION_TOKEN_KEY);
+      localStorage.removeItem(AUTH_STORAGE_KEY);
     } catch {
       /* ignore */
+    }
+    // Bellekteki önceki kullanıcının verisi (paylaşılan cihaz) temizlensin
+    if (isSupabaseBackend() && typeof window !== 'undefined') {
+      window.setTimeout(() => window.location.reload(), 0);
     }
   }, [auth]);
 
@@ -2497,9 +2529,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         // Önce panel açılışı için gerekli çekirdek veri (öğrenci listesi vb.)
         const [stuRes, coachRes, clubsRes, officesRes, discBranchesRes, trainGroupsRes, lessonPkgsRes] = await Promise.all([
-          sb.from('students').select('*'),
+          selectStudentRows(sb),
           sb.from('coaches').select('*'),
-          sb.from('clubs').select('*'),
+          sb.from('clubs').select(clubSelectColumns()),
           sb.from('branch_offices').select('*'),
           sb.from('discipline_branches').select('*'),
           sb.from('training_groups').select('*'),
@@ -2679,7 +2711,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const sb = getServiceSupabase();
     if (!sb) return;
     try {
-      const { data, error } = await sb.from('students').select('*');
+      const { data, error } = await selectStudentRows(sb);
       if (error) {
         console.warn('[App] refreshStudentsFromSupabase:', error.message);
         return;
@@ -2890,7 +2922,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sb.from('homework_attempts').select('*'),
           sb.from('homework_submissions').select('*'),
           sb.from('puzzles').select('*'),
-          sb.from('students').select('*'),
+          selectStudentRows(sb),
           sb.from('transactions').select('*'),
           sb.from('lessons').select('*'),
           sb.from('attendance_records').select('*'),
@@ -2901,7 +2933,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sb.from('coaches').select('*'),
           sb.from('performance_analyses').select('*'),
           sb.from('tournaments').select('*'),
-          sb.from('clubs').select('*'),
+          sb.from('clubs').select(clubSelectColumns()),
           sb.from('branch_offices').select('*'),
           sb.from('discipline_branches').select('*'),
           sb.from('training_groups').select('*'),
@@ -2938,7 +2970,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (coachRes.data) setCoaches((coachRes.data as Record<string, unknown>[]).map(dbToCoach));
         if (perfRes.data) setPerformanceAnalyses((perfRes.data as Record<string, unknown>[]).map(dbToPerformanceAnalysis));
         if (tourRes.data) setTournaments((tourRes.data as Record<string, unknown>[]).map(dbToTournament));
-        if (clubsRes.data) setClubs((clubsRes.data as Record<string, unknown>[]).map(dbToClub));
+        if (clubsRes.data) setClubs((clubsRes.data as unknown as Record<string, unknown>[]).map(dbToClub));
         if (!officesRes.error && officesRes.data) {
           setBranchOfficeRecords((officesRes.data as Record<string, unknown>[]).map(dbToBranchOffice));
         }

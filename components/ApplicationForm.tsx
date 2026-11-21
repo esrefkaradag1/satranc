@@ -263,8 +263,10 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ clubSlug }) => {
       });
       setSuccess({ no: app.applicationNo });
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch {
-      setErrors({ submit: 'Başvuru gönderilemedi. Lütfen tekrar deneyin.' });
+    } catch (err) {
+      // Sunucu mesajı (ör. deneme sınırı, boyut) varsa onu göster
+      const message = err instanceof Error && err.message ? err.message : '';
+      setErrors({ submit: message || 'Başvuru gönderilemedi. Lütfen tekrar deneyin.' });
     } finally {
       setSubmitting(false);
     }

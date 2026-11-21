@@ -22,6 +22,7 @@ import { lichessProxyRequest } from './lib/lichessProxyThrottle.mjs';
 import { chessduelloApiHandler } from './lib/chessduelloCoachApi.mjs';
 import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
 import { loginHandler, legacyParentLoginHandler } from './lib/authLogin.mjs';
+import { submitApplicationHandler } from './lib/publicApplication.mjs';
 import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
 import { startTrainingNotifyScheduler, trainingNotifyHandler } from './lib/trainingWhatsAppNotify.mjs';
 import { aiHandler } from './lib/aiProxy.mjs';
@@ -67,6 +68,7 @@ const DEV_GET_ROUTES = new Set([
 const DEV_POST_ROUTES = new Set([
   '/api/ai',
   '/api/login',
+  '/api/submit-application',
   '/api/homework-attempt',
   '/api/study-event',
   '/api/study-practice-log',
@@ -387,6 +389,8 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 };
               } else if (route === '/api/auth-parent') {
                 result = await legacyParentLoginHandler(body, env, { ip: req.socket?.remoteAddress ?? '' });
+              } else if (route === '/api/submit-application') {
+                result = await submitApplicationHandler(body, env, { ip: req.socket?.remoteAddress ?? '' });
               } else if (route === '/api/login') {
                 result = await loginHandler(body, env, { ip: req.socket?.remoteAddress ?? '' });
               } else if (route === '/api/mobile-push') {

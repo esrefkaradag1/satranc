@@ -1,6 +1,7 @@
 import type { Tournament, TournamentPairing } from '../types';
 import { getServiceSupabase, isSupabaseBackend, supabase } from '../services/supabase';
 import { dbToTournament } from './tournamentDb';
+import { selectPublicStudentFields } from '../services/studentRows';
 import { pairArenaRound, pairSwissRound, recalcStandings, type PairingPlayer } from './tournamentPairing';
 import { swissRoundIntervalMs } from './tournamentStatus';
 
@@ -95,7 +96,8 @@ async function loadPlayers(t: Tournament): Promise<PairingPlayer[]> {
   const sb = client();
   const ids = t.participantIds ?? [];
   if (!sb || ids.length === 0) return [];
-  const { data } = await sb.from('students').select('id,elo,group_name,club_id').in('id', ids);
+  // Öğrenci paneli de yönetici olabilir: diğer oyuncuların güvenli alanları görünümden okunur (RLS).
+  const data = await selectPublicStudentFields(sb, 'id,elo,group_name,club_id', ids);
   const source = t.teamBattle?.source ?? 'group';
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),
