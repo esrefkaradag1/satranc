@@ -44,7 +44,7 @@ import { saveStudyAsync } from '../studyStorage';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squareMarksToStyles, COLOR_VALUES, toggleSquareMark, removeSquareMarksOnSquare, chessboardDomId } from '../lib/chessBoardUi';
 import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStableEvalDisplay } from '../hooks/useStableEvalDisplay';
-import { whitePovWinningChances } from '../lib/winningChances';
+import { evalWinningChances } from '../lib/winningChances';
 import {
   activitySnapshotToStudentBoard,
   externalSnapshotToStudentBoard,
@@ -2599,18 +2599,24 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   const classroomRosterStudents = useMemo(() => {
     const roster = sessionMedia.rosterStudentIds ?? [];
+    let base: Student[] = [];
     if (roster.length > 0) {
-      return roster
+      base = roster
         .map((id) => students.find((s) => idsEqual(s.id, id)))
         .filter((s): s is Student => !!s);
+    } else {
+      const roomName = effectiveRoomName.trim();
+      if (roomName) base = students.filter((s) => s.group?.trim() === roomName);
     }
-    const roomName = effectiveRoomName.trim();
-    if (roomName) {
-      const exactGroup = students.filter((s) => s.group?.trim() === roomName);
-      if (exactGroup.length > 0) return exactGroup;
-    }
-    return [];
-  }, [sessionMedia.rosterStudentIds, students, effectiveRoomName]);
+    // Davet listesinde olmasa da odaya katılan / bekleme odasındaki öğrenci her zaman listede olmalı.
+    // Eski hata: davet yoksa ve oda adı bir grup adı değilse liste boştu → bekleme odasındaki
+    // öğrenci antrenöre hiç görünmüyor, derse alınamıyordu.
+    const extra = [...(sessionMedia.pendingStudentIds ?? []), ...(sessionMedia.admittedStudentIds ?? [])]
+      .filter((id) => !base.some((s) => idsEqual(s.id, id)))
+      .map((id) => students.find((s) => idsEqual(s.id, id)))
+      .filter((s, i, arr): s is Student => !!s && arr.findIndex((x) => x?.id === s.id) === i);
+    return extra.length > 0 ? [...base, ...extra] : base;
+  }, [sessionMedia.rosterStudentIds, sessionMedia.pendingStudentIds, sessionMedia.admittedStudentIds, students, effectiveRoomName]);
 
   const liveVideoTiles = useMemo(() => {
     const tiles: Array<{
@@ -6479,15 +6485,15 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   }, [engineAnalysisFen, boardDisplayFen]);
   const hasFreshEngineLines =
     engineAnalysisMatchesBoard && !!engineMainLine && engineDepth > 0;
-  // Lichess sortPvsInPlace: eval çubuğu için en iyi (kazanma şansı en yüksek) hattı seç
+  // Lichess sortPvsInPlace: eval çubuğu için SIRASI GELEN taraf açısından en iyi hattı seç.
+  // Motor skorları sırası gelen tarafın bakışıyla gelir (UCI). Eski hata: beyaz bakışıyla en
+  // yüksek hat seçiliyordu → siyah oynarken siyahın EN KÖTÜ hattı (ör. +3.2) çubukta görünüyordu.
   const bestLiveEvalLine = useMemo(() => {
     if (!hasFreshEngineLines) return null;
     const valid = enginePvLines.filter((l): l is NonNullable<typeof l> => l != null);
     if (valid.length === 0) return engineMainLine;
-    return valid.reduce((best, l) =>
-      whitePovWinningChances(l, displayTurn) > whitePovWinningChances(best, displayTurn) ? l : best,
-    );
-  }, [enginePvLines, engineMainLine, hasFreshEngineLines, displayTurn]);
+    return valid.reduce((best, l) => (evalWinningChances(l) > evalWinningChances(best) ? l : best));
+  }, [enginePvLines, engineMainLine, hasFreshEngineLines]);
   const stableEngineEval = useStableEvalDisplay(
     boardDisplayFen,
     bestLiveEvalLine,
