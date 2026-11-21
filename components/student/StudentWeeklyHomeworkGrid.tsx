@@ -155,12 +155,12 @@ export const StudentWeeklyHomeworkGrid: React.FC<Props> = ({
             </div>
             {row.gameTarget > 0 ? (
               <p className="text-[10px] text-slate-300">
-                Maç <span className="font-bold text-white tabular-nums">{Math.min(row.games, row.gameTarget)}/{row.gameTarget}</span>
+                Maç <span className="font-bold text-white tabular-nums">{row.games}/{row.gameTarget}</span>
               </p>
             ) : null}
             {row.puzzleTarget > 0 ? (
               <p className="text-[10px] text-slate-300">
-                Bulmaca <span className="font-bold text-white tabular-nums">{Math.min(row.puzzles, row.puzzleTarget)}/{row.puzzleTarget}</span>
+                Bulmaca <span className="font-bold text-white tabular-nums">{row.puzzles}/{row.puzzleTarget}</span>
               </p>
             ) : null}
             {row.puzzleTarget > 0 && row.puzzleSolved > 0 ? (

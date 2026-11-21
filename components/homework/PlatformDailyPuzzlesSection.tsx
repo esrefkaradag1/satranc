@@ -698,7 +698,7 @@ const ChessComMatchGoalCards: React.FC<ChessComMatchGoalCardsProps> = ({
             detay listesi şu an alınamadı.
           </p>
           <p className="text-xs text-slate-500 mt-2 tabular-nums">
-            Hedef: {Math.min(summaryGameCount, gameTarget || summaryGameCount)}/{gameTarget || summaryGameCount} maç
+            Hedef: {summaryGameCount}/{gameTarget || summaryGameCount} maç
           </p>
         </div>
       );
@@ -961,7 +961,7 @@ const LichessMatchSummaryCard: React.FC<{
       <div className="flex items-center justify-between text-xs">
         <span className="text-slate-500">Toplam maç</span>
         <span className="font-bold text-white tabular-nums">
-          {Math.min(gameCount, gameTarget || gameCount)}/{gameTarget || gameCount}
+          {gameCount}/{gameTarget || gameCount}
         </span>
       </div>
       <a
@@ -1508,7 +1508,7 @@ export const PlatformDailyPuzzlesSection: React.FC<Props> = ({
               <div className="px-4 py-5 space-y-2 text-sm">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-500">Toplam maç</span>
-                  <span className="font-bold text-white tabular-nums">{Math.min(totalGames, effectiveGameTarget || totalGames)}/{effectiveGameTarget || totalGames}</span>
+                  <span className="font-bold text-white tabular-nums">{totalGames}/{effectiveGameTarget || totalGames}</span>
                 </div>
                 {chessComUsername ? (
                   <div className="flex items-center justify-between text-xs">

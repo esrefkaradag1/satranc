@@ -169,7 +169,7 @@ export const StudentPlatformDetailModal: React.FC<Props> = ({
             {[
               {
                 label: 'Maç',
-                value: gameTarget > 0 ? `${Math.min(games, gameTarget)}/${gameTarget}` : games || '—',
+                value: gameTarget > 0 ? `${games}/${gameTarget}` : games || '—',
                 color: 'text-sky-300',
               },
               { label: 'Bulmaca doğru', value: puzzleCorrect, color: 'text-emerald-400' },

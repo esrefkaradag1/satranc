@@ -123,7 +123,7 @@ export const PlatformGroupResultsTable: React.FC<Props> = ({
                     </div>
                   </td>
                   <td className="py-3 px-2 text-center tabular-nums text-slate-300">
-                    {gameTarget > 0 ? `${Math.min(games, gameTarget)}/${gameTarget}` : games > 0 ? games : '—'}
+                    {gameTarget > 0 ? `${games}/${gameTarget}` : games > 0 ? games : '—'}
                   </td>
                   <td className="py-3 px-2 text-center font-bold text-emerald-400 tabular-nums">{stat.correct}</td>
                   <td className="py-3 px-2 text-center font-bold text-rose-400 tabular-nums">{stat.wrong}</td>

@@ -417,13 +417,13 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
             <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
               {item.dailyGameTarget > 0 && (
                 <span className={`px-2 py-1 rounded-lg border ${item.gameGoalMet ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
-                  Maç {Math.min(todayExternalGameCount, item.dailyGameTarget)}/{item.dailyGameTarget}
+                  Maç {todayExternalGameCount}/{item.dailyGameTarget}
                   {loadingExternalGameCount ? ' …' : ''}
                 </span>
               )}
               {item.dailyPuzzleTarget > 0 && (
                 <span className={`px-2 py-1 rounded-lg border ${item.puzzleGoalMet ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
-                  Bugün bulmaca {Math.min(item.todayPuzzleSolved, item.dailyPuzzleTarget)}/{item.dailyPuzzleTarget}
+                  Bugün bulmaca {item.todayPuzzleSolved}/{item.dailyPuzzleTarget}
                   {item.todayPuzzleSolved > 0 ? ` · %${Math.round(item.todayPuzzleAccuracy)} doğru` : ''}
                 </span>
               )}
