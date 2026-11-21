@@ -338,7 +338,7 @@ const CoachProfilePage: React.FC = () => {
             <div className="min-w-0">
               <p className="text-[10px] font-bold text-slate-500 uppercase">Giriş durumu</p>
               <p className="text-xs text-slate-300 truncate">
-                {coach.password ? 'Özel şifre aktif' : 'Varsayılan şifre (antrenor)'}
+                {coach.password ? 'Şifre tanımlı (güvenli saklanıyor)' : 'Şifre tanımlı değil — giriş yapılamaz'}
               </p>
             </div>
           </div>
@@ -434,7 +434,7 @@ const CoachProfilePage: React.FC = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className={`${inputCls} pr-10`}
-                    placeholder={coach.password ? 'Değiştirmek için yazın' : 'Varsayılan: antrenor'}
+                    placeholder={coach.password ? 'Değiştirmek için yazın' : 'Yeni şifre belirleyin'}
                   />
                   <button
                     type="button"

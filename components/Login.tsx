@@ -143,18 +143,29 @@ const Login = ({ adminOnly = false, initialTab }: LoginProps) => {
   const inputInner = 'flex-1 min-w-0 py-3 px-4 bg-transparent border-0 text-white placeholder:text-slate-500 outline-none text-sm font-medium';
   const iconSlot = 'flex items-center justify-center w-11 shrink-0 text-slate-400 border-r border-white/[0.08] bg-white/[0.02]';
 
-  const handleAdminSubmit = (e: React.FormEvent) => {
+  /** Sunucu hatası (deneme sınırı, yapılandırma eksik) açıklayıcı mesajla gösterilir. */
+  const loginErrorText = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
+
+  const handleAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdminError('');
-    if (loginAdmin(adminPassword)) return;
-    setAdminError('Yanlış parola. Lütfen tekrar deneyin.');
+    try {
+      if (await loginAdmin(adminPassword)) return;
+      setAdminError('Yanlış parola. Lütfen tekrar deneyin.');
+    } catch (err) {
+      setAdminError(loginErrorText(err, 'Giriş yapılamadı.'));
+    }
   };
 
-  const handleCoachSubmit = (e: React.FormEvent) => {
+  const handleCoachSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setCoachError('');
-    if (loginCoach(coachIdentifier, coachPassword)) return;
-    setCoachError('E-posta/ad veya şifre hatalı.');
+    try {
+      if (await loginCoach(coachIdentifier, coachPassword)) return;
+      setCoachError('E-posta/ad veya şifre hatalı.');
+    } catch (err) {
+      setCoachError(loginErrorText(err, 'Giriş yapılamadı.'));
+    }
   };
 
   const handleClubSubmit = async (e: React.FormEvent) => {
@@ -168,6 +179,8 @@ const Login = ({ adminOnly = false, initialTab }: LoginProps) => {
     try {
       if (await loginClub(clubUsername, clubPassword)) return;
       setClubError('Kullanıcı adı veya parola hatalı.');
+    } catch (err) {
+      setClubError(loginErrorText(err, 'Giriş yapılamadı.'));
     } finally {
       setClubLoading(false);
     }
@@ -196,7 +209,14 @@ const Login = ({ adminOnly = false, initialTab }: LoginProps) => {
       } catch {
         /* ignore */
       }
-      const local = await loginParent(parentIdOrPhone, parentPin);
+      let local: true | false | 'inactive';
+      try {
+        local = await loginParent(parentIdOrPhone, parentPin);
+      } catch (err) {
+        setParentError(loginErrorText(err, 'Giriş yapılamadı.'));
+        setParentLoading(false);
+        return;
+      }
       if (local === true) return;
       if (local === 'inactive') {
         setParentError('Hesabınız pasiftir. Sisteme giriş yapamazsınız.');
@@ -216,6 +236,8 @@ const Login = ({ adminOnly = false, initialTab }: LoginProps) => {
         return;
       }
       setParentError('Öğrenci bulunamadı veya PIN hatalı.');
+    } catch (err) {
+      setParentError(loginErrorText(err, 'Giriş yapılamadı.'));
     } finally {
       setParentLoading(false);
     }
@@ -245,7 +267,14 @@ const Login = ({ adminOnly = false, initialTab }: LoginProps) => {
       } catch {
         /* ignore */
       }
-      const local = await loginStudent(studentIdOrPhone, studentPin);
+      let local: true | false | 'inactive';
+      try {
+        local = await loginStudent(studentIdOrPhone, studentPin);
+      } catch (err) {
+        setStudentError(loginErrorText(err, 'Giriş yapılamadı.'));
+        setStudentLoading(false);
+        return;
+      }
       if (local === true) return;
       if (local === 'inactive') {
         setStudentError('Hesabınız pasiftir. Sisteme giriş yapamazsınız.');
@@ -265,6 +294,8 @@ const Login = ({ adminOnly = false, initialTab }: LoginProps) => {
         return;
       }
       setStudentError('Öğrenci bulunamadı veya şifre/PIN hatalı.');
+    } catch (err) {
+      setStudentError(loginErrorText(err, 'Giriş yapılamadı.'));
     } finally {
       setStudentLoading(false);
     }

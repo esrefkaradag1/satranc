@@ -1,3 +1,4 @@
+import { isPasswordHash } from '../../lib/passwordHash';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
@@ -163,8 +164,11 @@ const DemoApplicationsAdmin: React.FC = () => {
         clubName: club.name,
         contactPerson: app.contactPerson,
         clubUsername: club.loginUsername || suggestClubUsername(club.name, clubs, club.id),
+        // Mevcut kulübün parolası güvenli saklanır ve gösterilemez; değişmediği bildirilir.
         clubPassword: existingClub
-          ? (existingClub.loginPassword?.trim() || 'kulup')
+          ? (existingClub.loginPassword?.trim() && !isPasswordHash(existingClub.loginPassword)
+            ? existingClub.loginPassword.trim()
+            : '(mevcut parola — değişmedi)')
           : clubPassword,
         coachLogin: formatDemoPhone(app.phone) || app.contactPerson,
         coachPassword,

@@ -1,3 +1,4 @@
+import { isPasswordHash } from '../lib/passwordHash';
 import React, { useState } from 'react';
 import { Building2, MapPin, Users, Plus, Pencil, Trash2, X, KeyRound, Copy, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../AppContext';
@@ -5,7 +6,7 @@ import type { Club } from '../types';
 import { isClubUsernameTaken, suggestClubUsername } from '../lib/clubLoginUtils';
 
 const WEEKDAY_LABELS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
-const DEFAULT_CLUB_PASSWORD = 'kulup'; // Giriş sayfasında kullanılan varsayılan parola (sadece bilgi için)
+// Varsayılan kulüp parolası kaldırıldı; giriş sunucuda doğrulanır ve parola tek yönlü saklanır.
 
 const MAX_CLUBS = 20;
 
@@ -38,7 +39,8 @@ const CorporateStructure: React.FC = () => {
     setEditingId(club.id);
     setFormName(club.name);
     setFormAddress(club.address ?? '');
-    setFormLoginPassword(club.loginPassword ?? '');
+    // Kayıtlı parola tek yönlü saklanır (geri okunamaz); alan boş kalırsa parola değişmez.
+    setFormLoginPassword(isPasswordHash(club.loginPassword) ? '' : (club.loginPassword ?? ''));
     setFormLoginUsername(club.loginUsername ?? suggestClubUsername(club.name, clubs, club.id));
     setFormRoleId(club.roleId ?? '');
     setFormLogoUrl(club.logoUrl ?? '');
@@ -64,6 +66,10 @@ const CorporateStructure: React.FC = () => {
       return;
     }
     const loginPassword = formLoginPassword.trim() || undefined;
+    if (!editingId && !loginPassword) {
+      showToast('Yeni kulüp için giriş parolası gerekli.', 'warning');
+      return;
+    }
     const roleId = formRoleId.trim() || undefined;
     if (editingId) {
       updateClub(editingId, {
@@ -96,8 +102,10 @@ const CorporateStructure: React.FC = () => {
   const getClubLoginUsername = (club: Club) =>
     club.loginUsername?.trim() || suggestClubUsername(club.name, clubs, club.id);
 
+  /** Güvenli saklanan parola gösterilemez; yalnızca eski düz kayıtlar (ilk girişe kadar) görünür. */
+  const passwordHidden = (club: Club) => !club.loginPassword || isPasswordHash(club.loginPassword);
   const getClubPassword = (club: Club) =>
-    (club.loginPassword != null && club.loginPassword !== '') ? club.loginPassword : DEFAULT_CLUB_PASSWORD;
+    !club.loginPassword ? 'Tanımlı değil' : isPasswordHash(club.loginPassword) ? 'Güvenli saklanıyor' : club.loginPassword;
 
   const togglePasswordVisible = (clubId: string) => {
     setVisiblePasswords((prev) => {
@@ -307,18 +315,22 @@ const CorporateStructure: React.FC = () => {
                       >
                         {visiblePasswords.has(club.id) ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(getClubPassword(club), 'Parola')}
-                        className="p-1.5 rounded text-slate-400 hover:bg-white/10 hover:text-indigo-400"
-                        title="Kopyala"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
+                      {!passwordHidden(club) ? (
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(getClubPassword(club), 'Parola')}
+                          className="p-1.5 rounded text-slate-400 hover:bg-white/10 hover:text-indigo-400"
+                          title="Kopyala"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      ) : null}
                     </div>
-                    {!club.loginPassword && (
-                      <p className="text-[10px] text-slate-500">Varsayılan sistem parolası kullanılıyor (düzenleyerek özel parola atayabilirsiniz).</p>
-                    )}
+                    {!club.loginPassword ? (
+                      <p className="text-[10px] text-amber-400/90">Parola tanımlı değil — bu kulüp giriş yapamaz. Düzenleyerek parola atayın.</p>
+                    ) : isPasswordHash(club.loginPassword) ? (
+                      <p className="text-[10px] text-slate-500">Parola güvenli saklanıyor ve gösterilemez. Unutulduysa düzenleyerek yeni parola atayın.</p>
+                    ) : null}
                   </div>
                 </div>
               );

@@ -43,6 +43,9 @@ Proje Supabase ve isteğe bağlı API anahtarları kullanıyorsa Vercel’de şu
 | `VITE_SUPABASE_ANON_KEY` | Supabase anon key | Evet (Supabase kullanıyorsanız) |
 | `VITE_SUPABASE_SERVICE_ROLE_KEY` | Supabase service role (gerekirse) | Hayır |
 | `VITE_API_URL` | Backend API adresi (öğrenci/veli paneli) | Hayır |
+| `ADMIN_PASSWORD` | Yönetici giriş şifresi — **zorunlu**, yalnızca sunucu (yoksa yönetici girişi kapalı) | Evet |
+| `ADMIN_PASSWORD_HASH` | `ADMIN_PASSWORD` yerine özet (`pbkdf2$...`) | Hayır |
+| `SUPABASE_JWT_SECRET` | Supabase JWT gizli anahtarı — oturum belirteci imzası | Evet (Faz 2 için) |
 | `OPENROUTER_API_KEY` | OpenRouter API key — **yalnızca sunucu**, `VITE_` öneki koymayın | Hayır (AI özellikleri için) |
 | `OPENROUTER_MODEL` | Model adı (varsayılan `google/gemini-2.5-flash`) | Hayır |
 | `AI_DAILY_REQUEST_LIMIT` | Sunucu geneli günlük AI istek tavanı (varsayılan 500) | Hayır |

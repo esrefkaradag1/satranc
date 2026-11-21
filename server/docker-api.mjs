@@ -21,7 +21,6 @@ import {
   lichessOAuthAccountViaEnv,
 } from '../lib/lichessOAuthApi.mjs';
 import { lichessProxyRequest } from '../lib/lichessProxyThrottle.mjs';
-import { parentStudentLoginViaEnv } from '../lib/studentParentAuth.mjs';
 import { mobilePushHandler } from '../lib/mobilePush.mjs';
 import { mobileAuthHandler } from '../lib/mobileAuth.mjs';
 import { trainingNotifyHandler, startTrainingNotifyScheduler } from '../lib/trainingWhatsAppNotify.mjs';
@@ -29,6 +28,7 @@ import { whatsappApiGetHandler, whatsappApiPostHandler } from '../lib/whatsappAp
 import { chessduelloApiHandler } from '../lib/chessduelloCoachApi.mjs';
 import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch.mjs';
 import { aiHandler } from '../lib/aiProxy.mjs';
+import { loginHandler, legacyParentLoginHandler } from '../lib/authLogin.mjs';
 
 function syncServerEnv() {
   const pairs = [
@@ -138,9 +138,14 @@ async function handleStudyPracticeLog(req, res) {
   return sendJson(res, result.status, result.body);
 }
 
+function clientIp(req) {
+  const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+  return fwd || String(req.headers['x-real-ip'] ?? '') || req.socket?.remoteAddress || '';
+}
+
 async function handleAuthParent(req, res) {
   const body = await readJsonBody(req);
-  const result = await parentStudentLoginViaEnv(body, process.env);
+  const result = await legacyParentLoginHandler(body, process.env, { ip: clientIp(req) });
   return sendJson(res, result.status, result.body);
 }
 
@@ -556,6 +561,12 @@ export async function dispatchApi(req, res, url) {
 
     if (path === '/api/health') {
       sendJson(res, 200, { ok: true });
+      return true;
+    }
+    if (path === '/api/login' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const result = await loginHandler(body, process.env, { ip: clientIp(req) });
+      sendJson(res, result.status, result.body);
       return true;
     }
     if (path === '/api/ai' && req.method === 'POST') {

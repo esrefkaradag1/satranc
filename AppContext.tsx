@@ -36,6 +36,7 @@ import {
 import { writePanelHash } from './lib/panelRouting';
 import { apiLocalAuthParentLogin } from './services/backendApi';
 import { findClubForLogin } from './lib/clubLoginUtils';
+import { ensurePasswordHash } from './lib/passwordHash';
 import { buildClubDefaultOrgStructure, persistDefaultOrgStructure } from './lib/seedDefaultOrgStructure';
 import { createStudentLoginCredentials } from './lib/studentCredentials';
 import { sortLessonLogEntries } from './lib/lessonLogUtils';
@@ -250,8 +251,8 @@ interface AppContextType {
   auth: AuthUser | null;
   /** Sunucu modunda veli/öğrenci girişinde API'den dönen öğrenci (farklı cihazda öğrenci listesi yok). */
   apiStudent: Student | null;
-  loginAdmin: (password: string) => boolean;
-  loginCoach: (identifier: string, password: string) => boolean;
+  loginAdmin: (password: string) => Promise<boolean>;
+  loginCoach: (identifier: string, password: string) => Promise<boolean>;
   loginClub: (username: string, password: string) => Promise<boolean>;
   loginParent: (studentIdOrPhone: string, pin: string) => Promise<true | false | 'inactive'>;
   loginStudent: (studentIdOrPhone: string, pin: string) => Promise<true | false | 'inactive'>;
@@ -278,9 +279,9 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const AUTH_STORAGE_KEY = 'netchess_auth';
-const ADMIN_PASSWORD = 'admin';
-const COACH_PASSWORD = 'antrenor';
-const CLUB_PASSWORD = 'kulup';
+// Ortak/varsayılan şifreler ('admin', 'antrenor', 'kulup') kaldırıldı — giriş sunucuda (/api/login).
+/** Sunucunun verdiği imzalı oturum belirteci (Faz 2: veritabanı yetkileri bununla çalışacak). */
+const SESSION_TOKEN_KEY = 'netchess_session_token';
 
 const MOCK_DATA_VERSION = 2;
 
@@ -2100,263 +2101,127 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [auth]);
 
 
-  const loginAdmin = useCallback((password: string): boolean => {
-    if (password !== ADMIN_PASSWORD) return false;
+  // ── Giriş: tüm doğrulama sunucuda (/api/login). Şifre/PIN tarayıcıda karşılaştırılmaz. ──
+  // Yanlış bilgi → false. Deneme sınırı / yapılandırma hatası → açıklayıcı Error fırlatılır.
+  const postLogin = useCallback(async (
+    role: 'admin' | 'club' | 'coach' | 'student' | 'parent',
+    identifier: string,
+    password: string,
+  ): Promise<Record<string, unknown> | null> => {
+    let res: Response;
+    try {
+      res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, identifier: identifier.trim(), password: password.trim() }),
+      });
+    } catch {
+      throw new Error('Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edin.');
+    }
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (res.status === 401) return null;
+    if (res.status === 403 && body.inactive) return { inactive: true };
+    if (!res.ok) throw new Error(String(body.error || `Giriş başarısız (HTTP ${res.status}).`));
+    try {
+      if (typeof body.token === 'string') localStorage.setItem(SESSION_TOKEN_KEY, body.token);
+      else localStorage.removeItem(SESSION_TOKEN_KEY);
+    } catch {
+      /* depolama yoksa belirteçsiz devam */
+    }
+    return body;
+  }, []);
+
+  const loginAdmin = useCallback(async (password: string): Promise<boolean> => {
+    if (!password.trim()) return false;
+    const r = await postLogin('admin', 'admin', password);
+    if (!r) return false;
     clearStaffAuthBackup();
     setAuth({ role: 'admin' });
     return true;
-  }, []);
+  }, [postLogin]);
 
-  const loginCoach = useCallback((identifier: string, password: string): boolean => {
-    const idRaw = identifier.trim();
-    const idLower = idRaw.toLowerCase();
-    const idDigits = idRaw.replace(/\D/g, '');
-    const pwd = password.trim();
-    if (!pwd) return false;
-
-    const candidates = coaches.filter((c) => {
-      const email = (c.email || '').trim().toLowerCase();
-      const phone = (c.phone || '').replace(/\D/g, '');
-      const name = (c.name || '').trim().toLowerCase();
-      const matchesId =
-        (idLower && email === idLower) ||
-        (idLower && name === idLower) ||
-        (idDigits.length >= 4 && phone === idDigits) ||
-        (idDigits.length >= 4 && phone.endsWith(idDigits));
-      if (!matchesId) return false;
-      const expected = (c.password && c.password.trim()) ? c.password.trim() : COACH_PASSWORD;
-      return pwd === expected;
-    });
+  const loginCoach = useCallback(async (identifier: string, password: string): Promise<boolean> => {
+    if (!identifier.trim() || !password.trim()) return false;
+    const r = await postLogin('coach', identifier, password);
+    if (!r || !Array.isArray(r.coaches) || r.coaches.length === 0) return false;
+    const verified = r.coaches as Array<{ id: string; name?: string; branch?: string; clubId?: string; roleId?: string }>;
     // Aynı e-posta/telefonla birden fazla kayıt olabilir (eski kopyalar):
-    // grubu/öğrencisi olan, kulüple uyumlu kayıt seçilir.
-    const coach = pickPrimaryCoachRecord(candidates, students, trainingGroups, clubs);
-
-    if (coach) {
-      // Antrenörün `branch` değeri kulübün kısa adı olabilir ("AFYON SATRANÇ" ↔
-      // "AFYON SATRANÇ SPOR KULÜBÜ"); kapsam boş kalmasın diye kulüp kimliğine
-      // çözülür ve şube adı kulübün kayıtlı adına sabitlenir.
-      const scope = resolveCoachAuthScope(coach.branch, coach.clubId, branchOfficeRecords, clubs);
-      setAuth({
-        role: 'coach',
-        coachId: coach.id,
-        coachName: coach.name || undefined,
-        branch: scope.branch || 'Merkez',
-        clubId: scope.clubId,
-        roleId: coach.roleId,
-      });
-      return true;
-    }
-
-    // Geriye dönük: tanımlayıcı boş veya eşleşme yoksa eski ortak parola
-    if (!idRaw && pwd === COACH_PASSWORD) {
-      setAuth({ role: 'coach', branch: 'Merkez' });
-      return true;
-    }
-    if (pwd === COACH_PASSWORD && coaches.length === 0) {
-      setAuth({ role: 'coach', branch: 'Merkez' });
-      return true;
-    }
-
-    return false;
-  }, [coaches, clubs, branchOfficeRecords, students, trainingGroups]);
+    // sunucunun doğruladıkları arasından grubu/öğrencisi olan, kulüple uyumlu kayıt seçilir.
+    const local = coaches.filter((c) => verified.some((v) => v.id === c.id));
+    const candidates: Coach[] = local.length > 0
+      ? local
+      : verified.map((v) => ({ id: v.id, name: v.name ?? '', branch: v.branch ?? '', clubId: v.clubId, roleId: v.roleId } as Coach));
+    const coach = pickPrimaryCoachRecord(candidates, students, trainingGroups, clubs) ?? candidates[0];
+    if (!coach) return false;
+    // Antrenörün `branch` değeri kulübün kısa adı olabilir ("AFYON SATRANÇ" ↔
+    // "AFYON SATRANÇ SPOR KULÜBÜ"); kapsam boş kalmasın diye kulüp kimliğine
+    // çözülür ve şube adı kulübün kayıtlı adına sabitlenir.
+    const scope = resolveCoachAuthScope(coach.branch, coach.clubId, branchOfficeRecords, clubs);
+    setAuth({
+      role: 'coach',
+      coachId: coach.id,
+      coachName: coach.name || undefined,
+      branch: scope.branch || 'Merkez',
+      clubId: scope.clubId,
+      roleId: coach.roleId,
+    });
+    return true;
+  }, [postLogin, coaches, clubs, branchOfficeRecords, students, trainingGroups]);
 
   const loginClub = useCallback(async (username: string, password: string): Promise<boolean> => {
-    const idRaw = username.trim();
-    const pwd = password.trim();
-    if (!idRaw || !pwd) return false;
+    if (!username.trim() || !password.trim()) return false;
+    const r = await postLogin('club', username, password);
+    const club = r?.club as { id: string; name?: string; roleId?: string } | undefined;
+    if (!club?.id) return false;
+    const local = clubs.find((c) => c.id === club.id);
+    setAuth({
+      role: 'club',
+      branch: ((local?.name ?? club.name) || 'Merkez').trim(),
+      clubId: club.id,
+      roleId: local?.roleId ?? club.roleId,
+    });
+    return true;
+  }, [postLogin, clubs]);
 
-    const attempt = (list: Club[]): boolean => {
-      const club = findClubForLogin(list, idRaw);
-      if (!club) return false;
-      const expectedPassword =
-        club.loginPassword != null && club.loginPassword !== '' ? club.loginPassword : CLUB_PASSWORD;
-      if (pwd !== expectedPassword) return false;
-      setAuth({ role: 'club', branch: (club.name || 'Merkez').trim(), clubId: club.id, roleId: club.roleId });
-      return true;
-    };
-
-    if (attempt(clubs)) return true;
-
-    if (useSupabase && supabase) {
-      try {
-        const { data, error } = await supabase.from('clubs').select('*');
-        if (!error && data?.length) {
-          const loaded = (data as Record<string, unknown>[]).map(dbToClub);
-          setClubs(loaded);
-          if (attempt(loaded)) return true;
-        }
-      } catch {
-        /* yedek: yerel liste ile devam */
-      }
-    }
-
-    return false;
-  }, [clubs, useSupabase]);
-
-  const loginParent = useCallback(async (studentIdOrPhone: string, pin: string): Promise<true | false | 'inactive'> => {
-    const trimmedPin = pin.trim();
-    if (!studentIdOrPhone.trim() || !trimmedPin) return false;
-
-    const attempt = (list: Student[]): true | false | 'inactive' => {
-      const student = findStudentForLogin(list, studentIdOrPhone);
-      if (!student) return false;
-      if (student.status === 'inactive') return 'inactive';
-      if (student.parentPin && student.parentPin === trimmedPin) {
-        setAuth({ role: 'parent', studentId: student.id, user: { id: student.id } });
-        return true;
-      }
-      const last4 = trimmedPin.replace(/\D/g, '').slice(-4);
-      if (last4.length < 4) return false;
-      const phones = [
-        student.parentPhone,
-        student.fatherPhone,
-        student.motherPhone,
-        ...(student.contactNumbers ?? []),
-      ].filter(Boolean) as string[];
-      const hasMatch = phones.some((tel) => {
-        const digits = tel.replace(/\D/g, '');
-        return digits.length >= 4 && digits.slice(-4) === last4;
-      });
-      if (!hasMatch) return false;
-      setAuth({ role: 'parent', studentId: student.id });
-      return true;
-    };
-
-    const applyApiLogin = (apiResult: { studentId: string; student: Student }) => {
-      if (apiResult.student.status === 'inactive') return 'inactive' as const;
-      setAuth({ role: 'parent', studentId: apiResult.studentId, user: { id: apiResult.studentId } });
+  /** Öğrenci/veli girişinin ortak kısmı — sunucu öğrenciyi (şifre/PIN alanları çıkarılmış) döndürür. */
+  const loginStudentOrParent = useCallback(async (
+    role: 'student' | 'parent',
+    studentIdOrPhone: string,
+    pin: string,
+  ): Promise<true | false | 'inactive'> => {
+    if (!studentIdOrPhone.trim() || !pin.trim()) return false;
+    const r = await postLogin(role, studentIdOrPhone, pin);
+    if (!r) return false;
+    if (r.inactive) return 'inactive';
+    const studentId = String(r.studentId ?? '');
+    const fromServer = r.student as Student | undefined;
+    if (!studentId) return false;
+    if (fromServer?.status === 'inactive') return 'inactive';
+    setAuth({ role, studentId, user: { id: studentId } } as AuthUser);
+    if (fromServer) {
       setStudents((prev) => {
-        const idx = prev.findIndex((s) => s.id === apiResult.studentId);
+        const idx = prev.findIndex((s) => s.id === studentId);
         if (idx >= 0) {
           const next = [...prev];
-          next[idx] = { ...next[idx], ...apiResult.student };
+          next[idx] = { ...next[idx], ...fromServer };
           return next;
         }
-        return [...prev, apiResult.student];
+        return [...prev, fromServer];
       });
-      return true as const;
-    };
-
-    const local = attempt(students);
-    if (local === true || local === 'inactive') return local;
-
-    if (useSupabase) {
-      const apiResult = await apiLocalAuthParentLogin(studentIdOrPhone, trimmedPin);
-      if (apiResult && 'error' in apiResult) {
-        if (/pasif/i.test(apiResult.error)) return 'inactive';
-        return false;
-      }
-      if (apiResult && 'studentId' in apiResult) return applyApiLogin(apiResult);
     }
+    return true;
+  }, [postLogin]);
 
-    const sb = getServiceSupabase();
-    if (useSupabase && sb) {
-      try {
-        const { data, error } = await sb.from('students').select('*');
-        if (!error && data?.length) {
-          learnStudentColumnsFromRows(data as Record<string, unknown>[]);
-          const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
-          setStudents(loaded);
-          const r = attempt(loaded);
-          if (r === true || r === 'inactive') return r;
-        }
-      } catch {
-        /* anon ile devam */
-      }
-    }
-
-    if (useSupabase && supabase) {
-      try {
-        const { data, error } = await supabase.from('students').select('*');
-        if (!error && data?.length) {
-          learnStudentColumnsFromRows(data as Record<string, unknown>[]);
-          const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
-          setStudents(loaded);
-          const r = attempt(loaded);
-          if (r === true || r === 'inactive') return r;
-        }
-      } catch {
-        /* yerel liste ile devam */
-      }
-    }
-
-    return false;
-  }, [students, useSupabase]);
+  const loginParent = useCallback(
+    (studentIdOrPhone: string, pin: string) => loginStudentOrParent('parent', studentIdOrPhone, pin),
+    [loginStudentOrParent],
+  );
 
   /** Öğrenci girişi: öğrenci no, kullanıcı adı veya veli telefonu + şifre/PIN */
-  const loginStudent = useCallback(async (studentIdOrPhone: string, pin: string): Promise<true | false | 'inactive'> => {
-    const idRaw = studentIdOrPhone.trim();
-    const trimmedPin = pin.trim();
-    if (!idRaw || !trimmedPin) return false;
-
-    const attempt = (list: Student[]): true | false | 'inactive' => {
-      const student = findStudentForLogin(list, idRaw);
-      if (!student || !verifyStudentLoginPin(student, trimmedPin)) return false;
-      if (student.status === 'inactive') return 'inactive';
-      setAuth({ role: 'student', studentId: student.id, user: { id: student.id } });
-      return true;
-    };
-
-    const applyApiLogin = (apiResult: { studentId: string; student: Student }) => {
-      if (apiResult.student.status === 'inactive') return 'inactive' as const;
-      setAuth({ role: 'student', studentId: apiResult.studentId, user: { id: apiResult.studentId } });
-      setStudents((prev) => {
-        const idx = prev.findIndex((s) => s.id === apiResult.studentId);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = { ...next[idx], ...apiResult.student };
-          return next;
-        }
-        return [...prev, apiResult.student];
-      });
-      return true as const;
-    };
-
-    const local = attempt(students);
-    if (local === true || local === 'inactive') return local;
-
-    if (useSupabase) {
-      const apiResult = await apiLocalAuthParentLogin(idRaw, trimmedPin);
-      if (apiResult && 'error' in apiResult) {
-        if (/pasif/i.test(apiResult.error)) return 'inactive';
-        return false;
-      }
-      if (apiResult && 'studentId' in apiResult) return applyApiLogin(apiResult);
-    }
-
-    const sb = getServiceSupabase();
-    if (useSupabase && sb) {
-      try {
-        const { data, error } = await sb.from('students').select('*');
-        if (!error && data?.length) {
-          learnStudentColumnsFromRows(data as Record<string, unknown>[]);
-          const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
-          setStudents(loaded);
-          const r = attempt(loaded);
-          if (r === true || r === 'inactive') return r;
-        }
-      } catch {
-        /* anon ile devam */
-      }
-    }
-
-    if (useSupabase && supabase) {
-      try {
-        const { data, error } = await supabase.from('students').select('*');
-        if (!error && data?.length) {
-          learnStudentColumnsFromRows(data as Record<string, unknown>[]);
-          const loaded = applyLessonLogsToStudents((data as Record<string, unknown>[]).map(dbToStudent));
-          setStudents(loaded);
-          const r = attempt(loaded);
-          if (r === true || r === 'inactive') return r;
-        }
-      } catch {
-        /* yerel liste ile devam */
-      }
-    }
-
-    return false;
-  }, [students, useSupabase]);
+  const loginStudent = useCallback(
+    (studentIdOrPhone: string, pin: string) => loginStudentOrParent('student', studentIdOrPhone, pin),
+    [loginStudentOrParent],
+  );
 
   const [apiStudent, setApiStudent] = useState<Student | null>(() => {
     if (isSupabaseBackend()) return null;
@@ -2406,6 +2271,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     clearStaffAuthBackup();
     setAuth(null);
     setApiStudent(null);
+    try {
+      localStorage.removeItem(SESSION_TOKEN_KEY);
+    } catch {
+      /* ignore */
+    }
   }, [auth]);
 
   const hydrated = useRef(false);
@@ -3210,7 +3080,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const addCoach = useCallback(async (coach: Omit<Coach, 'id'>) => {
-    const newCoach: Coach = { ...coach, id: genId() };
+    // Şifre veritabanına düz metin yazılmaz (bkz. lib/passwordHash.ts)
+    const newCoach: Coach = { ...coach, id: genId(), password: await ensurePasswordHash(coach.password) };
     setCoaches(prev => [...prev, newCoach]);
     addActivityLog({ user: CURRENT_USER, action: 'Antrenör Eklendi', target: coach.name, type: 'success' });
     const sb = getServiceSupabase();
@@ -3223,12 +3094,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateCoach = useCallback(async (id: string, fields: Partial<Coach>) => {
     const patch = { ...fields };
     if (patch.password === '') delete patch.password;
+    if (patch.password !== undefined) patch.password = await ensurePasswordHash(patch.password);
     setCoaches(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
     const sb = getServiceSupabase();
     if (sb) try {
       const current = coaches.find((c) => c.id === id);
       const merged = current ? { ...current, ...patch } : ({ id, ...patch } as Coach);
-      const { error } = await sb.from('coaches').update(coachToDb(merged)).eq('id', id);
+      const row = coachToDb(merged);
+      // Şifre değişmiyorsa sütuna dokunma: tarayıcıdaki eski kopya, sunucunun girişte
+      // özete çevirdiği şifrenin üzerine düz metni geri yazmasın.
+      if (patch.password === undefined) delete row.password;
+      const { error } = await sb.from('coaches').update(row).eq('id', id);
       if (error) console.error('Supabase coaches update error:', error);
     } catch (err) { console.error('Supabase coaches throw error:', err); }
   }, [coaches]);
@@ -4262,16 +4138,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setClubs(prev => [...prev, full].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
     addActivityLog({ user: CURRENT_USER, action: 'Kulüp Eklendi', target: full.name, type: 'info' });
-    const sb = getServiceSupabase();
-    if (sb) {
-      sb.from('clubs').insert(clubToDb(full)).then(({ error }) => {
-        if (error) console.error('Supabase clubs insert error:', error);
-      }).then(undefined, (err) => console.error('Supabase clubs insert throw:', err));
-    }
+    // Şifre veritabanına düz metin yazılmaz: önce özete çevrilir, sonra kaydedilir.
+    void (async () => {
+      const hashed: Club = { ...full, loginPassword: await ensurePasswordHash(full.loginPassword) };
+      setClubs(prev => prev.map(c => (c.id === id ? { ...c, loginPassword: hashed.loginPassword } : c)));
+      const sb = getServiceSupabase();
+      if (!sb) return;
+      const { error } = await sb.from('clubs').insert(clubToDb(hashed));
+      if (error) console.error('Supabase clubs insert error:', error);
+    })().catch((err) => console.error('Supabase clubs insert throw:', err));
     return full;
   }, [addActivityLog]);
-  const updateClub = useCallback((id: string, patch: Partial<Club>) => {
-    setClubs(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
+  const updateClub = useCallback((id: string, rawPatch: Partial<Club>) => {
+    // Boş şifre = değiştirme (mevcut şifre silinmez; varsayılan şifre artık yok).
+    const { loginPassword: rawPassword, ...rest } = rawPatch;
+    const hasNewPassword = !!rawPassword?.trim();
+    setClubs(prev => prev.map(c => c.id === id ? { ...c, ...rest } : c));
+    if (hasNewPassword) {
+      void ensurePasswordHash(rawPassword).then((hashed) => {
+        setClubs(prev => prev.map(c => (c.id === id ? { ...c, loginPassword: hashed } : c)));
+        const sbPw = getServiceSupabase();
+        if (!sbPw) return;
+        return sbPw.from('clubs').update({ login_password: hashed }).eq('id', id).then(({ error }) => {
+          if (error) console.error('Supabase clubs password update error:', error);
+        });
+      }).catch((err) => console.error('Kulüp şifresi kaydedilemedi:', err));
+    }
+    const patch: Partial<Club> = rest;
     if (patch.name) addActivityLog({ user: CURRENT_USER, action: 'Kulüp Güncellendi', target: patch.name, type: 'info' });
     const sb = getServiceSupabase();
     if (sb) {
@@ -4279,7 +4172,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (patch.name !== undefined) payload.name = patch.name;
       if (patch.address !== undefined) payload.address = patch.address ?? null;
       if (patch.activeDays !== undefined) payload.active_days = patch.activeDays;
-      if (patch.loginPassword !== undefined) payload.login_password = patch.loginPassword ?? null;
       if (patch.loginUsername !== undefined) payload.login_username = patch.loginUsername ?? null;
       if (patch.roleId !== undefined) payload.role_id = patch.roleId ?? null;
       if (patch.leaderboardPoints !== undefined) payload.leaderboard_points = patch.leaderboardPoints ?? null;
