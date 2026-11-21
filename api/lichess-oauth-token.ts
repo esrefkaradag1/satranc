@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import {
   clearStudentLichessOAuth,
   exchangeLichessOAuthCode,
@@ -38,7 +39,7 @@ function requestOrigin(req: Req): string | undefined {
   }
 }
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Yalnızca POST desteklenir' });
     return;
@@ -80,3 +81,5 @@ export default async function handler(req: Req, res: Res) {
     lichessUsername: exchanged.username ?? null,
   });
 }
+
+export default withApiAuth('lichess-oauth-token', handler);

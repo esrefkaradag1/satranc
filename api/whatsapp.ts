@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import { whatsappApiGetHandler, whatsappApiPostHandler } from '../lib/whatsappApi.mjs';
 
 type Req = {
@@ -22,7 +23,7 @@ function parseBody(req: Req): Record<string, unknown> {
   return req.body;
 }
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   try {
     const result =
       req.method === 'GET'
@@ -35,3 +36,5 @@ export default async function handler(req: Req, res: Res) {
     res.status(500).json({ error: e instanceof Error ? e.message : 'Sunucu hatası' });
   }
 }
+
+export default withApiAuth('whatsapp', handler);

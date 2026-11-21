@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import {
   fetchLichessPuzzleActivityForDay,
   getStudentLichessToken,
@@ -17,7 +18,7 @@ function queryParam(q: Record<string, string | string[] | undefined>, key: strin
   return (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? '';
 }
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'Yalnızca GET desteklenir' });
     return;
@@ -47,3 +48,5 @@ export default async function handler(req: Req, res: Res) {
     res.status(502).json({ error: msg, connected: true, puzzles: [] });
   }
 }
+
+export default withApiAuth('lichess-puzzle-activity', handler);

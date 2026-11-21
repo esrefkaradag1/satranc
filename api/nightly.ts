@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 /**
  * Vercel Hobby: günde tek cron. 23:00 TR (20:00 UTC) —
  * 1) Platform gün sonu senkronu (Lichess/Chess.com → DB)
@@ -32,7 +33,7 @@ function cronAuthorized(req: Req): boolean {
 
 export const config = { maxDuration: 300 };
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   const method = String(req.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'POST') {
     res.status(405).json({ error: 'Yalnızca GET veya POST' });
@@ -56,3 +57,5 @@ export default async function handler(req: Req, res: Res) {
     res.status(500).json({ error: e instanceof Error ? e.message : 'Sunucu hatası' });
   }
 }
+
+export default withApiAuth('nightly', handler);

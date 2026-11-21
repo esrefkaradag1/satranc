@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch';
 
 type Req = {
@@ -9,7 +10,7 @@ type Res = {
   setHeader(name: string, value: string): void;
 };
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -35,3 +36,5 @@ export default async function handler(req: Req, res: Res) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 }
+
+export default withApiAuth('fetch-ukd', handler);

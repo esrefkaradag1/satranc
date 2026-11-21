@@ -28,6 +28,7 @@ import { whatsappApiGetHandler, whatsappApiPostHandler } from '../lib/whatsappAp
 import { chessduelloApiHandler } from '../lib/chessduelloCoachApi.mjs';
 import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch.mjs';
 import { aiHandler } from '../lib/aiProxy.mjs';
+import { authorizeApiRequest } from '../lib/apiAuth.mjs';
 import { loginHandler, legacyParentLoginHandler } from '../lib/authLogin.mjs';
 import { submitApplicationHandler } from '../lib/publicApplication.mjs';
 
@@ -77,6 +78,8 @@ function sendText(res, status, body, contentType, cacheControl) {
 }
 
 async function readJsonBody(req) {
+  // Yetki kontrolü gövdeyi önceden okuduysa aynısını döndür (akış bir kez okunabilir)
+  if (req.__jsonBody !== undefined) return req.__jsonBody;
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   if (chunks.length === 0) return {};
@@ -559,6 +562,22 @@ async function handleLichessProxy(url, req, res) {
 export async function dispatchApi(req, res, url) {
   try {
     const path = url.pathname.replace(/\/+$/, '') || '/';
+
+    // Faz 2b: her /api isteğinde çağıranı doğrula (kural tablosu: lib/apiAuth.mjs)
+    if (path.startsWith('/api/')) {
+      const query = Object.fromEntries(url.searchParams.entries());
+      const method = String(req.method || 'GET').toUpperCase();
+      let body = {};
+      if (method !== 'GET' && method !== 'HEAD') {
+        body = await readJsonBody(req);
+        req.__jsonBody = body;
+      }
+      const denied = authorizeApiRequest({ route: path, method, headers: req.headers, query, body, env: process.env });
+      if (denied) {
+        sendJson(res, denied.status, denied.body);
+        return true;
+      }
+    }
 
     if (path === '/api/health') {
       sendJson(res, 200, { ok: true });

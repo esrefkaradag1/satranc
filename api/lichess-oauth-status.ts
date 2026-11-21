@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import { getStudentLichessOAuthStatus } from '../lib/lichessOAuthServer';
 
 type Req = {
@@ -14,7 +15,7 @@ function queryParam(q: Record<string, string | string[] | undefined>, key: strin
   return (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? '';
 }
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'Yalnızca GET desteklenir' });
     return;
@@ -29,3 +30,5 @@ export default async function handler(req: Req, res: Res) {
   const status = await getStudentLichessOAuthStatus(studentId);
   res.status(200).json(status);
 }
+
+export default withApiAuth('lichess-oauth-status', handler);

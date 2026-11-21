@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 /** POST /api/login — sunucu tarafı giriş (bkz. lib/authLogin.mjs). */
 import { loginHandler } from '../lib/authLogin.mjs';
 
@@ -27,7 +28,7 @@ function header(req: Req, name: string): string {
   return Array.isArray(raw) ? String(raw[0] ?? '') : String(raw ?? '');
 }
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Yalnızca POST desteklenir' });
     return;
@@ -36,3 +37,5 @@ export default async function handler(req: Req, res: Res) {
   const result = await loginHandler(parseBody(req), process.env as Record<string, string>, { ip });
   res.status(result.status).json(result.body);
 }
+
+export default withApiAuth('login', handler);

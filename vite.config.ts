@@ -26,6 +26,7 @@ import { submitApplicationHandler } from './lib/publicApplication.mjs';
 import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
 import { startTrainingNotifyScheduler, trainingNotifyHandler } from './lib/trainingWhatsAppNotify.mjs';
 import { aiHandler } from './lib/aiProxy.mjs';
+import { authorizeApiRequest } from './lib/apiAuth.mjs';
 import { runPlatformDaySync } from './lib/api-handlers/platform-day-sync';
 import platformWeekStatsHandler from './lib/api-handlers/platform-week-stats';
 import externalGameSnapshotHandler from './lib/api-handlers/external-game-snapshot';
@@ -105,6 +106,20 @@ function devApiPlugin(env: Record<string, string>): Plugin {
             try {
               const parsed = new URL(fullUrl, 'http://local');
               let result;
+              // Faz 2b: çağıranı doğrula (lib/apiAuth.mjs — Docker/Vercel ile aynı kural tablosu)
+              const denied = authorizeApiRequest({
+                route,
+                method: 'GET',
+                headers: req.headers,
+                query: Object.fromEntries(parsed.searchParams.entries()),
+                env,
+              });
+              if (denied) {
+                res.statusCode = denied.status;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify(denied.body));
+                return;
+              }
               if (route === '/api/site-messages') {
                 const conversationId = parsed.searchParams.get('conversationId')?.trim() ?? '';
                 result = await listSiteMessagesViaEnv(conversationId || undefined, env);
@@ -356,6 +371,20 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
                 : {};
               let result;
+              const deniedPost = authorizeApiRequest({
+                route,
+                method: 'POST',
+                headers: req.headers,
+                query: Object.fromEntries(new URL(fullUrl, 'http://local').searchParams.entries()),
+                body,
+                env,
+              });
+              if (deniedPost) {
+                res.statusCode = deniedPost.status;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify(deniedPost.body));
+                return;
+              }
               if (route === '/api/ai') {
                 result = await aiHandler(body, env, {
                   ip: req.socket?.remoteAddress ?? '',

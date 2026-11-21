@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import { clearStudentLichessOAuth } from '../lib/lichessOAuthServer';
 
 type Req = {
@@ -21,7 +22,7 @@ function parseBody(req: Req): Record<string, unknown> {
   return req.body;
 }
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Yalnızca POST desteklenir' });
     return;
@@ -41,3 +42,5 @@ export default async function handler(req: Req, res: Res) {
 
   res.status(200).json({ ok: true });
 }
+
+export default withApiAuth('lichess-oauth-disconnect', handler);

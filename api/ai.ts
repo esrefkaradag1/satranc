@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import { aiHandler } from '../lib/aiProxy.mjs';
 
 type Req = {
@@ -30,7 +31,7 @@ function header(req: Req, name: string): string {
 export const config = { maxDuration: 60 };
 
 /** POST /api/ai — OpenRouter anahtarı yalnızca sunucuda (bkz. lib/aiProxy.mjs). */
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Yalnızca POST desteklenir' });
     return;
@@ -39,3 +40,5 @@ export default async function handler(req: Req, res: Res) {
   const result = await aiHandler(parseBody(req), process.env, { ip, referer: header(req, 'origin') });
   res.status(result.status).json(result.body);
 }
+
+export default withApiAuth('ai', handler);

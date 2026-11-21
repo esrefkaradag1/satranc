@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import { trainingNotifyHandler } from '../lib/trainingWhatsAppNotify.mjs';
 
 type Req = {
@@ -54,7 +55,7 @@ function cronAuthorized(req: Req): boolean {
   return headerValue(req, 'authorization') === `Bearer ${secret}`;
 }
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   const method = String(req.method || 'GET').toUpperCase();
   try {
     if (method === 'GET') {
@@ -76,3 +77,5 @@ export default async function handler(req: Req, res: Res) {
     res.status(500).json({ error: e instanceof Error ? e.message : 'Sunucu hatası' });
   }
 }
+
+export default withApiAuth('training-notify', handler);

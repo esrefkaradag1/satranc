@@ -1,9 +1,10 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import { mobileAuthHandler } from '../lib/mobileAuth.mjs';
 
 type Req = { method?: string; body?: Record<string, unknown> };
 type Res = { status(code: number): { json(body: unknown): void } };
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -11,3 +12,5 @@ export default async function handler(req: Req, res: Res) {
   const result = await mobileAuthHandler(req.body ?? {}, process.env as Record<string, string>);
   res.status(result.status).json(result.body);
 }
+
+export default withApiAuth('mobile-auth', handler);

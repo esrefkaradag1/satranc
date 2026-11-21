@@ -1,3 +1,4 @@
+import { withApiAuth } from '../lib/withApiAuth';
 import { createClient } from '@supabase/supabase-js';
 import {
   fetchSiteMessages,
@@ -37,7 +38,7 @@ function conversationIdFromUrl(url?: string): string {
   }
 }
 
-export default async function handler(req: Req, res: Res) {
+async function handler(req: Req, res: Res) {
   if (req.method === 'GET') {
     const conversationId = conversationIdFromUrl(req.url);
     const supabaseUrl = (process.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '').trim();
@@ -80,3 +81,5 @@ export default async function handler(req: Req, res: Res) {
   const result = await insertSiteMessageViaEnv({ message: normalized.record }, process.env);
   res.status(result.status).json(result.body);
 }
+
+export default withApiAuth('site-messages', handler);
