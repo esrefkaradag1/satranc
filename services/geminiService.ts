@@ -1,6 +1,6 @@
 /**
  * Tüm AI çağrıları OpenRouter API üzerinden yapılır.
- * API anahtarı: VITE_OPENROUTER_API_KEY
+ * Çağrılar sunucudaki /api/ai'ye gider; anahtar sunucuda: OPENROUTER_API_KEY
  */
 export {
   imageToFen,

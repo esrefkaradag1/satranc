@@ -647,7 +647,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
   const generateAiInsight = useCallback(async (prioritySkill?: SkillKeyLocal) => {
     if (!selectedStudent) return;
     if (!openRouterReady) {
-      setAiError('OpenRouter API anahtarı tanımlı değil. .env dosyasına VITE_OPENROUTER_API_KEY ekleyin.');
+      setAiError('Yapay zekâ yapılandırılmamış. Sunucu ortamına OPENROUTER_API_KEY ekleyin.');
       return;
     }
     if (platformLoading) {
@@ -1225,7 +1225,7 @@ const Analysis: React.FC<AnalysisProps> = ({ isEmbedded = false, studentId = nul
 
                   {!openRouterReady ? (
                     <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 text-left">
-                      AI için .env dosyasına <span className="font-mono text-xs">VITE_OPENROUTER_API_KEY</span> ekleyin.
+                      AI için sunucu ortamına <span className="font-mono text-xs">OPENROUTER_API_KEY</span> ekleyin.
                     </div>
                   ) : null}
                   {aiError ? (

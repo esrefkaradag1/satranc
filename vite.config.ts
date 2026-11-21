@@ -24,6 +24,7 @@ import { fetchUkdFromTsfServer } from './lib/tsfUkdFetch';
 import { parentStudentLoginViaEnv } from './lib/studentParentAuth.mjs';
 import { fetchChessComMonthGames } from './lib/chesscomMonthGamesFetch';
 import { startTrainingNotifyScheduler, trainingNotifyHandler } from './lib/trainingWhatsAppNotify.mjs';
+import { aiHandler } from './lib/aiProxy.mjs';
 import { runPlatformDaySync } from './lib/api-handlers/platform-day-sync';
 import platformWeekStatsHandler from './lib/api-handlers/platform-week-stats';
 import externalGameSnapshotHandler from './lib/api-handlers/external-game-snapshot';
@@ -64,6 +65,7 @@ const DEV_GET_ROUTES = new Set([
   '/api/chessduello',
 ]);
 const DEV_POST_ROUTES = new Set([
+  '/api/ai',
   '/api/homework-attempt',
   '/api/study-event',
   '/api/study-practice-log',
@@ -351,7 +353,12 @@ function devApiPlugin(env: Record<string, string>): Plugin {
                 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
                 : {};
               let result;
-              if (route === '/api/homework-attempt') {
+              if (route === '/api/ai') {
+                result = await aiHandler(body, env, {
+                  ip: req.socket?.remoteAddress ?? '',
+                  referer: String(req.headers.origin ?? ''),
+                });
+              } else if (route === '/api/homework-attempt') {
                 result = await insertHomeworkAttemptViaEnv(body, env);
               } else if (route === '/api/study-event') {
                 result = await insertStudyEventViaEnv(body, env);
@@ -493,8 +500,7 @@ export default defineConfig(({ mode }) => {
         __APP_BUILD_ID__: JSON.stringify(appBuildId),
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.VITE_OPENROUTER_API_KEY': JSON.stringify(env.VITE_OPENROUTER_API_KEY),
-        'process.env.VITE_OPENROUTER_MODEL': JSON.stringify(env.VITE_OPENROUTER_MODEL)
+        // OpenRouter anahtarı tarayıcı koduna GÖMÜLMEZ — yalnızca sunucu (/api/ai) okur.
       },
       resolve: {
         alias: {

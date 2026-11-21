@@ -43,8 +43,9 @@ Proje Supabase ve isteğe bağlı API anahtarları kullanıyorsa Vercel’de şu
 | `VITE_SUPABASE_ANON_KEY` | Supabase anon key | Evet (Supabase kullanıyorsanız) |
 | `VITE_SUPABASE_SERVICE_ROLE_KEY` | Supabase service role (gerekirse) | Hayır |
 | `VITE_API_URL` | Backend API adresi (öğrenci/veli paneli) | Hayır |
-| `VITE_OPENROUTER_API_KEY` | OpenRouter API key | Hayır (AI özellikleri için) |
-| `VITE_OPENROUTER_MODEL` | Model adı | Hayır |
+| `OPENROUTER_API_KEY` | OpenRouter API key — **yalnızca sunucu**, `VITE_` öneki koymayın | Hayır (AI özellikleri için) |
+| `OPENROUTER_MODEL` | Model adı (varsayılan `google/gemini-2.5-flash`) | Hayır |
+| `AI_DAILY_REQUEST_LIMIT` | Sunucu geneli günlük AI istek tavanı (varsayılan 500) | Hayır |
 
 Not: `VITE_` ile başlayan değişkenler build sırasında koda gömülür; değiştirince yeniden deploy gerekir.
 

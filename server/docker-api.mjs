@@ -28,6 +28,7 @@ import { trainingNotifyHandler, startTrainingNotifyScheduler } from '../lib/trai
 import { whatsappApiGetHandler, whatsappApiPostHandler } from '../lib/whatsappApi.mjs';
 import { chessduelloApiHandler } from '../lib/chessduelloCoachApi.mjs';
 import { fetchUkdFromTsfServer } from '../lib/tsfUkdFetch.mjs';
+import { aiHandler } from '../lib/aiProxy.mjs';
 
 function syncServerEnv() {
   const pairs = [
@@ -555,6 +556,14 @@ export async function dispatchApi(req, res, url) {
 
     if (path === '/api/health') {
       sendJson(res, 200, { ok: true });
+      return true;
+    }
+    if (path === '/api/ai' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+      const ip = fwd || String(req.headers['x-real-ip'] ?? '') || req.socket?.remoteAddress || '';
+      const result = await aiHandler(body, process.env, { ip, referer: String(req.headers.origin ?? '') });
+      sendJson(res, result.status, result.body);
       return true;
     }
     if (path === '/api/chesscom-recent-puzzles') {

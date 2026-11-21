@@ -1,25 +1,9 @@
-import { getRuntimeEnv } from '../runtimeEnv';
-
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-
-const getApiKey = () => getRuntimeEnv('VITE_OPENROUTER_API_KEY');
-
-const ENV_MODEL = getRuntimeEnv('VITE_OPENROUTER_MODEL');
-
-/** Vision için model sırası — 404 olursa sıradaki denenir */
-const VISION_MODEL_CANDIDATES = [
-  ENV_MODEL,
-  "google/gemini-2.5-flash",
-  "google/gemini-2.5-flash-preview-05-20",
-  "google/gemini-2.0-flash-001",
-  "google/gemini-flash-1.5",
-].filter((m, i, arr) => m && arr.indexOf(m) === i);
-
-const TEXT_MODEL = VISION_MODEL_CANDIDATES[0] || "google/gemini-2.5-flash";
-
-type ChatMessage =
-  | { role: "user"; content: string }
-  | { role: "user"; content: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> };
+/**
+ * Yapay zekâ istemcisi — tüm çağrılar sunucudaki POST /api/ai uç noktasına gider (lib/aiProxy.mjs).
+ * OpenRouter anahtarı artık tarayıcıda YOK (eskiden VITE_OPENROUTER_API_KEY ile JS'e gömülüyordu).
+ * İstemler sunucuda kurulur; istemci yalnızca görev adı ve verisini yollar.
+ * Raporlar tarayıcıda önbelleğe alınır: aynı veriyle aynı rapor tekrar üretilmez (maliyet).
+ */
 
 export class OpenRouterError extends Error {
   constructor(message: string) {
@@ -28,64 +12,97 @@ export class OpenRouterError extends Error {
   }
 }
 
-async function chatOnce(
-  messages: ChatMessage[],
-  model: string,
-): Promise<string> {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new OpenRouterError("OpenRouter API anahtarı tanımlı değil (VITE_OPENROUTER_API_KEY).");
+/** Görseldeki her satranç tahtası için FEN (+ isteğe bağlı çözüm). */
+export type ImageBoardResult = { fen: string; solution?: string };
 
-  const res = await fetch(OPENROUTER_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "",
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.1,
-      max_tokens: 4096,
-      ...(model.includes("gemini-2.5")
-        ? { reasoning: { effort: "none" } }
-        : {}),
-    }),
-  });
+type AiTask = "homework-report" | "comprehensive-report" | "image-to-fen" | "image-to-fen-multiple";
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new OpenRouterError(`OpenRouter ${res.status}: ${err}`);
+async function callAi(task: AiTask, payload: Record<string, unknown>): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch("/api/ai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task, ...payload }),
+    });
+  } catch (err) {
+    throw new OpenRouterError(err instanceof Error ? err.message : "Yapay zekâ sunucusuna ulaşılamadı.");
   }
-
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
-  return typeof content === "string" ? content : "";
+  const body = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+  if (!res.ok) throw new OpenRouterError(body.error || `Yapay zekâ isteği başarısız (HTTP ${res.status}).`);
+  return typeof body.text === "string" ? body.text : "";
 }
 
-async function chat(
-  messages: ChatMessage[],
-  options?: { model?: string; vision?: boolean },
-): Promise<string> {
-  const candidates = options?.vision
-    ? (options.model ? [options.model, ...VISION_MODEL_CANDIDATES] : VISION_MODEL_CANDIDATES)
-    : [options?.model ?? TEXT_MODEL];
-
-  const unique = candidates.filter((m, i, arr) => m && arr.indexOf(m) === i);
-  let lastError: Error | null = null;
-
-  for (const model of unique) {
-    try {
-      return await chatOnce(messages, model);
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      const msg = lastError.message;
-      const retryable = msg.includes("404") || msg.includes("No endpoints found") || msg.includes("503");
-      if (!retryable) throw lastError;
-    }
+/**
+ * Görseli göndermeden önce en fazla 1600 px'e küçült (JPEG). Tahta tanıma için yeterli;
+ * istek gövdesi sunucu/proxy sınırlarının (nginx, Vercel 4.5 MB) altında kalır ve görsel token'ı
+ * (dolayısıyla maliyet) düşer. Küçültme mümkün değilse görsel olduğu gibi gönderilir.
+ */
+const MAX_IMAGE_SIDE = 1600;
+async function shrinkImageDataUrl(dataUrl: string): Promise<string> {
+  if (typeof document === "undefined" || typeof Image === "undefined") return dataUrl;
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("görsel okunamadı"));
+      el.src = dataUrl;
+    });
+    const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+    if (scale >= 1 && dataUrl.length < 1_500_000) return dataUrl;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return dataUrl;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.9);
+  } catch {
+    return dataUrl;
   }
+}
 
-  throw lastError ?? new OpenRouterError("OpenRouter isteği başarısız.");
+// ── Rapor önbelleği (tarayıcı) ─────────────────────────────────────────────
+const REPORT_CACHE_KEY = "netchess_ai_report_cache_v1";
+const REPORT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const REPORT_CACHE_MAX = 100;
+
+type ReportCacheEntry = { at: number; value: { eksiklikler: string; hamleler: string } };
+
+function hashKey(input: string): string {
+  let h = 5381;
+  for (let i = 0; i < input.length; i++) h = ((h << 5) + h + input.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36) + ":" + input.length;
+}
+
+function readReportCache(): Record<string, ReportCacheEntry> {
+  try {
+    const raw = localStorage.getItem(REPORT_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, ReportCacheEntry>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function cachedReport(key: string): ReportCacheEntry["value"] | null {
+  const hit = readReportCache()[key];
+  return hit && Date.now() - hit.at < REPORT_CACHE_TTL_MS ? hit.value : null;
+}
+
+function storeReport(key: string, value: ReportCacheEntry["value"]): void {
+  try {
+    const all = readReportCache();
+    all[key] = { at: Date.now(), value };
+    const entries = Object.entries(all)
+      .filter(([, e]) => Date.now() - e.at < REPORT_CACHE_TTL_MS)
+      .sort((x, y) => y[1].at - x[1].at)
+      .slice(0, REPORT_CACHE_MAX);
+    localStorage.setItem(REPORT_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    /* depolama yoksa önbelleksiz çalışır */
+  }
 }
 
 const FEN_REGEX =
@@ -152,61 +169,16 @@ function parseAllFensFromRaw(raw: string): ImageBoardResult[] {
   return single && FEN_REGEX.test(single) ? [{ fen: single, solution: extractSolutionFromText(raw) }] : [];
 }
 
-const MULTI_BOARD_PROMPT = `Bu görselde veya PDF sayfasında BİR veya BİRDEN FAZLA satranç tahtası olabilir (ör. 2x2 ızgara, yan yana diyagramlar).
-
-Görev:
-1) Görseldeki TÜM satranç tahtalarını say (soldan sağa, yukarıdan aşağıya sıra: 1, 2, 3, ...).
-2) Her tahta için geçerli standart FEN yaz.
-3) Varsa o tahtaya özel çözüm hamlelerini UCI formatında virgülle ayır; yoksa boş string.
-
-Yanıtı ÖNCELİKLE şu JSON formatında ver (başka metin ekleme):
-{"boards":[{"fen":"<FEN>","solution":""},{"fen":"<FEN>","solution":""}]}
-
-JSON mümkün değilse her tahta için şu blokları kullan:
----TAHTA 1---
-FEN: <tek satır FEN>
-HAMLELER: <UCI veya boş>
----TAHTA 2---
-...
-
-Önemli: Izgara düzeninde 4 tahta varsa 4 FEN döndür. Tek tahta varsa boards dizisinde 1 eleman olsun.`;
 
 /**
- * Satranç tahtası görselinden FEN kodu çıkarır (OpenRouter vision).
+ * Satranç tahtası görselinden FEN kodu çıkarır (sunucu → OpenRouter vision).
  */
 export const imageToFen = async (
   imageDataUrl: string
 ): Promise<{ fen: string; solution?: string } | null> => {
   try {
-    const match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-    if (!match) return null;
-
-    const text = await chat(
-      [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `Bu görselde bir satranç tahtası pozisyonu var. Sadece FEN döndür.
-
-Yanıt formatı (tercihen JSON):
-{"boards":[{"fen":"<FEN>","solution":""}]}
-
-veya:
-FEN: <tek satır FEN>
-HAMLELER: <virgülle ayrılmış UCI veya boş>`,
-            },
-            {
-              type: "image_url",
-              image_url: { url: imageDataUrl },
-            },
-          ],
-        },
-      ],
-      { vision: true },
-    );
-
+    if (!/^data:([^;]+);base64,(.+)$/.test(imageDataUrl)) return null;
+    const text = await callAi("image-to-fen", { imageDataUrl: await shrinkImageDataUrl(imageDataUrl) });
     const boards = parseAllFensFromRaw((text || "").trim());
     return boards[0] ?? null;
   } catch (error) {
@@ -215,67 +187,16 @@ HAMLELER: <virgülle ayrılmış UCI veya boş>`,
   }
 };
 
-/** Görseldeki her satranç tahtası için FEN (+ isteğe bağlı çözüm). */
-export type ImageBoardResult = { fen: string; solution?: string };
-
 export const imageToFenMultiple = async (
   imageDataUrl: string
 ): Promise<ImageBoardResult[]> => {
-  const match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) return [];
-
-  const text = await chat(
-    [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: MULTI_BOARD_PROMPT },
-          {
-            type: "image_url",
-            image_url: { url: imageDataUrl },
-          },
-        ],
-      },
-    ],
-    { vision: true },
-  );
-
+  if (!/^data:([^;]+);base64,(.+)$/.test(imageDataUrl)) return [];
+  const text = await callAi("image-to-fen-multiple", { imageDataUrl: await shrinkImageDataUrl(imageDataUrl) });
   const boards = parseAllFensFromRaw((text || "").trim());
   if (boards.length > 0) return boards;
 
   const single = await imageToFen(imageDataUrl);
   return single ? [single] : [];
-};
-
-export const getChessAnalysis = async (fen: string, move: string) => {
-  try {
-    const text = await chat([
-      {
-        role: "user",
-        content: `Analyze this chess position (FEN): ${fen}. The player played: ${move}. Is this a good move? Provide a short tactical summary for a student.`,
-      },
-    ]);
-    return text || "Analiz şu an kullanılamıyor.";
-  } catch (error) {
-    console.error("Analysis Error:", error);
-    return "Analiz şu an kullanılamıyor.";
-  }
-};
-
-export const generatePuzzleFromFEN = async (fen: string) => {
-  try {
-    const text = await chat([
-      {
-        role: "user",
-        content: `Create a chess puzzle from this FEN position: ${fen}. Return ONLY a valid JSON object (no markdown, no code block) with these exact keys: "title" (string), "difficulty" (string), "points" (number), "solution" (array of move strings).`,
-      },
-    ]);
-    const cleaned = (text || "").replace(/^```\w*\n?|\n?```$/g, "").trim();
-    return JSON.parse(cleaned);
-  } catch (error) {
-    console.error("Puzzle Generation Error:", error);
-    return null;
-  }
 };
 
 /** Öğrenci satranç ödev denemelerine göre AI analizi */
@@ -300,30 +221,14 @@ export const analyzeStudentHomework = async (
   homeworkTitle: string,
   attempts: StudentHomeworkAttemptForAI[]
 ): Promise<{ eksiklikler: string; hamleler: string }> => {
-  const summary = attempts
-    .map(
-      (a, i) =>
-        `${i + 1}. "${a.puzzleTitle}": ${a.correct ? "Doğru" : "Yanlış"}. Oynanan: ${a.movesPlayed.join(", ") || "-"}. Doğru çözüm: ${a.solutionMoves.join(", ")}`
-    )
-    .join("\n");
-
-  const text = await chat([
-    {
-      role: "user",
-      content: `Aşağıda bir öğrencinin satranç bulmaca ödevindeki denemeleri var. Öğrenci adı: ${studentName}. Ödev: ${homeworkTitle}.
-
-DENEMELER:
-${summary || "(Henüz ödev denemesi yok)"}
-
-Lütfen iki bölüm halinde Türkçe yanıt ver (antrenöre gösterilecek):
-
-1) EKSİKLİKLER: Öğrencinin zayıf olduğu noktaları, sık yaptığı hataları ve geliştirilmesi gereken becerileri kısaca listeleyin (madde işaretli, 3-6 madde).
-
-2) HAMLELER: Hangi bulmacada hangi hamleleri oynadığı ve doğru çözümle karşılaştırması (kısa özet).`,
-    },
-  ]);
-
-  return parseAiInsightSections(text || "");
+  const payload = { studentName, homeworkTitle, attempts };
+  const key = hashKey("homework|" + JSON.stringify(payload));
+  const hit = cachedReport(key);
+  if (hit) return hit;
+  const text = await callAi("homework-report", payload);
+  const result = parseAiInsightSections(text || "");
+  if (text.trim()) storeReport(key, result);
+  return result;
 };
 
 export interface StudentComprehensiveContext {
@@ -341,66 +246,37 @@ export const analyzeStudentComprehensive = async (
   attempts: StudentHomeworkAttemptForAI[],
   context: StudentComprehensiveContext
 ): Promise<{ eksiklikler: string; hamleler: string }> => {
-  const attemptsSummary = attempts
-    .map(
-      (a, i) =>
-        `${i + 1}. "${a.puzzleTitle}": ${a.correct ? "Doğru" : "Yanlış"}. Oynanan: ${a.movesPlayed.join(", ") || "-"}. Çözüm: ${a.solutionMoves.join(", ") || "-"}`
-    )
-    .join("\n");
-
-  const text = await chat([
-    {
-      role: "user",
-      content: `Sen bir satranç antrenörüsün. Öğrenci: ${studentName}.
-
-BECERİ DAĞILIMI (%):
-${context.skillLines}
-
-ÖDEV ÖZETİ:
-${context.homeworkLine}
-
-ONLİNE PLATFORM (Lichess + Chess.com):
-${context.platformLine}
-
-PLATFORM BECERİ SKORLARI:
-${context.detailedStatsLine || context.skillLines}
-
-TEMPO / AKTİVİTE DAĞILIMI:
-${context.activityLine || '(Tempo verisi yok)'}
-
-SON AÇILIŞLAR:
-${context.recentOpeningsLine}
-
-ÖDEV DENEMELERİ (son kayıtlar):
-${attemptsSummary || "(Kayıtlı ödev denemesi yok — platform verisine ağırlık ver)"}
-
-Türkçe, antrenöre yönelik iki bölüm yaz. Her maddeyi "1." "2." şeklinde numaralandır; madde başlığını kalın yazma, sadece "Başlık: açıklama" formatı kullan.
-
-1) EKSİKLİKLER: Açılış, taktik, oyun sonu ve platform performansına göre 4-7 madde; hangi açılışlarda/temposlarda sorun var.
-
-2) HAMLELER: Somut çalışma planı — haftalık 3-5 adımlık öneri. Ödev denemesi yoksa platform verisinden çıkarım yap.`,
-    },
-  ]);
-
-  return parseAiInsightSections(text || "");
+  const payload = { studentName, attempts, context };
+  const key = hashKey("comprehensive|" + JSON.stringify(payload));
+  const hit = cachedReport(key);
+  if (hit) return hit;
+  const text = await callAi("comprehensive-report", payload);
+  const result = parseAiInsightSections(text || "");
+  if (text.trim()) storeReport(key, result);
+  return result;
 };
 
+/** Hiçbir ekranda kullanılmıyor; geriye dönük dışa aktarım için korunur (sunucuda karşılığı yok). */
+export const getChessAnalysis = async (_fen: string, _move: string) => "Analiz şu an kullanılamıyor.";
+export const generatePuzzleFromFEN = async (_fen: string) => null;
+
+/** Anahtar sunucuda; istemci bilemez — uygunluğu sunucu yanıtı belirler. */
 export function isOpenRouterConfigured(): boolean {
-  return !!getApiKey();
+  return true;
 }
 
 export function formatOpenRouterError(error: unknown): string {
   if (error instanceof OpenRouterError) {
     if (error.message.includes("402") || /insufficient|credit/i.test(error.message)) {
-      return "OpenRouter AI kredisi yetersiz. Görselden FEN için hesabınıza kredi yükleyin veya FEN'i elle girin.";
+      return "Yapay zekâ kredisi yetersiz. OpenRouter hesabına kredi yükleyin veya FEN'i elle girin.";
     }
     if (error.message.includes("404") || error.message.includes("No endpoints found")) {
-      return "Vision modeli bulunamadı. .env içinde VITE_OPENROUTER_MODEL=google/gemini-2.5-flash deneyin.";
+      return "Yapay zekâ modeli bulunamadı. Sunucuda OPENROUTER_MODEL=google/gemini-2.5-flash deneyin.";
     }
-    if (error.message.includes("API anahtarı")) {
+    if (/yapılandırılmamış|sınır|Çok fazla|Görsel/i.test(error.message)) {
       return error.message;
     }
-    return `OpenRouter hatası: ${error.message.slice(0, 200)}`;
+    return `Yapay zekâ hatası: ${error.message.slice(0, 200)}`;
   }
   if (error instanceof Error) return error.message;
   return "Görselden FEN çıkarılamadı.";
