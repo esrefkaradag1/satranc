@@ -11,6 +11,7 @@ import {
   pushTournamentGameMove,
   resignTournamentGame,
   subscribeToTournamentGame,
+  TOURNAMENT_GAME_START_FEN,
   type TournamentGame,
   type TournamentGameResult,
 } from '../../lib/tournamentGames';
@@ -47,7 +48,20 @@ function detectGameOverResult(chess: Chess): TournamentGameResult | null {
 export const LiveTournamentGame: React.FC<LiveTournamentGameProps> = ({ game: initialGame, studentId, whiteName, blackName, onClose }) => {
   const [game, setGame] = useState(initialGame);
   const [now, setNow] = useState(() => Date.now());
-  const chess = useMemo(() => new Chess(game.fen), [game.fen]);
+  // Motor, başlangıçtan kayıtlı hamleler tekrar oynatılarak kurulur; böylece history() TÜM
+  // hamleleri verir. Eski hata: yalnızca FEN'den kuruluyordu → her hamlede kayda sadece son hamle
+  // yazılıyor (izleme ekranında tek hamle görünüyordu) ve 3 tekrar beraberliği tespit edilemiyordu.
+  const chess = useMemo(() => {
+    const placement = (f: string) => f.split(' ').slice(0, 4).join(' ');
+    try {
+      const replay = new Chess(TOURNAMENT_GAME_START_FEN);
+      for (const san of game.moves) replay.move(san);
+      if (placement(replay.fen()) === placement(game.fen)) return replay;
+    } catch {
+      /* kayıtlı hamleler pozisyonla uyuşmuyor (eski maç) — FEN'e düş */
+    }
+    return new Chess(game.fen);
+  }, [game.fen, game.moves]);
   const myColor: 'white' | 'black' = game.whiteStudentId === studentId ? 'white' : 'black';
   const isMyTurn = chess.turn() === myColor[0] && game.status === 'active';
 
