@@ -1,4 +1,4 @@
-import { isPasswordHash } from '../lib/passwordHash';
+import { isPasswordHash } from '../lib/passwordHashBrowser';
 import React, { useState } from 'react';
 import { Building2, MapPin, Users, Plus, Pencil, Trash2, X, KeyRound, Copy, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../AppContext';

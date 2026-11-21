@@ -1,5 +1,6 @@
 /**
- * Personel şifreleri — tarayıcı tarafı (WebCrypto). Biçim sunucudaki lib/passwordHash.mjs ile
+ * Personel şifreleri — tarayıcı tarafı (WebCrypto). Dosya adı .mjs ile çakışmasın diye ayrı (Vite .mjs
+ * dosyasını .ts önüne çözer). Biçim sunucudaki lib/passwordHash.mjs ile
  * aynıdır: pbkdf2$sha256$<iterasyon>$<tuz base64>$<özet base64>. Yeni şifre kaydedilirken
  * düz metin veritabanına hiç yazılmaz.
  */

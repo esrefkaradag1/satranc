@@ -1,4 +1,4 @@
-import { isPasswordHash } from '../../lib/passwordHash';
+import { isPasswordHash } from '../../lib/passwordHashBrowser';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
