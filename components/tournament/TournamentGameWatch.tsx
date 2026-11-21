@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Chessboard } from 'react-chessboard';
-import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Radio, Repeat, X } from 'lucide-react';
+import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Pause, Play, Radio, Repeat, X } from 'lucide-react';
 import { ChessBoardFrame } from '../chess/ChessBoardFrame';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, chessboardDomId } from '../../lib/chessBoardUi';
 import { subscribeToTournamentGame, type TournamentGame } from '../../lib/tournamentGames';
@@ -30,8 +30,15 @@ export const TournamentGameWatch: React.FC<TournamentGameWatchProps> = ({ game: 
   const [game, setGame] = useState(initialGame);
   const [now, setNow] = useState(() => Date.now());
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
-  /** null = canlıyı takip et (son hamle); sayı = kullanıcının seçtiği ply */
-  const [viewPly, setViewPly] = useState<number | null>(null);
+  /**
+   * null = canlıyı takip et (son hamle); sayı = kullanıcının seçtiği ply.
+   * Bitmiş maç tekrar izlemek için açılır: ilk hamleden (başlangıç pozisyonu) başlar.
+   */
+  const [viewPly, setViewPly] = useState<number | null>(
+    () => (initialGame.status !== 'active' && initialGame.moves.length > 0 ? 0 : null),
+  );
+  /** Hamleleri kendiliğinden ilerletir (maçı oynatma) */
+  const [autoplay, setAutoplay] = useState(false);
   const moveListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => subscribeToTournamentGame(initialGame.id, setGame), [initialGame.id]);
@@ -52,11 +59,24 @@ export const TournamentGameWatch: React.FC<TournamentGameWatchProps> = ({ game: 
     setViewPly(clamped >= lastPly ? null : clamped);
   };
 
+  // Oynat: her saniye bir hamle ilerle; son hamlede dur.
+  useEffect(() => {
+    if (!autoplay) return undefined;
+    if (ply >= lastPly) {
+      setAutoplay(false);
+      return undefined;
+    }
+    const id = window.setTimeout(() => go(ply + 1), 1000);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoplay, ply, lastPly]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
-      else if (e.key === 'ArrowLeft') go(ply - 1);
-      else if (e.key === 'ArrowRight') go(ply + 1);
+      else if (e.key === ' ') setAutoplay((a) => (a ? false : ply < lastPly));
+      else if (e.key === 'ArrowLeft') { setAutoplay(false); go(ply - 1); }
+      else if (e.key === 'ArrowRight') { setAutoplay(false); go(ply + 1); }
       else if (e.key === 'ArrowUp' || e.key === 'Home') go(0);
       else if (e.key === 'ArrowDown' || e.key === 'End') go(lastPly);
       else if (e.key === 'f') setOrientation((o) => (o === 'white' ? 'black' : 'white'));
@@ -184,10 +204,16 @@ export const TournamentGameWatch: React.FC<TournamentGameWatchProps> = ({ game: 
 
           <div className="flex min-h-0 flex-col rounded-xl border border-slate-700/50 bg-slate-950/40 overflow-hidden md:max-h-[calc(100vh-10rem)]">
             <div className="flex border-b border-slate-700/50">
-              {navBtn(() => go(0), "Başa (↑)", ply === 0, <ChevronFirst className="w-4 h-4" />)}
-              {navBtn(() => go(ply - 1), "Geri (←)", ply === 0, <ChevronLeft className="w-4 h-4" />)}
-              {navBtn(() => go(ply + 1), "İleri (→)", ply >= lastPly, <ChevronRight className="w-4 h-4" />)}
-              {navBtn(() => go(lastPly), "Son hamle (↓)", ply >= lastPly, <ChevronLast className="w-4 h-4" />)}
+              {navBtn(() => { setAutoplay(false); go(0); }, "Başa (↑)", ply === 0, <ChevronFirst className="w-4 h-4" />)}
+              {navBtn(() => { setAutoplay(false); go(ply - 1); }, "Geri (←)", ply === 0, <ChevronLeft className="w-4 h-4" />)}
+              {navBtn(
+                () => setAutoplay((a) => !a),
+                autoplay ? "Durdur (boşluk)" : "Oynat (boşluk)",
+                !autoplay && ply >= lastPly,
+                autoplay ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />,
+              )}
+              {navBtn(() => { setAutoplay(false); go(ply + 1); }, "İleri (→)", ply >= lastPly, <ChevronRight className="w-4 h-4" />)}
+              {navBtn(() => { setAutoplay(false); go(lastPly); }, "Son hamle (↓)", ply >= lastPly, <ChevronLast className="w-4 h-4" />)}
             </div>
             <div ref={moveListRef} className="relative min-h-[8rem] flex-1 overflow-y-auto text-sm">
               {movePairs.length === 0 ? (

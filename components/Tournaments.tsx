@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Trophy, Plus, Clock3, CalendarDays, Trash2, Users, Shuffle,
   ChevronLeft, Info, Swords, ChevronRight, Settings, UserPlus,
-  CheckCircle2, Lock, Check, X, Minus, Hourglass, Flame, Shield, Search, Eye, Pencil,
+  CheckCircle2, Lock, Check, X, Minus, Hourglass, Flame, Shield, Search, Eye, Pencil, Play,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { canShowStudentCounts } from '../lib/studentCountVisibility';
@@ -68,6 +68,15 @@ function formatChessDuelloLimit(seconds: number): string {
 const TIME_CONTROL_PRESETS = ['3+0', '3+2', '5+0', '5+3', '10+0', '15+10', '30+0'];
 
 type TournamentStatus = 'upcoming' | 'ongoing' | 'finished';
+
+/** Kalan süre: 1:05:09 / 12:34 */
+function formatRemaining(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
 
 const STATUS_META: Record<TournamentStatus, { label: string; dot: string; text: string }> = {
   ongoing: { label: 'Canlı', dot: 'bg-rose-500', text: 'text-rose-400' },
@@ -707,7 +716,8 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
   // Arena/İsviçre durumu (başlık etiketi için); otomatik eşleştirmeyi useArenaDirector yürütür.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 5000);
+    // Arena kalan süresi saniye saniye sayar
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
   const arenaStartMs = new Date(t.startAt).getTime();
@@ -886,7 +896,7 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
               >
                 <Shuffle className="w-4 h-4" />
                 {arenaPhase === 'running'
-                  ? `Otomatik eşleştirme açık${freeCount > 0 ? ` · ${freeCount} boşta` : ''}`
+                  ? `Otomatik eşleştirme açık${freeCount > 0 ? ` · ${freeCount} boşta` : ''} · ⏱ ${formatRemaining(arenaEndMs - nowMs)} kaldı`
                   : arenaPhase === 'upcoming'
                     ? `Başlayınca otomatik eşleşir · ${new Date(t.startAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
                     : 'Turnuva süresi doldu'}
@@ -1026,14 +1036,26 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                       {blackName === null ? (
                         <span className="shrink-0 rounded-md bg-emerald-500/15 text-emerald-400 font-semibold text-[10px] uppercase tracking-wide px-2 py-1">BAY</span>
                       ) : p.result ? (
-                        <button
-                          type="button"
-                          onClick={() => setPairingResult(round.id, idx, undefined)}
-                          title="Sonucu düzenle"
-                          className="shrink-0 px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs tabular-nums transition-colors"
-                        >
-                          {p.result}
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {p.gameId ? (
+                            <button
+                              type="button"
+                              onClick={() => setWatchGameId(p.gameId!)}
+                              title="Maçı baştan oynat / izle"
+                              className="flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 font-semibold text-[10px] uppercase tracking-wide transition-colors"
+                            >
+                              <Play className="w-3 h-3" /> İzle
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => setPairingResult(round.id, idx, undefined)}
+                            title="Sonucu düzenle"
+                            className="shrink-0 px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs tabular-nums transition-colors"
+                          >
+                            {p.result}
+                          </button>
+                        </div>
                       ) : p.gameId && !manualOverrideIds.has(p.gameId) ? (
                         <div className="flex items-center gap-1 shrink-0">
                         <button
@@ -1096,16 +1118,38 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                             {blackName === null ? (
                               <span className="shrink-0 rounded-md bg-emerald-500/15 text-emerald-400 font-semibold text-[10px] uppercase tracking-wide px-2 py-1">BAY</span>
                             ) : p.result ? (
-                              <button
-                                type="button"
-                                onClick={() => setPairingResult(round.id, idx, undefined)}
-                                title="Sonucu düzenle"
-                                className="shrink-0 px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs tabular-nums transition-colors"
-                              >
-                                {p.result}
-                              </button>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {p.gameId ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setWatchGameId(p.gameId!)}
+                                    title="Maçı baştan oynat / izle"
+                                    className="flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 font-semibold text-[10px] uppercase tracking-wide transition-colors"
+                                  >
+                                    <Play className="w-3 h-3" /> İzle
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={() => setPairingResult(round.id, idx, undefined)}
+                                  title="Sonucu düzenle"
+                                  className="shrink-0 px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs tabular-nums transition-colors"
+                                >
+                                  {p.result}
+                                </button>
+                              </div>
                             ) : (
                               <div className="flex items-center gap-1 shrink-0">
+                                {p.gameId ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setWatchGameId(p.gameId!)}
+                                    title="Maçı canlı izle"
+                                    className="flex items-center gap-1 px-2 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold text-[10px] uppercase tracking-wide transition-colors"
+                                  >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" /> İzle
+                                  </button>
+                                ) : null}
                                 <button type="button" onClick={() => setPairingResult(round.id, idx, '1-0')} title={`${whiteName} kazandı`} className="w-6 h-6 rounded-md bg-slate-800 hover:bg-emerald-600 text-slate-500 hover:text-white flex items-center justify-center transition-colors">
                                   <Check className="w-3.5 h-3.5" />
                                 </button>
