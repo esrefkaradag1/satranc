@@ -41,7 +41,7 @@ Proje Supabase ve isteğe bağlı API anahtarları kullanıyorsa Vercel’de şu
 |----|----------|--------|
 | `VITE_SUPABASE_URL` | Supabase proje URL | Evet (Supabase kullanıyorsanız) |
 | `VITE_SUPABASE_ANON_KEY` | Supabase anon key | Evet (Supabase kullanıyorsanız) |
-| `VITE_SUPABASE_SERVICE_ROLE_KEY` | Supabase service role (gerekirse) | Hayır |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role — **yalnızca sunucu** (API'ler). Tarayıcı kodu okumaz; yetkiyi oturum belirteci + RLS belirler | Evet |
 | `VITE_API_URL` | Backend API adresi (öğrenci/veli paneli) | Hayır |
 | `ADMIN_PASSWORD` | Yönetici giriş şifresi — **zorunlu**, yalnızca sunucu (yoksa yönetici girişi kapalı) | Evet |
 | `ADMIN_PASSWORD_HASH` | `ADMIN_PASSWORD` yerine özet (`pbkdf2$...`) | Hayır |
