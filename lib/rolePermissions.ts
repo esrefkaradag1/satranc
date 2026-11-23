@@ -202,9 +202,12 @@ export function sanitizePermissionsForRole(panel: RolePanel, keys: string[]): st
   return keys.filter((k) => allowed.has(k));
 }
 
+/** Kulübün antrenörüne asla veremeyeceği yönetim menüleri. */
+const COACH_NON_GRANTABLE_KEYS = new Set(['corporate', 'main-site', 'security', 'roles']);
+
 /** Kulübün antrenörüne verebileceği menü izinleri (yönetim + antrenör + kulüp menüleri). */
 export function coachGrantablePermissionDefs(): PermissionDef[] {
-  return permissionsForRoleEditor('club');
+  return permissionsForRoleEditor('club').filter((p) => !COACH_NON_GRANTABLE_KEYS.has(p.key));
 }
 
 export function groupedCoachGrantablePermissions(): [string, PermissionDef[]][] {
@@ -348,11 +351,13 @@ export function coachNavForPermissions(allowed: Set<string>): NavCategory[] {
   effective.add('whatsapp');
   effective.add('chessduello');
   if (effective.has('student-list')) effective.delete('students');
+  COACH_NON_GRANTABLE_KEYS.forEach((k) => effective.delete(k));
   return mergeNavForPermissions(effective, [NAV_CATEGORIES, COACH_NAV_CATEGORIES]);
 }
 
 /** Antrenör panelinde sekme izni (alt sayfalar dahil) */
 export function isCoachPanelTabAllowed(allowed: Set<string>, tab: string): boolean {
+  if (COACH_NON_GRANTABLE_KEYS.has(tab)) return false;
   if (tab === 'whatsapp' || tab === 'chessduello') return true;
   if (allowed.has(tab)) return true;
   if (tab === 'student-detail' && (allowed.has('student-list') || allowed.has('students'))) return true;

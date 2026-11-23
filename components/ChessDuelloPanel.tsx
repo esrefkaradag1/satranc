@@ -356,7 +356,23 @@ const ChessDuelloPanel: React.FC = () => {
     }
   };
 
+  /** Üyeyi öğrenciye bağlar; studentId boşsa eşlemeyi kaldırır. Eski (yanlış) eşleme temizlenir. */
   const linkStudent = (member: ChessDuelloMember, studentId: string) => {
+    const unlinkFields = {
+      chessDuelloMemberId: null as unknown as string | undefined,
+      chessDuelloUsername: null as unknown as string | undefined,
+    };
+    const lowerUser = member.username.trim().toLowerCase();
+    for (const s of roster) {
+      if (s.id === studentId) continue;
+      const sameId = s.chessDuelloMemberId === member.id;
+      const sameUser = !s.chessDuelloMemberId && s.chessDuelloUsername?.trim().toLowerCase() === lowerUser;
+      if (sameId || sameUser) updateStudent(s.id, unlinkFields);
+    }
+    if (!studentId) {
+      showToast('ChessDuello eşlemesi kaldırıldı.', 'info');
+      return;
+    }
     updateStudent(studentId, {
       chessDuelloMemberId: member.id,
       chessDuelloUsername: member.username,
@@ -516,7 +532,8 @@ const ChessDuelloPanel: React.FC = () => {
                   </thead>
                   <tbody>
                     {members.map((m) => {
-                      const linked = roster.find((s) => s.chessDuelloMemberId === m.id) ?? matchChessDuelloMember(m, roster);
+                      const saved = roster.find((s) => s.chessDuelloMemberId === m.id);
+                      const suggested = saved ? undefined : matchChessDuelloMember(m, roster);
                       return (
                         <tr key={m.id} className="border-t border-white/[0.04] hover:bg-white/[0.03]">
                           <td className="px-3 py-2">
@@ -529,24 +546,32 @@ const ChessDuelloPanel: React.FC = () => {
                           <td className="px-3 py-2 text-slate-300 tabular-nums">{m.attemptsLast30Days ?? '—'}</td>
                           <td className="px-3 py-2 text-slate-300">{pct(m.accuracyLast30Days)}</td>
                           <td className="px-3 py-2">
-                            {linked ? (
-                              <span className="text-emerald-300 text-xs font-bold">{linked.name}</span>
-                            ) : (
+                            <div className="flex flex-col items-start gap-1">
                               <select
-                                className="bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-200 px-2 py-1 max-w-[160px]"
-                                defaultValue=""
-                                onChange={(e) => {
-                                  if (e.target.value) linkStudent(m, e.target.value);
-                                }}
+                                className={`bg-slate-950 border rounded-lg text-xs px-2 py-1 max-w-[180px] ${
+                                  saved ? 'border-emerald-500/40 text-emerald-300 font-bold' : 'border-slate-700 text-slate-200'
+                                }`}
+                                value={saved?.id ?? ''}
+                                onChange={(e) => linkStudent(m, e.target.value)}
                               >
-                                <option value="">Eşle…</option>
+                                <option value="">{saved ? '— Eşlemeyi kaldır —' : 'Eşle…'}</option>
                                 {roster.map((s) => (
                                   <option key={s.id} value={s.id}>
                                     {s.name}
                                   </option>
                                 ))}
                               </select>
-                            )}
+                              {suggested ? (
+                                <button
+                                  type="button"
+                                  onClick={() => linkStudent(m, suggested.id)}
+                                  className="text-[10px] font-bold text-amber-300 hover:text-amber-200"
+                                  title="Önerilen eşlemeyi kaydet"
+                                >
+                                  Öneri: {suggested.name} · Onayla
+                                </button>
+                              ) : null}
+                            </div>
                           </td>
                           <td className="px-3 py-2 text-slate-400 text-xs">{fmtDate(m.lastActiveAt)}</td>
                         </tr>

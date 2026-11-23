@@ -3,10 +3,13 @@ import { ExternalLink, Loader2, RefreshCw, Swords, User } from 'lucide-react';
 import type { Student } from '../../types';
 import {
   ChessDuelloApiError,
+  chessduelloAllMembers,
   chessduelloAnalytics,
+  chessduelloMember,
   chessduelloTraining,
   localizedTitle,
   type ChessDuelloAnalytics,
+  type ChessDuelloMember,
   type ChessDuelloTraining,
 } from '../../lib/chessduelloClient';
 
@@ -37,6 +40,8 @@ export default function ChessDuelloStudentCard({
   const [error, setError] = useState('');
   const [training, setTraining] = useState<ChessDuelloTraining | null>(null);
   const [analytics, setAnalytics] = useState<ChessDuelloAnalytics | null>(null);
+  const [member, setMember] = useState<ChessDuelloMember | null>(null);
+  const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
     setUsername(student.chessDuelloUsername ?? '');
@@ -48,21 +53,32 @@ export default function ChessDuelloStudentCard({
     if (!id) {
       setTraining(null);
       setAnalytics(null);
-      setError('');
+      setMember(null);
       return;
     }
     setLoading(true);
     setError('');
     try {
-      const [t, a] = await Promise.all([
+      const [t, a, m] = await Promise.all([
         chessduelloTraining(id, clubId),
         chessduelloAnalytics(id, clubId, 30),
+        chessduelloMember(id, clubId)
+          .then((r) => (typeof r.data?.eloRating === 'number' ? r.data : null))
+          .catch(() => null)
+          .then(async (direct) => {
+            if (direct) return direct;
+            // Tekil uç ELO döndürmezse listeden (ChessDuello sayfasındaki tablo) al.
+            const list = await chessduelloAllMembers(clubId).catch(() => []);
+            return list.find((x) => x.id === id) ?? null;
+          }),
       ]);
       setTraining(t.data);
       setAnalytics(a.data);
+      setMember(m);
     } catch (err) {
       setTraining(null);
       setAnalytics(null);
+      setMember(null);
       setError(err instanceof ChessDuelloApiError ? err.message : 'ChessDuello verisi alınamadı');
     } finally {
       setLoading(false);
@@ -73,11 +89,49 @@ export default function ChessDuelloStudentCard({
     void load();
   }, [load]);
 
-  const saveFields = () => {
+  // null → veritabanında alan temizlenir (undefined yazılmaz).
+  const persist = (nextUsername: string, nextMemberId: string) => {
     onChange({
-      chessDuelloUsername: username.trim() || undefined,
-      chessDuelloMemberId: memberId.trim() || undefined,
+      chessDuelloUsername: (nextUsername || null) as string | undefined,
+      chessDuelloMemberId: (nextMemberId || null) as string | undefined,
     });
+  };
+
+  const saveMemberId = () => {
+    const nextId = memberId.trim();
+    if (nextId === (student.chessDuelloMemberId ?? '')) return;
+    persist(username.trim(), nextId);
+  };
+
+  /** Kullanıcı adı değişince üye ID'yi kulüp üyelerinden yeniden bul; eski (yanlış) ID'de kalmasın. */
+  const saveUsername = async () => {
+    const nextUser = username.trim();
+    if (nextUser === (student.chessDuelloUsername ?? '').trim()) return;
+    if (!nextUser) {
+      setMemberId('');
+      setError('');
+      persist('', '');
+      return;
+    }
+    setResolving(true);
+    setError('');
+    try {
+      const members = await chessduelloAllMembers(clubId);
+      const hit = members.find((m) => m.username.trim().toLowerCase() === nextUser.toLowerCase());
+      if (hit) {
+        setUsername(hit.username);
+        setMemberId(hit.id);
+        persist(hit.username, hit.id);
+      } else {
+        setMemberId('');
+        persist(nextUser, '');
+        setError(`"${nextUser}" kulübün ChessDuello üyeleri arasında bulunamadı. Kullanıcı adını kontrol edin.`);
+      }
+    } catch (err) {
+      setError(err instanceof ChessDuelloApiError ? err.message : 'ChessDuello üyeleri alınamadı');
+    } finally {
+      setResolving(false);
+    }
   };
 
   return (
@@ -104,7 +158,11 @@ export default function ChessDuelloStudentCard({
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              onBlur={saveFields}
+              onBlur={() => void saveUsername()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              disabled={resolving}
               placeholder="ChessDuello kullanıcı adı"
               className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-medium placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/40 outline-none"
             />
@@ -114,7 +172,7 @@ export default function ChessDuelloStudentCard({
             <input
               value={memberId}
               onChange={(e) => setMemberId(e.target.value)}
-              onBlur={saveFields}
+              onBlur={saveMemberId}
               placeholder="UUID (kulüp panelinden eşlenir)"
               className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm font-mono placeholder:text-slate-500 focus:ring-2 focus:ring-violet-500/40 outline-none"
             />
@@ -159,6 +217,12 @@ export default function ChessDuelloStudentCard({
                   </div>
                   <div className="text-xs text-slate-500 mt-0.5">Son antrenman {fmtDate(training.lastTrainedAt)}</div>
                 </div>
+                {member?.eloRating != null ? (
+                  <div className="rounded-xl bg-violet-500/15 border border-violet-500/30 px-4 py-2 text-center">
+                    <div className="text-[10px] font-bold text-violet-300 uppercase tracking-wider">ELO Puanı</div>
+                    <div className="text-2xl font-black text-white tabular-nums">{member.eloRating}</div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
