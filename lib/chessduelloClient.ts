@@ -240,6 +240,19 @@ export async function chessduelloMember(memberId: string, clubId?: string): Prom
   return request('GET', { resource: 'member', id: memberId, clubId });
 }
 
+export type ChessDuelloStudentSummary = {
+  linked: boolean;
+  configured?: boolean;
+  member?: ChessDuelloMember | null;
+  training?: ChessDuelloTraining | null;
+  analytics?: ChessDuelloAnalytics | null;
+};
+
+/** Öğrenci/veli paneli: sunucu üye ID'yi öğrencinin kendi kaydından bulur. */
+export async function chessduelloStudentSummary(studentId: string): Promise<Envelope<ChessDuelloStudentSummary>> {
+  return request('GET', { resource: 'student-summary', studentId });
+}
+
 export async function chessduelloTraining(memberId: string, clubId?: string): Promise<Envelope<ChessDuelloTraining>> {
   return request('GET', { resource: 'training', memberId, clubId });
 }

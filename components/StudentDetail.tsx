@@ -4840,7 +4840,9 @@ const EditStudentModal: React.FC<{
                   </div>
                   <div>
                     <label className={labelCls}>ChessDuello Kullanıcı Adı</label>
-                    <input type="text" value={fields.chessDuelloUsername || ''} onChange={e => setFields(f => ({ ...f, chessDuelloUsername: e.target.value }))} className={inputCls} />
+                    {/* Burada değiştirmek üye ID'yi eski (yanlış) kişide bırakıyordu; eşleme ChessDuello sekmesinden yapılır. */}
+                    <input type="text" value={fields.chessDuelloUsername || ''} readOnly disabled className={`${inputCls} opacity-60 cursor-not-allowed`} />
+                    <p className="text-[10px] text-slate-500 mt-1">Değiştirmek için öğrencinin "ChessDuello" sekmesini kullanın.</p>
                   </div>
                   <div>
                     <label className={labelCls}>UKD (Puan)</label>

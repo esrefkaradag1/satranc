@@ -125,6 +125,7 @@ import LichessOpeningsSection from './LichessOpeningsSection';
 import { fetchFidePlayer, federationLabel, resolveFideProfileForStudent, type FidePlayer } from '../services/fideService';
 import { fetchUkdFromTsf } from '../services/ukdService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
+import StudentChessDuelloSummary from './student/StudentChessDuelloSummary';
 import { persistLeaderboardStatsFromActivity, persistLeaderboardStatsFromDays } from '../services/leaderboardService';
 import { fetchLichessOAuthProfile, fetchLichessOAuthStatus } from '../services/lichessOAuthClient';
 import { formatMidnightCountdown, homeworkDayKey } from '../lib/homeworkDayUtils';
@@ -1692,6 +1693,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             unreadNotificationCount={unreadNotificationCount}
             onNotificationUnreadChange={refreshUnreadNotificationCount}
           />
+        )}
+        {activeTab === 'summary' && derived && (
+          <StudentChessDuelloSummary studentId={String(studentId)} memberId={student.chessDuelloMemberId} />
         )}
 
         {activeTab === 'leaderboard' && (
