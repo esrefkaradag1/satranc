@@ -220,12 +220,14 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     setPuzzleModalBoardOrientation(puzzleBoardOrientationForStudent(studentColor));
     setSolutionPly(0);
     setGame(makeGameFromFen(requiresManualStart ? rawFen : playFen));
-    if (requiresManualStart) {
+    // Kurulum hamlesi tahtada zaten oynanmışsa (Başlat'ı beklemeyen pozisyon) rakibin son
+    // hamlesi ödev modunda da baştan vurgulanır; yalnızca Başlat ile oynanacaksa boş kalır.
+    if (requiresManualStart && hasSetupMove) {
       setLastMoveStyles({});
     } else {
       refreshSetupHighlight();
     }
-  }, [playFen, rawFen, studentColor, refreshSetupHighlight, requiresManualStart]);
+  }, [playFen, rawFen, studentColor, refreshSetupHighlight, requiresManualStart, hasSetupMove]);
 
   const handleStartSession = useCallback(() => {
     setSessionStarted(true);
@@ -324,7 +326,9 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
 
     const ply = solutionPly;
     if (ply >= solutionMoves.length) {
-      if (!game.isGameOver() && ply > 0) {
+      // Mat ile biten bulmacada oyun bitmiş olur — bu da çözüm sayılır (eski koşul !isGameOver
+      // mat bulmacalarını hiç "çözüldü" yapmıyor, kapatınca yanlış deneme kaydediyordu).
+      if (ply > 0) {
         setStatus('solved');
         reportAttempt(true, game.fen());
       }
@@ -423,7 +427,21 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
 
       if (!match.ok) {
         const wrongCopy = makeGameFromFen(game.fen());
-        const wrongMove = wrongCopy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+        let wrongMove: ReturnType<typeof wrongCopy.move> | null = null;
+        try {
+          wrongMove = wrongCopy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+        } catch {
+          wrongMove = null;
+        }
+        // Son hamlede çözümden farklı ama mat eden hamle de doğrudur (Lichess kuralı).
+        if (wrongMove && wrongCopy.isCheckmate() && ply === solutionMoves.length - 1) {
+          movesPlayedRef.current = [...movesPlayedRef.current, wrongMove.san];
+          setMovesPlayed([...movesPlayedRef.current]);
+          setLastMoveStyles(puzzleMoveHighlightStyles(game.fen(), `${wrongMove.from}${wrongMove.to}`));
+          setSolutionPly(solutionMoves.length);
+          setGame(makeGameFromFen(wrongCopy.fen()));
+          return true;
+        }
         if (wrongMove) {
           movesPlayedRef.current = [...movesPlayedRef.current, wrongMove.san];
           setMovesPlayed([...movesPlayedRef.current]);
@@ -786,6 +804,15 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
               className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all"
             >
               Sonraki soru
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          ) : nextPuzzle && onPlayNext && status === 'playing' ? (
+            <button
+              type="button"
+              onClick={handlePlayNext}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-bold text-sm transition-all"
+            >
+              Soruyu geç
               <ChevronRight className="w-4 h-4" />
             </button>
           ) : null}

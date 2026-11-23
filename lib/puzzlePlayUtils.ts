@@ -1381,8 +1381,10 @@ export function nextHomeworkPuzzle(
   const solved = new Set(solvedIds);
   const idx = homework.puzzles.indexOf(currentPuzzleId);
   if (idx < 0) return null;
-  for (let i = idx + 1; i < homework.puzzles.length; i++) {
-    const nextId = homework.puzzles[i];
+  // Sondan başa sarar: "Soruyu geç" ile atlanan çözülmemiş sorulara geri dönülebilir.
+  const n = homework.puzzles.length;
+  for (let step = 1; step < n; step++) {
+    const nextId = homework.puzzles[(idx + step) % n];
     const puzzle = puzzles.find((p) => p.id === nextId);
     if (!puzzle) continue;
     if (puzzleMatchesSolvedIds(puzzle, solved)) continue;
