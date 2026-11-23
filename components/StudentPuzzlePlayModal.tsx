@@ -80,9 +80,11 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   const [playPuzzle, setPlayPuzzle] = useState(puzzle);
   const [lichessRepairing, setLichessRepairing] = useState(false);
 
+  // Yalnızca içerik (id/FEN/çözüm) değişince: üst bileşen her render'da yeni nesne verse de
+  // oturum sıfırlanmaz (aksi halde Başlat'tan sonra tahta "gidip gelir").
   useEffect(() => {
     setPlayPuzzle(puzzle);
-  }, [puzzleResetKey, puzzle]);
+  }, [puzzleResetKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const materializedPuzzle = useMemo(
     () => materializeLichessPuzzleRecord(playPuzzle),
@@ -163,8 +165,13 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     puzzleBoardOrientationForStudent(studentColor),
   );
   const [lastMoveStyles, setLastMoveStyles] = useState<Record<string, React.CSSProperties>>({});
+  // sessionStarted ref üzerinden okunur: bağımlılık olsaydı Başlat → refreshSetupHighlight →
+  // resetPlay kimliği değişir → sıfırlama efekti çalışır → oturum anında "başlamadı"ya döner.
+  const sessionStartedRef = useRef(sessionStarted);
+  sessionStartedRef.current = sessionStarted;
 
   const refreshSetupHighlight = useCallback(() => {
+    const sessionStarted = sessionStartedRef.current;
     if (setupMoveSan && rawFen !== playFen) {
       setLastMoveStyles(puzzleMoveHighlightStyles(rawFen, setupMoveSan));
       return;
@@ -180,7 +187,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       return;
     }
     setLastMoveStyles({});
-  }, [setupMoveSan, rawFen, playFen, materializedPuzzle.lichessSetupMove, sessionStarted, solutionMoves]);
+  }, [setupMoveSan, rawFen, playFen, materializedPuzzle.lichessSetupMove, solutionMoves]);
 
   const markHintUsed = useCallback(() => {
     sessionHintUsedRef.current = true;
