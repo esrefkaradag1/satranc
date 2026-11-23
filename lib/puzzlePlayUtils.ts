@@ -333,6 +333,20 @@ function verifiedLichessPlayState(
         }
       }
     }
+    // 3) PGN/kaynak FEN taşımayan kopyalar (ödev, pratik listesi vb.): kurulum hamlesi kayıtlı
+    //    FEN'de ZATEN oynanmış mı? Başlangıç karesi boş, varış karesinde hamleyi yapan tarafın
+    //    taşı ve sıra karşı tarafta ise kayıt "kurulum sonrası FEN + öğrenci hattı" biçimindedir.
+    //    Aksi halde sezgisel yol çözümün ilk (öğrenci) hamlesini kurulum sanıp rengi ters çevirir.
+    if (/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(setupMove)) {
+      const board = new Chess(fen);
+      const from = setupMove.slice(0, 2) as Square;
+      const to = setupMove.slice(2, 4) as Square;
+      const moved = board.get(to);
+      const mover = board.turn() === 'w' ? 'b' : 'w';
+      if (!board.get(from) && moved && moved.color === mover && !isMoveLegalForSideToMove(fen, setupMove)) {
+        return { playFen: fen, solutionMoves: solution };
+      }
+    }
   } catch {
     return null;
   }
