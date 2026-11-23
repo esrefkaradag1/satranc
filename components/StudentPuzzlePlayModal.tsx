@@ -6,7 +6,7 @@ import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, chessboardDomId } from '.
 import { ChessBoardFrame } from './chess/ChessBoardFrame';
 import { isBoardFlipShortcutKey, keyboardTargetAllowsBoardShortcut } from '../lib/boardFlipShortcut';
 import { Chess, type Square } from 'chess.js';
-import { X, CheckCircle2, Lightbulb, ListChecks, ChevronRight, RotateCcw, Play } from 'lucide-react';
+import { X, CheckCircle2, Lightbulb, ListChecks, ChevronRight } from 'lucide-react';
 import type { Puzzle } from '../types';
 import { fetchPuzzleById } from '../services/lichessService';
 import {
@@ -142,12 +142,10 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     return () => { cancelled = true; };
   }, [playPuzzle.id, playPuzzle.lichessId, playPuzzle.source, playFen, solutionMoves, studentColor]);
 
-  const requiresManualStart = !!homeworkId;
   const movesPlayedRef = useRef<string[]>([]);
   const reportedRef = useRef(false);
   const puzzleStartRef = useRef<number>(0);
   const sessionHintUsedRef = useRef(false);
-  const [sessionStarted, setSessionStarted] = useState(() => !requiresManualStart);
   const playFenRef = useRef(playFen);
   /** Çözüm hattındaki ply — FEN'den kurulan game'de history boş kalır, indeks ayrı tutulur. */
   const [solutionPly, setSolutionPly] = useState(0);
@@ -155,7 +153,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   const [movesPlayed, setMovesPlayed] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
-  const [game, setGame] = useState(() => makeGameFromFen(requiresManualStart ? rawFen : playFen));
+  const [game, setGame] = useState(() => makeGameFromFen(hasSetupMove ? rawFen : playFen));
   const [status, setStatus] = useState<'playing' | 'wrong' | 'solved'>('playing');
   const [hintRevealed, setHintRevealed] = useState(false);
   const [solutionRevealed, setSolutionRevealed] = useState(false);
@@ -165,29 +163,20 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     puzzleBoardOrientationForStudent(studentColor),
   );
   const [lastMoveStyles, setLastMoveStyles] = useState<Record<string, React.CSSProperties>>({});
-  // sessionStarted ref üzerinden okunur: bağımlılık olsaydı Başlat → refreshSetupHighlight →
-  // resetPlay kimliği değişir → sıfırlama efekti çalışır → oturum anında "başlamadı"ya döner.
-  const sessionStartedRef = useRef(sessionStarted);
-  sessionStartedRef.current = sessionStarted;
-
+  /** Rakibin son (kurulum) hamlesini vurgular — öğrenci pozisyonun nasıl oluştuğunu görür. */
   const refreshSetupHighlight = useCallback(() => {
-    const sessionStarted = sessionStartedRef.current;
     if (setupMoveSan && rawFen !== playFen) {
       setLastMoveStyles(puzzleMoveHighlightStyles(rawFen, setupMoveSan));
       return;
     }
-    if (setupMoveSan && sessionStarted) {
-      const fenForSetup = rawFen !== playFen ? rawFen : fenBeforeSolutionMove(playFen, solutionMoves, 0);
-      setLastMoveStyles(puzzleMoveHighlightStyles(fenForSetup, setupMoveSan));
-      return;
-    }
+    // Kurulum tahtada zaten oynanmış: kareler UCI'den (ör. f6g8) okunur.
     const setupUci = materializedPuzzle.lichessSetupMove?.trim();
     if (setupUci) {
-      setLastMoveStyles(puzzleMoveHighlightStyles(rawFen !== playFen ? rawFen : null, setupUci));
+      setLastMoveStyles(puzzleMoveHighlightStyles(null, setupUci));
       return;
     }
     setLastMoveStyles({});
-  }, [setupMoveSan, rawFen, playFen, materializedPuzzle.lichessSetupMove, solutionMoves]);
+  }, [setupMoveSan, rawFen, playFen, materializedPuzzle.lichessSetupMove]);
 
   const markHintUsed = useCallback(() => {
     sessionHintUsedRef.current = true;
@@ -205,13 +194,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     } else {
       sessionHintUsedRef.current = true;
     }
-    if (requiresManualStart) {
-      setSessionStarted(false);
-      puzzleStartRef.current = 0;
-    } else {
-      setSessionStarted(true);
-      puzzleStartRef.current = Date.now();
-    }
+    puzzleStartRef.current = Date.now();
     setMovesPlayed([]);
     setSubmitted(false);
     setAutoPlaying(false);
@@ -219,20 +202,14 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     setAutoPlayError(null);
     setPuzzleModalBoardOrientation(puzzleBoardOrientationForStudent(studentColor));
     setSolutionPly(0);
-    setGame(makeGameFromFen(requiresManualStart ? rawFen : playFen));
-    // Kurulum hamlesi tahtada zaten oynanmışsa (Başlat'ı beklemeyen pozisyon) rakibin son
-    // hamlesi ödev modunda da baştan vurgulanır; yalnızca Başlat ile oynanacaksa boş kalır.
-    if (requiresManualStart && hasSetupMove) {
+    // Kurulum hamlesi henüz uygulanmamışsa kurulum öncesinden başla; efekt onu kendisi oynar.
+    setGame(makeGameFromFen(hasSetupMove ? rawFen : playFen));
+    if (hasSetupMove) {
       setLastMoveStyles({});
     } else {
       refreshSetupHighlight();
     }
-  }, [playFen, rawFen, studentColor, refreshSetupHighlight, requiresManualStart, hasSetupMove]);
-
-  const handleStartSession = useCallback(() => {
-    setSessionStarted(true);
-    puzzleStartRef.current = Date.now();
-  }, []);
+  }, [playFen, rawFen, studentColor, refreshSetupHighlight, hasSetupMove]);
 
   // Yeni bulmaca → oturumu sıfırla
   useEffect(() => {
@@ -297,7 +274,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
 
   // Kurulum + rakip hamleleri: Başlat sonrası sırayla oyna.
   useEffect(() => {
-    if (!sessionStarted || status !== 'playing') return;
+    if (status !== 'playing') return;
 
     const fen = game.fen();
     const setupDone = !hasSetupMove || !fenPositionsEqual(fen, rawFen);
@@ -360,7 +337,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       }
     }, 450);
     return () => clearTimeout(timer);
-  }, [sessionStarted, hasSetupMove, rawFen, playFen, setupMoveSan, game, solutionPly, solutionMoves, status, reportAttempt, studentColor]);
+  }, [hasSetupMove, rawFen, playFen, setupMoveSan, game, solutionPly, solutionMoves, status, reportAttempt, studentColor]);
 
   useEffect(() => {
     if (!showSuccessToast) return;
@@ -386,7 +363,6 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
 
   const canDragStudentPiece = useCallback(
     ({ piece }: { piece?: { pieceType?: string } | string }) => {
-      if (!sessionStarted) return false;
       if (hasSetupMove && fenPositionsEqual(game.fen(), rawFen)) return false;
       if (status === 'solved' || autoPlaying) return false;
       if (game.turn() !== studentColor) return false;
@@ -396,12 +372,11 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       if (colorChar !== 'w' && colorChar !== 'b') return false;
       return colorChar === game.turn() && colorChar === studentColor;
     },
-    [sessionStarted, hasSetupMove, rawFen, game, status, autoPlaying, studentColor, solutionPly, solutionMoves],
+    [hasSetupMove, rawFen, game, status, autoPlaying, studentColor, solutionPly, solutionMoves],
   );
 
   const onPieceDrop = useCallback(
     (sourceSquare: string, targetSquare: string) => {
-      if (!sessionStarted) return false;
       if (hasSetupMove && fenPositionsEqual(game.fen(), rawFen)) return false;
       if (status === 'solved' || autoPlaying) return false;
       if (game.isGameOver()) return false;
@@ -470,7 +445,7 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
       setGame(makeGameFromFen(copy.fen()));
       return true;
     },
-    [sessionStarted, hasSetupMove, rawFen, game, solutionMoves, solutionPly, status, autoPlaying, studentColor, reportAttempt]
+    [hasSetupMove, rawFen, game, solutionMoves, solutionPly, status, autoPlaying, studentColor, reportAttempt]
   );
 
   const handleDrop = useCallback(
@@ -501,24 +476,9 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
   const sideToMove = game.turn();
   const turnLabel = sideToMove === 'w' ? 'Beyaz' : 'Siyah';
   const studentLabel = studentColor === 'w' ? 'Beyaz' : 'Siyah';
-  const isStudentTurn = sessionStarted
-    && status === 'playing'
+  const isStudentTurn = status === 'playing'
     && sideToMove === studentColor
     && !autoPlaying;
-
-  const preStartTurnLabel = useMemo(() => {
-    try {
-      return new Chess(rawFen).turn() === 'w' ? 'Beyaz' : 'Siyah';
-    } catch {
-      return 'Beyaz';
-    }
-  }, [rawFen]);
-
-  const startPreviewLabel = hasSetupMove
-    ? `Başlatınca ${preStartTurnLabel} kurulum hamlesini oynayacak`
-    : sideToMove === studentColor
-      ? `Başlatınca sıra sizde (${studentLabel})`
-      : `Başlatınca ${turnLabel} hamle oynayacak`;
 
   const studentMoveIndex = nextStudentSolutionIndex(
     playFenRef.current,
@@ -574,8 +534,10 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
     onPieceDrop: handleDrop,
   };
 
+  const primaryBtn = 'flex-1 min-w-[8rem] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all';
+
   return createPortal(
-    <div className="modal-overlay z-[100] sm:!items-center sm:!justify-center sm:!py-8" onClick={handleClose}>
+    <div className="modal-overlay z-[100] sm:!items-center sm:!justify-center sm:!p-6" onClick={handleClose}>
       {showSuccessToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[101] flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm shadow-lg border border-emerald-500/50 animate-in fade-in slide-in-from-top-2 duration-300">
           <CheckCircle2 className="w-5 h-5 shrink-0" />
@@ -583,246 +545,212 @@ const StudentPuzzlePlayModal: React.FC<StudentPuzzlePlayModalProps> = ({
         </div>
       )}
       <div
-        className="modal-panel bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
+        className="modal-panel bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-lg md:max-w-2xl lg:max-w-5xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-black text-white truncate max-w-[240px]">{playPuzzle.title}</h3>
+        <div className="px-4 sm:px-5 py-3 sm:py-4 border-b border-slate-700 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-base sm:text-lg font-black text-white truncate">{playPuzzle.title}</h3>
             <p className="text-xs text-slate-400 mt-0.5">{playPuzzle.points} puan · {playPuzzle.difficulty}</p>
           </div>
           <button
             type="button"
             onClick={handleClose}
-            className="p-2 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-all"
+            className="p-2 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-all shrink-0"
             aria-label="Kapat"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="modal-scroll-body p-4">
-          {lichessRepairing ? (
-            <p className="text-xs text-sky-300/90 text-center mb-2 px-2">Bulmaca Lichess&apos;ten yükleniyor…</p>
-          ) : solutionMoves.length === 0 ? (
-            <p className="text-xs text-rose-300/90 text-center mb-2 px-2">
-              Bu bulmacanın çözüm kaydı tahtayla uyuşmuyor. Antrenörden bulmacayı Lichess&apos;ten yeniden çekmesini isteyin veya sonraki soruya geçin.
-            </p>
-          ) : (
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 text-center">
-              Tahta öğretmenin belirlediği pozisyonda. Sadece doğru hamleleri yapın; farklı hamle hata verir.
-            </p>
-          )}
-          {hasSetupMove && !sessionStarted ? (
-            <p className="text-xs text-sky-300/90 text-center mb-2 px-2">
-              Başlatınca ilk hamle tahtada oynanacak.
-            </p>
-          ) : hasSetupMove && setupMoveSan && sessionStarted ? (
-            <p className="text-xs text-sky-300/90 text-center mb-2">
-              Kurulum hamlesi: <span className="font-mono font-bold">{setupMoveSan}</span>
-            </p>
-          ) : null}
-          {!sessionStarted && requiresManualStart ? (
-            <div className="flex flex-col items-center gap-3 mb-3">
-              <p className="text-xs text-slate-400 text-center px-2">{startPreviewLabel}</p>
-              <button
-                type="button"
-                onClick={handleStartSession}
-                disabled={lichessRepairing || solutionMoves.length === 0}
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-sm uppercase tracking-wide shadow-lg shadow-indigo-600/30 transition-all active:scale-[0.98]"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                Başlat
-              </button>
+        <div className="modal-scroll-body p-3 sm:p-4 lg:p-6">
+          <div className="flex flex-col lg:flex-row lg:items-start gap-4 lg:gap-6">
+            {/* Tahta: ekran yüksekliğine sığacak kadar büyük */}
+            <div className="w-full lg:flex-1 min-w-0 flex justify-center">
+              <div className="w-full" style={{ maxWidth: 'min(100%, calc(100dvh - 11rem))' }}>
+                <ChessBoardFrame boardOrientation={puzzleModalBoardOrientation} className="max-w-full mx-auto relative">
+                  <Chessboard options={{ ...boardOptions, ...CHESSBOARD_NO_NOTATION }} />
+                </ChessBoardFrame>
+              </div>
             </div>
-          ) : null}
-          {autoPlaying ? (
-            <p className="text-xs text-slate-400 text-center mb-2">Rakip hamle oynanıyor…</p>
-          ) : null}
-          {autoPlayError ? (
-            <p className="text-xs text-rose-300/90 text-center mb-2 px-2">{autoPlayError}</p>
-          ) : null}
-          {sessionStarted ? (
-            <div className="flex flex-wrap items-center justify-center gap-2 mb-2">
-              <span
-                className={`text-[11px] font-bold px-3 py-1 rounded-full border ${
-                  isStudentTurn
-                    ? 'text-indigo-200 border-indigo-500/40 bg-indigo-500/15'
-                    : 'text-slate-400 border-white/10 bg-slate-800/60'
-                }`}
-              >
-                Sırada: {turnLabel}
-                {isStudentTurn ? ' · Sizin hamleniz' : status === 'playing' ? ' · Rakip' : ''}
-              </span>
-              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
-                Siz: {studentLabel}
-              </span>
-            </div>
-          ) : null}
-          {status === 'playing' && sessionStarted && isStudentTurn && !hintRevealed ? (
-            <div className="flex justify-center mb-2">
-              <button
-                type="button"
-                onClick={revealHint}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold hover:bg-amber-500/25 transition-colors"
-              >
-                <Lightbulb className="w-3.5 h-3.5" /> İpucu
-              </button>
-            </div>
-          ) : null}
-          {showHintText ? (
-            <p className="text-xs text-amber-200/90 text-center mb-2 px-2 flex items-center justify-center gap-1.5">
-              <Lightbulb className="w-3.5 h-3.5 shrink-0" />
-              <span>Beklenen hamle: {hintText}</span>
-            </p>
-          ) : null}
-          <ChessBoardFrame boardOrientation={puzzleModalBoardOrientation} className="max-w-full mx-auto relative">
-            <Chessboard options={{ ...boardOptions, ...CHESSBOARD_NO_NOTATION }} />
-            {!sessionStarted && requiresManualStart ? (
-              <div className="absolute inset-0 rounded-[inherit] bg-slate-950/25 pointer-events-none" aria-hidden />
-            ) : null}
-          </ChessBoardFrame>
-          {movesPlayed.length > 0 && (
-            <div className="mt-4 p-3 rounded-xl bg-slate-800/80 border border-slate-700/50">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Yaptığınız hamleler</p>
-              <p className="text-sm text-slate-300 font-mono">
-                {movesPlayed.map((m, i) => (
-                  <span key={i}>
-                    {i % 2 === 0 && <span className="text-slate-500 mr-1">{Math.floor(i / 2) + 1}.</span>}
-                    {m}{i < movesPlayed.length - 1 ? ' ' : ''}
-                  </span>
-                ))}
-              </p>
-            </div>
-          )}
-          {status === 'playing' && sessionStarted && isStudentTurn ? (
-            <div className="mt-4">
-              <StudyGamebookGuide
-                comment="Burada hangi hamleyi yapardınız?"
-                feedback="play"
-                turnColor={studentColor === 'w' ? 'white' : 'black'}
-                instruction={
-                  studentColor === 'w'
-                    ? 'Beyaz için en iyi hamleyi bulunuz'
-                    : 'Siyah için en iyi hamleyi bulunuz'
-                }
-              />
-            </div>
-          ) : null}
-          {status === 'wrong' && (
-            <div className="mt-4 space-y-3">
-              <StudyGamebookGuide
-                comment={
-                  homeworkId && studentId
-                    ? submitted
-                      ? 'Olmadı! Başka bir şey dene. Deneme kaydedildi; antrenör Ödev Takibinde görecektir.'
-                      : 'Olmadı! Başka bir şey dene. Kapatınca deneme kaydedilir (ipucu dahil).'
-                    : 'Olmadı! Başka bir şey dene.'
-                }
-                feedback="bad"
-                turnColor={studentColor === 'w' ? 'white' : 'black'}
-                actions={[
-                  {
-                    id: 'retry',
-                    label: 'Tekrar dene',
-                    onClick: tryAgain,
-                    variant: 'danger',
-                    icon: 'retry',
-                  },
-                ]}
-                hint={hintRevealed ? (hintDisplayLabel ? `Beklenen hamle: ${hintDisplayLabel}` : 'Bu pozisyonda geçerli ipucu yok.') : null}
-              />
-              <div className="flex flex-wrap gap-2">
+
+            {/* Yan panel: durum, ipucu, hamleler, sonuç ve işlemler */}
+            <aside className="w-full lg:w-[340px] lg:shrink-0 flex flex-col gap-3">
+              {lichessRepairing ? (
+                <p className="text-xs text-sky-300/90">Bulmaca Lichess&apos;ten yükleniyor…</p>
+              ) : solutionMoves.length === 0 ? (
+                <p className="text-xs text-rose-300/90">
+                  Bu bulmacanın çözüm kaydı tahtayla uyuşmuyor. Antrenörden bulmacayı Lichess&apos;ten yeniden çekmesini isteyin veya sonraki soruya geçin.
+                </p>
+              ) : (
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                  Tahta öğretmenin belirlediği pozisyonda. Sadece doğru hamleleri yapın; farklı hamle hata verir.
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`text-[11px] font-bold px-3 py-1 rounded-full border ${
+                    isStudentTurn
+                      ? 'text-indigo-200 border-indigo-500/40 bg-indigo-500/15'
+                      : 'text-slate-400 border-white/10 bg-slate-800/60'
+                  }`}
+                >
+                  Sırada: {turnLabel}
+                  {isStudentTurn ? ' · Sizin hamleniz' : status === 'playing' ? ' · Rakip' : ''}
+                </span>
+                <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                  Siz: {studentLabel}
+                </span>
+              </div>
+
+              {hasSetupMove && setupMoveSan ? (
+                <p className="text-xs text-sky-300/90">
+                  Rakibin son hamlesi: <span className="font-mono font-bold">{setupMoveSan}</span>
+                </p>
+              ) : null}
+              {autoPlaying ? <p className="text-xs text-slate-400">Rakip hamle oynanıyor…</p> : null}
+              {autoPlayError ? <p className="text-xs text-rose-300/90">{autoPlayError}</p> : null}
+
+              {status === 'playing' && isStudentTurn && !hintRevealed ? (
                 <button
                   type="button"
                   onClick={revealHint}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-sm hover:bg-amber-500/30 transition-colors"
+                  className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold hover:bg-amber-500/25 transition-colors"
                 >
-                  <Lightbulb className="w-4 h-4" /> İpucu
+                  <Lightbulb className="w-3.5 h-3.5" /> İpucu
                 </button>
-                <button
-                  type="button"
-                  onClick={revealSolution}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-600/80 border border-slate-500/50 text-slate-200 font-bold text-sm hover:bg-slate-500/50 transition-colors"
-                >
-                  <ListChecks className="w-4 h-4" /> Çözümü Göster
-                </button>
-              </div>
-              {solutionRevealed && (
-                <div className="p-3 rounded-xl border border-rose-500/20 bg-rose-500/10">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Çözüm (kalan hamleleriniz)</p>
-                  {remainingStudentMoves.length > 0 ? (
-                    <p className="text-sm font-mono text-slate-300 break-all">
-                      {remainingStudentMoves.map((label, i) => (
-                        <span key={i}>
-                          {i > 0 && ' → '}
-                          <span className="text-amber-300">{label}</span>
-                        </span>
-                      ))}
-                    </p>
-                  ) : (
-                    <p className="text-sm text-slate-500">Bu bulmaca için kayıtlı çözüm hamlesi yok.</p>
+              ) : null}
+              {showHintText ? (
+                <p className="text-xs text-amber-200/90 flex items-center gap-1.5">
+                  <Lightbulb className="w-3.5 h-3.5 shrink-0" />
+                  <span>Beklenen hamle: {hintText}</span>
+                </p>
+              ) : null}
+
+              {movesPlayed.length > 0 && (
+                <div className="p-3 rounded-xl bg-slate-800/80 border border-slate-700/50">
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Yaptığınız hamleler</p>
+                  <p className="text-sm text-slate-300 font-mono">
+                    {movesPlayed.map((m, i) => (
+                      <span key={i}>
+                        {i % 2 === 0 && <span className="text-slate-500 mr-1">{Math.floor(i / 2) + 1}.</span>}
+                        {m}{i < movesPlayed.length - 1 ? ' ' : ''}
+                      </span>
+                    ))}
+                  </p>
+                </div>
+              )}
+
+              {status === 'playing' && isStudentTurn ? (
+                <StudyGamebookGuide
+                  comment="Burada hangi hamleyi yapardınız?"
+                  feedback="play"
+                  turnColor={studentColor === 'w' ? 'white' : 'black'}
+                  instruction={
+                    studentColor === 'w'
+                      ? 'Beyaz için en iyi hamleyi bulunuz'
+                      : 'Siyah için en iyi hamleyi bulunuz'
+                  }
+                />
+              ) : null}
+
+              {status === 'wrong' && (
+                <div className="space-y-3">
+                  <StudyGamebookGuide
+                    comment={
+                      homeworkId && studentId
+                        ? submitted
+                          ? 'Olmadı! Başka bir şey dene. Deneme kaydedildi; antrenör Ödev Takibinde görecektir.'
+                          : 'Olmadı! Başka bir şey dene. Kapatınca deneme kaydedilir (ipucu dahil).'
+                        : 'Olmadı! Başka bir şey dene.'
+                    }
+                    feedback="bad"
+                    turnColor={studentColor === 'w' ? 'white' : 'black'}
+                    actions={[
+                      {
+                        id: 'retry',
+                        label: 'Tekrar dene',
+                        onClick: tryAgain,
+                        variant: 'danger',
+                        icon: 'retry',
+                      },
+                    ]}
+                    hint={hintRevealed ? (hintDisplayLabel ? `Beklenen hamle: ${hintDisplayLabel}` : 'Bu pozisyonda geçerli ipucu yok.') : null}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={revealHint}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-sm hover:bg-amber-500/30 transition-colors"
+                    >
+                      <Lightbulb className="w-4 h-4" /> İpucu
+                    </button>
+                    <button
+                      type="button"
+                      onClick={revealSolution}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-600/80 border border-slate-500/50 text-slate-200 font-bold text-sm hover:bg-slate-500/50 transition-colors"
+                    >
+                      <ListChecks className="w-4 h-4" /> Çözümü Göster
+                    </button>
+                  </div>
+                  {solutionRevealed && (
+                    <div className="p-3 rounded-xl border border-rose-500/20 bg-rose-500/10">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Çözüm (kalan hamleleriniz)</p>
+                      {remainingStudentMoves.length > 0 ? (
+                        <p className="text-sm font-mono text-slate-300 break-all">
+                          {remainingStudentMoves.map((label, i) => (
+                            <span key={i}>
+                              {i > 0 && ' → '}
+                              <span className="text-amber-300">{label}</span>
+                            </span>
+                          ))}
+                        </p>
+                      ) : (
+                        <p className="text-sm text-slate-500">Bu bulmaca için kayıtlı çözüm hamlesi yok.</p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
-            </div>
-          )}
-          {status === 'solved' && (
-            <div className="mt-4">
-              <StudyGamebookGuide
-                comment={`Tebrikler! Bu dersi tamamladınız. +${playPuzzle.points} puan${
-                  homeworkId && studentId ? '\nDeneme kaydedildi; antrenör Ödev Takibinde görecektir.' : ''
-                }`}
-                feedback="end"
-                turnColor={studentColor === 'w' ? 'white' : 'black'}
-                actions={[
-                  ...(nextPuzzle && onPlayNext
-                    ? [{
-                        id: 'next',
-                        label: 'Sonraki soru',
-                        onClick: handlePlayNext,
-                        variant: 'primary' as const,
-                        icon: 'play' as const,
-                      }]
-                    : []),
-                  {
-                    id: 'retry',
-                    label: 'Tekrar oyna',
-                    onClick: tryAgain,
-                    variant: 'neutral',
-                    icon: 'retry',
-                  },
-                ]}
-              />
-            </div>
-          )}
-        </div>
-        <div className="px-5 py-3 border-t border-slate-700 flex flex-wrap justify-end gap-2">
-          {nextPuzzle && onPlayNext && (status === 'wrong' || submitted) ? (
-            <button
-              type="button"
-              onClick={handlePlayNext}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all"
-            >
-              Sonraki soru
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          ) : nextPuzzle && onPlayNext && status === 'playing' ? (
-            <button
-              type="button"
-              onClick={handlePlayNext}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-bold text-sm transition-all"
-            >
-              Soruyu geç
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={handleClose}
-            className="px-5 py-2.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-bold text-sm transition-all"
-          >
-            Kapat
-          </button>
+
+              {status === 'solved' && (
+                <StudyGamebookGuide
+                  comment={`Tebrikler! Bu dersi tamamladınız. +${playPuzzle.points} puan${
+                    homeworkId && studentId ? '\nDeneme kaydedildi; antrenör Ödev Takibinde görecektir.' : ''
+                  }`}
+                  feedback="end"
+                  turnColor={studentColor === 'w' ? 'white' : 'black'}
+                  actions={[
+                    {
+                      id: 'retry',
+                      label: 'Tekrar oyna',
+                      onClick: tryAgain,
+                      variant: 'neutral',
+                      icon: 'retry',
+                    },
+                  ]}
+                />
+              )}
+
+              {/* İşlemler — telefonda altta sabit, geniş ekranda yan panelin sonunda */}
+              <div className="sticky bottom-0 lg:static -mx-3 sm:-mx-4 lg:mx-0 px-3 sm:px-4 lg:px-0 py-3 lg:py-0 bg-slate-900/95 lg:bg-transparent border-t border-slate-700 lg:border-0 flex flex-wrap gap-2">
+                {nextPuzzle && onPlayNext && (status === 'wrong' || status === 'solved' || submitted) ? (
+                  <button type="button" onClick={handlePlayNext} className={`${primaryBtn} bg-indigo-600 hover:bg-indigo-500 text-white`}>
+                    Sonraki soru
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : nextPuzzle && onPlayNext && status === 'playing' ? (
+                  <button type="button" onClick={handlePlayNext} className={`${primaryBtn} bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200`}>
+                    Soruyu geç
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : null}
+                <button type="button" onClick={handleClose} className={`${primaryBtn} bg-slate-700 hover:bg-slate-600 text-white`}>
+                  Kapat
+                </button>
+              </div>
+            </aside>
+          </div>
         </div>
       </div>
     </div>,

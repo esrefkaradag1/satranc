@@ -22,6 +22,11 @@ export type HomeworkPlayPayload = {
 };
 
 type Props = {
+  /**
+   * all: tüm ödevler (veli). training: öğrencinin Antrenman sekmesi — salt bulmaca ödevleri
+   * Bulmaca Çöz'e taşındı. puzzles: Bulmaca Çöz sekmesi — yalnızca bulmaca içeren ödevler.
+   */
+  mode?: 'all' | 'training' | 'puzzles';
   student: Student;
   viewAs?: 'student' | 'parent';
   assignedHomeworks: HomeworkAssignment[];
@@ -236,6 +241,7 @@ const STATUS_META = {
 } as const;
 
 export const StudentHomeworkPanel: React.FC<Props> = ({
+  mode = 'all',
   student,
   viewAs = 'student',
   assignedHomeworks,
@@ -293,9 +299,19 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
     }
   }, [progressList, homeworkSubmissions, student.id, onDailyGoalsComplete]);
 
+  const visibleList = useMemo(() => {
+    if (mode === 'all') return progressList;
+    const hasTrainingGoals = (item: HwProgress) =>
+      item.dailyPuzzleTarget > 0 || item.dailyGameTarget > 0 || homeworkHasPlatformGoals(item.hw);
+    if (mode === 'puzzles') return progressList.filter((item) => item.hw.puzzles.length > 0);
+    // training: bulmacası olmayanlar + bulmacayla birlikte günlük/platform hedefi olanlar
+    return progressList.filter((item) => item.hw.puzzles.length === 0 || hasTrainingGoals(item));
+  }, [progressList, mode]);
+  const puzzleMode = mode === 'puzzles';
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let list = progressList;
+    let list = visibleList;
     if (q) list = list.filter((p) => p.hw.title.toLowerCase().includes(q));
 
     return [...list].sort((a, b) => {
@@ -310,7 +326,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
       if (da && db) return da.localeCompare(db);
       return b.hw.title.localeCompare(a.hw.title, 'tr');
     });
-  }, [progressList, search]);
+  }, [visibleList, search]);
 
   const makePlayPayload = (puzzle: Puzzle, hw: HomeworkAssignment): HomeworkPlayPayload => {
     const item = progressList.find((x) => x.hw.id === hw.id);
@@ -554,20 +570,26 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
     );
   };
 
+  // Bulmaca Çöz sekmesi: bulmaca ödevi yoksa bölüm hiç görünmez
+  if (puzzleMode && !homeworksLoading && visibleList.length === 0) return null;
+  const hiddenPuzzleHomeworks = mode === 'training' ? progressList.length - visibleList.length : 0;
+
   return (
     <div className="space-y-5">
       <div className="rounded-2xl bg-gradient-to-br from-indigo-600/15 via-violet-600/10 to-transparent border border-indigo-600/20 p-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
             <Grid className="w-5 h-5 text-indigo-400" />
-            {parentView ? 'Antrenman' : 'Antremanım'}
+            {puzzleMode ? 'Bulmaca Ödevlerim' : parentView ? 'Antrenman' : 'Antremanım'}
           </h2>
           <p className="text-slate-400 text-sm mt-1">
-            {parentView
-              ? (progressList.length > 0
+            {puzzleMode
+              ? 'Antrenörünüzün verdiği bulmaca ödevleri. Kaldığınız yerden devam edin.'
+              : parentView
+              ? (visibleList.length > 0
                 ? 'Çocuğunuzun haftalık antrenman programı ve tamamlama durumu aşağıda listelenir.'
                 : 'Öğretmenin atadığı haftalık program burada görünür.')
-              : (progressList.length > 0
+              : (visibleList.length > 0
                 ? 'Haftalık antrenman programınız aşağıda listelenir.'
                 : 'Öğretmeninizin atadığı haftalık program burada görünür.')}
           </p>
@@ -586,13 +608,13 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
       {homeworksLoading && (
         <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-8 text-center">
           <RefreshCw className="w-10 h-10 text-indigo-400 animate-spin mx-auto mb-2" />
-          <p className="text-slate-400 text-sm">Antreman yükleniyor...</p>
+          <p className="text-slate-400 text-sm">{puzzleMode ? 'Ödevler yükleniyor...' : 'Antreman yükleniyor...'}</p>
         </div>
       )}
 
-      {!homeworksLoading && progressList.length > 0 && (
+      {!homeworksLoading && visibleList.length > 0 && (
         <>
-          {progressList.length > 1 && (
+          {visibleList.length > 1 && (
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
               <input
@@ -615,6 +637,7 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
             )}
           </div>
 
+          {!puzzleMode && (<>
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 px-1">
             <Clock className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
             <span>Günlük hedefler gece yarısı sıfırlanır.</span>
@@ -636,10 +659,18 @@ export const StudentHomeworkPanel: React.FC<Props> = ({
               <span>Lichess ve Chess.com verisi yükleniyor; tamamlanma durumu birkaç saniye içinde güncellenir.</span>
             </div>
           )}
+          </>)}
         </>
       )}
 
-      {!homeworksLoading && progressList.length === 0 && (
+      {hiddenPuzzleHomeworks > 0 && (
+        <div className="flex items-start gap-2 rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-3 py-2 text-xs text-indigo-200/90">
+          <Target className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>Bulmaca ödevleriniz ({hiddenPuzzleHomeworks}) <strong>Bulmaca Çöz</strong> sayfasında.</span>
+        </div>
+      )}
+
+      {!homeworksLoading && visibleList.length === 0 && hiddenPuzzleHomeworks === 0 && (
         <div className="rounded-2xl bg-slate-800/50 border border-slate-700/50 p-10 text-center">
           <Target className="w-12 h-12 text-slate-500 mx-auto mb-3" />
           <h3 className="text-white font-bold mb-1">

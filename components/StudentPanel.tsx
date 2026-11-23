@@ -1347,7 +1347,8 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   }, [refreshStudentHomeworks]);
 
   useEffect(() => {
-    if (activeTab !== 'puzzles') return;
+    // Bulmaca Çöz sekmesi de antrenörün verdiği bulmaca ödevlerini gösterir
+    if (activeTab !== 'puzzles' && activeTab !== 'puzzle-practice') return;
     refreshStudentHomeworks();
   }, [activeTab, refreshStudentHomeworks]);
 
@@ -1808,6 +1809,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         {activeTab === 'puzzles' && student && (
           <div className="animate-in fade-in duration-300">
             <StudentHomeworkPanel
+              mode={viewAs === 'parent' ? 'all' : 'training'}
               student={student}
               viewAs={viewAs}
               assignedHomeworks={assignedHomeworks}
@@ -1833,7 +1835,28 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         )}
 
         {activeTab === 'puzzle-practice' && student && (
-          <div className="animate-in fade-in duration-300">
+          <div className="animate-in fade-in duration-300 space-y-5">
+            <StudentHomeworkPanel
+              mode="puzzles"
+              student={student}
+              viewAs={viewAs}
+              assignedHomeworks={assignedHomeworks}
+              puzzles={puzzles}
+              homeworkAttempts={homeworkAttempts}
+              homeworkSubmissions={homeworkSubmissions}
+              homeworksLoading={homeworksLoading}
+              homeworkDayKey={homeworkDayKeyState}
+              todayExternalGameCount={todayExternalGameCount}
+              todayExternalPuzzleCount={todayExternalPuzzleCount}
+              todayExternalPuzzlePassed={todayExternalPuzzlePassed}
+              weekPlatformStatsByDate={weekPlatformStatsByDate}
+              loadingExternalGameCount={loadingExternalGameCount}
+              externalStatsNote={externalStatsNote}
+              midnightCountdown={midnightCountdown}
+              onRefresh={refreshHomeworkTab}
+              platformStatsFetched={platformStatsFetched}
+              onPlayPuzzle={viewAs === 'parent' ? () => {} : setPlayingPuzzle}
+            />
             <StudentPuzzlePracticePanel
               student={student}
               pool={puzzles}
