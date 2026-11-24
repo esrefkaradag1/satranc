@@ -949,6 +949,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
     const allowed = new Set(panelPermissions);
     if (viewAs === 'student') {
       allowed.add('puzzle-practice');
+      allowed.add('chessduello');
     }
     if (viewAs === 'parent' && allowed.has('dues') && !allowed.has('payments')) {
       allowed.add('payments');

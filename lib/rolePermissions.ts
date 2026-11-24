@@ -481,6 +481,7 @@ export function getPermissionsForAuth(
       }
       if (auth.role === 'student') {
         set.add('puzzle-practice');
+        set.add('chessduello');
       }
       return set;
     }
@@ -493,6 +494,7 @@ export function getPermissionsForAuth(
         }
         if (auth.role === 'student') {
           set.add('puzzle-practice');
+          set.add('chessduello');
         }
         return set;
       }
@@ -509,12 +511,13 @@ export function getPermissionsForAuth(
       }
       if (auth.role === 'student') {
         set.add('puzzle-practice');
+        set.add('chessduello');
       }
       return set;
     }
     if (!customRoleId || customRoleId === systemRoleId) {
       const set = new Set(keys);
-      if (auth.role === 'student') set.add('puzzle-practice');
+      if (auth.role === 'student') { set.add('puzzle-practice'); set.add('chessduello'); }
       return set;
     }
   }
