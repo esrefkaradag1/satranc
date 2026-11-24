@@ -42,6 +42,10 @@ interface UseStockfishOptions {
   threads?: number;
   hash?: number;
   engine?: 'lite' | 'wasm' | 'js';
+  /** false: paylaşılan worker'ın ayarlarını (numPv vb.) değiştirmez; yalnızca satırları dinler.
+   *  Aynı anda asıl analiz panelinin (EngineAnalysis) açık olduğu durumda eval çubuğu
+   *  aboneliği bunu `false` yapıp panelin MultiPV'sini bozmadan satırları okur. */
+  controlsOptions?: boolean;
 }
 
 interface UseStockfishReturn {
@@ -61,7 +65,7 @@ interface UseStockfishReturn {
  * Lichess-vari MultiPV analiz hook'u.
  * Tüm bileşenler tek bir paylaşılan analysisService worker'ı üzerinden çalışır.
  */
-export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16, engine = 'lite' }: UseStockfishOptions = {}): UseStockfishReturn {
+export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16, engine = 'lite', controlsOptions = true }: UseStockfishOptions = {}): UseStockfishReturn {
   const [ready, setReady] = useState<boolean>(() => isAnalysisReady());
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,11 +79,12 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
   enabledRef.current = enabled;
 
   useEffect(() => {
-    // Yalnızca etkin tüketici motor ayarını belirler; kapalı (ör. başka ekrandaki)
-    // bir abonelik paylaşılan worker'ın numPv'sini değiştirip aktif analizi bozmasın.
-    if (!enabled) return;
+    // Yalnızca etkin ve ayar yetkili tüketici motor ayarını belirler; kapalı ya da
+    // salt-dinleyici bir abonelik paylaşılan worker'ın numPv'sini değiştirip aktif
+    // analizi (ör. açık EngineAnalysis panelini) bozmasın.
+    if (!enabled || !controlsOptions) return;
     setEngineOptions({ numPv, threads, hash, engine });
-  }, [numPv, threads, hash, engine, enabled]);
+  }, [numPv, threads, hash, engine, enabled, controlsOptions]);
 
   useEffect(() => {
     if (!enabled) return;

@@ -234,19 +234,6 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [laMoveQuality, setLaMoveQuality] = useState<{ label: string; bestSan: string; color: string } | null>(null);
   const [laHint, setLaHint] = useState<string | null>(null);
   const [evalBar, setEvalBar] = useState<EvalBarDisplay>(OFF_EVAL_BAR);
-  // Stockfish barını süren motor paneli yalnızca `lg` ekranda görünür (hidden lg:flex).
-  // Telefon/tablette panel yok; o yüzden barı aşağıdaki efekt Stockfish ile sürüyor.
-  const [isLgViewport, setIsLgViewport] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches,
-  );
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mq = window.matchMedia('(min-width: 1024px)');
-    const onChange = () => setIsLgViewport(mq.matches);
-    onChange();
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
   const [replyToCoach, setReplyToCoach] = useState('');
   const [chapterMoveAnalysis, setChapterMoveAnalysis] = useState<ChapterMoveAnalysisItem[]>([]);
   /** Canlı analiz: öğrenciye özel hamleler (paylaşılan chapter.moves'a yazılmaz) */
@@ -1131,23 +1118,35 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       || boardSettings.showVariationArrows
     );
 
-  // Stockfish barını masaüstünde (lg) açık motor paneli (EngineAnalysis) sürer.
-  // Telefon/tablette o panel hiç mount olmaz (hidden lg:flex); orada barı aşağıdaki
-  // yerel Stockfish aboneliği, EngineAnalysis ile birebir aynı motor/hook üzerinden sürüyor.
-  const panelDrivesEvalBar = isLgViewport && !hideEngineForStudentPuzzle && boardSettings.showEvalBar;
+  // ── Eval çubuğu tek kaynaktan: StudentStudyView'in kendi Stockfish aboneliği ──
+  // Çubuğu her ekranda (telefon/tablet/masaüstü) bu abonelik sürer; EngineAnalysis'in
+  // onEvalBarChange'ine bağlı değil (o panel yalnızca `lg`'de mount olduğundan küçük
+  // ekranda çubuk hiç beslenmiyordu). Masaüstünde açık analiz paneli varsa, abonelik
+  // onun MultiPV'sini bozmamak için ayar yetkisini bırakır ve yalnızca satırları okur;
+  // analizi de o panel başlattığından burada ayrıca başlatmaya gerek yok.
   const terminalEval = useMemo(() => getTerminalEval(studyBoardFen), [studyBoardFen]);
+  // EngineAnalysis paneli `hidden lg:flex` ile yalnızca görsel gizlenir; React tüm ekranlarda
+  // mount eder ve paylaşılan motoru çalıştırır. Bu yüzden mount koşulu ekran boyutuna değil,
+  // panelin render koşuluna bağlı. Panel varken eval çubuğu aboneliği ayar yetkisini ona bırakır.
+  const engineAnalysisMounted = !hideEngineForStudentPuzzle && (!vsComputer || isVcGameOver);
   const barEngineEnabled =
-    !panelDrivesEvalBar && !vsComputer && !hideEngineForStudentPuzzle && boardSettings.showEvalBar && !terminalEval;
+    !hideEngineForStudentPuzzle
+    && boardSettings.showEvalBar
+    && !terminalEval
+    && (!vsComputer || isVcGameOver);
 
   const { ready: barEngineReady, pvLines: barPvLines, analyseFen: barAnalyseFen } = useStockfish({
     numPv: 1,
     enabled: barEngineEnabled,
     engine: 'lite',
+    controlsOptions: !engineAnalysisMounted,
   });
   const barPrevFenRef = useRef<string>('');
   const barReadyOnceRef = useRef(false);
   useEffect(() => {
-    if (!barEngineEnabled) {
+    // Analizi yalnızca bu abonelik yetkiliyse başlat (masaüstü panel yoksa). Panel varsa
+    // analizi o başlatır; abonelik paylaşılan worker'dan satırları zaten alır.
+    if (!barEngineEnabled || engineAnalysisMounted) {
       barReadyOnceRef.current = false;
       return;
     }
@@ -1157,14 +1156,13 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     barPrevFenRef.current = studyBoardFen;
     if (barEngineReady) barReadyOnceRef.current = true;
     barAnalyseFen(studyBoardFen);
-  }, [studyBoardFen, barEngineEnabled, barEngineReady, barAnalyseFen]);
+  }, [studyBoardFen, barEngineEnabled, engineAnalysisMounted, barEngineReady, barAnalyseFen]);
 
   const barBestLine = useMemo(() => {
     const valid = barPvLines.filter((l): l is PvLine => l !== null);
     if (valid.length === 0) return null;
     return valid.reduce((best, l) => (evalWinningChances(l) > evalWinningChances(best) ? l : best));
   }, [barPvLines]);
-  // analyseFen yeni FEN'de tüm satırları null'a çeker; bu yüzden dolu bir satır güncel pozisyona aittir.
   const barEngineDisplay = useStableEvalDisplay(
     studyBoardFen,
     barEngineEnabled && barBestLine ? barBestLine : null,
@@ -1177,8 +1175,9 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   }, [barEngineEnabled, barEngineDisplay]);
 
   useEffect(() => {
-    // Motor barı (panel veya yerel abonelik) sürüyorsa materyal efekti dokunmaz.
-    if (barEngineEnabled || panelDrivesEvalBar) return;
+    // Motor çubuğu sürmüyorsa (bulmacada gizli, mat/pat, VS bilgisayar oynarken veya bar kapalı)
+    // terminal / materyal değerini göster.
+    if (barEngineEnabled) return;
     if (terminalEval) {
       setEvalBar({
         whitePercent: terminalEvalToBarPercent(terminalEval),
@@ -1188,23 +1187,12 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       });
       return;
     }
-    if (vsComputer) {
-      try {
-        setEvalBar(materialEvalToBarDisplay(getEvaluationPawns(makeBuilderGame(studyBoardFen))));
-      } catch {
-        setEvalBar(OFF_EVAL_BAR);
-      }
-      return;
+    try {
+      setEvalBar(materialEvalToBarDisplay(getEvaluationPawns(makeBuilderGame(studyBoardFen))));
+    } catch {
+      setEvalBar(OFF_EVAL_BAR);
     }
-    // Bar görünmüyorsa (motor paneli/bar kapalı) sadece materyal göster.
-    if (!boardSettings.showEvalBar) {
-      try {
-        setEvalBar(materialEvalToBarDisplay(getEvaluationPawns(makeBuilderGame(studyBoardFen))));
-      } catch {
-        setEvalBar(OFF_EVAL_BAR);
-      }
-    }
-  }, [studyBoardFen, vsComputer, barEngineEnabled, panelDrivesEvalBar, terminalEval, boardSettings.showEvalBar]);
+  }, [studyBoardFen, barEngineEnabled, terminalEval]);
 
   const progressKey = effectiveChapter ? `${selectedStudy?.id}_${effectiveChapter.id}` : null;
   const recordProgress = useCallback((key: string, idx: number) => {
@@ -3650,7 +3638,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
               onToggle={() => updateBoardSettings(engineMasterTogglePatch(boardSettings))}
               onHoverMove={setEngineHoverMove}
               onTopMoveUpdate={setEngineTopMove}
-              onEvalBarChange={boardSettings.showEvalBar ? setEvalBar : undefined}
+              onEvalBarChange={undefined}
               onOpenBoardPrefs={() => setShowStudySettings(true)}
             />
           )}
