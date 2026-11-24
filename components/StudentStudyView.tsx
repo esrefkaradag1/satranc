@@ -55,9 +55,8 @@ import { serializePath } from '../lib/studySync/types';
 import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, mergeMainlineMoves } from '../lib/studySync/moveList';
 import { liveLessonFenAt } from '../lib/liveLessonVariations';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
-import { useStableEvalDisplay, type EvalBarDisplay } from '../hooks/useStableEvalDisplay';
-import { useStockfish, type PvLine } from '../hooks/useStockfish';
-import { cpWinningChances, winningChancesToBarPercent, evalWinningChances } from '../lib/winningChances';
+import type { EvalBarDisplay } from '../hooks/useStableEvalDisplay';
+import { cpWinningChances, winningChancesToBarPercent } from '../lib/winningChances';
 import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStudyBoardSettings } from '../hooks/useStudyBoardSettings';
 import { engineMasterTogglePatch } from '../lib/studyBoardSettings';
@@ -1118,66 +1117,20 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       || boardSettings.showVariationArrows
     );
 
-  // ── Eval çubuğu tek kaynaktan: StudentStudyView'in kendi Stockfish aboneliği ──
-  // Çubuğu her ekranda (telefon/tablet/masaüstü) bu abonelik sürer; EngineAnalysis'in
-  // onEvalBarChange'ine bağlı değil (o panel yalnızca `lg`'de mount olduğundan küçük
-  // ekranda çubuk hiç beslenmiyordu). Masaüstünde açık analiz paneli varsa, abonelik
-  // onun MultiPV'sini bozmamak için ayar yetkisini bırakır ve yalnızca satırları okur;
-  // analizi de o panel başlattığından burada ayrıca başlatmaya gerek yok.
+  // ── Eval çubuğu: StudyPage (kulüp paneli) ile AYNI, kanıtlanmış yol ──
+  // Çubuğu EngineAnalysis'in `onEvalBarChange`'i sürer (gerçek Stockfish değeri).
+  // EngineAnalysis `hidden lg:flex` sarmalayıcıda olsa da React tüm ekranlarda mount eder
+  // (yalnızca görsel gizlenir), bu yüzden çubuk her ekranda beslenir.
+  // Motor çubuğu sürmüyorsa (bulmacada gizli, VS bilgisayar oynarken, mat/pat) materyal/terminal göster.
   const terminalEval = useMemo(() => getTerminalEval(studyBoardFen), [studyBoardFen]);
-  // EngineAnalysis paneli `hidden lg:flex` ile yalnızca görsel gizlenir; React tüm ekranlarda
-  // mount eder ve paylaşılan motoru çalıştırır. Bu yüzden mount koşulu ekran boyutuna değil,
-  // panelin render koşuluna bağlı. Panel varken eval çubuğu aboneliği ayar yetkisini ona bırakır.
-  const engineAnalysisMounted = !hideEngineForStudentPuzzle && (!vsComputer || isVcGameOver);
-  const barEngineEnabled =
+  const engineDrivesBar =
     !hideEngineForStudentPuzzle
     && boardSettings.showEvalBar
-    && !terminalEval
-    && (!vsComputer || isVcGameOver);
-
-  const { ready: barEngineReady, pvLines: barPvLines, analyseFen: barAnalyseFen } = useStockfish({
-    numPv: 1,
-    enabled: barEngineEnabled,
-    engine: 'lite',
-    controlsOptions: !engineAnalysisMounted,
-  });
-  const barPrevFenRef = useRef<string>('');
-  const barReadyOnceRef = useRef(false);
-  useEffect(() => {
-    // Analizi yalnızca bu abonelik yetkiliyse başlat (masaüstü panel yoksa). Panel varsa
-    // analizi o başlatır; abonelik paylaşılan worker'dan satırları zaten alır.
-    if (!barEngineEnabled || engineAnalysisMounted) {
-      barReadyOnceRef.current = false;
-      return;
-    }
-    const fenChanged = studyBoardFen !== barPrevFenRef.current;
-    const becameReady = barEngineReady && !barReadyOnceRef.current;
-    if (!fenChanged && !becameReady) return;
-    barPrevFenRef.current = studyBoardFen;
-    if (barEngineReady) barReadyOnceRef.current = true;
-    barAnalyseFen(studyBoardFen);
-  }, [studyBoardFen, barEngineEnabled, engineAnalysisMounted, barEngineReady, barAnalyseFen]);
-
-  const barBestLine = useMemo(() => {
-    const valid = barPvLines.filter((l): l is PvLine => l !== null);
-    if (valid.length === 0) return null;
-    return valid.reduce((best, l) => (evalWinningChances(l) > evalWinningChances(best) ? l : best));
-  }, [barPvLines]);
-  const barEngineDisplay = useStableEvalDisplay(
-    studyBoardFen,
-    barEngineEnabled && barBestLine ? barBestLine : null,
-    turn === 'white' ? 'w' : 'b',
-    barEngineEnabled,
-  );
-  useEffect(() => {
-    if (!barEngineEnabled) return;
-    setEvalBar(barEngineDisplay);
-  }, [barEngineEnabled, barEngineDisplay]);
+    && (!vsComputer || isVcGameOver)
+    && !terminalEval;
 
   useEffect(() => {
-    // Motor çubuğu sürmüyorsa (bulmacada gizli, mat/pat, VS bilgisayar oynarken veya bar kapalı)
-    // terminal / materyal değerini göster.
-    if (barEngineEnabled) return;
+    if (engineDrivesBar) return; // EngineAnalysis.onEvalBarChange çubuğu sürüyor
     if (terminalEval) {
       setEvalBar({
         whitePercent: terminalEvalToBarPercent(terminalEval),
@@ -1192,7 +1145,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     } catch {
       setEvalBar(OFF_EVAL_BAR);
     }
-  }, [studyBoardFen, barEngineEnabled, terminalEval]);
+  }, [studyBoardFen, engineDrivesBar, terminalEval]);
 
   const progressKey = effectiveChapter ? `${selectedStudy?.id}_${effectiveChapter.id}` : null;
   const recordProgress = useCallback((key: string, idx: number) => {
@@ -3638,7 +3591,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
               onToggle={() => updateBoardSettings(engineMasterTogglePatch(boardSettings))}
               onHoverMove={setEngineHoverMove}
               onTopMoveUpdate={setEngineTopMove}
-              onEvalBarChange={undefined}
+              onEvalBarChange={boardSettings.showEvalBar ? setEvalBar : undefined}
               onOpenBoardPrefs={() => setShowStudySettings(true)}
             />
           )}
