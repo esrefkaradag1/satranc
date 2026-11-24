@@ -75,8 +75,11 @@ export function useStockfish({ numPv = 3, enabled = true, threads = 1, hash = 16
   enabledRef.current = enabled;
 
   useEffect(() => {
+    // Yalnızca etkin tüketici motor ayarını belirler; kapalı (ör. başka ekrandaki)
+    // bir abonelik paylaşılan worker'ın numPv'sini değiştirip aktif analizi bozmasın.
+    if (!enabled) return;
     setEngineOptions({ numPv, threads, hash, engine });
-  }, [numPv, threads, hash, engine]);
+  }, [numPv, threads, hash, engine, enabled]);
 
   useEffect(() => {
     if (!enabled) return;

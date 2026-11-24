@@ -55,8 +55,9 @@ import { serializePath } from '../lib/studySync/types';
 import { mainlineNodeIdForFen, mainlineSansFromTree, sanitizeChapterVariations, fenAtSyncPath, mergeMainlineMoves } from '../lib/studySync/moveList';
 import { liveLessonFenAt } from '../lib/liveLessonVariations';
 import { ChessBoardFrame, ChessEvalBar } from './chess/ChessBoardFrame';
-import type { EvalBarDisplay } from '../hooks/useStableEvalDisplay';
-import { cpWinningChances, winningChancesToBarPercent } from '../lib/winningChances';
+import { useStableEvalDisplay, type EvalBarDisplay } from '../hooks/useStableEvalDisplay';
+import { useStockfish, type PvLine } from '../hooks/useStockfish';
+import { cpWinningChances, winningChancesToBarPercent, evalWinningChances } from '../lib/winningChances';
 import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStudyBoardSettings } from '../hooks/useStudyBoardSettings';
 import { engineMasterTogglePatch } from '../lib/studyBoardSettings';
@@ -1130,17 +1131,59 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       || boardSettings.showVariationArrows
     );
 
-  // Masaüstünde (lg) açık motor paneli barı Stockfish ile sürer; bu efekt ona dokunmaz.
-  // Telefon/tablette panel olmadığından bar burada Stockfish'ten beslenir.
+  // Stockfish barını masaüstünde (lg) açık motor paneli (EngineAnalysis) sürer.
+  // Telefon/tablette o panel hiç mount olmaz (hidden lg:flex); orada barı aşağıdaki
+  // yerel Stockfish aboneliği, EngineAnalysis ile birebir aynı motor/hook üzerinden sürüyor.
   const panelDrivesEvalBar = isLgViewport && !hideEngineForStudentPuzzle && boardSettings.showEvalBar;
+  const terminalEval = useMemo(() => getTerminalEval(studyBoardFen), [studyBoardFen]);
+  const barEngineEnabled =
+    !panelDrivesEvalBar && !vsComputer && !hideEngineForStudentPuzzle && boardSettings.showEvalBar && !terminalEval;
+
+  const { ready: barEngineReady, pvLines: barPvLines, analyseFen: barAnalyseFen } = useStockfish({
+    numPv: 1,
+    enabled: barEngineEnabled,
+    engine: 'lite',
+  });
+  const barPrevFenRef = useRef<string>('');
+  const barReadyOnceRef = useRef(false);
+  useEffect(() => {
+    if (!barEngineEnabled) {
+      barReadyOnceRef.current = false;
+      return;
+    }
+    const fenChanged = studyBoardFen !== barPrevFenRef.current;
+    const becameReady = barEngineReady && !barReadyOnceRef.current;
+    if (!fenChanged && !becameReady) return;
+    barPrevFenRef.current = studyBoardFen;
+    if (barEngineReady) barReadyOnceRef.current = true;
+    barAnalyseFen(studyBoardFen);
+  }, [studyBoardFen, barEngineEnabled, barEngineReady, barAnalyseFen]);
+
+  const barBestLine = useMemo(() => {
+    const valid = barPvLines.filter((l): l is PvLine => l !== null);
+    if (valid.length === 0) return null;
+    return valid.reduce((best, l) => (evalWinningChances(l) > evalWinningChances(best) ? l : best));
+  }, [barPvLines]);
+  // analyseFen yeni FEN'de tüm satırları null'a çeker; bu yüzden dolu bir satır güncel pozisyona aittir.
+  const barEngineDisplay = useStableEvalDisplay(
+    studyBoardFen,
+    barEngineEnabled && barBestLine ? barBestLine : null,
+    turn === 'white' ? 'w' : 'b',
+    barEngineEnabled,
+  );
+  useEffect(() => {
+    if (!barEngineEnabled) return;
+    setEvalBar(barEngineDisplay);
+  }, [barEngineEnabled, barEngineDisplay]);
 
   useEffect(() => {
-    const terminal = getTerminalEval(studyBoardFen);
-    if (terminal) {
+    // Motor barı (panel veya yerel abonelik) sürüyorsa materyal efekti dokunmaz.
+    if (barEngineEnabled || panelDrivesEvalBar) return;
+    if (terminalEval) {
       setEvalBar({
-        whitePercent: terminalEvalToBarPercent(terminal),
-        label: terminal.label,
-        winningChances: terminal.kind === 'checkmate' ? (terminal.whiteAdvantage ? 1 : -1) : 0,
+        whitePercent: terminalEvalToBarPercent(terminalEval),
+        label: terminalEval.label,
+        winningChances: terminalEval.kind === 'checkmate' ? (terminalEval.whiteAdvantage ? 1 : -1) : 0,
         pending: false,
       });
       return;
@@ -1153,22 +1196,15 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       }
       return;
     }
-    // Masaüstü motor paneli barı sürüyorsa çift sürücü/titreme olmasın diye burada dokunma.
-    if (panelDrivesEvalBar) return;
-    // Bar görünmüyorsa Stockfish'i boşuna çalıştırma.
-    if (engineDrivesEvalBar && !boardSettings.showEvalBar) return;
-    let cancelled = false;
-    const updateEval = async () => {
+    // Bar görünmüyorsa (motor paneli/bar kapalı) sadece materyal göster.
+    if (!boardSettings.showEvalBar) {
       try {
-        const score = await getEvaluationPawnsAsync(makeBuilderGame(studyBoardFen));
-        if (!cancelled) setEvalBar(materialEvalToBarDisplay(score));
+        setEvalBar(materialEvalToBarDisplay(getEvaluationPawns(makeBuilderGame(studyBoardFen))));
       } catch {
-        if (!cancelled) setEvalBar(OFF_EVAL_BAR);
+        setEvalBar(OFF_EVAL_BAR);
       }
-    };
-    updateEval();
-    return () => { cancelled = true; };
-  }, [studyBoardFen, vsComputer, engineDrivesEvalBar, panelDrivesEvalBar, boardSettings.showEvalBar]);
+    }
+  }, [studyBoardFen, vsComputer, barEngineEnabled, panelDrivesEvalBar, terminalEval, boardSettings.showEvalBar]);
 
   const progressKey = effectiveChapter ? `${selectedStudy?.id}_${effectiveChapter.id}` : null;
   const recordProgress = useCallback((key: string, idx: number) => {
