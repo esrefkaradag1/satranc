@@ -240,6 +240,50 @@ export async function chessduelloMember(memberId: string, clubId?: string): Prom
   return request('GET', { resource: 'member', id: memberId, clubId });
 }
 
+export type ChessDuelloLeaderboardEntry = {
+  rank: number;
+  id: string;
+  username: string;
+  avatarUrl: string | null;
+  eloRating: number;
+  lastActiveAt: string | null;
+  joinedAt: string | null;
+  role: string;
+};
+
+/** Klan sıralaması — rating'e göre azalan (GET /coach-api/v1/leaderboard). */
+export async function chessduelloLeaderboard(
+  clubId?: string,
+  opts?: { limit?: number; after?: string; classId?: string },
+): Promise<Envelope<ChessDuelloLeaderboardEntry[]>> {
+  return request('GET', {
+    resource: 'leaderboard',
+    clubId,
+    limit: opts?.limit ?? 100,
+    after: opts?.after,
+    classId: opts?.classId,
+  });
+}
+
+/** Tüm sıralamayı sayfalayarak toplar (en fazla ~2000 üye). */
+export async function chessduelloFullLeaderboard(
+  clubId?: string,
+  classId?: string,
+): Promise<ChessDuelloLeaderboardEntry[]> {
+  const out: ChessDuelloLeaderboardEntry[] = [];
+  let after: string | undefined;
+  for (let i = 0; i < 20; i += 1) {
+    const page = await chessduelloLeaderboard(clubId, { limit: 100, after, classId });
+    const raw = page.data as ChessDuelloLeaderboardEntry[] | { items?: ChessDuelloLeaderboardEntry[] } | undefined;
+    const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.items) ? raw.items : [];
+    out.push(...rows);
+    const next = page.pagination?.hasMore ? page.pagination.nextCursor : null;
+    if (!next || rows.length === 0) break;
+    after = next;
+  }
+  return out;
+}
+
 export type ChessDuelloStudentSummary = {
   linked: boolean;
   configured?: boolean;

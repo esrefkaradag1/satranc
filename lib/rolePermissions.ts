@@ -55,6 +55,7 @@ export const PARENT_DEFAULT_PERMISSIONS = [
   'payments',
   'dues',
   'attendance',
+  'chessduello',
   'profile',
 ];
 

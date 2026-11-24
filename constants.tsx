@@ -343,6 +343,7 @@ export const STUDENT_NAV_CATEGORIES: NavCategory[] = [
     icon: <TrendingUp className="w-4 h-4" />,
     items: [
       { id: 'leaderboard', label: 'Lider Tablosu', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
+      { id: 'chessduello', label: 'ChessDuello', icon: <Swords className="w-5 h-5" />, iconColor: 'violet' },
       { id: 'tournaments', label: 'Turnuvalar', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
       { id: 'ukd', label: 'UKD/FIDE', icon: <Trophy className="w-5 h-5" />, iconColor: 'amber' },
       { id: 'lichess', label: 'Lichess', icon: <ExternalLink className="w-5 h-5" />, iconColor: 'teal' },

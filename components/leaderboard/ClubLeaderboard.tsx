@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ChevronDown,
   FileDown,
   Loader2,
   Medal,
   RefreshCw,
+  Swords,
   Trophy,
   Target,
   Gamepad2,
@@ -11,6 +13,7 @@ import {
   TrendingUp,
   Zap,
 } from 'lucide-react';
+import ChessDuelloClanLeaderboard from '../chessduello/ChessDuelloClanLeaderboard';
 import type { HomeworkPuzzleAttempt, Student } from '../../types';
 import type { LeaderboardEntry, LeaderboardPeriod, LeaderboardPointSettings, LeaderboardRankMode } from '../../lib/leaderboardUtils';
 import {
@@ -192,6 +195,7 @@ export const ClubLeaderboard: React.FC<Props> = ({
   const { auth, clubs } = useApp();
   const [period, setPeriod] = useState<LeaderboardPeriod>('week');
   const [rankMode, setRankMode] = useState<LeaderboardRankMode>('activity');
+  const [showClanBoard, setShowClanBoard] = useState(false);
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [fetching, setFetching] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
@@ -682,6 +686,30 @@ export const ClubLeaderboard: React.FC<Props> = ({
 
   return (
     <div className={`space-y-5 ${compact ? '' : 'animate-in fade-in duration-300'}`}>
+      {/* ChessDuello klan sıralaması — isteğe bağlı açılır (açılınca API'den çekilir). */}
+      <div className="rounded-2xl bg-[#1e293b] border border-white/5 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowClanBoard((v) => !v)}
+          className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left hover:bg-white/[0.02]"
+        >
+          <span className="flex items-center gap-2 text-sm font-black text-white">
+            <Swords className="w-4 h-4 text-violet-400" />
+            ChessDuello Klan Sıralaması
+          </span>
+          <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showClanBoard ? 'rotate-180' : ''}`} />
+        </button>
+        {showClanBoard ? (
+          <div className="px-5 pb-5 border-t border-white/5 pt-4">
+            <ChessDuelloClanLeaderboard
+              clubId={resolvedClubId || undefined}
+              highlightMemberId={anchorStudent?.chessDuelloMemberId}
+              highlightUsername={anchorStudent?.chessDuelloUsername}
+            />
+          </div>
+        ) : null}
+      </div>
+
       <div className="rounded-2xl bg-[#1e293b] border border-white/5 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

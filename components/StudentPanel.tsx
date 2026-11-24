@@ -126,6 +126,7 @@ import { fetchFidePlayer, federationLabel, resolveFideProfileForStudent, type Fi
 import { fetchUkdFromTsf } from '../services/ukdService';
 import { fetchLichessDailyPuzzle } from '../services/lichessService';
 import StudentChessDuelloSummary from './student/StudentChessDuelloSummary';
+import ChessDuelloClanLeaderboard from './chessduello/ChessDuelloClanLeaderboard';
 import { persistLeaderboardStatsFromActivity, persistLeaderboardStatsFromDays } from '../services/leaderboardService';
 import { fetchLichessOAuthProfile, fetchLichessOAuthStatus } from '../services/lichessOAuthClient';
 import { formatMidnightCountdown, homeworkDayKey } from '../lib/homeworkDayUtils';
@@ -253,7 +254,7 @@ function rankTournamentParticipants(t: Tournament): TournamentRankRow[] {
   return rows;
 }
 
-type PanelTab = 'summary' | 'leaderboard' | 'schedule' | 'puzzles' | 'puzzle-practice' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages' | 'notifications';
+type PanelTab = 'summary' | 'leaderboard' | 'chessduello' | 'schedule' | 'puzzles' | 'puzzle-practice' | 'study' | 'tournaments' | 'attendance' | 'profile' | 'live-lesson' | 'gallery' | 'payments' | 'dues' | 'analyses' | 'private-lesson' | 'ukd' | 'lichess' | 'chesscom' | 'messages' | 'notifications';
 
 
 const STUDENT_PANEL_REFRESH_TABS = new Set<PanelTab>(['summary', 'schedule', 'payments', 'dues', 'attendance', 'profile', 'analyses', 'private-lesson']);
@@ -271,6 +272,7 @@ const PARENT_HIDDEN_TAB_IDS = new Set<PanelTab>([
 const PANEL_TAB_TO_SLUG: Record<PanelTab, string> = {
   summary: 'ozet',
   leaderboard: 'lider-tablosu',
+  chessduello: 'chessduello',
   schedule: 'program',
   puzzles: 'bulmaca',
   'puzzle-practice': 'bulmaca-coz',
@@ -1706,6 +1708,19 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
             highlightStudentId={studentId}
             compact
           />
+        )}
+
+        {activeTab === 'chessduello' && student && (
+          <div className="space-y-5 animate-in fade-in duration-300 max-w-2xl mx-auto w-full">
+            <StudentChessDuelloSummary studentId={String(studentId)} memberId={student.chessDuelloMemberId} />
+            <div className="rounded-2xl border border-white/[0.07] bg-[#111827]/80 p-4 sm:p-5">
+              <ChessDuelloClanLeaderboard
+                clubId={student.clubId || undefined}
+                highlightMemberId={student.chessDuelloMemberId}
+                highlightUsername={student.chessDuelloUsername}
+              />
+            </div>
+          </div>
         )}
 
         {/* Ders Programı sekmesi — admin ile aynı tasarım: 7 gün, saat + ders adı */}
