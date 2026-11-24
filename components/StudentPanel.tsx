@@ -1697,7 +1697,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           />
         )}
         {activeTab === 'summary' && derived && (
-          <StudentChessDuelloSummary studentId={String(studentId)} memberId={student.chessDuelloMemberId} />
+          <div className="mt-4">
+            <StudentChessDuelloSummary studentId={String(studentId)} memberId={student.chessDuelloMemberId} />
+          </div>
         )}
 
         {activeTab === 'leaderboard' && (
