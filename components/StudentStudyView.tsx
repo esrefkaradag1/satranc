@@ -233,6 +233,19 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const [laMoveQuality, setLaMoveQuality] = useState<{ label: string; bestSan: string; color: string } | null>(null);
   const [laHint, setLaHint] = useState<string | null>(null);
   const [evalBar, setEvalBar] = useState<EvalBarDisplay>(OFF_EVAL_BAR);
+  // Stockfish barını süren motor paneli yalnızca `lg` ekranda görünür (hidden lg:flex).
+  // Telefon/tablette panel yok; o yüzden barı aşağıdaki efekt Stockfish ile sürüyor.
+  const [isLgViewport, setIsLgViewport] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches,
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const onChange = () => setIsLgViewport(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
   const [replyToCoach, setReplyToCoach] = useState('');
   const [chapterMoveAnalysis, setChapterMoveAnalysis] = useState<ChapterMoveAnalysisItem[]>([]);
   /** Canlı analiz: öğrenciye özel hamleler (paylaşılan chapter.moves'a yazılmaz) */
@@ -1117,8 +1130,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       || boardSettings.showVariationArrows
     );
 
+  // Masaüstünde (lg) açık motor paneli barı Stockfish ile sürer; bu efekt ona dokunmaz.
+  // Telefon/tablette panel olmadığından bar burada Stockfish'ten beslenir.
+  const panelDrivesEvalBar = isLgViewport && !hideEngineForStudentPuzzle && boardSettings.showEvalBar;
+
   useEffect(() => {
-    if (engineDrivesEvalBar) return;
     const terminal = getTerminalEval(studyBoardFen);
     if (terminal) {
       setEvalBar({
@@ -1137,6 +1153,10 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
       }
       return;
     }
+    // Masaüstü motor paneli barı sürüyorsa çift sürücü/titreme olmasın diye burada dokunma.
+    if (panelDrivesEvalBar) return;
+    // Bar görünmüyorsa Stockfish'i boşuna çalıştırma.
+    if (engineDrivesEvalBar && !boardSettings.showEvalBar) return;
     let cancelled = false;
     const updateEval = async () => {
       try {
@@ -1148,7 +1168,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
     };
     updateEval();
     return () => { cancelled = true; };
-  }, [studyBoardFen, vsComputer, engineDrivesEvalBar]);
+  }, [studyBoardFen, vsComputer, engineDrivesEvalBar, panelDrivesEvalBar, boardSettings.showEvalBar]);
 
   const progressKey = effectiveChapter ? `${selectedStudy?.id}_${effectiveChapter.id}` : null;
   const recordProgress = useCallback((key: string, idx: number) => {
@@ -1824,6 +1844,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const handlePieceDrop = useCallback(({ sourceSquare, targetSquare, piece }: { piece?: any; sourceSquare: string; targetSquare: string | null }) => {
     if (!sourceSquare || !targetSquare) return false;
+    if (sourceSquare === targetSquare) return false;
     if (!effectiveChapter) return false;
     if (!puzzleBoardInteraction && !studentMoveEnabled) {
       showFeedback('wrong', 'Taş oynatma kapalı');
@@ -2528,6 +2549,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
   const handleVcDrop = useCallback(({ sourceSquare, targetSquare, piece }: { piece?: any; sourceSquare: string; targetSquare: string | null }) => {
     if (!sourceSquare || !targetSquare) return false;
+    if (sourceSquare === targetSquare) return false;
     if (vcThinking) return false;
     const game = makeBuilderGame(vcFen);
     try {
@@ -3383,6 +3405,8 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
                         canDragPiece: canDragStudentPiece,
                         onPieceDrop: ({ sourceSquare, targetSquare, piece }) => {
                           if (!sourceSquare || !targetSquare) return false;
+                          // Taş kaldırılıp aynı kareye bırakılırsa hamle sayılmaz (yanlış işaretlenmesin).
+                          if (sourceSquare === targetSquare) return false;
                           const args = { sourceSquare, targetSquare, piece };
                           const ok = vsComputer ? handleVcDrop(args) : handlePieceDrop(args);
                           if (ok) {
