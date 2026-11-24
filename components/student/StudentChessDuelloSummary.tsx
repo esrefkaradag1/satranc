@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Circle, Loader2, Swords, User } from 'lucide-react';
+import { CheckCircle2, Circle, Loader2, Swords, TrendingUp, User } from 'lucide-react';
 import {
   chessduelloStudentSummary,
   localizedTitle,
@@ -15,7 +15,7 @@ function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' });
+  return d.toLocaleDateString('tr-TR', { day: '2-digit', month: 'short' });
 }
 
 const CATEGORY_TR: Record<string, string> = {
@@ -28,7 +28,15 @@ const CATEGORY_TR: Record<string, string> = {
 };
 
 function categoryLabel(id: string): string {
-  return CATEGORY_TR[id.toLowerCase()] ?? id.toUpperCase();
+  return CATEGORY_TR[id.toLowerCase()] ?? id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** Doğruluk yüzdesine göre renk — hızlı okunsun diye. */
+function accuracyTone(n: number | null | undefined): { text: string; bar: string } {
+  if (n == null) return { text: 'text-slate-200', bar: 'bg-slate-500' };
+  if (n >= 65) return { text: 'text-emerald-300', bar: 'bg-emerald-500' };
+  if (n >= 45) return { text: 'text-amber-300', bar: 'bg-amber-500' };
+  return { text: 'text-rose-300', bar: 'bg-rose-500' };
 }
 
 /** Öğrenci / veli özetinde ChessDuello kartı — yalnızca eşlenmiş öğrencide görünür. */
@@ -79,170 +87,211 @@ export default function StudentChessDuelloSummary({
 
   const username = member?.username || training?.username || '';
   const avatar = member?.avatarUrl || training?.avatarUrl || null;
+  const curriculumPct = training?.completionPercent ?? null;
+  const accTone = accuracyTone(analytics?.accuracy);
 
   return (
-    <section className="rounded-2xl border border-violet-500/20 bg-slate-900/50 overflow-hidden">
-      <div className="px-4 sm:px-5 py-3 border-b border-slate-700/60 flex items-center gap-2">
-        <Swords className="w-4 h-4 text-violet-400" />
-        <h3 className="text-sm font-black text-white">ChessDuello</h3>
-      </div>
+    <section className="rounded-3xl border border-white/[0.07] bg-slate-900/60 overflow-hidden shadow-xl shadow-black/20">
       {loading && !data ? (
-        <div className="flex items-center gap-2 px-5 py-6 text-sm text-slate-400">
-          <Loader2 className="w-4 h-4 animate-spin" /> Yükleniyor…
+        <div className="flex items-center gap-2 px-6 py-10 text-sm text-slate-400">
+          <Loader2 className="w-4 h-4 animate-spin" /> ChessDuello yükleniyor…
         </div>
       ) : (
-        <div className="p-4 sm:p-5 space-y-5">
-          {/* Başlık */}
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-violet-500/15 flex items-center justify-center text-violet-300 overflow-hidden shrink-0">
-              {avatar ? <img src={avatar} alt="" className="w-full h-full object-cover" /> : <User className="w-6 h-6" />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-base font-black text-white truncate">{username || 'ChessDuello'}</div>
-              {training ? (
-                <div className="text-xs text-slate-400">
-                  Müfredat {training.completedLessons}/{training.totalLessons} · {pct(training.completionPercent)}
+        <>
+          {/* Hero — isim, müfredat ilerleme, ELO */}
+          <header className="relative px-5 sm:px-6 py-5 bg-gradient-to-br from-violet-600/20 via-violet-500/5 to-transparent border-b border-white/[0.06]">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl ring-2 ring-violet-400/30 bg-violet-500/15 overflow-hidden flex items-center justify-center text-violet-200 shrink-0">
+                {avatar ? <img src={avatar} alt="" className="w-full h-full object-cover" /> : <User className="w-7 h-7" />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <Swords className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-violet-300/90">ChessDuello</span>
+                </div>
+                <div className="text-xl font-black text-white truncate leading-tight mt-0.5">{username || '—'}</div>
+                {training ? (
+                  <div className="mt-2">
+                    <div className="flex items-center justify-between text-[11px] text-violet-200/80 font-semibold">
+                      <span>Müfredat</span>
+                      <span className="tabular-nums">{training.completedLessons}/{training.totalLessons} · {pct(curriculumPct)}</span>
+                    </div>
+                    <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <div className="h-full rounded-full bg-violet-400" style={{ width: `${Math.max(2, Math.round(curriculumPct ?? 0))}%` }} />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              {typeof member?.eloRating === 'number' ? (
+                <div className="shrink-0 text-right">
+                  <div className="text-3xl sm:text-4xl font-black text-white tabular-nums leading-none">{member.eloRating}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-violet-300/80 mt-1">ELO Puanı</div>
                 </div>
               ) : null}
-              {training?.lastTrainedAt ? (
-                <div className="text-[11px] text-slate-500 mt-0.5">Son antrenman {fmtDate(training.lastTrainedAt)}</div>
-              ) : null}
             </div>
-            {typeof member?.eloRating === 'number' ? (
-              <div className="rounded-xl bg-violet-500/15 border border-violet-500/30 px-3 py-1.5 text-center shrink-0">
-                <div className="text-[10px] font-bold text-violet-300 uppercase tracking-wider">ELO</div>
-                <div className="text-xl font-black text-white tabular-nums">{member.eloRating}</div>
+          </header>
+
+          <div className="p-5 sm:p-6 space-y-6">
+            {/* Birincil metrikler — doğruluk öne çıkar */}
+            {analytics ? (
+              <div className="grid grid-cols-3 divide-x divide-white/[0.06] rounded-2xl border border-white/[0.06] bg-slate-950/40 overflow-hidden">
+                <Metric label="İsabet" value={pct(analytics.accuracy)} valueClass={accTone.text} />
+                <Metric label="30 gün deneme" value={(analytics.attempts ?? 0).toLocaleString('tr-TR')} />
+                <Metric label="İlk deneme" value={pct(analytics.firstTryAccuracy)} />
+              </div>
+            ) : null}
+
+            {/* İkincil metrikler — tek satır, ayraçlı */}
+            {analytics ? (
+              <dl className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+                <SubStat label="Doğru" value={`${(analytics.correct ?? 0).toLocaleString('tr-TR')} / ${(analytics.attempts ?? 0).toLocaleString('tr-TR')}`} />
+                <SubStat label="Antrenman / Maç" value={`${analytics.trainingAttempts ?? 0} / ${analytics.matchAttempts ?? 0}`} />
+                <SubStat label="Son cevap" value={fmtDate(analytics.lastAnsweredAt)} />
+                {training?.lastTrainedAt ? <SubStat label="Son antrenman" value={fmtDate(training.lastTrainedAt)} /> : null}
+              </dl>
+            ) : null}
+
+            {/* Müfredat ilerlemesi — kategoriler */}
+            {categories.length ? (
+              <div className="space-y-4">
+                <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Müfredat ilerlemesi</h4>
+                <div className="space-y-4">
+                  {categories.map((cat) => {
+                    const total = cat.totalLessons || 0;
+                    const done = cat.completedLessons || 0;
+                    const width = total ? Math.round((done / total) * 100) : 0;
+                    return (
+                      <div key={cat.id}>
+                        <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                          <span className="text-sm font-bold text-white">{categoryLabel(cat.id)}</span>
+                          <span className="text-xs font-semibold text-slate-400 tabular-nums">{done}/{total} ders</span>
+                        </div>
+                        <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                          <div className="h-full rounded-full bg-violet-500 transition-[width] duration-500" style={{ width: `${width}%` }} />
+                        </div>
+                        {cat.lessons?.length ? (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {cat.lessons.map((lsn) => {
+                              const complete = lsn.status === 'completed' || (lsn.totalSteps > 0 && lsn.completedSteps >= lsn.totalSteps);
+                              const started = !complete && lsn.completedSteps > 0;
+                              return (
+                                <span
+                                  key={lsn.slug}
+                                  title={`${localizedTitle(lsn.title) || lsn.slug} · ${lsn.completedSteps}/${lsn.totalSteps} adım`}
+                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium ${
+                                    complete
+                                      ? 'bg-emerald-500/12 text-emerald-300'
+                                      : started
+                                        ? 'bg-violet-500/12 text-violet-200'
+                                        : 'bg-white/[0.04] text-slate-400'
+                                  }`}
+                                >
+                                  {complete ? <CheckCircle2 className="w-3 h-3" /> : <Circle className="w-3 h-3" />}
+                                  {localizedTitle(lsn.title) || lsn.slug}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {/* 30 günlük aktivite */}
+            {analytics?.trend && analytics.trend.length > 1 ? (
+              <div>
+                <div className="flex items-center gap-1.5 mb-2.5">
+                  <TrendingUp className="w-3.5 h-3.5 text-slate-400" />
+                  <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Son 30 gün aktivite</h4>
+                </div>
+                <div className="flex items-end gap-1 h-16 rounded-xl bg-slate-950/40 border border-white/[0.05] px-2.5 py-2">
+                  {analytics.trend.map((t) => {
+                    const h = t.attempts ? Math.max(8, Math.round((t.attempts / maxTrend) * 100)) : 2;
+                    const acc = t.attempts ? t.correct / t.attempts : 0;
+                    return (
+                      <div
+                        key={t.day}
+                        className="flex-1 min-w-[3px] rounded-full bg-violet-500 self-end"
+                        style={{ height: `${h}%`, opacity: t.attempts ? 0.45 + acc * 0.55 : 0.2 }}
+                        title={`${fmtDate(t.day)}: ${t.correct}/${t.attempts} doğru`}
+                      />
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1.5">Çubuk yüksekliği günlük deneme, renk yoğunluğu doğruluk oranı.</p>
+              </div>
+            ) : null}
+
+            {/* Temalar */}
+            {weak.length || strong.length ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                {weak.length ? (
+                  <ThemeList title="Gelişime açık" tone="rose" themes={weak} />
+                ) : null}
+                {strong.length ? (
+                  <ThemeList title="Güçlü yönler" tone="emerald" themes={strong} />
+                ) : null}
               </div>
             ) : null}
           </div>
-
-          {/* İstatistikler */}
-          {analytics ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              <Stat label="30 gün deneme" value={String(analytics.attempts ?? 0)} />
-              <Stat label="Doğru" value={String(analytics.correct ?? 0)} />
-              <Stat label="İsabet" value={pct(analytics.accuracy)} />
-              <Stat label="İlk deneme" value={pct(analytics.firstTryAccuracy)} />
-              <Stat label="Antrenman / Maç" value={`${analytics.trainingAttempts ?? 0} / ${analytics.matchAttempts ?? 0}`} />
-              <Stat label="Son cevap" value={fmtDate(analytics.lastAnsweredAt)} />
-            </div>
-          ) : null}
-
-          {/* Müfredat kategorileri (Taktik / Oyunsonu / Strateji ...) */}
-          {categories.length ? (
-            <div>
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Müfredat ilerlemesi</div>
-              <div className="space-y-2.5">
-                {categories.map((cat) => {
-                  const total = cat.totalLessons || 0;
-                  const done = cat.completedLessons || 0;
-                  const width = total ? Math.round((done / total) * 100) : 0;
-                  return (
-                    <div key={cat.id} className="rounded-xl border border-white/[0.06] bg-slate-950/40 px-3 py-2.5">
-                      <div className="flex items-center justify-between text-xs font-bold text-slate-200">
-                        <span className="uppercase tracking-wider">{categoryLabel(cat.id)}</span>
-                        <span className="tabular-nums text-slate-400">{done}/{total}</span>
-                      </div>
-                      <div className="mt-2 h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                        <div className="h-full bg-violet-500" style={{ width: `${width}%` }} />
-                      </div>
-                      {cat.lessons?.length ? (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {cat.lessons.map((lsn) => {
-                            const complete = lsn.status === 'completed' || (lsn.totalSteps > 0 && lsn.completedSteps >= lsn.totalSteps);
-                            return (
-                              <span
-                                key={lsn.slug}
-                                title={`${localizedTitle(lsn.title) || lsn.slug} · ${lsn.completedSteps}/${lsn.totalSteps}`}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium ${
-                                  complete
-                                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
-                                    : 'bg-slate-800/70 border border-white/[0.06] text-slate-400'
-                                }`}
-                              >
-                                {complete ? <CheckCircle2 className="w-3 h-3" /> : <Circle className="w-3 h-3" />}
-                                {localizedTitle(lsn.title) || lsn.slug}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {/* 30 günlük aktivite (trend) */}
-          {analytics?.trend?.length ? (
-            <div>
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Son 30 gün aktivite</div>
-              <div className="flex items-end gap-[2px] h-14">
-                {analytics.trend.map((t) => {
-                  const h = Math.round((t.attempts / maxTrend) * 100);
-                  const acc = t.attempts ? t.correct / t.attempts : 0;
-                  return (
-                    <div
-                      key={t.day}
-                      className="flex-1 min-w-[2px] rounded-sm bg-slate-800 relative overflow-hidden"
-                      style={{ height: '100%' }}
-                      title={`${t.day}: ${t.correct}/${t.attempts} doğru`}
-                    >
-                      <div
-                        className="absolute bottom-0 left-0 right-0 bg-violet-500"
-                        style={{ height: `${h}%`, opacity: 0.4 + acc * 0.6 }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {/* Temalar */}
-          {weak.length ? (
-            <div>
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Çalışılması gereken temalar</div>
-              <div className="flex flex-wrap gap-1.5">
-                {weak.map((t) => (
-                  <span
-                    key={t.id}
-                    className="px-2 py-0.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs font-medium"
-                  >
-                    {localizedTitle(t.title) || t.slug} · {pct(t.accuracy)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {strong.length ? (
-            <div>
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Güçlü temalar</div>
-              <div className="flex flex-wrap gap-1.5">
-                {strong.map((t) => (
-                  <span
-                    key={t.id}
-                    className="px-2 py-0.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-medium"
-                  >
-                    {localizedTitle(t.title) || t.slug} · {pct(t.accuracy)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
+        </>
       )}
     </section>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, valueClass = 'text-white' }: { label: string; value: string; valueClass?: string }) {
   return (
-    <div className="rounded-xl bg-slate-800/50 border border-slate-700/50 px-2.5 py-2 min-w-0">
-      <div className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate">{label}</div>
-      <div className="text-sm font-black text-white mt-0.5 tabular-nums truncate">{value}</div>
+    <div className="px-3 py-3 text-center">
+      <div className={`text-2xl font-black tabular-nums leading-none ${valueClass}`}>{value}</div>
+      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-1.5">{label}</div>
+    </div>
+  );
+}
+
+function SubStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="font-bold text-slate-200 tabular-nums">{value}</dd>
+    </div>
+  );
+}
+
+function ThemeList({
+  title,
+  tone,
+  themes,
+}: {
+  title: string;
+  tone: 'rose' | 'emerald';
+  themes: Array<{ id: number; slug: string; title: Record<string, string>; accuracy: number | null }>;
+}) {
+  const barBg = tone === 'rose' ? 'bg-rose-500/70' : 'bg-emerald-500/70';
+  const dot = tone === 'rose' ? 'bg-rose-400' : 'bg-emerald-400';
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-2">
+        <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+        <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{title}</h4>
+      </div>
+      <ul className="space-y-1.5">
+        {themes.map((t) => {
+          const p = Math.max(0, Math.min(100, Math.round(t.accuracy ?? 0)));
+          return (
+            <li key={t.id} className="flex items-center gap-2.5">
+              <span className="flex-1 min-w-0 text-sm text-slate-200 truncate">{localizedTitle(t.title) || t.slug}</span>
+              <span className="w-16 h-1.5 rounded-full bg-slate-800 overflow-hidden shrink-0">
+                <span className={`block h-full ${barBg}`} style={{ width: `${p}%` }} />
+              </span>
+              <span className="w-9 text-right text-xs font-bold text-slate-300 tabular-nums shrink-0">%{p}</span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
