@@ -207,14 +207,14 @@ export default function StudentChessDuelloSummary({
                   <TrendingUp className="w-3.5 h-3.5 text-slate-400" />
                   <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Son 30 gün aktivite</h4>
                 </div>
-                <div className="flex items-end gap-1 h-16 rounded-xl bg-slate-950/40 border border-white/[0.05] px-2.5 py-2">
+                <div className="flex items-end justify-between gap-1.5 h-16 rounded-xl bg-slate-950/40 border border-white/[0.05] px-3 py-2">
                   {analytics.trend.map((t) => {
                     const h = t.attempts ? Math.max(8, Math.round((t.attempts / maxTrend) * 100)) : 2;
                     const acc = t.attempts ? t.correct / t.attempts : 0;
                     return (
                       <div
                         key={t.day}
-                        className="flex-1 min-w-[3px] rounded-full bg-violet-500 self-end"
+                        className="flex-1 max-w-[14px] min-w-[4px] rounded-md bg-violet-500 self-end"
                         style={{ height: `${h}%`, opacity: t.attempts ? 0.45 + acc * 0.55 : 0.2 }}
                         title={`${fmtDate(t.day)}: ${t.correct}/${t.attempts} doğru`}
                       />

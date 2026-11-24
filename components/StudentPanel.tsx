@@ -1714,9 +1714,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
         )}
 
         {activeTab === 'chessduello' && student && (
-          <div className="space-y-5 animate-in fade-in duration-300 max-w-2xl mx-auto w-full">
+          <div className="animate-in fade-in duration-300 w-full max-w-6xl mx-auto grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
             <StudentChessDuelloSummary studentId={String(studentId)} memberId={student.chessDuelloMemberId} />
-            <div className="rounded-2xl border border-white/[0.07] bg-[#111827]/80 p-4 sm:p-5">
+            <div className="rounded-3xl border border-white/[0.07] bg-slate-900/60 p-4 sm:p-5 shadow-xl shadow-black/20">
               <ChessDuelloClanLeaderboard
                 clubId={student.clubId || undefined}
                 highlightMemberId={student.chessDuelloMemberId}
