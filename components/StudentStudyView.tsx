@@ -1121,12 +1121,11 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   // Çubuğu EngineAnalysis'in `onEvalBarChange`'i sürer (gerçek Stockfish değeri).
   // EngineAnalysis `hidden lg:flex` sarmalayıcıda olsa da React tüm ekranlarda mount eder
   // (yalnızca görsel gizlenir), bu yüzden çubuk her ekranda beslenir.
-  // Motor çubuğu sürmüyorsa (bulmacada gizli, VS bilgisayar oynarken, mat/pat) materyal/terminal göster.
+  // Motor çubuğu sürmüyorsa (bulmacada gizli, mat/pat) materyal/terminal göster.
   const terminalEval = useMemo(() => getTerminalEval(studyBoardFen), [studyBoardFen]);
   const engineDrivesBar =
     !hideEngineForStudentPuzzle
     && boardSettings.showEvalBar
-    && (!vsComputer || isVcGameOver)
     && !terminalEval;
 
   useEffect(() => {
@@ -3579,7 +3578,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
 
         {/* ── RIGHT ── */}
         <div className="hidden lg:flex w-[22rem] shrink-0 flex-col min-h-0 rounded-2xl bg-[#111827]/95 border border-white/[0.07] overflow-hidden shadow-xl shadow-black/20">
-          {!hideEngineForStudentPuzzle && (!vsComputer || isVcGameOver) && (
+          {!hideEngineForStudentPuzzle && (
             <EngineAnalysis
               fen={studyBoardFen}
               enabled={
