@@ -1302,17 +1302,21 @@ function ClassroomStudentVideoPanel({
         {speakFloorBar ? <div className="shrink-0">{speakFloorBar}</div> : null}
         <div className="ll-live-card flex-1 min-h-[120px] flex flex-col overflow-hidden">
           <h3 className="ll-live-card-title">Katılımcılar ({Math.max(0, tiles.length - 1)})</h3>
-          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar mt-2 grid grid-cols-1 gap-2">
+          <div className={`flex-1 min-h-0 overflow-y-auto custom-scrollbar mt-2 grid gap-2 content-start ${
+            otherTiles.length > 1 ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'
+          }`}>
             {otherTiles.length === 0 ? (
               <p className="text-[11px] text-slate-500 text-center py-6">Diğer katılımcı yok.</p>
             ) : (
               otherTiles.map((tile) => (
-                <div key={tile.id} className="flex items-center gap-2">
-                  <div className="w-20 shrink-0 aspect-video rounded-lg overflow-hidden">
-                    {tileButton(tile, 'w-full h-full rounded-lg', 'text-[8px]')}
+                <div key={tile.id} className="flex flex-col gap-1.5 min-w-0">
+                  <div className="relative w-full aspect-video rounded-xl overflow-hidden ring-1 ring-white/10">
+                    {tileButton(tile, 'w-full h-full rounded-xl', 'text-[10px]')}
                   </div>
-                  <p className="text-xs font-medium text-white truncate flex-1">{tile.name}</p>
-                  {tile.micMuted ? <MicOff className="w-3.5 h-3.5 text-rose-400 shrink-0" /> : <Mic className="w-3.5 h-3.5 text-slate-500 shrink-0" />}
+                  <div className="flex items-center gap-2 px-0.5">
+                    <p className="text-xs font-medium text-white truncate flex-1">{tile.name}</p>
+                    {tile.micMuted ? <MicOff className="w-3.5 h-3.5 text-rose-400 shrink-0" /> : <Mic className="w-3.5 h-3.5 text-slate-500 shrink-0" />}
+                  </div>
                 </div>
               ))
             )}
@@ -3930,22 +3934,40 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (!sid) return;
 
     let cancelled = false;
+    let timer: number | null = null;
+    // Oyun varken 4 sn; yokken (ya da hata/429'da) kademeli olarak 45 sn'ye kadar uzar.
+    // Sekme arka plandayken sorgu atılmaz. Böylece Lichess/Chess.com istek sınırına takılmayız.
+    let idleStreak = 0;
+    const nextDelay = () => (idleStreak === 0 ? 4000 : Math.min(45_000, 8000 * 2 ** (idleStreak - 1)));
+    const schedule = () => {
+      if (cancelled) return;
+      timer = window.setTimeout(() => { void tick(); }, nextDelay());
+    };
     const tick = async () => {
       if (cancelled) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        schedule();
+        return;
+      }
       try {
         const res = await fetchStudentActivityAuto(sid);
-        if (!res.ok || !res.snapshot || cancelled) return;
-        publishStudentBoardSnapshot(activitySnapshotToStudentBoard(res.snapshot));
+        if (cancelled) return;
+        if (res.ok && res.snapshot) {
+          idleStreak = 0;
+          publishStudentBoardSnapshot(activitySnapshotToStudentBoard(res.snapshot));
+        } else {
+          idleStreak = Math.min(idleStreak + 1, 6);
+        }
       } catch {
-        /* sessiz */
+        idleStreak = Math.min(idleStreak + 1, 6);
       }
+      schedule();
     };
 
     void tick();
-    const id = window.setInterval(() => { void tick(); }, 4000);
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [isStudentView, isStudentAdmittedToClass, studentIdProp, publishStudentBoardSnapshot]);
 
@@ -5281,6 +5303,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       lastLocalMoveTimeRef.current = Date.now();
     }
 
+    // Öğrenci RLS'te yalnızca UPDATE yapabilir (INSERT politikası yok); `upsert` INSERT yetkisi de
+    // istediğinden öğrencinin hamlesi sessizce reddediliyor, 2 sn sonra eski konum geri yükleniyordu.
+    // Satırı antrenör açar; öğrenci mevcut satırı günceller.
+    const writeRow = (row: Record<string, unknown>) => (isStudentView
+      ? sb.from('live_lesson_state').update(row).eq('id', effectiveRoomId)
+      : sb.from('live_lesson_state').upsert(row, { onConflict: 'id' }));
+
     const applySyncKey = (stamp: string) => {
       const varsKey = JSON.stringify(payload.variations ?? {});
       lastSyncRef.current = `${broadcastFen}|${varsKey}|${stamp}|${JSON.stringify(payload.session_media ?? '')}|${JSON.stringify(payload.chat_messages ?? '')}`;
@@ -5289,7 +5318,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       }
     };
 
-    void sb.from('live_lesson_state').upsert(payload, { onConflict: 'id' }).then(({ error }) => {
+    void writeRow(payload).then(({ error }) => {
       if (!error) {
         if ('marks' in payload) schemaHasMarksRef.current = true;
         if ('arrows' in payload) schemaHasArrowsRef.current = true;
@@ -5302,7 +5331,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         schemaHasMarksRef.current = false;
         const sansMarks: Record<string, unknown> = { ...payload };
         delete sansMarks.marks;
-        void sb.from('live_lesson_state').upsert(sansMarks, { onConflict: 'id' }).then(({ error: e2 }) => {
+        void writeRow(sansMarks).then(({ error: e2 }) => {
           if (!e2) {
             applySyncKey(new Date().toISOString());
             return;
@@ -5316,14 +5345,14 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               moves: broadcastMoves,
               updated_at: new Date().toISOString(),
             };
-            void sb.from('live_lesson_state').upsert(minimal, { onConflict: 'id' }).then(({ error: e3 }) => {
+            void writeRow(minimal).then(({ error: e3 }) => {
               if (!e3) applySyncKey(new Date().toISOString());
             });
           }
         });
         return;
       }
-      if (schemaHasExtendedRef.current !== false) {
+      if (isPgColumnError(error) && schemaHasExtendedRef.current !== false) {
         schemaHasExtendedRef.current = false;
         const minimal = {
           id: effectiveRoomId,
@@ -5332,7 +5361,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           moves: broadcastMoves,
           updated_at: new Date().toISOString(),
         };
-        void sb.from('live_lesson_state').upsert(minimal, { onConflict: 'id' }).then(({ error: e2 }) => {
+        void writeRow(minimal).then(({ error: e2 }) => {
           if (!e2) applySyncKey(new Date().toISOString());
         });
       }
@@ -6615,10 +6644,22 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
 
   useEffect(() => {
     if (isStudentView || !gridAutoPull) return;
-    const id = window.setInterval(() => {
-      void pullAllStudentBoardsFromPlatform({ silent: true });
-    }, 3000);
-    return () => window.clearInterval(id);
+    // Önceki tur bitmeden yenisini başlatma (isteklerin üst üste binip 429'a yol açmasını önler),
+    // sekme arka plandayken sorma ve turlar arasında makul boşluk bırak.
+    let cancelled = false;
+    let timer: number | null = null;
+    const loop = async () => {
+      if (cancelled) return;
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        await pullAllStudentBoardsFromPlatform({ silent: true }).catch(() => undefined);
+      }
+      if (!cancelled) timer = window.setTimeout(() => { void loop(); }, 8000);
+    };
+    timer = window.setTimeout(() => { void loop(); }, 3000);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [isStudentView, gridAutoPull, pullAllStudentBoardsFromPlatform]);
 
   const gridOnlineStudentIds = useMemo(() => {

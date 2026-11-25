@@ -35,6 +35,43 @@ function profileHintsFromQuery(
   };
 }
 
+/**
+ * Aynı öğrenci için kısa süreli önbellek + aynı anda tek istek (in-flight birleştirme).
+ * Her öğrenci tarayıcısı birkaç sn'de bir sorduğundan sunucu Lichess/Chess.com'a aynı sorguyu
+ * tekrar tekrar atıp 429 yiyordu. Oyun bulunduysa kısa, bulunamadıysa uzun süre aynı yanıt verilir.
+ */
+const SNAPSHOT_FOUND_TTL_MS = 3_000;
+const SNAPSHOT_MISS_TTL_MS = 20_000;
+const SNAPSHOT_CACHE_MAX = 500;
+const snapshotCache = new Map<string, { at: number; found: boolean; value: unknown }>();
+const snapshotInflight = new Map<string, Promise<unknown>>();
+
+async function coalescedSnapshot(key: string, load: () => Promise<unknown>): Promise<unknown> {
+  const hit = snapshotCache.get(key);
+  if (hit && Date.now() - hit.at < (hit.found ? SNAPSHOT_FOUND_TTL_MS : SNAPSHOT_MISS_TTL_MS)) {
+    return hit.value;
+  }
+  const pending = snapshotInflight.get(key);
+  if (pending) return pending;
+  const task = (async () => {
+    try {
+      const value = await load();
+      const found = !!(value && typeof value === 'object' && (value as { ok?: boolean }).ok);
+      if (snapshotCache.size >= SNAPSHOT_CACHE_MAX) snapshotCache.clear();
+      snapshotCache.set(key, { at: Date.now(), found, value });
+      return value;
+    } finally {
+      snapshotInflight.delete(key);
+    }
+  })();
+  snapshotInflight.set(key, task);
+  return task;
+}
+
+function hintsKey(h: StudentPlatformPullHints): string {
+  return `${h.lichessUsername ?? ''}|${h.chessComUsername ?? ''}`;
+}
+
 async function snapshotForPlatform(
   parsed: ParsedExternalGameLink,
 ): Promise<ExternalGameSnapshot | null> {
@@ -104,7 +141,10 @@ export default async function handler(req: Req, res: Res) {
         res.status(400).json({ error: 'studentId gerekli' });
         return;
       }
-      const result = await fetchStudentExternalGameAuto(studentId, profileHints);
+      const result = await coalescedSnapshot(
+        `auto|${studentId}|${hintsKey(profileHints)}`,
+        () => fetchStudentExternalGameAuto(studentId, profileHints),
+      );
       res.status(200).json(result);
       return;
     }
@@ -114,7 +154,10 @@ export default async function handler(req: Req, res: Res) {
         res.status(400).json({ error: 'studentId gerekli' });
         return;
       }
-      const result = await fetchStudentActivityAuto(studentId, profileHints);
+      const result = await coalescedSnapshot(
+        `activity|${studentId}|${hintsKey(profileHints)}`,
+        () => fetchStudentActivityAuto(studentId, profileHints),
+      );
       res.status(200).json(result);
       return;
     }
