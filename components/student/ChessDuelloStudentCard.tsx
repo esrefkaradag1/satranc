@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, Loader2, RefreshCw, Swords, User } from 'lucide-react';
+import { ExternalLink, Loader2, RefreshCw, Swords } from 'lucide-react';
 import type { Student } from '../../types';
 import {
   ChessDuelloApiError,
@@ -7,23 +7,11 @@ import {
   chessduelloAnalytics,
   chessduelloMember,
   chessduelloTraining,
-  localizedTitle,
   type ChessDuelloAnalytics,
   type ChessDuelloMember,
   type ChessDuelloTraining,
 } from '../../lib/chessduelloClient';
-
-function pct(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return '—';
-  return `${Math.round(n)}%`;
-}
-
-function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' });
-}
+import ChessDuelloSummaryView from './ChessDuelloSummaryView';
 
 export default function ChessDuelloStudentCard({
   student,
@@ -200,79 +188,8 @@ export default function ChessDuelloStudentCard({
         ) : null}
 
         {training || analytics ? (
-          <div className="space-y-4">
-            {training ? (
-              <div className="rounded-xl bg-slate-800/60 border border-slate-700/60 p-4 flex flex-wrap items-center gap-4">
-                <div className="w-14 h-14 rounded-full bg-violet-500/15 flex items-center justify-center text-violet-300 overflow-hidden">
-                  {training.avatarUrl ? (
-                    <img src={training.avatarUrl} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    <User className="w-8 h-8" />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-lg font-black text-white">{training.username}</div>
-                  <div className="text-xs text-slate-400 mt-0.5">
-                    Müfredat {training.completedLessons}/{training.totalLessons} · {pct(training.completionPercent)}
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5">Son antrenman {fmtDate(training.lastTrainedAt)}</div>
-                </div>
-                {member?.eloRating != null ? (
-                  <div className="rounded-xl bg-violet-500/15 border border-violet-500/30 px-4 py-2 text-center">
-                    <div className="text-[10px] font-bold text-violet-300 uppercase tracking-wider">ELO Puanı</div>
-                    <div className="text-2xl font-black text-white tabular-nums">{member.eloRating}</div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {analytics ? (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <Stat label="30 gün deneme" value={String(analytics.attempts)} />
-                <Stat label="İsabet" value={pct(analytics.accuracy)} />
-                <Stat label="İlk deneme" value={pct(analytics.firstTryAccuracy)} />
-                <Stat label="Son cevap" value={fmtDate(analytics.lastAnsweredAt)} />
-              </div>
-            ) : null}
-
-            {analytics?.weakThemes?.length ? (
-              <div>
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Zayıf temalar</div>
-                <div className="flex flex-wrap gap-2">
-                  {analytics.weakThemes.slice(0, 8).map((theme) => (
-                    <span
-                      key={theme.id}
-                      className="px-2.5 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs font-medium"
-                    >
-                      {localizedTitle(theme.title) || theme.slug} · {pct(theme.accuracy)}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {training?.categories?.length ? (
-              <div className="space-y-2">
-                {training.categories.map((cat) => (
-                  <div key={cat.id} className="rounded-xl border border-white/[0.06] bg-slate-950/40 px-3 py-2">
-                    <div className="flex items-center justify-between text-xs font-bold text-slate-300">
-                      <span className="uppercase tracking-wider">{cat.id}</span>
-                      <span>
-                        {cat.completedLessons}/{cat.totalLessons}
-                      </span>
-                    </div>
-                    <div className="mt-2 h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                      <div
-                        className="h-full bg-violet-500"
-                        style={{
-                          width: `${cat.totalLessons ? Math.round((cat.completedLessons / cat.totalLessons) * 100) : 0}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
+          <div className="rounded-2xl border border-white/[0.07] bg-slate-900/60 overflow-hidden">
+            <ChessDuelloSummaryView member={member} training={training} analytics={analytics} />
           </div>
         ) : !loading && !error ? (
           <p className="text-slate-400 text-sm font-medium">
@@ -284,11 +201,3 @@ export default function ChessDuelloStudentCard({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-slate-800/50 border border-slate-700/50 px-3 py-2.5">
-      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{label}</div>
-      <div className="text-sm font-black text-white mt-1 truncate">{value}</div>
-    </div>
-  );
-}
