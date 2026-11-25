@@ -42,6 +42,7 @@ import {
   ArrowLeft,
   Eye,
   UserPlus,
+  Flame,
 } from 'lucide-react';
 import { useApp } from '../AppContext';
 import { analyzeStudentHomework } from '../services/geminiService';
@@ -71,7 +72,10 @@ import { LichessOAuthConnect } from './student/LichessOAuthConnect';
 import LichessGameViewerModal from './LichessGameViewerModal';
 import { LiveTournamentGame } from './student/LiveTournamentGame';
 import { useArenaDirector } from '../hooks/useArenaDirector';
-import { joinTournamentSelf, subscribeToStudentActiveGames, type TournamentGame } from '../lib/tournamentGames';
+import { joinTournamentSelf, subscribeToStudentActiveGames, subscribeToTournamentGames, type TournamentGame } from '../lib/tournamentGames';
+import { LiveGamesGrid, type PlayerInfo } from './tournament/LiveGamesGrid';
+import { TournamentGameWatch } from './tournament/TournamentGameWatch';
+import { TournamentPlayerDetail } from './tournament/TournamentPlayerDetail';
 import ChessComGameViewerModal from './ChessComGameViewerModal';
 import StudentMessagesPanel from './StudentMessagesPanel';
 import ParentNotificationsPanel from './student/ParentNotificationsPanel';
@@ -227,6 +231,8 @@ type TournamentRankRow = {
   wins: number;
   draws: number;
   losses: number;
+  /** Üst üste galibiyet (Arena seri bonusu için). */
+  winStreak: number;
 };
 
 /** Koç ekranıyla aynı kural (lib/tournamentPairing rankParticipants): puan, sonra Sonneborn-Berger.
@@ -244,6 +250,7 @@ function rankTournamentParticipants(t: Tournament): TournamentRankRow[] {
       wins: s?.wins ?? 0,
       draws: s?.draws ?? 0,
       losses: s?.losses ?? 0,
+      winStreak: s?.winStreak ?? 0,
     };
   });
   rows.sort((a, b) => b.points - a.points || b.tieBreak - a.tieBreak || b.wins - a.wins);
@@ -932,6 +939,34 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
   const myTournamentRow = useMemo(
     () => selectedTournamentRanking.find((r) => r.id === studentId) ?? null,
     [selectedTournamentRanking, studentId],
+  );
+  // Turnuvanın süren maçlarını izleme (bekleyen öğrenci diğer maçları canlı görebilsin).
+  const [tournamentLiveGames, setTournamentLiveGames] = useState<TournamentGame[]>([]);
+  const [watchTournamentGameId, setWatchTournamentGameId] = useState<string | null>(null);
+  const [detailTournamentPlayerId, setDetailTournamentPlayerId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!selectedTournament || selectedTournament.format !== 'arena') {
+      setTournamentLiveGames([]);
+      return () => {};
+    }
+    return subscribeToTournamentGames(selectedTournament.id, setTournamentLiveGames);
+  }, [selectedTournament?.id, selectedTournament?.format]);
+  const tournamentActiveGames = useMemo(
+    () => tournamentLiveGames
+      .filter((g) => g.status === 'active')
+      .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()),
+    [tournamentLiveGames],
+  );
+  const watchedTournamentGame = useMemo(
+    () => tournamentLiveGames.find((g) => g.id === watchTournamentGameId) ?? null,
+    [tournamentLiveGames, watchTournamentGameId],
+  );
+  const tournamentPlayerInfo = useCallback(
+    (id: string): PlayerInfo => ({
+      name: students.find((x) => x.id === id)?.name ?? 'Bilinmiyor',
+      rank: selectedTournamentRanking.find((r) => r.id === id)?.rank ?? null,
+    }),
+    [students, selectedTournamentRanking],
   );
   const myTournamentRowRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -2081,6 +2116,30 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                   );
                 })()}
 
+                {selectedTournament.format === 'arena' && (
+                  <LiveGamesGrid
+                    games={tournamentActiveGames}
+                    player={tournamentPlayerInfo}
+                    onOpen={(g) => setWatchTournamentGameId(g.id)}
+                  />
+                )}
+                {detailTournamentPlayerId && (
+                  <TournamentPlayerDetail
+                    tournament={selectedTournament}
+                    playerId={detailTournamentPlayerId}
+                    nameOf={(id) => students.find((x) => x.id === id)?.name ?? 'Katılımcı'}
+                    rankOf={(id) => selectedTournamentRanking.find((r) => r.id === id)?.rank ?? null}
+                    onClose={() => setDetailTournamentPlayerId(null)}
+                  />
+                )}
+                {watchedTournamentGame && (
+                  <TournamentGameWatch
+                    game={watchedTournamentGame}
+                    player={tournamentPlayerInfo}
+                    onClose={() => setWatchTournamentGameId(null)}
+                  />
+                )}
+
                 <div className="space-y-4">
                   <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 overflow-hidden">
                     <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
@@ -2109,7 +2168,12 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                                 key={row.id}
                                 ref={isMe ? myTournamentRowRef : undefined}
                                 aria-current={isMe ? 'true' : undefined}
-                                className={`grid grid-cols-[2.5rem_1fr_3rem_4.5rem_3.5rem] gap-2 items-center px-4 py-2.5 text-sm ${
+                                role="button"
+                                tabIndex={0}
+                                title="Oynadığı maçları gör"
+                                onClick={() => setDetailTournamentPlayerId(row.id)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetailTournamentPlayerId(row.id); } }}
+                                className={`grid grid-cols-[2.5rem_1fr_3rem_4.5rem_3.5rem] gap-2 items-center px-4 py-2.5 text-sm cursor-pointer hover:bg-white/[0.04] focus:outline-none focus-visible:bg-white/[0.06] ${
                                   isMe ? 'bg-indigo-600/20 border-l-2 border-l-indigo-400' : ''
                                 }`}
                               >
@@ -2122,6 +2186,9 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
                                   </span>
                                   {isMe && (
                                     <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-indigo-500 text-white font-black">SEN</span>
+                                  )}
+                                  {selectedTournament.format === 'arena' && selectedTournament.streakBonus !== false && row.winStreak >= 2 && (
+                                    <Flame className="w-3.5 h-3.5 text-orange-400 shrink-0" aria-label="Seride, sıradaki galibiyet 4 puan eder" />
                                   )}
                                 </span>
                                 <span className="text-center text-slate-400 tabular-nums">{row.played}</span>
@@ -3149,6 +3216,7 @@ const StudentPanel: React.FC<StudentPanelProps> = ({ studentId, onLogout, viewAs
           studentId={studentId}
           whiteName={students.find((s) => s.id === activeLiveGame.whiteStudentId)?.name ?? 'Beyaz'}
           blackName={students.find((s) => s.id === activeLiveGame.blackStudentId)?.name ?? 'Siyah'}
+          timeControl={tournaments.find((t) => t.id === activeLiveGame.tournamentId)?.timeControl}
           onClose={() => {
             setDismissedGameIds((prev) => new Set(prev).add(activeLiveGame.id));
             setActiveLiveGame(null);

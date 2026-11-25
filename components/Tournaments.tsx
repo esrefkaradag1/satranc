@@ -27,6 +27,7 @@ import {
 import { createTournamentGames, subscribeToTournamentGames, type TournamentGame } from '../lib/tournamentGames';
 import { LiveGamesGrid, type PlayerInfo } from './tournament/LiveGamesGrid';
 import { TournamentGameWatch } from './tournament/TournamentGameWatch';
+import { TournamentPlayerDetail } from './tournament/TournamentPlayerDetail';
 import { useArenaDirector } from '../hooks/useArenaDirector';
 import { getTournamentLifecycle, tournamentLengthLabel } from '../lib/tournamentStatus';
 import type { Tournament, TournamentPairing, TournamentStanding, Student, Club } from '../types';
@@ -651,6 +652,7 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
   // Canlı izleme: turnuvanın maçları (mini tahtalar + izleme penceresi).
   const [liveGames, setLiveGames] = useState<TournamentGame[]>([]);
   const [watchGameId, setWatchGameId] = useState<string | null>(null);
+  const [detailPlayerId, setDetailPlayerId] = useState<string | null>(null);
   const activeGames = useMemo(
     () => liveGames
       .filter((g) => g.status === 'active')
@@ -979,7 +981,14 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
                       : i === 2 ? 'bg-amber-700/70 text-amber-50'
                       : 'bg-slate-900 text-slate-500';
                     return (
-                      <tr key={r.id} className="hover:bg-white/[0.02] transition-colors">
+                      <tr
+                        key={r.id}
+                        onClick={() => setDetailPlayerId(r.id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetailPlayerId(r.id); } }}
+                        tabIndex={0}
+                        title="Oynadığı maçları gör"
+                        className="hover:bg-white/[0.04] transition-colors cursor-pointer focus:outline-none focus-visible:bg-white/[0.06]"
+                      >
                         <td className="py-2.5 px-2 text-center">
                           <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold ${rankCls}`}>{i + 1}</span>
                         </td>
@@ -1012,6 +1021,15 @@ const TournamentViewer: React.FC<ViewerProps> = ({ tournament: t, students, club
           {isArena && <LiveGamesGrid games={activeGames} player={playerInfo} onOpen={(g) => setWatchGameId(g.id)} />}
           {watchGame && (
             <TournamentGameWatch game={watchGame} player={playerInfo} onClose={() => setWatchGameId(null)} />
+          )}
+          {detailPlayerId && (
+            <TournamentPlayerDetail
+              tournament={t}
+              playerId={detailPlayerId}
+              nameOf={(id) => students.find((x) => x.id === id)?.name ?? 'Anonim'}
+              rankOf={(id) => rankById.get(id) ?? null}
+              onClose={() => setDetailPlayerId(null)}
+            />
           )}
 
           {/* Pairings */}

@@ -111,6 +111,65 @@ function basePoints(t: Tournament): StandingsTable {
   return standings;
 }
 
+export interface PlayerGameEntry {
+  roundNo: number;
+  /** null => bay (rakipsiz) */
+  opponentId: string | null;
+  color: 'white' | 'black';
+  outcome: 'win' | 'draw' | 'loss' | 'bye' | 'pending';
+  /** Bu maçtan alınan puan; sonuçsuz (süren) maçta 0 */
+  points: number;
+  /** Arena seri bonusu (ateşte) uygulandı mı — puan ikiye katlandı */
+  onFire: boolean;
+  gameId?: string;
+}
+
+/**
+ * Bir oyuncunun turnuva boyunca oynadığı maçlar (tur sırasıyla) ve her maçtan aldığı puan.
+ * Puan/seri hesabı `basePoints` ile birebir aynıdır (Arena: 2/1/0, ateşte 4/2; Swiss: 1/0.5/0),
+ * böylece listedeki puanların toplamı sıralamadaki puanla tutar.
+ */
+export function playerGameLog(t: Tournament, playerId: string): PlayerGameEntry[] {
+  const isArena = t.format === 'arena';
+  const streakActive = isArena && t.streakBonus !== false;
+  const out: PlayerGameEntry[] = [];
+  let streak = 0;
+
+  for (const r of t.rounds ?? []) {
+    for (const p of r.pairings) {
+      const isWhite = p.whiteId === playerId;
+      const isBlack = p.blackId === playerId;
+      if (!isWhite && !isBlack) continue;
+      const color: 'white' | 'black' = isWhite ? 'white' : 'black';
+
+      if (p.blackId == null) {
+        out.push({ roundNo: r.roundNo, opponentId: null, color, outcome: 'bye', points: isArena ? 2 : 1, onFire: false });
+        streak = 0;
+        continue;
+      }
+      const opponentId = isWhite ? (p.blackId as string) : p.whiteId;
+      if (!p.result) {
+        out.push({ roundNo: r.roundNo, opponentId, color, outcome: 'pending', points: 0, onFire: false, gameId: p.gameId });
+        continue;
+      }
+      const onFire = streakActive && streak >= 2;
+      const won = (p.result === '1-0' && isWhite) || (p.result === '0-1' && isBlack);
+      const drew = p.result === '1/2-1/2';
+      if (won) {
+        out.push({ roundNo: r.roundNo, opponentId, color, outcome: 'win', points: isArena ? (onFire ? 4 : 2) : 1, onFire, gameId: p.gameId });
+        streak += 1;
+      } else if (drew) {
+        out.push({ roundNo: r.roundNo, opponentId, color, outcome: 'draw', points: isArena ? (onFire ? 2 : 1) : 0.5, onFire, gameId: p.gameId });
+        streak = 0;
+      } else {
+        out.push({ roundNo: r.roundNo, opponentId, color, outcome: 'loss', points: 0, onFire: false, gameId: p.gameId });
+        streak = 0;
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Sıralama puanları + Sonneborn-Berger derece ayırıcı.
  * lila `SwissScoring.computePlayers`: galibiyette rakibin toplam puanı tam,

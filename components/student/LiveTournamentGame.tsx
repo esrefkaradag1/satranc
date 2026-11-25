@@ -8,6 +8,7 @@ import { useClickToMove } from '../../hooks/useClickToMove';
 import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, chessboardDomId } from '../../lib/chessBoardUi';
 import {
   finishTournamentGame,
+  parseTimeControl,
   pushTournamentGameMove,
   resignTournamentGame,
   subscribeToTournamentGame,
@@ -21,6 +22,8 @@ interface LiveTournamentGameProps {
   studentId: string;
   whiteName: string;
   blackName: string;
+  /** Turnuvanın süre denetimi ("15+10" = 15 dk + hamle başına 10 sn). */
+  timeControl?: string;
   onClose: () => void;
 }
 
@@ -45,8 +48,9 @@ function detectGameOverResult(chess: Chess): TournamentGameResult | null {
  * özellikleriyle aynı güven modeli); sonuç `tournament_games` tablosuna yazılır ve
  * turnuvanın sıralaması oradan otomatik senkronlanır (bkz. Tournaments.tsx).
  */
-export const LiveTournamentGame: React.FC<LiveTournamentGameProps> = ({ game: initialGame, studentId, whiteName, blackName, onClose }) => {
+export const LiveTournamentGame: React.FC<LiveTournamentGameProps> = ({ game: initialGame, studentId, whiteName, blackName, timeControl, onClose }) => {
   const [game, setGame] = useState(initialGame);
+  const incrementMs = useMemo(() => parseTimeControl(timeControl ?? '').incrementMs, [timeControl]);
   const [now, setNow] = useState(() => Date.now());
   // Motor, başlangıçtan kayıtlı hamleler tekrar oynatılarak kurulur; böylece history() TÜM
   // hamleleri verir. Eski hata: yalnızca FEN'den kuruluyordu → her hamlede kayda sadece son hamle
@@ -107,10 +111,10 @@ export const LiveTournamentGame: React.FC<LiveTournamentGameProps> = ({ game: in
       }
 
       const turnStartedAt = new Date().toISOString();
-      // Şu anki (hamleyi oynayan tarafın kalan süresi düşülmüş) saatler buradan itibaren geçerli;
-      // artış (increment) MVP kapsamında yok, sadece kalan süre taşınır.
-      const nextWhiteMs = whiteTimeMs;
-      const nextBlackMs = blackTimeMs;
+      // Şu anki (hamleyi oynayan tarafın kalan süresi düşülmüş) saatler buradan itibaren geçerli.
+      // Hamleyi oynayan taraf süre denetimindeki artışı (ör. 15+10 → +10 sn) kazanır.
+      const nextWhiteMs = myColor === 'white' ? whiteTimeMs + incrementMs : whiteTimeMs;
+      const nextBlackMs = myColor === 'black' ? blackTimeMs + incrementMs : blackTimeMs;
 
       const result = detectGameOverResult(chess);
       const movesArr = chess.history();
@@ -137,7 +141,7 @@ export const LiveTournamentGame: React.FC<LiveTournamentGameProps> = ({ game: in
       }));
       return true;
     },
-    [chess, isMyTurn, myColor, whiteTimeMs, blackTimeMs, game.id],
+    [chess, isMyTurn, myColor, whiteTimeMs, blackTimeMs, incrementMs, game.id],
   );
 
   const handleResign = () => {
