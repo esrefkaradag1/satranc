@@ -8,6 +8,8 @@ type Props = {
   onClose: () => void;
   settings: StudyBoardSettings;
   onToggle: (key: keyof StudyBoardSettings) => void;
+  /** Öğrenci paneli: motor/değerlendirme çubuğu/ok ayarları gösterilmez (öğrenci açıp kapatamaz). */
+  hideEngineControls?: boolean;
 };
 
 function ToggleRow({
@@ -42,8 +44,12 @@ export const StudyBoardSettingsPanel: React.FC<Props> = ({
   onClose,
   settings,
   onToggle,
+  hideEngineControls = false,
 }) => {
   if (!open) return null;
+  const shortcutRows = hideEngineControls
+    ? STUDY_SETTINGS_SHORTCUTS.filter((r) => !['l', 'a', 'v', 'Space'].includes(r.keys))
+    : STUDY_SETTINGS_SHORTCUTS;
 
   return (
     <div className="fixed inset-0 z-[75] flex items-start justify-center p-4 pt-16 sm:pt-20 bg-black/50 backdrop-blur-[2px]">
@@ -75,7 +81,7 @@ export const StudyBoardSettingsPanel: React.FC<Props> = ({
               Klavye kısayolları
             </h3>
             <div className="space-y-1">
-              {STUDY_SETTINGS_SHORTCUTS.map((row) => (
+              {shortcutRows.map((row) => (
                 <div key={row.keys} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg">
                   <span className="text-xs text-slate-400">{row.label}</span>
                   <kbd className="text-[9px] font-bold text-slate-300 bg-white/5 border border-white/10 rounded px-1.5 py-0.5">
@@ -86,6 +92,7 @@ export const StudyBoardSettingsPanel: React.FC<Props> = ({
             </div>
           </section>
 
+          {!hideEngineControls && (
           <section className="rounded-xl border border-white/10 bg-black/20 p-3">
             <h3 className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500 px-1 mb-2">
               Genel
@@ -102,6 +109,7 @@ export const StudyBoardSettingsPanel: React.FC<Props> = ({
               onChange={() => onToggle('showEngineAnalysis')}
             />
           </section>
+          )}
 
           <section className="rounded-xl border border-white/10 bg-black/20 p-3">
             <h3 className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500 px-1 mb-2">
@@ -130,6 +138,8 @@ export const StudyBoardSettingsPanel: React.FC<Props> = ({
             <h3 className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500 px-1 mb-2">
               Tahta
             </h3>
+            {!hideEngineControls && (
+              <>
             <ToggleRow
               label="En iyi hamle okları"
               hint="Klavye: a"
@@ -142,6 +152,8 @@ export const StudyBoardSettingsPanel: React.FC<Props> = ({
               checked={settings.showVariationArrows}
               onChange={() => onToggle('showVariationArrows')}
             />
+              </>
+            )}
             <ToggleRow
               label="Rakip tehditleri"
               hint="Savunmasız taşları vurgula — klavye: x"

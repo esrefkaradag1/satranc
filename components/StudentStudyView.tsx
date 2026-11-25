@@ -59,7 +59,7 @@ import type { EvalBarDisplay } from '../hooks/useStableEvalDisplay';
 import { cpWinningChances, winningChancesToBarPercent } from '../lib/winningChances';
 import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStudyBoardSettings } from '../hooks/useStudyBoardSettings';
-import { engineMasterTogglePatch } from '../lib/studyBoardSettings';
+import { engineMasterTogglePatch, DEFAULT_STUDY_BOARD_SETTINGS } from '../lib/studyBoardSettings';
 import { useStudyKeyboardShortcuts } from '../hooks/useStudyKeyboardShortcuts';
 import { StudyKeyboardHelpModal } from './study/StudyKeyboardHelpModal';
 import { StudyBoardSettingsPanel } from './study/StudyBoardSettingsPanel';
@@ -245,7 +245,25 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Motor analizi için state
-  const { settings: boardSettings, toggleSetting: toggleBoardSetting, updateSettings: updateBoardSettings } = useStudyBoardSettings();
+  const { settings: storedBoardSettings, toggleSetting: toggleStoredBoardSetting, updateSettings: updateStoredBoardSettings } = useStudyBoardSettings();
+  // Öğrenci motor/değerlendirme çubuğu/ok ayarlarını değiştiremez: tarayıcıda (ör. antrenör hesabı
+  // aynı tarayıcıda kapatmışsa) saklı değerler yok sayılır, varsayılan davranış uygulanır.
+  const boardSettings = useMemo(() => ({
+    ...storedBoardSettings,
+    showEvalBar: DEFAULT_STUDY_BOARD_SETTINGS.showEvalBar,
+    showEngineAnalysis: DEFAULT_STUDY_BOARD_SETTINGS.showEngineAnalysis,
+    showBestMoveArrows: DEFAULT_STUDY_BOARD_SETTINGS.showBestMoveArrows,
+    showVariationArrows: DEFAULT_STUDY_BOARD_SETTINGS.showVariationArrows,
+  }), [storedBoardSettings]);
+  const STUDENT_LOCKED_SETTINGS: (keyof typeof storedBoardSettings)[] = ['showEvalBar', 'showEngineAnalysis', 'showBestMoveArrows', 'showVariationArrows'];
+  const toggleBoardSetting = useCallback((key: keyof typeof storedBoardSettings) => {
+    if (STUDENT_LOCKED_SETTINGS.includes(key)) return;
+    toggleStoredBoardSetting(key);
+  }, [toggleStoredBoardSetting]);
+  const updateBoardSettings = useCallback((patch: Partial<typeof storedBoardSettings>) => {
+    const { showEvalBar, showEngineAnalysis, showBestMoveArrows, showVariationArrows, ...allowed } = patch;
+    if (Object.keys(allowed).length) updateStoredBoardSettings(allowed);
+  }, [updateStoredBoardSettings]);
   const [showStudyHelp, setShowStudyHelp] = useState(false);
   const [showStudySettings, setShowStudySettings] = useState(false);
   const [engineHoverMove, setEngineHoverMove] = useState<{ from: string; to: string } | null>(null);
@@ -3804,6 +3822,7 @@ const StudentStudyView: React.FC<StudentStudyViewProps> = ({
         onClose={() => setShowStudySettings(false)}
         settings={boardSettings}
         onToggle={toggleBoardSetting}
+        hideEngineControls
       />
     </div>
   );
