@@ -185,7 +185,21 @@ export function reconstructVsFullMoveList(
 
   const studentTurn = studentOrientation === 'white' ? 'w' : 'b';
 
+  // Rakip cevapları üzerinde geri izlemeli arama üstel büyür; tutarsız/uzun kayıtlarda tarayıcıyı
+  // kilitliyordu. Düğüm ve süre sınırı aşılırsa geri kurulum yapılmaz (boş liste döner).
+  const MAX_NODES = 2500;
+  const MAX_MS = 600;
+  const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  let nodes = 0;
+  let aborted = false;
+
   const dfs = (fen: string, left: string[], path: string[]): string[] | null => {
+    if (aborted) return null;
+    nodes += 1;
+    if (nodes > MAX_NODES || (nodes % 64 === 0 && (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt > MAX_MS)) {
+      aborted = true;
+      return null;
+    }
     if (left.length === 0) return path;
     const game = makeBuilderGame(fen || DEFAULT_FEN);
     if (game.isGameOver()) return null;
@@ -202,6 +216,7 @@ export function reconstructVsFullMoveList(
       if (!applyPuzzleMove(next, reply)) continue;
       const found = dfs(next.fen(), left, [...path, reply]);
       if (found) return found;
+      if (aborted) return null;
     }
     return null;
   };

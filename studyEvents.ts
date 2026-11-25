@@ -140,15 +140,17 @@ export async function logStudyEvent(args: {
   }
 }
 
-export async function loadStudyEvents(studyId: string): Promise<StudyEvent[]> {
+/** `studentId` verilirse yalnızca o öğrencinin kayıtları çekilir (büyük çalışmalarda tüm grubu indirmemek için). */
+export async function loadStudyEvents(studyId: string, studentId?: string): Promise<StudyEvent[]> {
   if (!isSupabaseBackend()) return [];
   try {
     const client = getServiceSupabase() ?? supabase;
-    const { data, error } = await client
+    let query = client
       .from(TABLE)
       .select('*')
-      .eq('study_id', studyId)
-      .order('created_at', { ascending: true });
+      .eq('study_id', studyId);
+    if (studentId) query = query.eq('student_id', studentId);
+    const { data, error } = await query.order('created_at', { ascending: true });
     if (error) {
       console.warn('[StudyEvents] load error:', error.message);
       return [];

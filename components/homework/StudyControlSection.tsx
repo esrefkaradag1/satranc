@@ -39,6 +39,7 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
   const [loadingResults, setLoadingResults] = useState(false);
   const [selectedResultsStudyId, setSelectedResultsStudyId] = useState('');
   const [activeLogChapterId, setActiveLogChapterId] = useState<string | null>(null);
+  const [studyLogDiag, setStudyLogDiag] = useState('');
   const [studentStudyStatsById, setStudentStudyStatsById] = useState<Record<string, StudyStudentStat | undefined>>({});
 
   const getVsComputerHistory = (payload: unknown): string[] => {
@@ -344,34 +345,64 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
     let cancelled = false;
 
     const { study, student } = activeStudyLog;
+    // Sonuç listesi aynı çalışmanın kayıtlarını zaten yüklediyse pencereyi anında onunla aç;
+    // taze veri arka planda gelince yerine geçer (büyük çalışmalarda "yükleniyor"da kalmaz).
+    const seeded = selectedResultsStudyId === study.id
+      ? mergeStudyAnalysisEvents(resultsStudyEvents, study)
+          .filter((event) => String(event.studentId) === String(student.id))
+      : [];
+    if (seeded.length > 0) {
+      setActiveStudyEvents(mergeVisibleStudyEvents(
+        seeded,
+        buildPresenceStudyEvents(study, student, resultsStudyPresenceRows),
+      ));
+      setActiveStudyPresenceRows(resultsStudyPresenceRows);
+    }
     const refresh = async () => {
-      setLoadingStudyEvents(true);
+      setLoadingStudyEvents(seeded.length === 0);
       try {
-        const [dbEvents, presenceRows] = await Promise.all([
-          loadStudyEvents(study.id),
+        const [studentDbEvents, presenceRows] = await Promise.all([
+          loadStudyEvents(study.id, String(student.id)),
           loadStudyPresence(study.id),
         ]);
+        // Öğrenciye özel sorgu boş/başarısız dönerse tüm çalışmanın kayıtlarına düş.
+        const dbEvents = studentDbEvents.length > 0
+          ? studentDbEvents
+          : await loadStudyEvents(study.id);
         if (cancelled) return;
         setActiveStudyPresenceRows(presenceRows);
         const persisted = mergeStudyAnalysisEvents(dbEvents, study)
           .filter((event) => String(event.studentId) === String(student.id));
         const live = buildPresenceStudyEvents(study, student, presenceRows);
+        setStudyLogDiag(
+          `öğrenci sorgusu: ${studentDbEvents.length} · tüm çalışma: ${dbEvents.length} · bu öğrenci: ${persisted.length} · canlı: ${live.length} · liste verisi: ${seeded.length} · öğrenci id: ${String(student.id)} · örnek kayıt id: ${dbEvents[0] ? String(dbEvents[0].studentId) : '-'}`,
+        );
         // Presence (study_id,user_id) tek satır — bölüm değişince eski vs geçmişi silinir.
         // Bu yüzden DB + practiceLogs kayıtlarını da tut; presence yalnızca canlı tamamlayıcı.
-        setActiveStudyEvents(mergeVisibleStudyEvents(persisted, live));
-      } catch {
-        if (!cancelled) setActiveStudyEvents([]);
+        const fresh = mergeVisibleStudyEvents(persisted, live);
+        // Taze sonuç boşsa ve listeden gelen veri varsa onu ezme.
+        if (fresh.length > 0 || seeded.length === 0) setActiveStudyEvents(fresh);
+      } catch (err) {
+        console.error('[StudyControl] hamle kayıtları yüklenemedi:', err);
+        setStudyLogDiag(`HATA: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
+        if (!cancelled && seeded.length === 0) setActiveStudyEvents([]);
       } finally {
         if (!cancelled) setLoadingStudyEvents(false);
       }
     };
 
     void refresh();
-    const unsubscribe = subscribeStudyPresence({
-      studyId: study.id,
-      onRow: () => {
-        if (cancelled) return;
-        void loadStudyPresence(study.id).then((rows) => {
+    // Çalışma canlıyken tüm öğrencilerden saniyede onlarca presence olayı gelir. Her olayda sorgu +
+    // yeniden hesaplama pencereyi kilitliyordu: yalnızca bu öğrencinin satırlarını dinle ve
+    // yenilemeyi en fazla 2,5 sn'de bir, tek istekle yap.
+    let presenceTimer: number | null = null;
+    let presenceInFlight = false;
+    const refreshPresence = () => {
+      presenceTimer = null;
+      if (cancelled || presenceInFlight) return;
+      presenceInFlight = true;
+      void loadStudyPresence(study.id)
+        .then((rows) => {
           if (cancelled) return;
           setActiveStudyPresenceRows(rows);
           setActiveStudyEvents((prev) => {
@@ -379,12 +410,23 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
             const live = buildPresenceStudyEvents(study, student, rows);
             return mergeVisibleStudyEvents(persisted, live);
           });
-        });
+        })
+        .catch(() => { /* mevcut görünüm korunur */ })
+        .finally(() => { presenceInFlight = false; });
+    };
+    const unsubscribe = subscribeStudyPresence({
+      studyId: study.id,
+      onRow: (row) => {
+        if (cancelled) return;
+        if (String((row as { user_id?: unknown })?.user_id ?? '') !== String(student.id)) return;
+        if (presenceTimer !== null) return;
+        presenceTimer = window.setTimeout(refreshPresence, 2500);
       },
     });
 
     return () => {
       cancelled = true;
+      if (presenceTimer !== null) window.clearTimeout(presenceTimer);
       unsubscribe();
     };
   }, [activeStudyLog]);
@@ -723,7 +765,10 @@ export const StudyControlSection: React.FC<Props> = ({ students, onOpenStudy }) 
               </div>
             ) : activeStudyEventsByChapter.length === 0 ? (
               <div className="flex-1 flex items-center justify-center text-slate-400 p-10">
-                Bu öğrenci için çalışma hamle kaydı bulunamadı.
+                <div className="text-center">
+                  <p>Bu öğrenci için çalışma hamle kaydı bulunamadı.</p>
+                  {studyLogDiag ? <p className="mt-3 text-[11px] text-slate-600 max-w-2xl break-words">{studyLogDiag}</p> : null}
+                </div>
               </div>
             ) : (
               <>
