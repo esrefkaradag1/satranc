@@ -9,6 +9,7 @@ import {
   Settings2, Search, FolderOpen, GraduationCap, Pencil,
   ChevronFirst, ChevronLast, Play, Pause, Download, Zap, MoreVertical, HelpCircle, Minus, Focus,
   MousePointer2, PanelRight, Hand, Grid2X2, Radio, Sparkles, Share2,
+  MonitorUp,
 } from 'lucide-react';
 import { SatrancEduLogo } from './brand/SatrancEduLogo';
 import { LiveLessonBoardGrid, type GridLayoutMode } from './live-lesson/LiveLessonBoardGrid';
@@ -29,6 +30,9 @@ import {
   persistSessionMediaReplace,
 } from '../lib/liveLessonSessionMediaDb.mjs';
 import { getRuntimeEnv } from '../runtimeEnv';
+import { PlatformWatchLinks } from './live-lesson/PlatformWatchLinks';
+import { ScreenShareViewer } from './live-lesson/ScreenShareViewer';
+import { useCoachScreenShare } from '../hooks/useCoachScreenShare';
 import AgoraRTC, { type IAgoraRTCClient, type ICameraVideoTrack, type IMicrophoneAudioTrack, type IAgoraRTCRemoteUser } from 'agora-rtc-sdk-ng';
 import type { IVirtualBackgroundProcessor } from 'agora-extension-virtual-background';
 import {
@@ -339,6 +343,8 @@ export type SessionMediaState = {
   studentsCanUnmuteSelf?: boolean;
   /** Öğrencilerin genel sınıf sohbetine yazması / görmesi (kapalıyken yalnızca özel sohbet) */
   generalChatEnabled?: boolean;
+  /** Antrenör şu an ekranını paylaşıyor (öğrencilerde büyük izleme penceresi açılır) */
+  coachScreenSharing?: boolean;
 };
 
 export type LiveStudentBoardSnapshot = {
@@ -379,6 +385,7 @@ const DEFAULT_SESSION_MEDIA: SessionMediaState = {
   studentPlaySides: {},
   studentsCanUnmuteSelf: false,
   generalChatEnabled: true,
+  coachScreenSharing: false,
 };
 
 /** Agora stream değişince video önizlemesinin siyah kalmasını önler */
@@ -595,6 +602,7 @@ function ClassroomMediaControlsCard({
   onToggleCam,
   onToggleBlur,
   speakFloorSlot,
+  screenShare,
 }: {
   wallClock: string;
   localMicMuted: boolean;
@@ -608,6 +616,8 @@ function ClassroomMediaControlsCard({
   onToggleCam: () => void;
   onToggleBlur: () => void;
   speakFloorSlot?: React.ReactNode;
+  /** Yalnızca antrenör: ekran paylaşımı düğmesi */
+  screenShare?: { active: boolean; busy: boolean; onToggle: () => void };
 }) {
   return (
     <div className="ll-live-card shrink-0 mt-auto !p-1.5 !rounded-lg">
@@ -616,6 +626,19 @@ function ClassroomMediaControlsCard({
         <p className="text-[8px] text-slate-500 tabular-nums font-mono shrink-0">{wallClock}</p>
       </div>
       {speakFloorSlot ? <div className="mb-1">{speakFloorSlot}</div> : null}
+      {screenShare ? (
+        <button
+          type="button"
+          onClick={screenShare.onToggle}
+          disabled={screenShare.busy}
+          className={`mb-1 flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-[10px] font-bold uppercase tracking-wide text-white disabled:opacity-50 ${
+            screenShare.active ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'
+          }`}
+        >
+          <MonitorUp className="w-3.5 h-3.5" />
+          {screenShare.active ? 'Paylaşımı durdur' : 'Ekran paylaş'}
+        </button>
+      ) : null}
       <div className={`grid gap-1 ${vbSupported ? 'grid-cols-3' : 'grid-cols-2'}`}>
         <button
           type="button"
@@ -868,9 +891,12 @@ function ClassroomAttendancePanel({
           </div>
         </div>
         <div className="border-t border-white/5 bg-slate-950/80">
-          <p className="text-[9px] font-semibold text-slate-200 truncate px-1.5 pt-1 leading-tight" title={student.name}>
-            {student.name}
-          </p>
+          <div className="flex items-center gap-1 px-1.5 pt-1">
+            <p className="min-w-0 flex-1 text-[9px] font-semibold text-slate-200 truncate leading-tight" title={student.name}>
+              {student.name}
+            </p>
+            <PlatformWatchLinks student={student} />
+          </div>
           {!isPending ? (
             <>
               {onSetStudentPlayPermission && sessionMedia ? (
@@ -1613,6 +1639,7 @@ function parseSessionMedia(raw: unknown): SessionMediaState {
     attendanceMarks: parseAttendanceMarks(o.attendanceMarks),
     studentsCanUnmuteSelf: !!o.studentsCanUnmuteSelf,
     generalChatEnabled: o.generalChatEnabled === undefined ? true : !!o.generalChatEnabled,
+    coachScreenSharing: !!o.coachScreenSharing,
   };
 }
 
@@ -2622,6 +2649,8 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     return extra.length > 0 ? [...base, ...extra] : base;
   }, [sessionMedia.rosterStudentIds, sessionMedia.pendingStudentIds, sessionMedia.admittedStudentIds, students, effectiveRoomName]);
 
+  /** Antrenörün yayınlanan video akışı (ekran paylaşırken ekran görüntüsüdür). */
+  const coachScreenStream = remoteStreamsByUid['coach'] ?? null;
   const liveVideoTiles = useMemo(() => {
     const tiles: Array<{
       id: string;
@@ -3869,9 +3898,13 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         handRaisedStudentIds: cur.handRaisedStudentIds ?? [],
       }));
       if (schemaHasSessionMediaRef.current === false) return;
+      // Ekran paylaşımı bayrağını yalnızca antrenör yazar: öğrencinin tam nesne yazımı bayat değerle
+      // ezmesin (alan gönderilmezse veritabanındaki değer korunur).
+      const toPersist: SessionMediaState = { ...nextWithoutHands };
+      if (isStudentView) delete toPersist.coachScreenSharing;
       const result = await persistSessionMediaReplace(
         effectiveRoomId,
-        nextWithoutHands,
+        toPersist,
         getServiceSupabase,
       );
       if (result.missingColumn) schemaHasSessionMediaRef.current = false;
@@ -3892,8 +3925,22 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         }
       }
     },
-    [effectiveRoomId],
+    [effectiveRoomId, isStudentView],
   );
+
+  const screenShare = useCoachScreenShare({
+    clientRef: agoraClientRef,
+    cameraTrackRef: agoraLocalVideoTrackRef,
+    roomKey: `${effectiveRoomId}|${showClassList}`,
+    onActiveChange: (active) => { void pushSessionMediaRemote({ coachScreenSharing: active }); },
+    onError: (msg) => showToast(msg, 'warning'),
+  });
+
+  // Antrenör sekmesi paylaşım sırasında kapandıysa bayrak açık kalmasın.
+  const staleScreenFlag = !isStudentView && !screenShare.sharing && !screenShare.busy && !!sessionMedia.coachScreenSharing;
+  useEffect(() => {
+    if (staleScreenFlag) void pushSessionMediaRemote({ coachScreenSharing: false });
+  }, [staleScreenFlag, pushSessionMediaRemote]);
 
   const publishStudentBoardSnapshot = useCallback(
     (snapshot: LiveStudentBoardSnapshot) => {
@@ -7866,6 +7913,11 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               onToggleMic={() => toggleLocalMic()}
               onToggleCam={() => toggleLocalCam()}
               onToggleBlur={() => toggleCameraBackgroundBlur()}
+              screenShare={
+                !isStudentView && screenShare.supported
+                  ? { active: screenShare.sharing, busy: screenShare.busy || mediaLoading, onToggle: () => void screenShare.toggle() }
+                  : undefined
+              }
               speakFloorSlot={
                 isStudentView && canStudentRequestSpeak && !classroomStudentsCanUnmuteSelf ? (
                   <StudentSpeakFloorBar
@@ -8536,6 +8588,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
                               >
                                 {s.name}
                               </button>
+                              {!isStudentView && <PlatformWatchLinks student={s} className="ml-1.5 align-middle" />}
                               <span className={`inline-flex mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold border ${liveAttendanceStatusClass(attStatus)}`}>
                                 {LIVE_ATTENDANCE_STATUS_LABEL[attStatus]}
                               </span>
@@ -9179,6 +9232,20 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               >
                 {localCamOff ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
               </button>
+              {!isStudentView && screenShare.supported ? (
+                <button
+                  type="button"
+                  onClick={() => void screenShare.toggle()}
+                  disabled={screenShare.busy || mediaLoading}
+                  title={screenShare.sharing ? 'Ekran paylaşımını durdur' : 'Ekran paylaş'}
+                  aria-label={screenShare.sharing ? 'Ekran paylaşımını durdur' : 'Ekran paylaş'}
+                  className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors disabled:opacity-50 ${
+                    screenShare.sharing ? 'bg-rose-600 text-white' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600/80'
+                  }`}
+                >
+                  <MonitorUp className="w-4 h-4" />
+                </button>
+              ) : null}
               {vbSupported ? (
                 <button
                   type="button"
@@ -9633,6 +9700,22 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           </div>
         </div>
       )}
+
+      {!isStudentView && screenShare.sharing ? (
+        <div className="fixed left-1/2 top-3 z-[110] flex -translate-x-1/2 items-center gap-3 rounded-full border border-rose-400/40 bg-slate-900/95 py-1.5 pl-4 pr-1.5 shadow-xl">
+          <span className="text-xs font-bold text-white whitespace-nowrap">Ekranınız öğrencilerle paylaşılıyor</span>
+          <button
+            type="button"
+            onClick={() => void screenShare.stop()}
+            className="rounded-full bg-rose-600 px-3 py-1 text-xs font-bold text-white hover:bg-rose-500"
+          >
+            Durdur
+          </button>
+        </div>
+      ) : null}
+      {isStudentView && sessionMedia.coachScreenSharing && coachScreenStream && !isStudentWaitingForAdmission ? (
+        <ScreenShareViewer stream={coachScreenStream} />
+      ) : null}
     </div>
   );
 };
