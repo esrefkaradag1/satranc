@@ -2,7 +2,6 @@ import type { Club } from '../types';
 import type { StudentApplication } from './applicationTypes';
 import { normalizeClubKey } from './clubScope';
 import { findClubForLogin, slugifyClubUsername } from './clubLoginUtils';
-import { supabase, isSupabaseBackend } from '../services/supabase';
 
 export type ClubPublicInfo = {
   id: string;
@@ -25,26 +24,23 @@ export function resolveClubFromApplicationSlug(slug: string, clubs: Club[]): Clu
   return { id: club.id, name: club.name, slug: getClubApplicationSlug(club) };
 }
 
-/** Giriş yapmadan kulüp bilgisi — başvuru formu için */
+/**
+ * Giriş yapmadan kulüp bilgisi — başvuru formu için.
+ * Ziyaretçi `clubs.login_username` sütununu okuyamadığından (RLS) eşleme sunucuda yapılır.
+ */
 export async function fetchClubByApplicationSlug(slug: string): Promise<ClubPublicInfo | null> {
   const trimmed = slug.trim();
   if (!trimmed) return null;
 
-  if (!isSupabaseBackend()) return null;
-
   try {
-    const { data, error } = await supabase.from('clubs').select('id, name, login_username');
-    if (error || !data?.length) return null;
-
-    const clubs: Club[] = data.map((row) => ({
-      id: String((row as { id: string }).id),
-      name: String((row as { name?: string }).name ?? ''),
-      loginUsername: (row as { login_username?: string }).login_username
-        ? String((row as { login_username?: string }).login_username)
-        : undefined,
-    }));
-
-    return resolveClubFromApplicationSlug(trimmed, clubs);
+    const res = await fetch('/api/submit-application', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lookupClub: trimmed }),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { club?: ClubPublicInfo };
+    return body.club?.id ? body.club : null;
   } catch {
     return null;
   }
