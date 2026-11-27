@@ -8,13 +8,10 @@ import {
   Library, BookOpen, ChevronDown, ChevronUp, ChevronLeft,
   Settings2, Search, FolderOpen, GraduationCap, Pencil,
   ChevronFirst, ChevronLast, Play, Pause, Download, Zap, MoreVertical, HelpCircle, Minus, Focus,
-  MousePointer2, PanelRight, Hand, Grid2X2, Radio, Sparkles, Share2,
+  MousePointer2, PanelRight, Hand, Radio, Sparkles, 
   MonitorUp,
 } from 'lucide-react';
 import { SatrancEduLogo } from './brand/SatrancEduLogo';
-import { LiveLessonBoardGrid, type GridLayoutMode } from './live-lesson/LiveLessonBoardGrid';
-import { LiveLessonStudentBoardsPanel } from './live-lesson/LiveLessonStudentBoardsPanel';
-import { StudentExternalGameSharePanel } from './live-lesson/StudentExternalGameSharePanel';
 import { useStockfish } from '../hooks/useStockfish';
 import type { PvLine } from '../hooks/useStockfish';
 import { useApp } from '../AppContext';
@@ -49,21 +46,6 @@ import { CHESSBOARD_ANIMATION, CHESSBOARD_NO_NOTATION, type SquareMarkColor, squ
 import { getTerminalEval, terminalEvalToBarPercent } from '../lib/analysisTerminal';
 import { useStableEvalDisplay } from '../hooks/useStableEvalDisplay';
 import { evalWinningChances } from '../lib/winningChances';
-import {
-  activitySnapshotToStudentBoard,
-  externalSnapshotToStudentBoard,
-  fetchChessComLiveSnapshot,
-  fetchExternalGameSnapshotByLink,
-  fetchStudentActivityAuto,
-  fetchStudentExternalGameAuto,
-} from '../services/externalGameShareClient';
-import {
-  fetchStudentLatestLichessPuzzle,
-  fetchStudentLichessCurrentPuzzleBoard,
-} from '../services/lichessOAuthClient';
-import { fetchStudentLatestChessComPuzzle } from '../services/chesscomPuzzleClient';
-import { studentBoardFromPaste } from '../lib/externalGamePaste';
-import { isChessComPuzzleUrl, parseExternalGameLink } from '../lib/externalGameLink';
 import { Study, StudyChapter } from '../lib/studyTypes';
 import type { Student } from '../types';
 import { makeBuilderGame, applyMove, studyDisplayEmoji, parsePgnBlockToMoves } from '../lib/studyUtils';
@@ -1391,13 +1373,6 @@ function idsEqual(a: string | null | undefined, b: string | null | undefined): b
   return x !== '' && x === y;
 }
 
-function isRefreshableChessComGameUrl(url: string): boolean {
-  const trimmed = url.trim();
-  if (!trimmed || isChessComPuzzleUrl(trimmed)) return false;
-  if (/chess\.com\/play\/computer\/?$/i.test(trimmed.replace(/\/$/, ''))) return false;
-  return !!parseExternalGameLink(trimmed);
-}
-
 /** Koç↔öğrenci özel sohbet kanalı */
 function isPrivateChatMessage(msg: LiveChatMessage, peerStudentId: string): boolean {
   return !!msg.privateWithStudentId && idsEqual(msg.privateWithStudentId, peerStudentId);
@@ -2142,9 +2117,7 @@ export type ClassroomSidebarTab =
   | 'katilimcilar'
   | 'goruntu'
   | 'sohbet'
-  | 'tahtalar'
-  | 'oyunlar'
-  | 'oyunum';
+  | 'oyunlar';
 
 function formatStudentSeatLabel(side: PlayBoardSide | null): string {
   if (side === 'w') return 'Beyaz';
@@ -2410,18 +2383,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const [mobileClassroomPanel, setMobileClassroomPanel] = useState<'board' | 'sidebar'>('board');
   /** Oyunlar sekmesi alt bölümü */
   const [oyunlarSection, setOyunlarSection] = useState<'library' | 'pgn' | 'position'>('library');
-  const [gridPage, setGridPage] = useState(0);
-  const [focusedGridStudentId, setFocusedGridStudentId] = useState<string | null>(null);
-  const [gridBoardsPerPage, setGridBoardsPerPage] = useState<GridLayoutMode>(4);
-  const [gridAutoFollow, setGridAutoFollow] = useState(true);
-  const [gridAutoPage, setGridAutoPage] = useState(false);
-  const [gridAutoPull, setGridAutoPull] = useState(true);
-  const [gridPullLoading, setGridPullLoading] = useState(false);
-  const [pullingStudentIds, setPullingStudentIds] = useState<Set<string>>(() => new Set());
-  const [pullingLichessLiveIds, setPullingLichessLiveIds] = useState<Set<string>>(() => new Set());
-  const [pullingChessComLiveIds, setPullingChessComLiveIds] = useState<Set<string>>(() => new Set());
-  const [pullingPuzzleStudentIds, setPullingPuzzleStudentIds] = useState<Set<string>>(() => new Set());
-  const [gridSyncNonce, setGridSyncNonce] = useState(0);
   /** Notasyon zaman çizelgesinde gezinme; null = güncel (son ply) */
   const [replayNavPly, setReplayNavPly] = useState<number | null>(null);
   const [replayIsPlaying, setReplayIsPlaying] = useState(false);
@@ -2605,21 +2566,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
         isStudentJoinedLiveClass(s.id, sessionMedia, remoteStreamsByUid),
     );
   }, [students, isStudentView, studentIdProp, sessionMedia, remoteStreamsByUid]);
-
-  const studentPlatformPullHints = useCallback(
-    (targetStudentId: string) => {
-      const st = students.find((s) => normalizeStudentId(s.id) === normalizeStudentId(targetStudentId));
-      if (!st) return undefined;
-      const lichessUsername = st.lichessUsername?.trim();
-      const chessComUsername = st.chessComUsername?.trim();
-      if (!lichessUsername && !chessComUsername) return undefined;
-      return {
-        ...(lichessUsername ? { lichessUsername } : {}),
-        ...(chessComUsername ? { chessComUsername } : {}),
-      };
-    },
-    [students],
-  );
 
   const [attendanceSaving, setAttendanceSaving] = useState(false);
   const [attendanceSaveToast, setAttendanceSaveToast] = useState<string | null>(null);
@@ -3280,7 +3226,7 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     fetchState();
     const interval = setInterval(fetchState, SYNC_POLL_MS);
     return () => clearInterval(interval);
-  }, [effectiveRoomId, isStudentView, studentIdProp, isPgColumnError, gridSyncNonce]);
+  }, [effectiveRoomId, isStudentView, studentIdProp, isPgColumnError]);
 
   useEffect(() => {
     setLessonRoomClosed(false);
@@ -3941,275 +3887,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   useEffect(() => {
     if (staleScreenFlag) void pushSessionMediaRemote({ coachScreenSharing: false });
   }, [staleScreenFlag, pushSessionMediaRemote]);
-
-  const publishStudentBoardSnapshot = useCallback(
-    (snapshot: LiveStudentBoardSnapshot) => {
-      const sid = normalizeStudentId(studentIdProp);
-      if (!sid || !isStudentView) return;
-      const prev = sessionMediaRef.current;
-      const boards = {
-        ...(prev.studentBoards ?? {}),
-        [sid]: { ...snapshot, sharedBy: 'student' as const, updatedAt: new Date().toISOString() },
-      };
-      const indIds = Array.from(
-        new Set([...(prev.independentBoardStudentIds ?? []), sid].map(normalizeStudentId)),
-      );
-      void pushSessionMediaRemote({
-        studentBoards: boards,
-        independentBoardStudentIds: indIds,
-      });
-    },
-    [isStudentView, studentIdProp, pushSessionMediaRemote],
-  );
-
-  const stopStudentBoardShare = useCallback(() => {
-    const sid = normalizeStudentId(studentIdProp);
-    if (!sid || !isStudentView) return;
-    const prev = sessionMediaRef.current;
-    const boards = { ...(prev.studentBoards ?? {}) };
-    delete boards[sid];
-    const indIds = (prev.independentBoardStudentIds ?? []).filter((kid) => !idsEqual(kid, sid));
-    void pushSessionMediaRemote({
-      studentBoards: boards,
-      independentBoardStudentIds: indIds,
-    });
-  }, [isStudentView, studentIdProp, pushSessionMediaRemote]);
-
-  useEffect(() => {
-    if (!isStudentView || !isStudentAdmittedToClass) return;
-    const sid = normalizeStudentId(studentIdProp);
-    if (!sid) return;
-
-    let cancelled = false;
-    let timer: number | null = null;
-    // Oyun varken 4 sn; yokken (ya da hata/429'da) kademeli olarak 45 sn'ye kadar uzar.
-    // Sekme arka plandayken sorgu atılmaz. Böylece Lichess/Chess.com istek sınırına takılmayız.
-    let idleStreak = 0;
-    const nextDelay = () => (idleStreak === 0 ? 4000 : Math.min(45_000, 8000 * 2 ** (idleStreak - 1)));
-    const schedule = () => {
-      if (cancelled) return;
-      timer = window.setTimeout(() => { void tick(); }, nextDelay());
-    };
-    const tick = async () => {
-      if (cancelled) return;
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-        schedule();
-        return;
-      }
-      try {
-        const res = await fetchStudentActivityAuto(sid);
-        if (cancelled) return;
-        if (res.ok && res.snapshot) {
-          idleStreak = 0;
-          publishStudentBoardSnapshot(activitySnapshotToStudentBoard(res.snapshot));
-        } else {
-          idleStreak = Math.min(idleStreak + 1, 6);
-        }
-      } catch {
-        idleStreak = Math.min(idleStreak + 1, 6);
-      }
-      schedule();
-    };
-
-    void tick();
-    return () => {
-      cancelled = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [isStudentView, isStudentAdmittedToClass, studentIdProp, publishStudentBoardSnapshot]);
-
-  const publishCoachStudentBoardSnapshot = useCallback(
-    (targetStudentId: string, snapshot: LiveStudentBoardSnapshot) => {
-      const sid = normalizeStudentId(targetStudentId);
-      if (!sid || isStudentView) return;
-      const prev = sessionMediaRef.current;
-      const boards = {
-        ...(prev.studentBoards ?? {}),
-        [sid]: { ...snapshot, sharedBy: 'coach' as const, updatedAt: new Date().toISOString() },
-      };
-      const indIds = Array.from(
-        new Set([...(prev.independentBoardStudentIds ?? []), sid].map(normalizeStudentId)),
-      );
-      void pushSessionMediaRemote({
-        studentBoards: boards,
-        independentBoardStudentIds: indIds,
-      });
-    },
-    [isStudentView, pushSessionMediaRemote],
-  );
-
-  const pullStudentBoardFromPlatform = useCallback(
-    async (targetStudentId: string, opts?: { silent?: boolean }) => {
-      const sid = normalizeStudentId(targetStudentId);
-      if (!sid || isStudentView) return false;
-      const hints = studentPlatformPullHints(sid);
-      setPullingStudentIds((prev) => new Set(prev).add(sid));
-      try {
-        const existing = sessionMediaRef.current.studentBoards?.[sid];
-
-        if (
-          existing?.sharedBy === 'student'
-          && existing.fen?.trim()
-          && existing.updatedAt
-          && !existing.shareKind
-          && (existing.moves?.length ?? 0) > 0
-        ) {
-          const age = Date.now() - new Date(existing.updatedAt).getTime();
-          if (Number.isFinite(age) && age < 7000) {
-            return true;
-          }
-        }
-
-        if (existing?.sharedBy === 'student' && existing.fen?.trim()) {
-          if (existing.shareKind === 'pgn' || existing.shareKind === 'fen') {
-            const raw = existing.pastePayload?.trim();
-            const reparsed = raw ? studentBoardFromPaste(raw) : null;
-            const snap: LiveStudentBoardSnapshot = reparsed
-              ? {
-                  fen: reparsed.fen,
-                  moves: reparsed.moves,
-                  baseFen: reparsed.baseFen,
-                  source: reparsed.source,
-                  gameId: reparsed.gameId,
-                  gameUrl: reparsed.gameUrl,
-                  label: reparsed.label,
-                  shareKind: reparsed.shareKind,
-                  pastePayload: reparsed.pastePayload,
-                  sharedBy: 'student',
-                }
-              : existing;
-            publishCoachStudentBoardSnapshot(sid, snap);
-            if (!opts?.silent) showToast('Öğrencinin paylaştığı konum tahtada', 'success');
-            return true;
-          }
-          if (existing.shareKind === 'link' && existing.gameUrl?.trim()) {
-            const linkRes = await fetchExternalGameSnapshotByLink(existing.gameUrl);
-            if (linkRes.snapshot) {
-              const boardSnap = externalSnapshotToStudentBoard(linkRes.snapshot);
-              publishCoachStudentBoardSnapshot(sid, {
-                ...boardSnap,
-                sharedBy: 'student',
-                shareKind: 'link',
-              });
-              if (!opts?.silent) showToast('Öğrencinin paylaştığı oyun güncellendi', 'success');
-              return true;
-            }
-          }
-        }
-
-        const sharedUrl =
-          existing?.sharedBy === 'student'
-          && existing.gameUrl?.trim()
-          && isRefreshableChessComGameUrl(existing.gameUrl)
-            ? existing.gameUrl.trim()
-            : '';
-
-        if (sharedUrl) {
-          const shared = await fetchChessComLiveSnapshot(sid, sharedUrl, hints);
-          if (shared.ok && shared.snapshot) {
-            const boardSnap = externalSnapshotToStudentBoard(shared.snapshot);
-            publishCoachStudentBoardSnapshot(sid, { ...boardSnap, sharedBy: 'student' });
-            if (!opts?.silent) showToast('Öğrencinin paylaştığı oyun güncellendi', 'success');
-            return true;
-          }
-        }
-
-        const result = await fetchStudentActivityAuto(sid, hints);
-        if (result.ok && result.snapshot) {
-          const boardSnap = activitySnapshotToStudentBoard(result.snapshot);
-          publishCoachStudentBoardSnapshot(sid, boardSnap);
-          if (!opts?.silent) {
-            const via =
-              result.method === 'lichess-oauth'
-                ? 'Lichess OAuth'
-                : result.method === 'lichess-username'
-                  ? 'Lichess'
-                  : result.method === 'chesscom-to-move'
-                    ? 'Chess.com'
-                    : result.snapshot.activityKind === 'puzzle'
-                      ? result.snapshot.source === 'lichess' ? 'Lichess bulmaca' : 'Chess.com bulmaca'
-                      : 'Chess.com';
-            showToast(`${via} tahtaya alındı`, 'success');
-          }
-          return true;
-        }
-
-        if (!sharedUrl) {
-          const chesscom = await fetchChessComLiveSnapshot(sid, undefined, hints);
-          if (chesscom.ok && chesscom.snapshot) {
-            const boardSnap = externalSnapshotToStudentBoard(chesscom.snapshot);
-            publishCoachStudentBoardSnapshot(sid, boardSnap);
-            if (!opts?.silent) showToast('Chess.com oyunu tahtaya alındı', 'success');
-            return true;
-          }
-        }
-
-        if (!opts?.silent) {
-          showToast(
-            result.error
-            || 'Aktif oyun/bulmaca bulunamadı. Lichess bulmaca için OAuth, bot için PGN paylaşımı gerekir.',
-            'warning',
-          );
-        }
-        return false;
-      } finally {
-        setPullingStudentIds((prev) => {
-          const next = new Set(prev);
-          next.delete(sid);
-          return next;
-        });
-      }
-    },
-    [isStudentView, publishCoachStudentBoardSnapshot, showToast, studentPlatformPullHints],
-  );
-
-  const pullStudentPuzzleFromPlatform = useCallback(
-    async (targetStudentId: string, opts?: { silent?: boolean }) => {
-      const sid = normalizeStudentId(targetStudentId);
-      if (!sid || isStudentView) return false;
-      setPullingPuzzleStudentIds((prev) => new Set(prev).add(sid));
-      try {
-        const current = await fetchStudentLichessCurrentPuzzleBoard(sid);
-        if (current.ok && current.snapshot) {
-          const boardSnap = { ...current.snapshot, activityKind: 'puzzle' as const };
-          publishCoachStudentBoardSnapshot(sid, boardSnap);
-          if (!opts?.silent) showToast('Lichess bulmacası tahtaya alındı', 'success');
-          return true;
-        }
-
-        const lichess = await fetchStudentLatestLichessPuzzle(sid);
-        if (lichess.ok && lichess.snapshot) {
-          const boardSnap = { ...lichess.snapshot, activityKind: 'puzzle' as const };
-          publishCoachStudentBoardSnapshot(sid, boardSnap);
-          if (!opts?.silent) showToast('Son Lichess bulmacası tahtaya alındı', 'success');
-          return true;
-        }
-
-        const chesscom = await fetchStudentLatestChessComPuzzle(sid);
-        if (chesscom.ok && chesscom.snapshot) {
-          const boardSnap = { ...chesscom.snapshot, activityKind: 'puzzle' as const };
-          publishCoachStudentBoardSnapshot(sid, boardSnap);
-          if (!opts?.silent) showToast('Son Chess.com bulmacası tahtaya alındı', 'success');
-          return true;
-        }
-
-        if (!opts?.silent) {
-          showToast(
-            chesscom.error || current.error || lichess.error || 'Bulmaca çekilemedi',
-            'warning',
-          );
-        }
-        return false;
-      } finally {
-        setPullingPuzzleStudentIds((prev) => {
-          const next = new Set(prev);
-          next.delete(sid);
-          return next;
-        });
-      }
-    },
-    [isStudentView, publishCoachStudentBoardSnapshot, showToast],
-  );
 
   const sendChatMessage = useCallback(async () => {
     const text = chatInput.trim().slice(0, 600);
@@ -5427,11 +5104,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     }
   }, [sidebarTab, isStudentView]);
 
-  useEffect(() => {
-    if (!isStudentView && sidebarTab === 'tahtalar') {
-      setMobileClassroomPanel('board');
-    }
-  }, [sidebarTab, isStudentView]);
 
   const applyChapterContent = useCallback((ch: StudyChapter) => {
     try {
@@ -5929,57 +5601,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
       setPositionError('Geçersiz FEN. Standart başlangıç veya geçerli bir konum girin.');
       return false;
     }
-  }, [pushState, coachSide, analyseEngineFen]);
-
-  const lastCoachBoardLoadRef = useRef<{
-    studentId: string;
-    updatedAt?: string;
-    fen?: string;
-    moveCount?: number;
-  } | null>(null);
-
-  const applyStudentBoardSnapshotToCoachBoard = useCallback((snapshot: LiveStudentBoardSnapshot) => {
-    const base = snapshot.baseFen?.trim() || START_FEN;
-    const moves = Array.isArray(snapshot.moves) ? snapshot.moves.map((m) => String(m).trim()).filter(Boolean) : [];
-    let headFen = snapshot.fen?.trim() || base;
-    if (moves.length > 0) {
-      try {
-        const g = makeBuilderGame(base);
-        for (const m of moves) {
-          if (!applyMove(g, m)) break;
-        }
-        headFen = g.fen();
-      } catch {
-        headFen = snapshot.fen?.trim() || base;
-      }
-    }
-    let nextGame: Chess;
-    try {
-      nextGame = makeBuilderGame(headFen);
-    } catch {
-      headFen = START_FEN;
-      nextGame = makeBuilderGame(START_FEN);
-    }
-    setReplayNavPly(null);
-    setCurrentVariation(null);
-    setHoverFen(null);
-    setEnginePvHovered(null);
-    setEnginePvLinePreview(null);
-    setPositionError('');
-    setBaseFen(base);
-    setMoveHistory(moves);
-    setVariations(snapshot.variations ?? {});
-    setGame(nextGame);
-    setFen(headFen);
-    setFenInput(headFen);
-    setArrows([]);
-    setMarks({});
-    setBoardDrawRevision((r) => r + 1);
-    lastLocalMoveTimeRef.current = Date.now();
-    pushState(headFen, moves, [], {}, coachSide ?? undefined, snapshot.variations ?? {});
-    analyseEngineFen(headFen);
-    setSidebarTab('analiz');
-    setMobileClassroomPanel('board');
   }, [pushState, coachSide, analyseEngineFen]);
 
   const applyFen = useCallback(() => {
@@ -6612,290 +6233,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     [rooms],
   );
 
-  const gridMonitorStudents = useMemo(() => {
-    const admittedSet = new Set((sessionMedia.admittedStudentIds ?? []).map(normalizeStudentId));
-    const admitted = classroomRosterStudents.filter((s) => admittedSet.has(normalizeStudentId(s.id)));
-    return admitted.length > 0 ? admitted : classroomRosterStudents;
-  }, [classroomRosterStudents, sessionMedia.admittedStudentIds]);
-
-  const focusGridStudent = useCallback(
-    (studentId: string) => {
-      const sid = normalizeStudentId(studentId);
-      setFocusedGridStudentId(sid);
-      const idx = gridMonitorStudents.findIndex((s) => normalizeStudentId(s.id) === sid);
-      if (idx >= 0) setGridPage(Math.floor(idx / gridBoardsPerPage));
-    },
-    [gridMonitorStudents, gridBoardsPerPage],
-  );
-
-  const handleGridBoardsPerPageChange = useCallback((n: GridLayoutMode) => {
-    setGridBoardsPerPage(n);
-    setGridPage(0);
-  }, []);
-
-  const requestGridSync = useCallback(() => {
-    setGridSyncNonce((v) => v + 1);
-  }, []);
-
-  const pullAllStudentBoardsFromPlatform = useCallback(async (opts?: { silent?: boolean }) => {
-    if (isStudentView) return;
-    const targets = gridMonitorStudents
-      .map((s) => normalizeStudentId(s.id))
-      .filter(Boolean);
-    if (targets.length === 0) {
-      if (!opts?.silent) showToast('Derste öğrenci yok', 'info');
-      return;
-    }
-    setGridPullLoading(true);
-    try {
-      const results = await Promise.all(
-        targets.map((sid) => pullStudentBoardFromPlatform(sid, { silent: true })),
-      );
-      const ok = results.filter(Boolean).length;
-      if (!opts?.silent) {
-        showToast(
-          ok > 0 ? `${ok}/${targets.length} öğrenci oyunu güncellendi` : 'Aktif oyun bulunamadı (bot için öğrenci link paylaşmalı)',
-          ok > 0 ? 'success' : 'warning',
-        );
-      }
-    } finally {
-      setGridPullLoading(false);
-    }
-  }, [isStudentView, gridMonitorStudents, pullStudentBoardFromPlatform, showToast]);
-
-  const pullAllStudentPuzzlesFromPlatform = useCallback(async (opts?: { silent?: boolean }) => {
-    if (isStudentView) return;
-    const targets = gridMonitorStudents
-      .map((s) => normalizeStudentId(s.id))
-      .filter(Boolean);
-    if (targets.length === 0) {
-      if (!opts?.silent) showToast('Derste öğrenci yok', 'info');
-      return;
-    }
-    setGridPullLoading(true);
-    try {
-      const results = await Promise.all(
-        targets.map((sid) => pullStudentPuzzleFromPlatform(sid, { silent: true })),
-      );
-      const ok = results.filter(Boolean).length;
-      if (!opts?.silent) {
-        showToast(
-          ok > 0 ? `${ok}/${targets.length} öğrenci bulmacası çekildi` : 'Hiçbir öğrencide Lichess/Chess.com bulmacası bulunamadı',
-          ok > 0 ? 'success' : 'warning',
-        );
-      }
-    } finally {
-      setGridPullLoading(false);
-    }
-  }, [isStudentView, gridMonitorStudents, pullStudentPuzzleFromPlatform, showToast]);
-
-  useEffect(() => {
-    if (isStudentView || !gridAutoPull) return;
-    // Önceki tur bitmeden yenisini başlatma (isteklerin üst üste binip 429'a yol açmasını önler),
-    // sekme arka plandayken sorma ve turlar arasında makul boşluk bırak.
-    let cancelled = false;
-    let timer: number | null = null;
-    const loop = async () => {
-      if (cancelled) return;
-      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
-        await pullAllStudentBoardsFromPlatform({ silent: true }).catch(() => undefined);
-      }
-      if (!cancelled) timer = window.setTimeout(() => { void loop(); }, 8000);
-    };
-    timer = window.setTimeout(() => { void loop(); }, 3000);
-    return () => {
-      cancelled = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [isStudentView, gridAutoPull, pullAllStudentBoardsFromPlatform]);
-
-  const gridOnlineStudentIds = useMemo(() => {
-    const online = new Set<string>();
-    for (const s of gridMonitorStudents) {
-      const sid = normalizeStudentId(s.id);
-      if (!sid) continue;
-      const uid = agoraUidForStudent(s.id);
-      if (uid && remoteStreamsByUid[uid]) {
-        online.add(sid);
-        continue;
-      }
-      if ((sessionMedia.admittedStudentIds ?? []).some((kid) => idsEqual(kid, sid))) {
-        online.add(sid);
-      }
-    }
-    return online;
-  }, [gridMonitorStudents, remoteStreamsByUid, sessionMedia.admittedStudentIds]);
-
-  const followGridStudent = useCallback(
-    (studentId: string, snapshotOverride?: LiveStudentBoardSnapshot) => {
-      const sid = normalizeStudentId(studentId);
-      focusGridStudent(sid);
-      const snap = snapshotOverride ?? sessionMediaRef.current.studentBoards?.[sid];
-      if (snap?.fen?.trim()) {
-        applyStudentBoardSnapshotToCoachBoard(snap);
-        lastCoachBoardLoadRef.current = {
-          studentId: sid,
-          updatedAt: snap.updatedAt,
-          fen: snap.fen,
-          moveCount: snap.moves?.length ?? 0,
-        };
-      }
-      setFocusedVideoTileId(`student-${sid}`);
-      setParticipantMenuStudentId(sid);
-      setSidebarTab('analiz');
-      setMobileClassroomPanel('board');
-    },
-    [focusGridStudent, applyStudentBoardSnapshotToCoachBoard],
-  );
-
-  useEffect(() => {
-    if (isStudentView || !gridAutoFollow || !focusedGridStudentId) return;
-    const sid = normalizeStudentId(focusedGridStudentId);
-    const snap = sessionMedia.studentBoards?.[sid];
-    if (!snap?.fen?.trim()) return;
-    const prev = lastCoachBoardLoadRef.current;
-    const snapKey = `${snap.updatedAt ?? ''}|${snap.fen}|${snap.moves?.length ?? 0}`;
-    const prevKey = prev?.studentId === sid
-      ? `${prev.updatedAt ?? ''}|${prev.fen ?? ''}|${prev.moveCount ?? 0}`
-      : '';
-    if (prevKey === snapKey) return;
-    applyStudentBoardSnapshotToCoachBoard(snap);
-    lastCoachBoardLoadRef.current = {
-      studentId: sid,
-      updatedAt: snap.updatedAt,
-      fen: snap.fen,
-      moveCount: snap.moves?.length ?? 0,
-    };
-  }, [
-    isStudentView,
-    gridAutoFollow,
-    focusedGridStudentId,
-    sessionMedia.studentBoards,
-    applyStudentBoardSnapshotToCoachBoard,
-  ]);
-
-  const pullStudentLichessLiveFromPlatform = useCallback(
-    async (targetStudentId: string, opts?: { silent?: boolean }) => {
-      const sid = normalizeStudentId(targetStudentId);
-      if (!sid || isStudentView) return false;
-      const hints = studentPlatformPullHints(sid);
-      setPullingLichessLiveIds((prev) => new Set(prev).add(sid));
-      try {
-        const result = await fetchStudentExternalGameAuto(sid, hints);
-        if (!result.ok || !result.snapshot) {
-          const activity = await fetchStudentActivityAuto(sid, hints);
-          if (!activity.ok || !activity.snapshot) {
-            if (!opts?.silent) {
-              showToast(
-                activity.error || result.error || 'Devam eden Lichess aktivitesi yok',
-                'warning',
-              );
-            }
-            return false;
-          }
-          const boardSnap = activitySnapshotToStudentBoard(activity.snapshot);
-          publishCoachStudentBoardSnapshot(sid, boardSnap);
-          if (!opts?.silent) {
-            showToast(
-              activity.snapshot.activityKind === 'puzzle'
-                ? 'Lichess bulmacası tahtaya alındı'
-                : 'Lichess oyunu tahtaya alındı',
-              'success',
-            );
-          }
-          return true;
-        }
-        const boardSnap = externalSnapshotToStudentBoard(result.snapshot);
-        publishCoachStudentBoardSnapshot(sid, boardSnap);
-        followGridStudent(sid, boardSnap);
-        if (!opts?.silent) {
-          showToast('Lichess oyunu tahtaya alındı', 'success');
-        }
-        return true;
-      } finally {
-        setPullingLichessLiveIds((prev) => {
-          const next = new Set(prev);
-          next.delete(sid);
-          return next;
-        });
-      }
-    },
-    [isStudentView, publishCoachStudentBoardSnapshot, showToast, followGridStudent, studentPlatformPullHints],
-  );
-
-  const pullStudentChessComLiveFromPlatform = useCallback(
-    async (targetStudentId: string, opts?: { silent?: boolean }) => {
-      const sid = normalizeStudentId(targetStudentId);
-      if (!sid || isStudentView) return false;
-      const hints = studentPlatformPullHints(sid);
-      setPullingChessComLiveIds((prev) => new Set(prev).add(sid));
-      try {
-        const existing = sessionMediaRef.current.studentBoards?.[sid];
-
-        if (existing?.sharedBy === 'student' && existing.fen?.trim()
-          && (existing.shareKind === 'pgn' || existing.shareKind === 'fen')) {
-          const reparsed = existing.pastePayload?.trim()
-            ? studentBoardFromPaste(existing.pastePayload.trim())
-            : null;
-          const merged: LiveStudentBoardSnapshot = reparsed
-            ? {
-                fen: reparsed.fen,
-                moves: reparsed.moves,
-                baseFen: reparsed.baseFen,
-                source: reparsed.source,
-                gameId: reparsed.gameId,
-                gameUrl: reparsed.gameUrl,
-                label: reparsed.label,
-                shareKind: reparsed.shareKind,
-                pastePayload: reparsed.pastePayload,
-                sharedBy: 'student',
-              }
-            : existing;
-          publishCoachStudentBoardSnapshot(sid, merged);
-          followGridStudent(sid, merged);
-          if (!opts?.silent) showToast('Öğrencinin paylaştığı konum tahtada', 'success');
-          return true;
-        }
-
-        const sharedUrl =
-          existing?.sharedBy === 'student'
-          && existing.gameUrl?.trim()
-          && isRefreshableChessComGameUrl(existing.gameUrl)
-            ? existing.gameUrl.trim()
-            : '';
-
-        const result = await fetchChessComLiveSnapshot(sid, sharedUrl || undefined, hints);
-        if (result.ok && result.snapshot) {
-          const boardSnap = externalSnapshotToStudentBoard(result.snapshot);
-          const merged = sharedUrl ? { ...boardSnap, sharedBy: 'student' as const } : boardSnap;
-          publishCoachStudentBoardSnapshot(sid, merged);
-          followGridStudent(sid, merged);
-          if (!opts?.silent) {
-            const label = result.method === 'chesscom-shared-link'
-              ? 'Öğrencinin Chess.com oyunu tahtaya alındı'
-              : 'Chess.com oyunu tahtaya alındı';
-            showToast(label, 'success');
-          }
-          return true;
-        }
-
-        if (!opts?.silent) {
-          showToast(
-            result.error || 'Aktif oyun yok. Bot için öğrenci Paylaş → PGN yapıştırmalı.',
-            'warning',
-          );
-        }
-        return false;
-      } finally {
-        setPullingChessComLiveIds((prev) => {
-          const next = new Set(prev);
-          next.delete(sid);
-          return next;
-        });
-      }
-    },
-    [isStudentView, publishCoachStudentBoardSnapshot, showToast, followGridStudent, studentPlatformPullHints],
-  );
   if (showClassList) {
     return (
       <div className="flex flex-col h-full min-h-0 max-h-[100dvh] bg-[#0f172a] overflow-hidden rounded-none sm:rounded-2xl lg:rounded-3xl border-0 sm:border border-white/[0.06] animate-in fade-in duration-500 atmospheric-bg ring-0 sm:ring-1 ring-indigo-500/10 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
@@ -7431,8 +6768,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
   const setBoardScalePct = isStudentView ? setStudentBoardScalePct : setCoachBoardScalePct;
   const sidebarTabDefs: { id: ClassroomSidebarTab; Icon: typeof Search; label: string; coachOnly?: boolean; studentOnly?: boolean }[] = [
     { id: 'analiz', Icon: Search, label: 'Analiz' },
-    { id: 'tahtalar', Icon: Grid2X2, label: 'Tahtalar', coachOnly: true },
-    { id: 'oyunum', Icon: Share2, label: 'Oyunum', studentOnly: true },
     { id: 'katilimcilar', Icon: Users, label: 'Katılımcılar' },
     { id: 'goruntu', Icon: Video, label: 'Görüntü' },
     { id: 'sohbet', Icon: MessageCircle, label: 'Sohbet' },
@@ -7443,7 +6778,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
     if (t.studentOnly && !isStudentView) return false;
     return true;
   });
-  const showStudentBoardGrid = !isStudentView && sidebarTab === 'tahtalar';
 
   return (
     <div
@@ -7531,45 +6865,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             <div
               className="flex flex-1 min-h-0 w-full max-w-full flex-col lg:flex-row items-stretch lg:items-start justify-center gap-0 lg:gap-1 xl:gap-2 overflow-hidden"
             >
-            {showStudentBoardGrid ? (
-              <div className="flex-1 min-h-0 w-full flex flex-col py-1 overflow-y-auto custom-scrollbar">
-                <LiveLessonBoardGrid
-                  students={gridMonitorStudents}
-                  studentBoards={sessionMedia.studentBoards ?? {}}
-                  coachBoardFen={boardDisplayFen}
-                  boardsPerPage={gridBoardsPerPage}
-                  page={gridPage}
-                  onPageChange={setGridPage}
-                  onBoardsPerPageChange={handleGridBoardsPerPageChange}
-                  focusedStudentId={focusedGridStudentId}
-                  onFocusStudent={focusGridStudent}
-                  onFollowStudent={followGridStudent}
-                  autoFollow={gridAutoFollow}
-                  onAutoFollowChange={setGridAutoFollow}
-                  autoPageTransition={gridAutoPage}
-                  onAutoPageTransitionChange={setGridAutoPage}
-                  onRefresh={requestGridSync}
-                  onPullAllStudents={() => void pullAllStudentBoardsFromPlatform()}
-                  onPullStudent={(sid) => void pullStudentBoardFromPlatform(sid)}
-                  onPullAllStudentPuzzles={() => void pullAllStudentPuzzlesFromPlatform()}
-                  onPullStudentPuzzle={(sid) => void pullStudentPuzzleFromPlatform(sid)}
-                  pullLoading={gridPullLoading}
-                  pullingStudentIds={pullingStudentIds}
-                  pullingPuzzleStudentIds={pullingPuzzleStudentIds}
-                  autoPull={gridAutoPull}
-                  onAutoPullChange={setGridAutoPull}
-                  onOpenAllAnalysis={() => {
-                    setSidebarTab('analiz');
-                    setMobileClassroomPanel('sidebar');
-                  }}
-                  onAddBoard={() => {
-                    setSidebarTab('katilimcilar');
-                    setMobileClassroomPanel('sidebar');
-                  }}
-                  onlineStudentIds={gridOnlineStudentIds}
-                />
-              </div>
-            ) : (
             <>
             <div
               className={`${lessonBoardSizing} min-h-0 min-w-0 flex flex-col gap-1 sm:gap-2 flex-1 min-w-0`}
@@ -7751,7 +7046,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
             </div>
 
             </>
-            )}
             </div>
 
             {/* Tahta görünmez kaldığında hata bildir */}
@@ -7761,7 +7055,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
           </div>
 
           {/* Mobil: ince video şeridi — tahtanın dışında, kaydırmaz */}
-          {!showStudentBoardGrid ? (
             <div className="lg:hidden shrink-0 border-t border-white/[0.06] bg-[#12121a]/90 px-2 py-1.5">
               {!isStudentView ? (
               <ClassroomAttendancePanel
@@ -7822,16 +7115,12 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               />
               )}
             </div>
-          ) : null}
         </section>
 
         {/* Tahta ↔ yan panel sürükle tutamacı */}
-        {!showStudentBoardGrid ? (
           <ClassroomVideoDockResizeHandle onResizeStart={handleVideoDockResizeStart} />
-        ) : null}
 
         {/* ── Orta sütun: video + katılımcılar (lg+) ── */}
-        {!showStudentBoardGrid ? (
           <section
             className="hidden lg:flex shrink-0 flex-col gap-2 p-2 bg-[#131620] border-r border-white/[0.06] min-h-0 overflow-hidden"
             style={{
@@ -7933,7 +7222,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               }
             />
           </section>
-        ) : null}
 
         {/* ── Classroom sağ sidebar ── */}
         <aside className={`${mobileClassroomPanel === 'sidebar' ? 'grid' : 'hidden'} lg:grid flex-1 lg:flex-none w-full ${
@@ -8223,18 +7511,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </div>
             )}
 
-            {sidebarTab === 'oyunum' && isStudentView && currentStudent ? (
-              <div className="flex flex-col h-full min-h-0 overflow-y-auto custom-scrollbar">
-                <StudentExternalGameSharePanel
-                  studentId={normalizeStudentId(currentStudent.id)}
-                  lichessUsername={currentStudent.lichessUsername}
-                  chessComUsername={currentStudent.chessComUsername}
-                  admitted={isStudentAdmittedToClass}
-                  onPublish={publishStudentBoardSnapshot}
-                  onStop={stopStudentBoardShare}
-                />
-              </div>
-            ) : null}
 
             {sidebarTab === 'katilimcilar' && (
               <div className="flex flex-col h-full min-h-0 overflow-y-auto custom-scrollbar">
@@ -9033,21 +8309,6 @@ const LiveLesson: React.FC<LiveLessonProps> = ({ onBack, isStudentView, roomId: 
               </div>
             )}
 
-            {sidebarTab === 'tahtalar' && (
-              <LiveLessonStudentBoardsPanel
-                students={gridMonitorStudents}
-                studentBoards={sessionMedia.studentBoards ?? {}}
-                coachBoardFen={boardDisplayFen}
-                focusedStudentId={focusedGridStudentId}
-                onlineStudentIds={gridOnlineStudentIds}
-                onSelectStudent={focusGridStudent}
-                onFollowStudent={followGridStudent}
-                onPullLichessLive={(sid) => void pullStudentLichessLiveFromPlatform(sid)}
-                onPullChessComLive={(sid) => void pullStudentChessComLiveFromPlatform(sid)}
-                pullingLichessStudentIds={pullingLichessLiveIds}
-                pullingChessComStudentIds={pullingChessComLiveIds}
-              />
-            )}
 
             {sidebarTab === 'oyunlar' && (
               <div className="p-3 flex flex-col gap-3 h-full min-h-0 overflow-y-auto custom-scrollbar">
