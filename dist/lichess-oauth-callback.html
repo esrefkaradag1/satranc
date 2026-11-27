@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lichess Bağlantısı</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0d0f12;
+      color: #e2e8f0;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    .box {
+      max-width: 420px;
+      padding: 2rem;
+      text-align: center;
+    }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid rgba(129, 182, 76, 0.2);
+      border-top-color: #81b64c;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 1rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .err { color: #fca5a5; }
+    .ok { color: #86efac; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="spinner" id="spinner"></div>
+    <p id="msg">Lichess hesabınız bağlanıyor…</p>
+  </div>
+  <script>
+    const STORAGE_KEY = 'netchess_lichess_pkce_v1';
+
+    function setMsg(text, cls) {
+      const el = document.getElementById('msg');
+      el.textContent = text;
+      if (cls) el.className = cls;
+    }
+
+    function loadSession() {
+      try {
+        const raw = sessionStorage.getItem(STORAGE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    }
+
+    function redirectTo(path) {
+      var target = (path && String(path).trim()) || '#/';
+      if (!target.startsWith('#')) target = '#' + target.replace(/^\/+/, '');
+      window.location.replace(window.location.origin + '/' + target);
+    }
+
+    async function run() {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      const error = params.get('error');
+      const session = loadSession();
+
+      if (error) {
+        document.getElementById('spinner').style.display = 'none';
+        setMsg('Lichess bağlantısı iptal edildi: ' + error, 'err');
+        setTimeout(function () { redirectTo(session && session.returnPath); }, 2500);
+        return;
+      }
+
+      if (!code) {
+        document.getElementById('spinner').style.display = 'none';
+        setMsg('Yetkilendirme kodu bulunamadı.', 'err');
+        setTimeout(function () { redirectTo(session && session.returnPath); }, 2500);
+        return;
+      }
+
+      if (!session || !session.codeVerifier || !session.studentId) {
+        document.getElementById('spinner').style.display = 'none';
+        setMsg('Oturum süresi doldu. Lütfen tekrar bağlanmayı deneyin.', 'err');
+        setTimeout(function () { redirectTo('#/ogrenci'); }, 2500);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/lichess-oauth-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: code,
+            codeVerifier: session.codeVerifier,
+            studentId: session.studentId,
+            redirectUri: window.location.origin + '/lichess-oauth-callback.html',
+          }),
+        });
+        const data = await res.json().catch(function () { return {}; });
+        sessionStorage.removeItem(STORAGE_KEY);
+        if (!res.ok) {
+          throw new Error(data.error || 'Token kaydedilemedi');
+        }
+        setMsg('Lichess hesabınız bağlandı! Yönlendiriliyorsunuz…', 'ok');
+        setTimeout(function () { redirectTo(session.returnPath); }, 900);
+      } catch (err) {
+        document.getElementById('spinner').style.display = 'none';
+        setMsg(err && err.message ? err.message : 'Bağlantı hatası', 'err');
+        setTimeout(function () { redirectTo(session.returnPath); }, 3000);
+      }
+    }
+
+    run();
+  </script>
+</body>
+</html>
